@@ -1,0 +1,9 @@
+{
+  "name": "coco-cashu",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {},
+  "peerDependencies": {}
+}
