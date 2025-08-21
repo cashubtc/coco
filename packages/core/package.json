@@ -1,0 +1,14 @@
+{
+  "name": "coco-cashu/core",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@cashu/cashu-ts": "^2.6.0"
+  }
+}
