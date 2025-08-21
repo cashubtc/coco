@@ -1,6 +1,4 @@
-import type { CashuMint } from "@cashu/cashu-ts";
-
-type MintInfo = Awaited<ReturnType<CashuMint["getInfo"]>>;
+import type { MintInfo } from "../types";
 
 export interface Mint {
   mintUrl: string;

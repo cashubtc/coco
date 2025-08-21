@@ -1,4 +1,3 @@
-import { CashuMint } from "@cashu/cashu-ts";
 import {
   KeysetSyncError,
   MintFetchError,
@@ -6,6 +5,7 @@ import {
 } from "../models/Error";
 import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
+import { MintAdapter } from "../infra/MintAdapter";
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -29,10 +29,12 @@ export interface KeysetRepository {
 export class MintService {
   private readonly mintRepo: MintRepository;
   private readonly keysetRepo: KeysetRepository;
+  private readonly mintAdapter: MintAdapter;
 
   constructor(mintRepo: MintRepository, keysetRepo: KeysetRepository) {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
+    this.mintAdapter = new MintAdapter();
   }
 
   private async ensureUpdatedMint(mintUrl: string): Promise<Mint> {
@@ -51,17 +53,16 @@ export class MintService {
   }
 
   private async updateMint(mint: Mint): Promise<Mint> {
-    const cashuMint = new CashuMint(mint.mintUrl);
     let mintInfo;
     try {
-      mintInfo = await cashuMint.getInfo();
+      mintInfo = await this.mintAdapter.fetchMintInfo(mint.mintUrl);
     } catch (err) {
       throw new MintFetchError(mint.mintUrl, undefined, err);
     }
 
     let keysets;
     try {
-      ({ keysets } = await cashuMint.getKeySets());
+      ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
     } catch (err) {
       throw new MintFetchError(mint.mintUrl, "Failed to fetch keysets", err);
     }
@@ -81,17 +82,12 @@ export class MintService {
           return this.keysetRepo.updateKeyset(keysetModel);
         } else {
           try {
-            const keysRes = await cashuMint.getKeys(ks.id);
-            if (keysRes.keysets.length !== 1 || !keysRes.keysets[0]) {
-              throw new Error(
-                `Expected 1 keyset for ${ks.id}, got ${keysRes.keysets.length}`
-              );
-            }
+            const keysRes = await this.mintAdapter.fetchKeysForId(
+              mint.mintUrl,
+              ks.id
+            );
             const keypairs = Object.fromEntries(
-              Object.entries(keysRes.keysets[0].keys).map(([k, v]) => [
-                Number(k),
-                v,
-              ])
+              Object.entries(keysRes).map(([k, v]) => [Number(k), v])
             ) as Record<number, string>;
             return this.keysetRepo.addKeyset({
               mintUrl: mint.mintUrl,
