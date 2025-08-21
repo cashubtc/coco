@@ -6,25 +6,9 @@ import {
 import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
 import { MintAdapter } from "../infra/MintAdapter";
+import type { KeysetRepository, MintRepository } from "../repositories";
 
 const MINT_REFRESH_TTL_S = 60 * 5;
-
-export interface MintRepository {
-  isKnownMint(mintUrl: string): Promise<boolean>;
-  getMintByUrl(mintUrl: string): Promise<Mint>;
-  getAllMints(): Promise<Mint[]>;
-  addNewMint(mint: Mint): Promise<void>;
-  updateMint(mint: Mint): Promise<void>;
-  deleteMint(mintUrl: string): Promise<void>;
-}
-
-export interface KeysetRepository {
-  getKeysetsByMintUrl(mintUrl: string): Promise<Keyset[]>;
-  getKeysetById(mintUrl: string, id: string): Promise<Keyset | null>;
-  updateKeyset(keyset: Omit<Keyset, "keypairs" | "updatedAt">): Promise<void>;
-  addKeyset(keyset: Omit<Keyset, "updatedAt">): Promise<void>;
-  deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
-}
 
 export class MintService {
   private readonly mintRepo: MintRepository;
