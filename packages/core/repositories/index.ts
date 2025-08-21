@@ -1,5 +1,6 @@
 import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
+import type { Counter } from "../models/Counter";
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -16,4 +17,9 @@ export interface KeysetRepository {
   updateKeyset(keyset: Omit<Keyset, "keypairs" | "updatedAt">): Promise<void>;
   addKeyset(keyset: Omit<Keyset, "updatedAt">): Promise<void>;
   deleteKeyset(mintUrl: string, keysetId: string): Promise<void>;
+}
+
+export interface CounterRepository {
+  getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
+  setCounter(mintUrl: string, keysetId: string, counter: number): Promise<void>;
 }
