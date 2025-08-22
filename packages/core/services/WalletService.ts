@@ -1,0 +1,102 @@
+import { CashuMint, CashuWallet, type MintKeyset } from "@cashu/cashu-ts";
+import type { MintService } from "./MintService";
+
+interface CachedWallet {
+  wallet: CashuWallet;
+  lastCheck: number;
+}
+
+export class WalletService {
+  private walletCache: Map<string, CachedWallet> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000;
+  private readonly mintService: MintService;
+  private inFlight: Map<string, Promise<CashuWallet>> = new Map();
+
+  constructor(mintService: MintService) {
+    this.mintService = mintService;
+  }
+
+  async getWallet(mintUrl: string): Promise<CashuWallet> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new Error("mintUrl is required");
+    }
+
+    // Serve from cache when fresh
+    const cached = this.walletCache.get(mintUrl);
+    const now = Date.now();
+    if (cached && now - cached.lastCheck < this.CACHE_TTL) {
+      return cached.wallet;
+    }
+
+    // De-duplicate concurrent requests per mintUrl
+    const existing = this.inFlight.get(mintUrl);
+    if (existing) return existing;
+
+    const promise = this.buildWallet(mintUrl).finally(() => {
+      this.inFlight.delete(mintUrl);
+    });
+    this.inFlight.set(mintUrl, promise);
+    return promise;
+  }
+
+  /**
+   * Clear cached wallet for a specific mint URL
+   */
+  clearCache(mintUrl: string): void {
+    this.walletCache.delete(mintUrl);
+  }
+
+  /**
+   * Clear all cached wallets
+   */
+  clearAllCaches(): void {
+    this.walletCache.clear();
+  }
+
+  /**
+   * Force refresh mint data and get fresh wallet
+   */
+  async refreshWallet(mintUrl: string): Promise<CashuWallet> {
+    this.clearCache(mintUrl);
+    this.inFlight.delete(mintUrl);
+    await this.mintService.updateMintData(mintUrl);
+    return this.getWallet(mintUrl);
+  }
+  private async buildWallet(mintUrl: string): Promise<CashuWallet> {
+    const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+
+    const validKeysets = keysets.filter(
+      (keyset) => keyset.keypairs && Object.keys(keyset.keypairs).length > 0
+    );
+
+    if (validKeysets.length === 0) {
+      throw new Error(`No valid keysets found for mint ${mintUrl}`);
+    }
+
+    const keys = validKeysets.map((keyset) => ({
+      id: keyset.id,
+      unit: "sat" as const,
+      keys: keyset.keypairs,
+    }));
+
+    const compatibleKeysets: MintKeyset[] = validKeysets.map((k) => ({
+      id: k.id,
+      unit: "sat" as const,
+      active: k.active,
+      input_fee_ppk: k.feePpk,
+    }));
+
+    const wallet = new CashuWallet(new CashuMint(mintUrl), {
+      mintInfo: mint.mintInfo,
+      keys,
+      keysets: compatibleKeysets,
+    });
+
+    this.walletCache.set(mintUrl, {
+      wallet,
+      lastCheck: Date.now(),
+    });
+
+    return wallet;
+  }
+}
