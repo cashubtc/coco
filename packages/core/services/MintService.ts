@@ -7,6 +7,8 @@ import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
 import { MintAdapter } from "../infra/MintAdapter";
 import type { KeysetRepository, MintRepository } from "../repositories";
+import { EventBus } from "../events/EventBus";
+import type { CoreEvents } from "../events/types";
 import type { MintInfo } from "../types";
 
 const MINT_REFRESH_TTL_S = 60 * 5;
@@ -15,11 +17,17 @@ export class MintService {
   private readonly mintRepo: MintRepository;
   private readonly keysetRepo: KeysetRepository;
   private readonly mintAdapter: MintAdapter;
+  private readonly eventBus?: EventBus<CoreEvents>;
 
-  constructor(mintRepo: MintRepository, keysetRepo: KeysetRepository) {
+  constructor(
+    mintRepo: MintRepository,
+    keysetRepo: KeysetRepository,
+    eventBus?: EventBus<CoreEvents>
+  ) {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
     this.mintAdapter = new MintAdapter();
+    this.eventBus = eventBus;
   }
 
   /**
@@ -41,7 +49,9 @@ export class MintService {
       updatedAt: 0,
     };
     // Do not persist before successful sync; updateMint will persist on success
-    return this.updateMint(newMint);
+    const added = await this.updateMint(newMint);
+    await this.eventBus?.emit("mint:added", added);
+    return added;
   }
 
   async updateMintData(
@@ -70,7 +80,9 @@ export class MintService {
     const mint = await this.mintRepo.getMintByUrl(mintUrl);
     const now = Math.floor(Date.now() / 1000);
     if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
-      return await this.updateMint(mint);
+      const updated = await this.updateMint(mint);
+      await this.eventBus?.emit("mint:updated", updated);
+      return updated;
     }
 
     const keysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
