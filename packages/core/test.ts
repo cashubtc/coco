@@ -13,6 +13,10 @@ const testManager = new Manager({
   keysetRepository,
 });
 
+testManager.on("counter:updated", (counter) => {
+  console.log("Counter updated:", counter);
+});
+
 const mintUrl = "https://nofees.testnut.cashu.space";
 
 // Register mint by URL; this fetches info and keysets once and persists in memory
@@ -21,9 +25,5 @@ const { wallet, keysetId } = await testManager.getWallet(mintUrl);
 const currentCounter = await testManager.getCounter(mintUrl, keysetId);
 
 const firstQuote = await wallet.createMintQuote(21);
-console.log("First counter:", currentCounter);
 const firstMint = await wallet.mintProofs(21, firstQuote.quote, { keysetId });
 await testManager.incrementCounter(mintUrl, keysetId, firstMint.length);
-const newCounter = await testManager.getCounter(mintUrl, keysetId);
-console.log("First mint:", firstMint);
-console.log("Second counter:", newCounter);
