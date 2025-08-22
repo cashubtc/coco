@@ -23,3 +23,5 @@ export interface CounterRepository {
   getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   setCounter(mintUrl: string, keysetId: string, counter: number): Promise<void>;
 }
+
+export * from "./memory";

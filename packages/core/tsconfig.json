@@ -24,6 +24,16 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
+    "noPropertyAccessFromIndexSignature": false,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["./*"],
+      "@core/models": ["./models/index.ts"],
+      "@core/services": ["./services/index.ts"],
+      "@core/repositories": ["./repositories/index.ts"],
+      "@core/repositories/memory": ["./repositories/memory/index.ts"],
+      "@core/events": ["./events/index.ts"],
+      "@core/infra": ["./infra/index.ts"]
+    }
   }
 }

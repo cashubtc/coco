@@ -4,13 +4,9 @@ import type {
   KeysetRepository,
   MintRepository,
 } from "./repositories";
-import { CounterService } from "./services/CounterService";
-import { MintService } from "./services/MintService";
-import { WalletService } from "./services/WalletService";
-import type { Mint } from "./models/Mint";
-import type { Keyset } from "./models/Keyset";
-import { EventBus } from "./events/EventBus";
-import type { CoreEvents } from "./events/types";
+import { CounterService, MintService, WalletService } from "./services";
+import type { Mint, Keyset } from "./models";
+import { EventBus, type CoreEvents } from "./events";
 
 interface Repositories {
   mintRepository: MintRepository;
