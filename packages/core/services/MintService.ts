@@ -7,6 +7,7 @@ import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
 import { MintAdapter } from "../infra/MintAdapter";
 import type { KeysetRepository, MintRepository } from "../repositories";
+import type { MintInfo } from "../types";
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -19,6 +20,28 @@ export class MintService {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
     this.mintAdapter = new MintAdapter();
+  }
+
+  /**
+   * Add a new mint by URL, running a single update cycle to fetch info & keysets.
+   * If the mint already exists, it ensures it is updated.
+   */
+  async addMintByUrl(
+    mintUrl: string
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    const exists = await this.mintRepo.isKnownMint(mintUrl);
+    if (exists) return this.ensureUpdatedMint(mintUrl);
+
+    const now = Math.floor(Date.now() / 1000);
+    const newMint: Mint = {
+      mintUrl,
+      name: mintUrl,
+      mintInfo: {} as MintInfo,
+      createdAt: now,
+      updatedAt: 0,
+    };
+    // Do not persist before successful sync; updateMint will persist on success
+    return this.updateMint(newMint);
   }
 
   async updateMintData(
