@@ -32,3 +32,32 @@ export class KeysetSyncError extends Error {
     (this as unknown as { cause?: unknown }).cause = cause;
   }
 }
+
+export class ProofValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProofValidationError";
+  }
+}
+
+export class ProofOperationError extends Error {
+  readonly mintUrl: string;
+  readonly keysetId?: string;
+  constructor(
+    mintUrl: string,
+    message?: string,
+    keysetId?: string,
+    cause?: unknown
+  ) {
+    super(
+      message ??
+        `Proof operation failed for mint ${mintUrl}${
+          keysetId ? ` keyset ${keysetId}` : ""
+        }`
+    );
+    this.name = "ProofOperationError";
+    this.mintUrl = mintUrl;
+    this.keysetId = keysetId;
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}

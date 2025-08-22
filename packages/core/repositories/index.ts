@@ -1,6 +1,7 @@
 import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
 import type { Counter } from "../models/Counter";
+import type { Proof } from "@cashu/cashu-ts";
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -22,6 +23,17 @@ export interface KeysetRepository {
 export interface CounterRepository {
   getCounter(mintUrl: string, keysetId: string): Promise<Counter | null>;
   setCounter(mintUrl: string, keysetId: string, counter: number): Promise<void>;
+}
+
+export interface ProofRepository {
+  saveProofs(mintUrl: string, proofs: Proof[]): Promise<void>;
+  getReadyProofs(mintUrl: string): Promise<Proof[]>;
+  setProofState(
+    mintUrl: string,
+    secrets: string[],
+    state: "inflight" | "ready"
+  ): Promise<void>;
+  deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
 }
 
 export * from "./memory";
