@@ -21,7 +21,24 @@ export class MintService {
     this.mintAdapter = new MintAdapter();
   }
 
-  private async ensureUpdatedMint(mintUrl: string): Promise<Mint> {
+  async updateMintData(
+    mintUrl: string
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
+    if (!isKnownMint) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not known`);
+    }
+    const mint = await this.mintRepo.getMintByUrl(mintUrl);
+    return this.updateMint(mint);
+  }
+
+  async isKnownMint(mintUrl: string): Promise<boolean> {
+    return await this.mintRepo.isKnownMint(mintUrl);
+  }
+
+  async ensureUpdatedMint(
+    mintUrl: string
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
     const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
     if (!isKnownMint) {
       throw new UnknownMintError(`Mint ${mintUrl} is not known`);
@@ -33,10 +50,13 @@ export class MintService {
       return await this.updateMint(mint);
     }
 
-    return mint;
+    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    return { mint, keysets };
   }
 
-  private async updateMint(mint: Mint): Promise<Mint> {
+  private async updateMint(
+    mint: Mint
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
     let mintInfo;
     try {
       mintInfo = await this.mintAdapter.fetchMintInfo(mint.mintUrl);
@@ -92,6 +112,7 @@ export class MintService {
     mint.updatedAt = Math.floor(Date.now() / 1000);
     await this.mintRepo.updateMint(mint);
 
-    return mint;
+    const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    return { mint, keysets: repoKeysets };
   }
 }
