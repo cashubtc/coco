@@ -1,4 +1,5 @@
 import type { Proof } from "@cashu/cashu-ts";
+import type { CoreProof } from "../types";
 import type { CounterService } from "./CounterService";
 import type { ProofRepository } from "../repositories";
 import { EventBus } from "../events/EventBus";
@@ -60,8 +61,12 @@ export class ProofService {
     }
   }
 
-  async getReadyProofs(mintUrl: string): Promise<Proof[]> {
+  async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
     return this.proofRepository.getReadyProofs(mintUrl);
+  }
+
+  async getAllReadyProofs(): Promise<CoreProof[]> {
+    return this.proofRepository.getAllReadyProofs();
   }
 
   async setProofState(

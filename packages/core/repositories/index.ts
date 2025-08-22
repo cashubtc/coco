@@ -2,6 +2,7 @@ import type { Mint } from "../models/Mint";
 import type { Keyset } from "../models/Keyset";
 import type { Counter } from "../models/Counter";
 import type { Proof } from "@cashu/cashu-ts";
+import type { CoreProof } from "../types";
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -27,7 +28,8 @@ export interface CounterRepository {
 
 export interface ProofRepository {
   saveProofs(mintUrl: string, proofs: Proof[]): Promise<void>;
-  getReadyProofs(mintUrl: string): Promise<Proof[]>;
+  getReadyProofs(mintUrl: string): Promise<CoreProof[]>;
+  getAllReadyProofs(): Promise<CoreProof[]>;
   setProofState(
     mintUrl: string,
     secrets: string[],

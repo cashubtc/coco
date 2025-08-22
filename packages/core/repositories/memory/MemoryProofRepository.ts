@@ -1,10 +1,12 @@
 import type { Proof } from "@cashu/cashu-ts";
 import type { ProofRepository } from "..";
+import type { CoreProof } from "../../types";
 
 type ProofState = "inflight" | "ready";
 
 interface StoredProof extends Proof {
   _state: ProofState;
+  mintUrl: string;
 }
 
 export class MemoryProofRepository implements ProofRepository {
@@ -27,15 +29,28 @@ export class MemoryProofRepository implements ProofRepository {
       }
     }
     for (const p of proofs) {
-      map.set(p.secret, { ...p, _state: "ready" });
+      map.set(p.secret, { ...p, _state: "ready", mintUrl });
     }
   }
 
-  async getReadyProofs(mintUrl: string): Promise<Proof[]> {
+  async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
     return Array.from(map.values())
       .filter((p) => p._state === "ready")
-      .map(({ _state, ...rest }) => rest as Proof);
+      .map(({ _state, ...rest }) => rest as CoreProof);
+  }
+
+  async getAllReadyProofs(): Promise<CoreProof[]> {
+    const all: CoreProof[] = [];
+    for (const map of this.proofsByMint.values()) {
+      for (const p of map.values()) {
+        if (p._state === "ready") {
+          const { _state, ...rest } = p as StoredProof;
+          all.push(rest as CoreProof);
+        }
+      }
+    }
+    return all;
   }
 
   async setProofState(

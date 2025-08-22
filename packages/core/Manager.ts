@@ -3,8 +3,14 @@ import type {
   CounterRepository,
   KeysetRepository,
   MintRepository,
+  ProofRepository,
 } from "./repositories";
-import { CounterService, MintService, WalletService } from "./services";
+import {
+  CounterService,
+  MintService,
+  ProofService,
+  WalletService,
+} from "./services";
 import type { Mint, Keyset } from "./models";
 import { EventBus, type CoreEvents } from "./events";
 
@@ -12,12 +18,14 @@ interface Repositories {
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
+  proofRepository: ProofRepository;
 }
 
 export class Manager {
   private mintService: MintService;
   private walletService: WalletService;
   private counterService: CounterService;
+  private proofService: ProofService;
   private eventBus: EventBus<CoreEvents>;
 
   constructor(repositories: Repositories) {
@@ -30,6 +38,11 @@ export class Manager {
     this.walletService = new WalletService(this.mintService);
     this.counterService = new CounterService(
       repositories.counterRepository,
+      this.eventBus
+    );
+    this.proofService = new ProofService(
+      this.counterService,
+      repositories.proofRepository,
       this.eventBus
     );
   }
@@ -69,6 +82,17 @@ export class Manager {
     const wallet = await this.walletService.getWallet(mintUrl);
     const keysetId = wallet.getActiveKeyset(wallet.keysets).id;
     return { wallet, keysetId };
+  }
+
+  async getBalances(): Promise<{ [mintUrl: string]: number }> {
+    const proofs = await this.proofService.getAllReadyProofs();
+    const balances: { [mintUrl: string]: number } = {};
+    for (const proof of proofs) {
+      const mintUrl = proof.mintUrl;
+      const balance = balances[mintUrl] || 0;
+      balances[mintUrl] = balance + proof.amount;
+    }
+    return balances;
   }
 
   async getCounter(mintUrl: string, keysetId: string): Promise<number> {
