@@ -1,10 +1,5 @@
-import type { CashuWallet } from "@cashu/cashu-ts";
-import type {
-  CounterRepository,
-  KeysetRepository,
-  MintRepository,
-  ProofRepository,
-} from "./repositories";
+import type { CashuWallet, Proof } from "@cashu/cashu-ts";
+import type { Repositories } from "./repositories";
 import {
   CounterService,
   MintService,
@@ -14,12 +9,7 @@ import {
 import type { Mint, Keyset } from "./models";
 import { EventBus, type CoreEvents } from "./events";
 
-interface Repositories {
-  mintRepository: MintRepository;
-  counterRepository: CounterRepository;
-  keysetRepository: KeysetRepository;
-  proofRepository: ProofRepository;
-}
+// Repositories interface is imported from ./repositories
 
 export class Manager {
   private mintService: MintService;
@@ -98,6 +88,14 @@ export class Manager {
   async getCounter(mintUrl: string, keysetId: string): Promise<number> {
     const counter = await this.counterService.getCounter(mintUrl, keysetId);
     return counter.counter;
+  }
+
+  async mintProofs(mintUrl: string, amount: number): Promise<Proof[]> {
+    const { wallet, keysetId } = await this.getWallet(mintUrl);
+    const quote = await wallet.createMintQuote(amount);
+    const proofs = await wallet.mintProofs(amount, quote.quote, { keysetId });
+    await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+    return proofs;
   }
 
   async incrementCounter(

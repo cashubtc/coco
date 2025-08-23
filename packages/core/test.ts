@@ -1,29 +1,30 @@
 import { Manager } from "./Manager";
-import { MemoryMintRepository } from "./repositories/memory/MemoryMintRepository";
-import { MemoryKeysetRepository } from "./repositories/memory/MemoryKeysetRepository";
-import { MemoryCounterRepository } from "./repositories/memory/MemoryCounterRepository";
+import { MemoryRepositories } from "./repositories/memory/MemoryRepositories";
 
-const mintRepository = new MemoryMintRepository();
-const keysetRepository = new MemoryKeysetRepository();
-const counterRepository = new MemoryCounterRepository();
+const repositories = new MemoryRepositories();
 
-const testManager = new Manager({
-  mintRepository,
-  counterRepository,
-  keysetRepository,
-});
+const testManager = new Manager(repositories);
 
 testManager.on("counter:updated", (counter) => {
-  console.log("Counter updated:", counter);
+  console.log("Counter updated:", counter.counter);
+});
+
+testManager.on("proofs:saved", async () => {
+  const balances = await testManager.getBalances();
+  console.log("Balances:", balances);
 });
 
 const mintUrl = "https://nofees.testnut.cashu.space";
 
-// Register mint by URL; this fetches info and keysets once and persists in memory
 await testManager.addMint(mintUrl);
-const { wallet, keysetId } = await testManager.getWallet(mintUrl);
-const currentCounter = await testManager.getCounter(mintUrl, keysetId);
+await testManager.addMint(mintUrl);
 
-const firstQuote = await wallet.createMintQuote(21);
-const firstMint = await wallet.mintProofs(21, firstQuote.quote, { keysetId });
-await testManager.incrementCounter(mintUrl, keysetId, firstMint.length);
+console.log("Minting...");
+const firstMint = await testManager.mintProofs(mintUrl, 21);
+console.log("Minting...");
+const secondMint = await testManager.mintProofs(mintUrl, 21);
+console.log("Minting...");
+const thirdMint = await testManager.mintProofs(mintUrl, 21);
+
+const finalBalance = await testManager.getBalances();
+console.log("Final Balances: ", finalBalance);

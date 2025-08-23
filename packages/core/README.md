@@ -15,10 +15,12 @@ bun install
 ## Quick start
 
 ```ts
-import { Manager } from "coco-cashu/core/Manager";
-import { MemoryMintRepository } from "coco-cashu/core/repositories/memory/MemoryMintRepository";
-import { MemoryKeysetRepository } from "coco-cashu/core/repositories/memory/MemoryKeysetRepository";
-import { MemoryCounterRepository } from "coco-cashu/core/repositories/memory/MemoryCounterRepository";
+import { Manager } from "coco-cashu/core";
+import {
+  MemoryMintRepository,
+  MemoryKeysetRepository,
+  MemoryCounterRepository,
+} from "coco-cashu/core";
 
 const manager = new Manager({
   mintRepository: new MemoryMintRepository(),
@@ -75,11 +77,3 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `mint:added` → `{ mint, keysets }`
 - `mint:updated` → `{ mint, keysets }`
 - `counter:updated` → `Counter`
-
-## Developing
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.2.18. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.

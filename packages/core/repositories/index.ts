@@ -38,4 +38,11 @@ export interface ProofRepository {
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
 }
 
+export interface Repositories {
+  mintRepository: MintRepository;
+  counterRepository: CounterRepository;
+  keysetRepository: KeysetRepository;
+  proofRepository: ProofRepository;
+}
+
 export * from "./memory";
