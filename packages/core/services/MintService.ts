@@ -1,15 +1,11 @@
-import {
-  KeysetSyncError,
-  MintFetchError,
-  UnknownMintError,
-} from "../models/Error";
-import type { Mint } from "../models/Mint";
-import type { Keyset } from "../models/Keyset";
-import { MintAdapter } from "../infra/MintAdapter";
-import type { KeysetRepository, MintRepository } from "../repositories";
-import { EventBus } from "../events/EventBus";
-import type { CoreEvents } from "../events/types";
-import type { MintInfo } from "../types";
+import { KeysetSyncError, MintFetchError, UnknownMintError } from '../models/Error';
+import type { Mint } from '../models/Mint';
+import type { Keyset } from '../models/Keyset';
+import { MintAdapter } from '../infra/MintAdapter';
+import type { KeysetRepository, MintRepository } from '../repositories';
+import { EventBus } from '../events/EventBus';
+import type { CoreEvents } from '../events/types';
+import type { MintInfo } from '../types';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -22,7 +18,7 @@ export class MintService {
   constructor(
     mintRepo: MintRepository,
     keysetRepo: KeysetRepository,
-    eventBus?: EventBus<CoreEvents>
+    eventBus?: EventBus<CoreEvents>,
   ) {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
@@ -34,9 +30,7 @@ export class MintService {
    * Add a new mint by URL, running a single update cycle to fetch info & keysets.
    * If the mint already exists, it ensures it is updated.
    */
-  async addMintByUrl(
-    mintUrl: string
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  async addMintByUrl(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
     const exists = await this.mintRepo.isKnownMint(mintUrl);
     if (exists) return this.ensureUpdatedMint(mintUrl);
 
@@ -50,13 +44,11 @@ export class MintService {
     };
     // Do not persist before successful sync; updateMint will persist on success
     const added = await this.updateMint(newMint);
-    await this.eventBus?.emit("mint:added", added);
+    await this.eventBus?.emit('mint:added', added);
     return added;
   }
 
-  async updateMintData(
-    mintUrl: string
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
     const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
     if (!isKnownMint) {
       throw new UnknownMintError(`Mint ${mintUrl} is not known`);
@@ -69,9 +61,7 @@ export class MintService {
     return await this.mintRepo.isKnownMint(mintUrl);
   }
 
-  async ensureUpdatedMint(
-    mintUrl: string
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
     const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
     if (!isKnownMint) {
       throw new UnknownMintError(`Mint ${mintUrl} is not known`);
@@ -81,7 +71,7 @@ export class MintService {
     const now = Math.floor(Date.now() / 1000);
     if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
       const updated = await this.updateMint(mint);
-      await this.eventBus?.emit("mint:updated", updated);
+      await this.eventBus?.emit('mint:updated', updated);
       return updated;
     }
 
@@ -89,9 +79,7 @@ export class MintService {
     return { mint, keysets };
   }
 
-  private async updateMint(
-    mint: Mint
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+  private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
     let mintInfo;
     try {
       mintInfo = await this.mintAdapter.fetchMintInfo(mint.mintUrl);
@@ -103,16 +91,13 @@ export class MintService {
     try {
       ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
     } catch (err) {
-      throw new MintFetchError(mint.mintUrl, "Failed to fetch keysets", err);
+      throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
     }
     await Promise.all(
       keysets.map(async (ks) => {
-        const existingKeyset = await this.keysetRepo.getKeysetById(
-          mint.mintUrl,
-          ks.id
-        );
+        const existingKeyset = await this.keysetRepo.getKeysetById(mint.mintUrl, ks.id);
         if (existingKeyset) {
-          const keysetModel: Omit<Keyset, "keypairs" | "updatedAt"> = {
+          const keysetModel: Omit<Keyset, 'keypairs' | 'updatedAt'> = {
             mintUrl: mint.mintUrl,
             id: ks.id,
             active: ks.active,
@@ -121,12 +106,9 @@ export class MintService {
           return this.keysetRepo.updateKeyset(keysetModel);
         } else {
           try {
-            const keysRes = await this.mintAdapter.fetchKeysForId(
-              mint.mintUrl,
-              ks.id
-            );
+            const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
             const keypairs = Object.fromEntries(
-              Object.entries(keysRes).map(([k, v]) => [Number(k), v])
+              Object.entries(keysRes).map(([k, v]) => [Number(k), v]),
             ) as Record<number, string>;
             return this.keysetRepo.addKeyset({
               mintUrl: mint.mintUrl,
@@ -139,7 +121,7 @@ export class MintService {
             throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
           }
         }
-      })
+      }),
     );
 
     // Persist mint updates only after successful fetch and keyset sync

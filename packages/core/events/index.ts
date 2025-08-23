@@ -1,2 +1,2 @@
-export * from "./EventBus";
-export * from "./types";
+export * from './EventBus';
+export * from './types';

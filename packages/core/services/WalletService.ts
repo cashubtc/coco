@@ -1,5 +1,5 @@
-import { CashuMint, CashuWallet, type MintKeyset } from "@cashu/cashu-ts";
-import type { MintService } from "./MintService";
+import { CashuMint, CashuWallet, type MintKeyset } from '@cashu/cashu-ts';
+import type { MintService } from './MintService';
 
 interface CachedWallet {
   wallet: CashuWallet;
@@ -18,7 +18,7 @@ export class WalletService {
 
   async getWallet(mintUrl: string): Promise<CashuWallet> {
     if (!mintUrl || mintUrl.trim().length === 0) {
-      throw new Error("mintUrl is required");
+      throw new Error('mintUrl is required');
     }
 
     // Serve from cache when fresh
@@ -66,7 +66,7 @@ export class WalletService {
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
     const validKeysets = keysets.filter(
-      (keyset) => keyset.keypairs && Object.keys(keyset.keypairs).length > 0
+      (keyset) => keyset.keypairs && Object.keys(keyset.keypairs).length > 0,
     );
 
     if (validKeysets.length === 0) {
@@ -75,13 +75,13 @@ export class WalletService {
 
     const keys = validKeysets.map((keyset) => ({
       id: keyset.id,
-      unit: "sat" as const,
+      unit: 'sat' as const,
       keys: keyset.keypairs,
     }));
 
     const compatibleKeysets: MintKeyset[] = validKeysets.map((k) => ({
       id: k.id,
-      unit: "sat" as const,
+      unit: 'sat' as const,
       active: k.active,
       input_fee_ppk: k.feePpk,
     }));

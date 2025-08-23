@@ -1,4 +1,4 @@
-import type { MintInfo } from "../types";
+import type { MintInfo } from '../types';
 
 export interface Mint {
   mintUrl: string;

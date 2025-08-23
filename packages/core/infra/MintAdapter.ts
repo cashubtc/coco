@@ -1,5 +1,5 @@
-import { CashuMint, type MintAllKeysets } from "@cashu/cashu-ts";
-import type { MintInfo } from "../types";
+import { CashuMint, type MintAllKeysets } from '@cashu/cashu-ts';
+import type { MintInfo } from '../types';
 
 export class MintAdapter {
   private cashuMints: Record<string, CashuMint> = {};
@@ -14,10 +14,7 @@ export class MintAdapter {
     return await cashuMint.getKeySets();
   }
 
-  async fetchKeysForId(
-    mintUrl: string,
-    id: string
-  ): Promise<Record<number, string>> {
+  async fetchKeysForId(mintUrl: string, id: string): Promise<Record<number, string>> {
     const cashuMint = await this.getCashuMint(mintUrl);
     const { keysets } = await cashuMint.getKeys(id);
     if (keysets.length !== 1 || !keysets[0]) {

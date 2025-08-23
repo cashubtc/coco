@@ -1,5 +1,5 @@
-import type { Keyset } from "../../models/Keyset";
-import type { KeysetRepository } from "..";
+import type { Keyset } from '../../models/Keyset';
+import type { KeysetRepository } from '..';
 
 export class MemoryKeysetRepository implements KeysetRepository {
   private keysetsByMint: Map<string, Map<string, Keyset>> = new Map();
@@ -19,9 +19,7 @@ export class MemoryKeysetRepository implements KeysetRepository {
     return this.getMintMap(mintUrl).get(id) ?? null;
   }
 
-  async updateKeyset(
-    keyset: Omit<Keyset, "keypairs" | "updatedAt">
-  ): Promise<void> {
+  async updateKeyset(keyset: Omit<Keyset, 'keypairs' | 'updatedAt'>): Promise<void> {
     const mintMap = this.getMintMap(keyset.mintUrl);
     const existing = mintMap.get(keyset.id);
     if (!existing) {
@@ -41,7 +39,7 @@ export class MemoryKeysetRepository implements KeysetRepository {
     });
   }
 
-  async addKeyset(keyset: Omit<Keyset, "updatedAt">): Promise<void> {
+  async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const mintMap = this.getMintMap(keyset.mintUrl);
     mintMap.set(keyset.id, {
       ...keyset,

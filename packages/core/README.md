@@ -15,12 +15,12 @@ bun install
 ## Quick start
 
 ```ts
-import { Manager } from "coco-cashu/core";
+import { Manager } from 'coco-cashu/core';
 import {
   MemoryMintRepository,
   MemoryKeysetRepository,
   MemoryCounterRepository,
-} from "coco-cashu/core";
+} from 'coco-cashu/core';
 
 const manager = new Manager({
   mintRepository: new MemoryMintRepository(),
@@ -29,19 +29,14 @@ const manager = new Manager({
 });
 
 // Subscribe to events (typed)
-const unsubscribe = manager.on("counter:updated", (c) => {
-  console.log("counter updated", c);
+const unsubscribe = manager.on('counter:updated', (c) => {
+  console.log('counter updated', c);
 });
 
 // Register a mint and get a wallet
-await manager.addMint("https://nofees.testnut.cashu.space");
-const { wallet, keysetId } = await manager.getWallet(
-  "https://nofees.testnut.cashu.space"
-);
-const counter = await manager.getCounter(
-  "https://nofees.testnut.cashu.space",
-  keysetId
-);
+await manager.addMint('https://nofees.testnut.cashu.space');
+const { wallet, keysetId } = await manager.getWallet('https://nofees.testnut.cashu.space');
+const counter = await manager.getCounter('https://nofees.testnut.cashu.space', keysetId);
 ```
 
 ## Architecture

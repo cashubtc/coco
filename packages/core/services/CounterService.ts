@@ -1,7 +1,7 @@
-import type { Counter } from "../models/Counter";
-import type { CounterRepository } from "../repositories";
-import { EventBus } from "../events/EventBus";
-import type { CoreEvents } from "../events/types";
+import type { Counter } from '../models/Counter';
+import type { CounterRepository } from '../repositories';
+import { EventBus } from '../events/EventBus';
+import type { CoreEvents } from '../events/types';
 
 export class CounterService {
   private readonly counterRepo: CounterRepository;
@@ -31,7 +31,7 @@ export class CounterService {
     const updatedValue = current.counter + n;
     await this.counterRepo.setCounter(mintUrl, keysetId, updatedValue);
     const updated = { ...current, counter: updatedValue };
-    await this.eventBus?.emit("counter:updated", updated);
+    await this.eventBus?.emit('counter:updated', updated);
     return updated;
   }
 }

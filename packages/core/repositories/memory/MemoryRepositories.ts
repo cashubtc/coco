@@ -4,11 +4,11 @@ import type {
   KeysetRepository,
   CounterRepository,
   ProofRepository,
-} from "..";
-import { MemoryMintRepository } from "./MemoryMintRepository";
-import { MemoryKeysetRepository } from "./MemoryKeysetRepository";
-import { MemoryCounterRepository } from "./MemoryCounterRepository";
-import { MemoryProofRepository } from "./MemoryProofRepository";
+} from '..';
+import { MemoryMintRepository } from './MemoryMintRepository';
+import { MemoryKeysetRepository } from './MemoryKeysetRepository';
+import { MemoryCounterRepository } from './MemoryCounterRepository';
+import { MemoryProofRepository } from './MemoryProofRepository';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;

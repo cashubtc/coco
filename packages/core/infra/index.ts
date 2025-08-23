@@ -1,1 +1,1 @@
-export * from "./MintAdapter";
+export * from './MintAdapter';

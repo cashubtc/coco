@@ -1,30 +1,30 @@
-import { Manager } from "./Manager";
-import { MemoryRepositories } from "./repositories/memory/MemoryRepositories";
+import { Manager } from './Manager';
+import { MemoryRepositories } from './repositories/memory/MemoryRepositories';
 
 const repositories = new MemoryRepositories();
 
 const testManager = new Manager(repositories);
 
-testManager.on("counter:updated", (counter) => {
-  console.log("Counter updated:", counter.counter);
+testManager.on('counter:updated', (counter) => {
+  console.log('Counter updated:', counter.counter);
 });
 
-testManager.on("proofs:saved", async () => {
+testManager.on('proofs:saved', async () => {
   const balances = await testManager.getBalances();
-  console.log("Balances:", balances);
+  console.log('Balances:', balances);
 });
 
-const mintUrl = "https://nofees.testnut.cashu.space";
+const mintUrl = 'https://nofees.testnut.cashu.space';
 
 await testManager.addMint(mintUrl);
 await testManager.addMint(mintUrl);
 
-console.log("Minting...");
+console.log('Minting...');
 await testManager.mintProofs(mintUrl, 21);
-console.log("Minting...");
+console.log('Minting...');
 await testManager.mintProofs(mintUrl, 21);
-console.log("Minting...");
+console.log('Minting...');
 await testManager.mintProofs(mintUrl, 21);
 
 const finalBalance = await testManager.getBalances();
-console.log("Final Balances: ", finalBalance);
+console.log('Final Balances: ', finalBalance);

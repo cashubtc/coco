@@ -1,5 +1,5 @@
-import type { Mint } from "../../models/Mint";
-import type { MintRepository } from "..";
+import type { Mint } from '../../models/Mint';
+import type { MintRepository } from '..';
 
 export class MemoryMintRepository implements MintRepository {
   private mints: Map<string, Mint> = new Map();
