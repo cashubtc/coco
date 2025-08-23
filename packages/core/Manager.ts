@@ -95,7 +95,6 @@ export class Manager {
     const quote = await wallet.createMintQuote(amount);
     const proofs = await wallet.mintProofs(amount, quote.quote, { keysetId });
     await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
-    return proofs;
   }
 
   async incrementCounter(

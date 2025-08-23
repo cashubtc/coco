@@ -20,11 +20,11 @@ await testManager.addMint(mintUrl);
 await testManager.addMint(mintUrl);
 
 console.log("Minting...");
-const firstMint = await testManager.mintProofs(mintUrl, 21);
+await testManager.mintProofs(mintUrl, 21);
 console.log("Minting...");
-const secondMint = await testManager.mintProofs(mintUrl, 21);
+await testManager.mintProofs(mintUrl, 21);
 console.log("Minting...");
-const thirdMint = await testManager.mintProofs(mintUrl, 21);
+await testManager.mintProofs(mintUrl, 21);
 
 const finalBalance = await testManager.getBalances();
 console.log("Final Balances: ", finalBalance);
