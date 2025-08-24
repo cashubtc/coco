@@ -1,10 +1,8 @@
-import { getDecodedToken, type CashuWallet, type Proof, type Token } from '@cashu/cashu-ts';
+import { getDecodedToken, type CashuWallet, type Token } from '@cashu/cashu-ts';
 import type { Repositories } from './repositories';
 import { CounterService, MintService, ProofService, WalletService } from './services';
 import { type Mint, type Keyset, UnknownMintError } from './models';
 import { EventBus, type CoreEvents } from './events';
-
-// Repositories interface is imported from ./repositories
 
 export class Manager {
   private mintService: MintService;
@@ -90,54 +88,15 @@ export class Manager {
   }
 
   async receive(token: Token | string) {
-    const decoded: Token = typeof token === 'string' ? getDecodedToken(token) : token;
+    const { mint, proofs }: Token = typeof token === 'string' ? getDecodedToken(token) : token;
 
-    const entries = this.normalizeTokenToEntries(decoded);
-    if (entries.length === 0) return;
-
-    // Ensure all mints are known up-front
-    await Promise.all(
-      entries.map(async (entry) => {
-        const known = await this.mintService.isKnownMint(entry.mint);
-        if (!known) {
-          throw new UnknownMintError(`Mint ${entry.mint} is not known`);
-        }
-      }),
-    );
-
-    await Promise.all(
-      entries.map(async (entry) => {
-        const wallet = await this.walletService.getWallet(entry.mint);
-        const singleMintToken = { token: [entry] } as unknown as Token;
-        const newProofs = await wallet.receive(singleMintToken);
-        await this.proofService.saveProofsAndIncrementCounters(entry.mint, newProofs);
-      }),
-    );
-  }
-
-  private normalizeTokenToEntries(token: Token): Array<{ mint: string; proofs: Proof[] }> {
-    const t = token as unknown as {
-      mint?: string;
-      proofs?: Proof[];
-      token?: Array<{ mint: string; proofs: Proof[] }>;
-    };
-
-    if (t && typeof t.mint === 'string' && Array.isArray(t.proofs)) {
-      return [{ mint: t.mint, proofs: t.proofs }];
+    const known = await this.mintService.isKnownMint(mint);
+    if (!known) {
+      throw new UnknownMintError(`Mint ${mint} is not known`);
     }
 
-    if (t && Array.isArray(t.token)) {
-      // Filter out any malformed entries defensively
-      return t.token.filter((e) => typeof e.mint === 'string' && Array.isArray(e.proofs));
-    }
-
-    return [];
+    const wallet = await this.walletService.getWallet(mint);
+    const newProofs = await wallet.receive({ mint, proofs });
+    await this.proofService.saveProofsAndIncrementCounters(mint, newProofs);
   }
-
-  async incrementCounter(mintUrl: string, keysetId: string, number: number): Promise<number> {
-    const counter = await this.counterService.incrementCounter(mintUrl, keysetId, number);
-    return counter.counter;
-  }
-
-  // removed duplicate addMint implementation
 }
