@@ -5,14 +5,13 @@ const repositories = new MemoryRepositories();
 
 const testManager = new Manager(repositories);
 
-testManager.on('counter:updated', (counter) => {
-  console.log('Counter updated:', counter.counter);
-});
-
-testManager.on('proofs:saved', async () => {
+async function logBalances() {
   const balances = await testManager.getBalances();
   console.log('Balances:', balances);
-});
+}
+
+testManager.on('proofs:saved', logBalances);
+testManager.on('proofs:state-changed', logBalances);
 
 const mintUrl = 'https://nofees.testnut.cashu.space';
 
@@ -26,5 +25,6 @@ await testManager.mintProofs(mintUrl, 21);
 console.log('Minting...');
 await testManager.mintProofs(mintUrl, 21);
 
-const finalBalance = await testManager.getBalances();
-console.log('Final Balances: ', finalBalance);
+const send = await testManager.send(mintUrl, 21);
+
+await testManager.receive(send);
