@@ -23,6 +23,7 @@ export class Manager {
     this.proofService = new ProofService(
       this.counterService,
       repositories.proofRepository,
+      this.walletService,
       this.eventBus,
     );
   }
@@ -98,5 +99,21 @@ export class Manager {
     const wallet = await this.walletService.getWallet(mint);
     const newProofs = await wallet.receive({ mint, proofs });
     await this.proofService.saveProofsAndIncrementCounters(mint, newProofs);
+  }
+
+  async send(mintUrl: string, amount: number): Promise<Token> {
+    const cashuWallet = await this.walletService.getWallet(mintUrl);
+    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
+    const { send, keep } = await cashuWallet.send(amount, selectedProofs);
+    await this.proofService.saveProofsAndIncrementCounters(mintUrl, keep);
+    await this.proofService.setProofState(
+      mintUrl,
+      send.map((proof) => proof.secret),
+      'inflight',
+    );
+    return {
+      mint: mintUrl,
+      proofs: send,
+    };
   }
 }

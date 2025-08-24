@@ -5,18 +5,21 @@ import type { ProofRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
+import { WalletService } from './WalletService';
 
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
   private readonly eventBus?: EventBus<CoreEvents>;
-
+  private readonly walletService: WalletService;
   constructor(
     counterService: CounterService,
     proofRepository: ProofRepository,
+    walletService: WalletService,
     eventBus?: EventBus<CoreEvents>,
   ) {
     this.counterService = counterService;
+    this.walletService = walletService;
     this.proofRepository = proofRepository;
     this.eventBus = eventBus;
   }
@@ -96,6 +99,16 @@ export class ProofService {
     }
   }
 
+  async selectProofsToSend(mintUrl: string, amount: number): Promise<Proof[]> {
+    const proofs = await this.getReadyProofs(mintUrl);
+    const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
+    if (totalAmount < amount) {
+      throw new ProofValidationError('Not enough proofs to send');
+    }
+    const cashuWallet = await this.walletService.getWallet(mintUrl);
+    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount);
+    return selectedProofs.send;
+  }
   private groupProofsByKeysetId(proofs: Proof[]): Map<string, Proof[]> {
     const map = new Map<string, Proof[]>();
     for (const proof of proofs) {
