@@ -1,15 +1,17 @@
-# sqlite3
+# coco-cashu sqlite3 adapter
 
-To install dependencies:
-
-```bash
-bun install
-```
-
-To run:
+## Install deps
 
 ```bash
-bun run index.ts
+npm i
 ```
 
-This project was created using `bun init` in bun v1.2.18. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+## Build
+
+```bash
+npm run build
+```
+
+## Notes
+
+- The `coco_cashu_keysets` table no longer has a foreign key to `coco_cashu_mints`. Keysets are deleted manually in the repository when a mint is deleted. This improves compatibility with backends that cannot perform async work inside transactions (e.g., IndexedDB) and avoids FK timing issues during initial sync.
