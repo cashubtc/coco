@@ -33,10 +33,15 @@ const unsubscribe = manager.on('counter:updated', (c) => {
   console.log('counter updated', c);
 });
 
-// Register a mint and get a wallet
+// Register a mint
 await manager.addMint('https://nofees.testnut.cashu.space');
-const { wallet, keysetId } = await manager.getWallet('https://nofees.testnut.cashu.space');
-const counter = await manager.getCounter('https://nofees.testnut.cashu.space', keysetId);
+
+// Mint some proofs
+await manager.mintProofs('https://nofees.testnut.cashu.space', 100);
+
+// Check balances
+const balances = await manager.getBalances();
+console.log('balances', balances);
 ```
 
 ## Architecture
@@ -62,7 +67,6 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### Manager
 
 - `addMint(mintUrl: string): Promise<{ mint; keysets; }>`
-- `getWallet(mintUrl: string): Promise<{ wallet; keysetId; }>`
 - `getCounter(mintUrl: string, keysetId: string): Promise<number>`
 - `incrementCounter(mintUrl: string, keysetId: string, n: number): Promise<number>`
 - `on/once/off` for `CoreEvents`

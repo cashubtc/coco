@@ -39,6 +39,15 @@ export class WalletService {
     return promise;
   }
 
+  async getWalletWithActiveKeysetId(mintUrl: string): Promise<{
+    wallet: CashuWallet;
+    keysetId: string;
+  }> {
+    const wallet = await this.getWallet(mintUrl);
+    const keysetId = wallet.getActiveKeyset(wallet.keysets).id;
+    return { wallet, keysetId };
+  }
+
   /**
    * Clear cached wallet for a specific mint URL
    */

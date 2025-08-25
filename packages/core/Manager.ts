@@ -1,4 +1,4 @@
-import { getDecodedToken, type CashuWallet, type Token } from '@cashu/cashu-ts';
+import { getDecodedToken, type MintQuoteResponse, type Token } from '@cashu/cashu-ts';
 import type { Repositories } from './repositories';
 import { CounterService, MintService, ProofService, WalletService } from './services';
 import { type Mint, type Keyset, UnknownMintError } from './models';
@@ -56,15 +56,6 @@ export class Manager {
     return this.eventBus.off(event, handler);
   }
 
-  async getWallet(mintUrl: string): Promise<{
-    wallet: CashuWallet;
-    keysetId: string;
-  }> {
-    const wallet = await this.walletService.getWallet(mintUrl);
-    const keysetId = wallet.getActiveKeyset(wallet.keysets).id;
-    return { wallet, keysetId };
-  }
-
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
     const proofs = await this.proofService.getAllReadyProofs();
     const balances: { [mintUrl: string]: number } = {};
@@ -82,10 +73,24 @@ export class Manager {
   }
 
   async mintProofs(mintUrl: string, amount: number): Promise<void> {
-    const { wallet, keysetId } = await this.getWallet(mintUrl);
+    const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const quote = await wallet.createMintQuote(amount);
-    const proofs = await wallet.mintProofs(amount, quote.quote, { keysetId });
-    await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+
+    const handleQuotePaid = async (paidQuote: MintQuoteResponse) => {
+      const proofs = await wallet.mintProofs(amount, paidQuote.quote, { keysetId });
+      await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+    };
+
+    const handleError = () => {
+      throw new Error('Mint quote payment failed or was cancelled');
+    };
+
+    await wallet.onMintQuotePaid(quote.quote, handleQuotePaid, handleError);
+  }
+
+  async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
+    const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const proofs = await wallet.mintProofs(21, quoteId, { keysetId });
   }
 
   async receive(token: Token | string) {
