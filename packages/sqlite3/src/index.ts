@@ -11,6 +11,7 @@ import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
+import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -19,6 +20,8 @@ export class SqliteRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
+  // narrow type is fine in consumers via structural typing
+  readonly mintQuoteRepository: SqliteMintQuoteRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -27,6 +30,7 @@ export class SqliteRepositories implements Repositories {
     this.counterRepository = new SqliteCounterRepository(this.db);
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
+    this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -41,4 +45,5 @@ export {
   SqliteKeysetRepository,
   SqliteCounterRepository,
   SqliteProofRepository,
+  SqliteMintQuoteRepository,
 };
