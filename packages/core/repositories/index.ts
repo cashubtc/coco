@@ -3,6 +3,7 @@ import type { Keyset } from '../models/Keyset';
 import type { Counter } from '../models/Counter';
 import type { Proof } from '@cashu/cashu-ts';
 import type { CoreProof } from '../types';
+import type { MintQuote } from '@core/models/MintQuote';
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -34,11 +35,18 @@ export interface ProofRepository {
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
 }
 
+export interface MintQuoteRepository {
+  getMintQuote(mintUrl: string, quoteId: string): Promise<MintQuote | null>;
+  addMintQuote(quote: MintQuote): Promise<void>;
+  setMintQuoteState(mintUrl: string, quoteId: string, state: MintQuote['state']): Promise<void>;
+}
+
 export interface Repositories {
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
+  mintQuoteRepository: MintQuoteRepository;
 }
 
 export * from './memory';
