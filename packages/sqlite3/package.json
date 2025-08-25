@@ -3,9 +3,20 @@
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "tsdown": "^0.14.1"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    }
   },
   "dependencies": {},
+  "scripts": {
+    "build": "tsdown"
+  },
   "peerDependencies": {
     "typescript": "^5",
     "sqlite3": "^5",

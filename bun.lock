@@ -25,6 +25,7 @@
       "name": "cashu-coco-sqlite3",
       "devDependencies": {
         "@types/bun": "latest",
+        "tsdown": "^0.14.1",
       },
       "peerDependencies": {
         "coco-cashu-core": "workspace:*",
