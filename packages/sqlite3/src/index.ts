@@ -4,7 +4,7 @@ import type {
   KeysetRepository,
   CounterRepository,
   ProofRepository,
-} from './core.ts';
+} from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
@@ -23,13 +23,14 @@ export class SqliteRepositories implements Repositories {
 
   constructor(options: SqliteRepositoriesOptions) {
     this.db = new SqliteDb(options);
-    // fire and forget is fine; but keep await for correctness
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ensureSchema(this.db);
     this.mintRepository = new SqliteMintRepository(this.db);
     this.counterRepository = new SqliteCounterRepository(this.db);
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
+  }
+
+  async init(): Promise<void> {
+    await ensureSchema(this.db);
   }
 }
 

@@ -5,10 +5,10 @@
   "devDependencies": {
     "@types/bun": "latest"
   },
-  "dependencies": {
-    "sqlite3": "^5.1.7"
-  },
+  "dependencies": {},
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5",
+    "sqlite3": "^5",
+    "coco-cashu-core": "workspace:*"
   }
 }

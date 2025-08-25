@@ -1,5 +1,5 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { ProofRepository, CoreProof } from '../core.ts';
+import type { ProofRepository, CoreProof } from 'coco-cashu-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type ProofState = 'inflight' | 'ready';

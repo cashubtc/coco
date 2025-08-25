@@ -1,4 +1,4 @@
-import type { KeysetRepository, Keyset } from '../core.ts';
+import type { KeysetRepository, Keyset } from 'coco-cashu-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 export class SqliteKeysetRepository implements KeysetRepository {
@@ -29,7 +29,7 @@ export class SqliteKeysetRepository implements KeysetRepository {
           active: !!r.active,
           feePpk: r.feePpk,
           updatedAt: r.updatedAt,
-        } satisfies Keyset),
+        }) satisfies Keyset,
     );
   }
 
