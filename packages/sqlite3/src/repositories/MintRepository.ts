@@ -55,7 +55,7 @@ export class SqliteMintRepository implements MintRepository {
           mintInfo: JSON.parse(r.mintInfo),
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
-        }) satisfies Mint,
+        } satisfies Mint),
     );
   }
 
