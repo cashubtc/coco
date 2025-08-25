@@ -79,6 +79,15 @@ export class MintService {
     return { mint, keysets };
   }
 
+  async deleteMint(mintUrl: string): Promise<void> {
+    const isKnown = await this.mintRepo.isKnownMint(mintUrl);
+    if (!isKnown) return;
+
+    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mintUrl);
+    await Promise.all(keysets.map((ks) => this.keysetRepo.deleteKeyset(mintUrl, ks.id)));
+    await this.mintRepo.deleteMint(mintUrl);
+  }
+
   private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
     let mintInfo;
     try {
