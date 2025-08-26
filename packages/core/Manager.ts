@@ -1,4 +1,3 @@
-import { getDecodedToken, type MintQuoteResponse, type Token } from '@cashu/cashu-ts';
 import type { Repositories } from './repositories';
 import {
   CounterService,
@@ -7,17 +6,18 @@ import {
   ProofService,
   WalletService,
 } from './services';
-import { type Mint, type Keyset, UnknownMintError } from './models';
+import { type Mint, type Keyset } from './models';
 import { EventBus, type CoreEvents } from './events';
-import type { Logger } from './logging/Logger.ts';
-import { NullLogger } from './logging/NullLogger.ts';
+import { type Logger, NullLogger } from './logging';
+import { WalletApi, QuotesApi } from './api';
 
 export class Manager {
+  readonly wallet: WalletApi;
+  readonly quotes: QuotesApi;
   private mintService: MintService;
   private walletService: WalletService;
   private counterService: CounterService;
   private proofService: ProofService;
-  private mintQuoteService: MintQuoteService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
 
@@ -66,13 +66,15 @@ export class Manager {
       proofLogger,
       this.eventBus,
     );
-    this.mintQuoteService = new MintQuoteService(
+    const quotesService = new MintQuoteService(
       repositories.mintQuoteRepository,
       this.walletService,
       this.proofService,
       this.eventBus,
       mintQuoteLogger,
     );
+    this.wallet = new WalletApi(this.mintService, this.walletService, this.proofService);
+    this.quotes = new QuotesApi(quotesService);
   }
 
   async addMint(mintUrl: string): Promise<{
@@ -112,60 +114,5 @@ export class Manager {
       balances[mintUrl] = balance + proof.amount;
     }
     return balances;
-  }
-
-  async getCounter(mintUrl: string, keysetId: string): Promise<number> {
-    const counter = await this.counterService.getCounter(mintUrl, keysetId);
-    return counter.counter;
-  }
-
-  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
-    return this.mintQuoteService.createMintQuote(mintUrl, amount);
-  }
-
-  async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
-    return this.mintQuoteService.redeemMintQuote(mintUrl, quoteId);
-  }
-
-  async mintQuote(
-    mintUrl: string,
-    amount: number,
-  ): Promise<{
-    quote: MintQuoteResponse;
-    handlePayment: () => {
-      promise: Promise<MintQuoteResponse>;
-      unsubscribe: () => void;
-    };
-  }> {
-    return this.mintQuoteService.mintProofs(mintUrl, amount);
-  }
-
-  async receive(token: Token | string) {
-    const { mint, proofs }: Token = typeof token === 'string' ? getDecodedToken(token) : token;
-
-    const known = await this.mintService.isKnownMint(mint);
-    if (!known) {
-      throw new UnknownMintError(`Mint ${mint} is not known`);
-    }
-
-    const wallet = await this.walletService.getWallet(mint);
-    const newProofs = await wallet.receive({ mint, proofs });
-    await this.proofService.saveProofsAndIncrementCounters(mint, newProofs);
-  }
-
-  async send(mintUrl: string, amount: number): Promise<Token> {
-    const cashuWallet = await this.walletService.getWallet(mintUrl);
-    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
-    const { send, keep } = await cashuWallet.send(amount, selectedProofs);
-    await this.proofService.saveProofsAndIncrementCounters(mintUrl, keep);
-    await this.proofService.setProofState(
-      mintUrl,
-      send.map((proof) => proof.secret),
-      'inflight',
-    );
-    return {
-      mint: mintUrl,
-      proofs: send,
-    };
   }
 }

@@ -95,6 +95,16 @@ export class MintService {
     await this.mintRepo.deleteMint(mintUrl);
   }
 
+  async getMintInfo(mintUrl: string): Promise<MintInfo> {
+    const { mint } = await this.ensureUpdatedMint(mintUrl);
+    return mint.mintInfo;
+  }
+
+  async getAllMints(): Promise<Mint[]> {
+    const mints = await this.mintRepo.getAllMints();
+    return mints;
+  }
+
   private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
     let mintInfo;
     try {
