@@ -1,5 +1,6 @@
 import { CashuMint, CashuWallet, type MintKeyset } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
+import type { Logger } from '../logging/Logger.ts';
 
 interface CachedWallet {
   wallet: CashuWallet;
@@ -11,9 +12,11 @@ export class WalletService {
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
   private inFlight: Map<string, Promise<CashuWallet>> = new Map();
+  private readonly logger?: Logger;
 
-  constructor(mintService: MintService) {
+  constructor(mintService: MintService, logger?: Logger) {
     this.mintService = mintService;
+    this.logger = logger;
   }
 
   async getWallet(mintUrl: string): Promise<CashuWallet> {
@@ -25,6 +28,7 @@ export class WalletService {
     const cached = this.walletCache.get(mintUrl);
     const now = Date.now();
     if (cached && now - cached.lastCheck < this.CACHE_TTL) {
+      this.logger?.debug('Wallet served from cache', { mintUrl });
       return cached.wallet;
     }
 
@@ -53,6 +57,7 @@ export class WalletService {
    */
   clearCache(mintUrl: string): void {
     this.walletCache.delete(mintUrl);
+    this.logger?.debug('Wallet cache cleared', { mintUrl });
   }
 
   /**
@@ -60,6 +65,7 @@ export class WalletService {
    */
   clearAllCaches(): void {
     this.walletCache.clear();
+    this.logger?.debug('All wallet caches cleared');
   }
 
   /**
@@ -106,6 +112,7 @@ export class WalletService {
       lastCheck: Date.now(),
     });
 
+    this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
     return wallet;
   }
 }

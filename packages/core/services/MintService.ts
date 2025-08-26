@@ -6,6 +6,7 @@ import type { KeysetRepository, MintRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MintInfo } from '../types';
+import type { Logger } from '../logging/Logger.ts';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -14,15 +15,18 @@ export class MintService {
   private readonly keysetRepo: KeysetRepository;
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus?: EventBus<CoreEvents>;
+  private readonly logger?: Logger;
 
   constructor(
     mintRepo: MintRepository,
     keysetRepo: KeysetRepository,
+    logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
     this.mintAdapter = new MintAdapter();
+    this.logger = logger;
     this.eventBus = eventBus;
   }
 
@@ -31,6 +35,7 @@ export class MintService {
    * If the mint already exists, it ensures it is updated.
    */
   async addMintByUrl(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    this.logger?.info('Adding mint by URL', { mintUrl });
     const exists = await this.mintRepo.isKnownMint(mintUrl);
     if (exists) return this.ensureUpdatedMint(mintUrl);
 
@@ -45,6 +50,7 @@ export class MintService {
     // Do not persist before successful sync; updateMint will persist on success
     const added = await this.updateMint(newMint);
     await this.eventBus?.emit('mint:added', added);
+    this.logger?.info('Mint added', { mintUrl });
     return added;
   }
 
@@ -70,6 +76,7 @@ export class MintService {
     const mint = await this.mintRepo.getMintByUrl(mintUrl);
     const now = Math.floor(Date.now() / 1000);
     if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
+      this.logger?.debug('Refreshing stale mint', { mintUrl });
       const updated = await this.updateMint(mint);
       await this.eventBus?.emit('mint:updated', updated);
       return updated;
@@ -91,15 +98,19 @@ export class MintService {
   private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
     let mintInfo;
     try {
+      this.logger?.debug('Fetching mint info', { mintUrl: mint.mintUrl });
       mintInfo = await this.mintAdapter.fetchMintInfo(mint.mintUrl);
     } catch (err) {
+      this.logger?.error('Failed to fetch mint info', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, undefined, err);
     }
 
     let keysets;
     try {
+      this.logger?.debug('Fetching keysets', { mintUrl: mint.mintUrl });
       ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
     } catch (err) {
+      this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
     }
     await Promise.all(
@@ -127,6 +138,11 @@ export class MintService {
               feePpk: ks.input_fee_ppk || 0,
             });
           } catch (err) {
+            this.logger?.error('Failed to sync keyset', {
+              mintUrl: mint.mintUrl,
+              keysetId: ks.id,
+              err,
+            });
             throw new KeysetSyncError(mint.mintUrl, ks.id, undefined, err);
           }
         }
@@ -139,6 +155,7 @@ export class MintService {
     await this.mintRepo.updateMint(mint);
 
     const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });
     return { mint, keysets: repoKeysets };
   }
 }

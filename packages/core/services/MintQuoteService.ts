@@ -3,23 +3,27 @@ import type { WalletService } from './WalletService';
 import type { ProofService } from './ProofService';
 import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
+import type { Logger } from '../logging/Logger.ts';
 
 export class MintQuoteService {
   private readonly mintQuoteRepo: MintQuoteRepository;
   private readonly walletService: WalletService;
   private readonly proofService: ProofService;
   private readonly eventBus: EventBus<CoreEvents>;
+  private readonly logger?: Logger;
 
   constructor(
     mintQuoteRepo: MintQuoteRepository,
     walletService: WalletService,
     proofService: ProofService,
     eventBus: EventBus<CoreEvents>,
+    logger?: Logger,
   ) {
     this.mintQuoteRepo = mintQuoteRepo;
     this.walletService = walletService;
     this.proofService = proofService;
     this.eventBus = eventBus;
+    this.logger = logger;
   }
 
   /**
@@ -45,6 +49,8 @@ export class MintQuoteService {
 
     const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const quote = await wallet.createMintQuote(amount);
+
+    this.logger?.info('Mint quote created', { mintUrl, amount, quoteId: quote.quote });
 
     // Persist the newly created quote and emit initial state
     await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
@@ -86,8 +92,14 @@ export class MintQuoteService {
                 const proofs = await wallet.mintProofs(amount, quote.quote, { keysetId });
                 await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
                 await this.setMintQuoteState(mintUrl, quote.quote, 'ISSUED');
+                this.logger?.info('Mint quote issued', { mintUrl, quoteId: quote.quote });
                 resolve(quote);
               } catch (err) {
+                this.logger?.error('Error minting proofs after payment', {
+                  mintUrl,
+                  quoteId: quote.quote,
+                  err,
+                });
                 reject(err as Error);
               } finally {
                 safeCleanup();
@@ -96,6 +108,11 @@ export class MintQuoteService {
             (err: unknown) => {
               if (settled) return;
               try {
+                this.logger?.error('Mint quote payment error', {
+                  mintUrl,
+                  quoteId: quote.quote,
+                  err,
+                });
                 reject(err as Error);
               } finally {
                 safeCleanup();

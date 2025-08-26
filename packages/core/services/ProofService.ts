@@ -6,21 +6,25 @@ import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
 import { WalletService } from './WalletService';
+import type { Logger } from '../logging/Logger.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly walletService: WalletService;
+  private readonly logger?: Logger;
   constructor(
     counterService: CounterService,
     proofRepository: ProofRepository,
     walletService: WalletService,
+    logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
     this.proofRepository = proofRepository;
+    this.logger = logger;
     this.eventBus = eventBus;
   }
 
@@ -45,11 +49,13 @@ export class ProofService {
         } catch {
           // ignore event handler errors
         }
+        this.logger?.info('Proofs saved', { mintUrl, keysetId, count: group.length });
       }),
     );
 
     const failed = results.filter((r) => r.status === 'rejected');
     if (failed.length > 0) {
+      this.logger?.error('Failed to persist some proofs', { mintUrl, failed: failed.length });
       throw new ProofOperationError(
         mintUrl,
         `Failed to persist proofs for ${failed.length} keyset group(s)`,
@@ -84,6 +90,7 @@ export class ProofService {
     } catch {
       // ignore event handler errors
     }
+    this.logger?.debug('Proof state updated', { mintUrl, count: secrets.length, state });
   }
 
   async deleteProofs(mintUrl: string, secrets: string[]): Promise<void> {
@@ -97,6 +104,7 @@ export class ProofService {
     } catch {
       // ignore event handler errors
     }
+    this.logger?.info('Proofs deleted', { mintUrl, count: secrets.length });
   }
 
   async selectProofsToSend(mintUrl: string, amount: number): Promise<Proof[]> {
@@ -107,6 +115,11 @@ export class ProofService {
     }
     const cashuWallet = await this.walletService.getWallet(mintUrl);
     const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount);
+    this.logger?.debug('Selected proofs to send', {
+      mintUrl,
+      amount,
+      count: selectedProofs.send.length,
+    });
     return selectedProofs.send;
   }
   private groupProofsByKeysetId(proofs: Proof[]): Map<string, Proof[]> {

@@ -1,4 +1,4 @@
-import { getDecodedToken, type Token } from '@cashu/cashu-ts';
+import { getDecodedToken, type MintQuoteResponse, type Token } from '@cashu/cashu-ts';
 import type { Repositories } from './repositories';
 import {
   CounterService,
@@ -9,6 +9,8 @@ import {
 } from './services';
 import { type Mint, type Keyset, UnknownMintError } from './models';
 import { EventBus, type CoreEvents } from './events';
+import type { Logger } from './logging/Logger.ts';
+import { NullLogger } from './logging/NullLogger.ts';
 
 export class Manager {
   private mintService: MintService;
@@ -17,26 +19,53 @@ export class Manager {
   private proofService: ProofService;
   private mintQuoteService: MintQuoteService;
   private eventBus: EventBus<CoreEvents>;
+  private logger: Logger;
 
-  constructor(repositories: Repositories) {
+  constructor(repositories: Repositories, logger?: Logger) {
+    this.logger = logger ?? new NullLogger();
     this.eventBus = new EventBus<CoreEvents>();
+
+    const mintLogger = this.logger.child
+      ? this.logger.child({ module: 'MintService' })
+      : this.logger;
+    const walletLogger = this.logger.child
+      ? this.logger.child({ module: 'WalletService' })
+      : this.logger;
+    const counterLogger = this.logger.child
+      ? this.logger.child({ module: 'CounterService' })
+      : this.logger;
+    const proofLogger = this.logger.child
+      ? this.logger.child({ module: 'ProofService' })
+      : this.logger;
+    const mintQuoteLogger = this.logger.child
+      ? this.logger.child({ module: 'MintQuoteService' })
+      : this.logger;
+
     this.mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
+      mintLogger,
       this.eventBus,
     );
-    this.walletService = new WalletService(this.mintService);
-    this.counterService = new CounterService(repositories.counterRepository, this.eventBus);
+    this.walletService = new WalletService(this.mintService, walletLogger);
+    this.counterService = new CounterService(
+      repositories.counterRepository,
+      counterLogger,
+      this.eventBus,
+    );
     this.proofService = new ProofService(
       this.counterService,
       repositories.proofRepository,
       this.walletService,
+      proofLogger,
       this.eventBus,
     );
     this.mintQuoteService = new MintQuoteService(
       repositories.mintQuoteRepository,
       this.walletService,
       this.proofService,
+      this.eventBus,
+      mintQuoteLogger,
     );
   }
 
@@ -84,8 +113,17 @@ export class Manager {
     return counter.counter;
   }
 
-  async mintQuote(mintUrl: string, amount: number): Promise<void> {
-    await this.mintQuoteService.createAndRedeemMintQuote(mintUrl, amount);
+  async mintQuote(
+    mintUrl: string,
+    amount: number,
+  ): Promise<{
+    quote: MintQuoteResponse;
+    handlePayment: () => {
+      promise: Promise<MintQuoteResponse>;
+      unsubscribe: () => void;
+    };
+  }> {
+    return this.mintQuoteService.mintProofs(mintUrl, amount);
   }
 
   async receive(token: Token | string) {

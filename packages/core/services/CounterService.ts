@@ -2,13 +2,16 @@ import type { Counter } from '../models/Counter';
 import type { CounterRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
+import type { Logger } from '../logging/Logger.ts';
 
 export class CounterService {
   private readonly counterRepo: CounterRepository;
   private readonly eventBus?: EventBus<CoreEvents>;
+  private readonly logger?: Logger;
 
-  constructor(counterRepo: CounterRepository, eventBus?: EventBus<CoreEvents>) {
+  constructor(counterRepo: CounterRepository, logger?: Logger, eventBus?: EventBus<CoreEvents>) {
     this.counterRepo = counterRepo;
+    this.logger = logger;
     this.eventBus = eventBus;
   }
 
@@ -21,6 +24,7 @@ export class CounterService {
         counter: 0,
       };
       await this.counterRepo.setCounter(mintUrl, keysetId, 0);
+      this.logger?.debug('Initialized counter', { mintUrl, keysetId });
       return newCounter;
     }
     return counter;
@@ -32,6 +36,7 @@ export class CounterService {
     await this.counterRepo.setCounter(mintUrl, keysetId, updatedValue);
     const updated = { ...current, counter: updatedValue };
     await this.eventBus?.emit('counter:updated', updated);
+    this.logger?.info('Counter incremented', { mintUrl, keysetId, counter: updatedValue });
     return updated;
   }
 }
