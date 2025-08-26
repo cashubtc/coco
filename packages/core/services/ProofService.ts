@@ -118,6 +118,7 @@ export class ProofService {
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
       amount,
+      selectedProofs,
       count: selectedProofs.send.length,
     });
     return selectedProofs.send;

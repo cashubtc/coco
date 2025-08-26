@@ -105,6 +105,9 @@ export class WalletService {
       mintInfo: mint.mintInfo,
       keys,
       keysets: compatibleKeysets,
+      // @ts-ignore
+      logger:
+        this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
     });
 
     this.walletCache.set(mintUrl, {
