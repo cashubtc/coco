@@ -141,11 +141,7 @@ export class MintQuoteService {
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const quote = await wallet.createMintQuote(amount);
     await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
-    try {
-      await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
-    } catch {
-      // ignore event handler errors
-    }
+    await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
 
     return quote;
   }
@@ -167,10 +163,6 @@ export class MintQuoteService {
     state: MintQuoteState,
   ): Promise<void> {
     await this.mintQuoteRepo.setMintQuoteState(mintUrl, quoteId, state);
-    try {
-      await this.eventBus.emit('mint-quote:state-changed', { mintUrl, quoteId, state });
-    } catch {
-      // ignore event handler errors
-    }
+    await this.eventBus.emit('mint-quote:state-changed', { mintUrl, quoteId, state });
   }
 }

@@ -23,7 +23,13 @@ export class Manager {
 
   constructor(repositories: Repositories, logger?: Logger) {
     this.logger = logger ?? new NullLogger();
-    this.eventBus = new EventBus<CoreEvents>();
+    const eventLogger = this.logger.child ? this.logger.child({ module: 'EventBus' }) : this.logger;
+
+    this.eventBus = new EventBus<CoreEvents>({
+      onError: (args) => {
+        eventLogger.error('Event handler error', args);
+      },
+    });
 
     const mintLogger = this.logger.child
       ? this.logger.child({ module: 'MintService' })
@@ -115,6 +121,10 @@ export class Manager {
 
   async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
     return this.mintQuoteService.createMintQuote(mintUrl, amount);
+  }
+
+  async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
+    return this.mintQuoteService.redeemMintQuote(mintUrl, quoteId);
   }
 
   async mintQuote(

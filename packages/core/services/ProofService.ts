@@ -40,15 +40,11 @@ export class ProofService {
       Array.from(groupedByKeyset.entries()).map(async ([keysetId, group]) => {
         await this.proofRepository.saveProofs(mintUrl, group);
         await this.counterService.incrementCounter(mintUrl, keysetId, group.length);
-        try {
-          await this.eventBus?.emit('proofs:saved', {
-            mintUrl,
-            keysetId,
-            proofs: group,
-          });
-        } catch {
-          // ignore event handler errors
-        }
+        await this.eventBus?.emit('proofs:saved', {
+          mintUrl,
+          keysetId,
+          proofs: group,
+        });
         this.logger?.info('Proofs saved', { mintUrl, keysetId, count: group.length });
       }),
     );
@@ -81,15 +77,11 @@ export class ProofService {
     }
     if (!secrets || secrets.length === 0) return;
     await this.proofRepository.setProofState(mintUrl, secrets, state);
-    try {
-      await this.eventBus?.emit('proofs:state-changed', {
-        mintUrl,
-        secrets,
-        state,
-      });
-    } catch {
-      // ignore event handler errors
-    }
+    await this.eventBus?.emit('proofs:state-changed', {
+      mintUrl,
+      secrets,
+      state,
+    });
     this.logger?.debug('Proof state updated', { mintUrl, count: secrets.length, state });
   }
 
@@ -99,11 +91,7 @@ export class ProofService {
     }
     if (!secrets || secrets.length === 0) return;
     await this.proofRepository.deleteProofs(mintUrl, secrets);
-    try {
-      await this.eventBus?.emit('proofs:deleted', { mintUrl, secrets });
-    } catch {
-      // ignore event handler errors
-    }
+    await this.eventBus?.emit('proofs:deleted', { mintUrl, secrets });
     this.logger?.info('Proofs deleted', { mintUrl, count: secrets.length });
   }
 
