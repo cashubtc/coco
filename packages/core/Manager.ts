@@ -113,6 +113,10 @@ export class Manager {
     return counter.counter;
   }
 
+  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
+    return this.mintQuoteService.createMintQuote(mintUrl, amount);
+  }
+
   async mintQuote(
     mintUrl: string,
     amount: number,

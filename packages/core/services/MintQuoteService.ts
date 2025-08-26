@@ -137,6 +137,30 @@ export class MintQuoteService {
     return { quote, handlePayment };
   }
 
+  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const quote = await wallet.createMintQuote(amount);
+    await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
+    try {
+      await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
+    } catch {
+      // ignore event handler errors
+    }
+
+    return quote;
+  }
+
+  async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
+    const quote = await this.mintQuoteRepo.getMintQuote(mintUrl, quoteId);
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+    const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const proofs = await wallet.mintProofs(quote.amount, quote.quote, { keysetId });
+    await this.setMintQuoteState(mintUrl, quoteId, 'ISSUED');
+    await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+  }
+
   private async setMintQuoteState(
     mintUrl: string,
     quoteId: string,
