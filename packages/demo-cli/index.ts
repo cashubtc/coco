@@ -30,6 +30,35 @@ program
   });
 
 program
+  .command('redeem-mint')
+  .description('create new mint quote')
+  .argument('<mintUrl>')
+  .argument('quoteId')
+  .action(async function (mintUrl, quoteId) {
+    try {
+      await manager.redeemMintQuote(mintUrl, quoteId);
+      console.log('Redeemed quote!');
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+program
+  .command('create-mint')
+  .description('create new mint quote')
+  .argument('<mintUrl>')
+  .argument('<amount>')
+  .action(async function (mintUrl, amount) {
+    try {
+      const quote = await manager.createMintQuote(mintUrl, Number(amount));
+      console.log('Quote created: ', quote.quote);
+      console.log('Please pay this invoice: ', quote.request);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+program
   .command('send')
   .description('send token')
   .argument('<mintUrl>')
