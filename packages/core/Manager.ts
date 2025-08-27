@@ -5,8 +5,8 @@ import {
   MintQuoteService,
   ProofService,
   WalletService,
+  SeedService,
 } from './services';
-import { type Mint, type Keyset } from './models';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
 import { WalletApi, QuotesApi } from './api';
@@ -18,10 +18,11 @@ export class Manager {
   private walletService: WalletService;
   private counterService: CounterService;
   private proofService: ProofService;
+  private seedService: SeedService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
 
-  constructor(repositories: Repositories, logger?: Logger) {
+  constructor(repositories: Repositories, seedGetter: () => Promise<Uint8Array>, logger?: Logger) {
     this.logger = logger ?? new NullLogger();
     const eventLogger = this.logger.child ? this.logger.child({ module: 'EventBus' }) : this.logger;
 
@@ -53,7 +54,8 @@ export class Manager {
       mintLogger,
       this.eventBus,
     );
-    this.walletService = new WalletService(this.mintService, walletLogger);
+    this.seedService = new SeedService(seedGetter);
+    this.walletService = new WalletService(this.mintService, this.seedService, walletLogger);
     this.counterService = new CounterService(
       repositories.counterRepository,
       counterLogger,
@@ -77,13 +79,6 @@ export class Manager {
     this.quotes = new QuotesApi(quotesService);
   }
 
-  async addMint(mintUrl: string): Promise<{
-    mint: Mint;
-    keysets: Keyset[];
-  }> {
-    return this.mintService.addMintByUrl(mintUrl);
-  }
-
   on<E extends keyof CoreEvents>(
     event: E,
     handler: (payload: CoreEvents[E]) => void | Promise<void>,
@@ -103,16 +98,5 @@ export class Manager {
     handler: (payload: CoreEvents[E]) => void | Promise<void>,
   ): void {
     return this.eventBus.off(event, handler);
-  }
-
-  async getBalances(): Promise<{ [mintUrl: string]: number }> {
-    const proofs = await this.proofService.getAllReadyProofs();
-    const balances: { [mintUrl: string]: number } = {};
-    for (const proof of proofs) {
-      const mintUrl = proof.mintUrl;
-      const balance = balances[mintUrl] || 0;
-      balances[mintUrl] = balance + proof.amount;
-    }
-    return balances;
   }
 }

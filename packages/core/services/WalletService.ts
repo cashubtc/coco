@@ -1,6 +1,7 @@
 import { CashuMint, CashuWallet, type MintKeyset } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
+import type { SeedService } from './SeedService.ts';
 
 interface CachedWallet {
   wallet: CashuWallet;
@@ -11,11 +12,13 @@ export class WalletService {
   private walletCache: Map<string, CachedWallet> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
+  private readonly seedService: SeedService;
   private inFlight: Map<string, Promise<CashuWallet>> = new Map();
   private readonly logger?: Logger;
 
-  constructor(mintService: MintService, logger?: Logger) {
+  constructor(mintService: MintService, seedService: SeedService, logger?: Logger) {
     this.mintService = mintService;
+    this.seedService = seedService;
     this.logger = logger;
   }
 
@@ -101,6 +104,8 @@ export class WalletService {
       input_fee_ppk: k.feePpk,
     }));
 
+    const seed = await this.seedService.getSeed();
+
     const wallet = new CashuWallet(new CashuMint(mintUrl), {
       mintInfo: mint.mintInfo,
       keys,
@@ -108,6 +113,7 @@ export class WalletService {
       // @ts-ignore
       logger:
         this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
+      seed,
     });
 
     this.walletCache.set(mintUrl, {
