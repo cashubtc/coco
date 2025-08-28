@@ -90,7 +90,7 @@ export class MintQuoteService {
               try {
                 await this.setMintQuoteState(mintUrl, quote.quote, 'PAID');
                 const proofs = await wallet.mintProofs(amount, quote.quote, { keysetId });
-                await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+                await this.proofService.saveProofs(mintUrl, proofs);
                 await this.setMintQuoteState(mintUrl, quote.quote, 'ISSUED');
                 this.logger?.info('Mint quote issued', { mintUrl, quoteId: quote.quote });
                 resolve(quote);
@@ -151,10 +151,16 @@ export class MintQuoteService {
     if (!quote) {
       throw new Error('Quote not found');
     }
-    const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-    const proofs = await wallet.mintProofs(quote.amount, quote.quote, { keysetId });
+    console.log('quote', quote);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+      keep: quote.amount,
+      send: 0,
+    });
+    console.log('keep', keep);
+    const proofs = await wallet.mintProofs(quote.amount, quote.quote, { outputData: keep });
     await this.setMintQuoteState(mintUrl, quoteId, 'ISSUED');
-    await this.proofService.saveProofsAndIncrementCounters(mintUrl, proofs);
+    await this.proofService.saveProofs(mintUrl, proofs);
   }
 
   private async setMintQuoteState(

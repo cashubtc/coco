@@ -66,6 +66,7 @@ export class Manager {
       this.counterService,
       repositories.proofRepository,
       this.walletService,
+      this.seedService,
       proofLogger,
       this.eventBus,
     );

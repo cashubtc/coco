@@ -1,4 +1,4 @@
-import { CashuMint, CashuWallet, type MintKeyset } from '@cashu/cashu-ts';
+import { CashuMint, CashuWallet, type Keys, type MintKeys, type MintKeyset } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
@@ -49,10 +49,13 @@ export class WalletService {
   async getWalletWithActiveKeysetId(mintUrl: string): Promise<{
     wallet: CashuWallet;
     keysetId: string;
+    keyset: MintKeyset;
+    keys: MintKeys;
   }> {
     const wallet = await this.getWallet(mintUrl);
-    const keysetId = wallet.getActiveKeyset(wallet.keysets).id;
-    return { wallet, keysetId };
+    const keyset = wallet.getActiveKeyset(wallet.keysets);
+    const keys = await wallet.getKeys(keyset.id);
+    return { wallet, keysetId: keyset.id, keyset, keys };
   }
 
   /**

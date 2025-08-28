@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import { OutputData, type Proof } from '@cashu/cashu-ts';
 import type { CoreProof } from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
@@ -7,28 +7,84 @@ import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
 import { WalletService } from './WalletService';
 import type { Logger } from '../logging/Logger.ts';
+import type { SeedService } from './SeedService.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly walletService: WalletService;
+  private readonly seedService: SeedService;
   private readonly logger?: Logger;
   constructor(
     counterService: CounterService,
     proofRepository: ProofRepository,
     walletService: WalletService,
+    seedService: SeedService,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
     this.proofRepository = proofRepository;
+    this.seedService = seedService;
     this.logger = logger;
     this.eventBus = eventBus;
   }
 
-  async saveProofsAndIncrementCounters(mintUrl: string, proofs: Proof[]): Promise<void> {
+  async createOutputsAndIncrementCounters(
+    mintUrl: string,
+    amount: { keep: number; send: number },
+  ): Promise<{ keep: OutputData[]; send: OutputData[] }> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (
+      !Number.isFinite(amount.keep) ||
+      !Number.isFinite(amount.send) ||
+      amount.keep < 0 ||
+      amount.send < 0
+    ) {
+      return { keep: [], send: [] };
+    }
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const seed = await this.seedService.getSeed();
+    const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
+    const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
+    if (amount.keep > 0) {
+      console.log('amount.keep', amount.keep);
+      data.keep = OutputData.createDeterministicData(
+        amount.keep,
+        seed,
+        currentCounter.counter,
+        keys,
+      );
+      console.log('keep', data.keep);
+      if (data.keep.length > 0) {
+        await this.counterService.incrementCounter(mintUrl, keys.id, data.keep.length);
+      }
+    }
+    if (amount.send > 0) {
+      data.send = OutputData.createDeterministicData(
+        amount.send,
+        seed,
+        currentCounter.counter + data.keep.length,
+        keys,
+      );
+      if (data.send.length > 0) {
+        await this.counterService.incrementCounter(mintUrl, keys.id, data.send.length);
+      }
+    }
+    this.logger?.debug('Deterministic outputs created', {
+      mintUrl,
+      keysetId: keys.id,
+      amount,
+      outputs: data.keep.length + data.send.length,
+    });
+    return data;
+  }
+
+  async saveProofs(mintUrl: string, proofs: Proof[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -36,26 +92,45 @@ export class ProofService {
 
     const groupedByKeyset = this.groupProofsByKeysetId(proofs);
 
-    const results = await Promise.allSettled(
-      Array.from(groupedByKeyset.entries()).map(async ([keysetId, group]) => {
+    const entries = Array.from(groupedByKeyset.entries());
+    const tasks = entries.map(([keysetId, group]) =>
+      (async () => {
         await this.proofRepository.saveProofs(mintUrl, group);
-        await this.counterService.incrementCounter(mintUrl, keysetId, group.length);
         await this.eventBus?.emit('proofs:saved', {
           mintUrl,
           keysetId,
           proofs: group,
         });
         this.logger?.info('Proofs saved', { mintUrl, keysetId, count: group.length });
+      })().catch((error) => {
+        // Enrich the rejection with keyset context so we can log precise details later
+        throw { keysetId, error };
       }),
     );
+    const results = await Promise.allSettled(tasks);
 
-    const failed = results.filter((r) => r.status === 'rejected');
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failed.length > 0) {
-      this.logger?.error('Failed to persist some proofs', { mintUrl, failed: failed.length });
-      throw new ProofOperationError(
-        mintUrl,
+      // Log each failure with its original error for maximum visibility
+      for (const fr of failed) {
+        const { keysetId, error } = fr.reason as { keysetId?: string; error?: unknown };
+        this.logger?.error('Failed to persist proofs for keyset', { mintUrl, keysetId, error });
+      }
+      const details = failed.map((fr) => fr.reason as { keysetId?: string; error?: unknown });
+      const failedKeysets = details
+        .map((d) => d.keysetId)
+        .filter((id): id is string => Boolean(id));
+      const aggregate = new AggregateError(
+        details.map((d) => (d?.error instanceof Error ? d.error : new Error(String(d?.error)))),
         `Failed to persist proofs for ${failed.length} keyset group(s)`,
       );
+      const message =
+        failedKeysets.length > 0
+          ? `Failed to persist proofs for ${failed.length} keyset group(s) [${failedKeysets.join(
+              ', ',
+            )}]`
+          : `Failed to persist proofs for ${failed.length} keyset group(s)`;
+      throw new ProofOperationError(mintUrl, message, undefined, aggregate);
     }
   }
 

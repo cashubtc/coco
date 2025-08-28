@@ -22,16 +22,26 @@ export class WalletApi {
       throw new UnknownMintError(`Mint ${mint} is not known`);
     }
 
-    const wallet = await this.walletService.getWallet(mint);
-    const newProofs = await wallet.receive({ mint, proofs });
-    await this.proofService.saveProofsAndIncrementCounters(mint, newProofs);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+    const receiveAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
+    const { keep: outputData } = await this.proofService.createOutputsAndIncrementCounters(mint, {
+      keep: receiveAmount,
+      send: 0,
+    });
+    const newProofs = await wallet.receive({ mint, proofs }, { outputData });
+    await this.proofService.saveProofs(mint, newProofs);
   }
 
   async send(mintUrl: string, amount: number): Promise<Token> {
-    const cashuWallet = await this.walletService.getWallet(mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
-    const { send, keep } = await cashuWallet.send(amount, selectedProofs);
-    await this.proofService.saveProofsAndIncrementCounters(mintUrl, [...keep, ...send]);
+    const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
+    const outputData = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+      keep: selectedAmount - amount,
+      send: amount,
+    });
+    const { send, keep } = await wallet.send(amount, selectedProofs, { outputData });
+    await this.proofService.saveProofs(mintUrl, [...keep, ...send]);
     await this.proofService.setProofState(
       mintUrl,
       selectedProofs.map((proof) => proof.secret),
