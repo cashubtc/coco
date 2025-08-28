@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@scure/bip39": "^2.0.0",
     "coco-cashu-core": "workspace:*",
     "coco-cashu-indexeddb": "workspace:*"
   },

@@ -1,6 +1,17 @@
 import { IndexedDbRepositories } from 'coco-cashu-indexeddb';
 import './style.css';
-import { ConsoleLogger, Manager } from 'coco-cashu-core';
+import { ConsoleLogger, getDecodedToken, getEncodedToken, Manager } from 'coco-cashu-core';
+import * as bip39 from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english';
+
+declare global {
+  interface Window {
+    coco: Manager;
+    cocoUtils: { getEncodedToken: typeof getEncodedToken; getDecodedToken: typeof getDecodedToken };
+    setMnemonic: (mnemonic: string) => void;
+    getMnemonic: () => string | null;
+  }
+}
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
@@ -12,16 +23,26 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 `;
 
 let seed: Uint8Array | undefined;
-const cachedSeed = localStorage.getItem('coco-seed');
-if (!cachedSeed) {
-  const newSeed = window.crypto.getRandomValues(new Uint8Array(64));
-  localStorage.setItem('coco-seed', JSON.stringify(Array.from(newSeed)));
-  seed = newSeed;
+const cachedMnemonic = localStorage.getItem('coco-mnemonic');
+if (!cachedMnemonic) {
+  const newMnemonic = bip39.generateMnemonic(wordlist);
+  localStorage.setItem('coco-mnemonic', newMnemonic);
+  seed = bip39.mnemonicToSeedSync(newMnemonic);
 } else {
-  seed = new Uint8Array(JSON.parse(cachedSeed));
+  seed = bip39.mnemonicToSeedSync(cachedMnemonic);
 }
+
+window.setMnemonic = (mnemonic: string) => {
+  localStorage.setItem('coco-mnemonic', mnemonic);
+  seed = bip39.mnemonicToSeedSync(mnemonic);
+};
+
+window.getMnemonic = () => {
+  return localStorage.getItem('coco-mnemonic');
+};
 
 const repo = new IndexedDbRepositories({});
 await repo.init();
 
 window.coco = new Manager(repo, async () => seed, new ConsoleLogger(undefined, { level: 'debug' }));
+window.cocoUtils = { getEncodedToken, getDecodedToken };
