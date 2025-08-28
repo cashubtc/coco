@@ -11,7 +11,7 @@ export interface CoreEvents {
   'proofs:state-changed': {
     mintUrl: string;
     secrets: string[];
-    state: 'inflight' | 'ready';
+    state: 'inflight' | 'ready' | 'spent';
   };
   'proofs:deleted': { mintUrl: string; secrets: string[] };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };

@@ -31,7 +31,11 @@ export interface ProofRepository {
   saveProofs(mintUrl: string, proofs: Proof[]): Promise<void>;
   getReadyProofs(mintUrl: string): Promise<CoreProof[]>;
   getAllReadyProofs(): Promise<CoreProof[]>;
-  setProofState(mintUrl: string, secrets: string[], state: 'inflight' | 'ready'): Promise<void>;
+  setProofState(
+    mintUrl: string,
+    secrets: string[],
+    state: 'inflight' | 'ready' | 'spent',
+  ): Promise<void>;
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
 }
 

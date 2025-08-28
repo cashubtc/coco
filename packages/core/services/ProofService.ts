@@ -70,7 +70,7 @@ export class ProofService {
   async setProofState(
     mintUrl: string,
     secrets: string[],
-    state: 'inflight' | 'ready',
+    state: 'inflight' | 'ready' | 'spent',
   ): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
