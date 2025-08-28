@@ -31,7 +31,12 @@ export class WalletApi {
     const cashuWallet = await this.walletService.getWallet(mintUrl);
     const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
     const { send, keep } = await cashuWallet.send(amount, selectedProofs);
-    await this.proofService.saveProofsAndIncrementCounters(mintUrl, keep);
+    await this.proofService.saveProofsAndIncrementCounters(mintUrl, [...keep, ...send]);
+    await this.proofService.setProofState(
+      mintUrl,
+      selectedProofs.map((proof) => proof.secret),
+      'spent',
+    );
     await this.proofService.setProofState(
       mintUrl,
       send.map((proof) => proof.secret),

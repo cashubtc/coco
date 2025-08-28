@@ -9,9 +9,10 @@ import {
 } from './services';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { WalletApi, QuotesApi } from './api';
+import { MintApi, WalletApi, QuotesApi } from './api';
 
 export class Manager {
+  readonly mint: MintApi;
   readonly wallet: WalletApi;
   readonly quotes: QuotesApi;
   private mintService: MintService;
@@ -75,6 +76,7 @@ export class Manager {
       this.eventBus,
       mintQuoteLogger,
     );
+    this.mint = new MintApi(this.mintService);
     this.wallet = new WalletApi(this.mintService, this.walletService, this.proofService);
     this.quotes = new QuotesApi(quotesService);
   }
