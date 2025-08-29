@@ -2,7 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof } from 'coco-cashu-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
-type ProofState = 'inflight' | 'ready';
+type ProofState = 'inflight' | 'ready' | 'spent';
 
 export class IdbProofRepository implements ProofRepository {
   private readonly db: IdbDb;
@@ -24,9 +24,13 @@ export class IdbProofRepository implements ProofRepository {
       for (const p of proofs) {
         const row: ProofRow = {
           mintUrl,
+          id: p.id,
+          amount: p.amount,
           secret: p.secret,
+          C: p.C,
+          dleqJson: p.dleq ? JSON.stringify(p.dleq) : null,
+          witness: p.witness ? JSON.stringify(p.witness) : null,
           state: 'ready',
-          proofJson: JSON.stringify(p),
           createdAt: now,
         };
         await (this.db as any).table('coco_cashu_proofs').put(row);
@@ -41,7 +45,14 @@ export class IdbProofRepository implements ProofRepository {
       .equals([mintUrl, 'ready'])
       .toArray()) as ProofRow[];
     return rows.map((r) => {
-      const base = JSON.parse(r.proofJson) as Proof;
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
+      };
       return { ...base, mintUrl } satisfies CoreProof;
     });
   }
@@ -53,8 +64,34 @@ export class IdbProofRepository implements ProofRepository {
       .equals('ready')
       .toArray()) as ProofRow[];
     return rows.map((r) => {
-      const base = JSON.parse(r.proofJson) as Proof;
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
+      };
       return { ...base, mintUrl: r.mintUrl } satisfies CoreProof;
+    });
+  }
+
+  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+id+state]')
+      .equals([mintUrl, keysetId, 'ready'])
+      .toArray()) as ProofRow[];
+    return rows.map((r) => {
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
+      };
+      return { ...base, mintUrl } satisfies CoreProof;
     });
   }
 

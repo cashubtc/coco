@@ -41,9 +41,13 @@ export interface CounterRow {
 
 export interface ProofRow {
   mintUrl: string;
+  id: string;
+  amount: number;
   secret: string;
-  state: 'inflight' | 'ready';
-  proofJson: string;
+  C: string;
+  dleqJson?: string | null;
+  witness?: string | null;
+  state: 'inflight' | 'ready' | 'spent';
   createdAt: number;
 }
 
