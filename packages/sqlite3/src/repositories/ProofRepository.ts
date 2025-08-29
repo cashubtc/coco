@@ -2,7 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof } from 'coco-cashu-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
-type ProofState = 'inflight' | 'ready';
+type ProofState = 'inflight' | 'ready' | 'spent';
 
 export class SqliteProofRepository implements ProofRepository {
   private readonly db: SqliteDb;
@@ -24,31 +24,96 @@ export class SqliteProofRepository implements ProofRepository {
         }
       }
       const insertSql =
-        'INSERT INTO coco_cashu_proofs (mintUrl, secret, state, proofJson, createdAt) VALUES (?, ?, "ready", ?, ?)';
+        'INSERT INTO coco_cashu_proofs (mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, "ready", ?)';
       for (const p of proofs) {
-        await tx.run(insertSql, [mintUrl, p.secret, JSON.stringify(p), now]);
+        const dleqJson = p.dleq ? JSON.stringify(p.dleq) : null;
+        const witnessJson = p.witness ? JSON.stringify(p.witness) : null;
+        await tx.run(insertSql, [
+          mintUrl,
+          p.id,
+          p.amount,
+          p.secret,
+          p.C,
+          dleqJson,
+          witnessJson,
+          now,
+        ]);
       }
     });
   }
 
   async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
-    const rows = await this.db.all<{ proofJson: string }>(
-      'SELECT proofJson FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready"',
+    const rows = await this.db.all<{
+      id: string;
+      amount: number;
+      secret: string;
+      C: string;
+      dleqJson: string | null;
+      witnessJson: string | null;
+    }>(
+      'SELECT id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready"',
       [mintUrl],
     );
     return rows.map((r) => {
-      const base = JSON.parse(r.proofJson) as Proof;
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
+      };
       return { ...base, mintUrl } satisfies CoreProof;
     });
   }
 
   async getAllReadyProofs(): Promise<CoreProof[]> {
-    const rows = await this.db.all<{ proofJson: string; mintUrl: string }>(
-      'SELECT proofJson, mintUrl FROM coco_cashu_proofs WHERE state = "ready"',
+    const rows = await this.db.all<{
+      mintUrl: string;
+      id: string;
+      amount: number;
+      secret: string;
+      C: string;
+      dleqJson: string | null;
+      witnessJson: string | null;
+    }>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE state = "ready"',
     );
     return rows.map((r) => {
-      const base = JSON.parse(r.proofJson) as Proof;
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
+      };
       return { ...base, mintUrl: r.mintUrl } satisfies CoreProof;
+    });
+  }
+
+  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+    const rows = await this.db.all<{
+      id: string;
+      amount: number;
+      secret: string;
+      C: string;
+      dleqJson: string | null;
+      witnessJson: string | null;
+    }>(
+      'SELECT id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = "ready"',
+      [mintUrl, keysetId],
+    );
+    return rows.map((r) => {
+      const base: Proof = {
+        id: r.id,
+        amount: r.amount,
+        secret: r.secret,
+        C: r.C,
+        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
+      };
+      return { ...base, mintUrl } satisfies CoreProof;
     });
   }
 

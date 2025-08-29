@@ -24,56 +24,33 @@ const MIGRATIONS: readonly Migration[] = [
         active    INTEGER NOT NULL,
         feePpk    INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
-        PRIMARY KEY (mintUrl, id),
-        FOREIGN KEY (mintUrl) REFERENCES coco_cashu_mints(mintUrl) ON DELETE CASCADE
+        PRIMARY KEY (mintUrl, id)
       );
 
       CREATE TABLE IF NOT EXISTS coco_cashu_counters (
         mintUrl  TEXT NOT NULL,
         keysetId TEXT NOT NULL,
         counter  INTEGER NOT NULL,
-        PRIMARY KEY (mintUrl, keysetId),
-        FOREIGN KEY (mintUrl) REFERENCES coco_cashu_mints(mintUrl) ON DELETE CASCADE
+        PRIMARY KEY (mintUrl, keysetId)
       );
 
       CREATE TABLE IF NOT EXISTS coco_cashu_proofs (
         mintUrl   TEXT NOT NULL,
+        id        TEXT NOT NULL,
+        amount    INTEGER NOT NULL,
         secret    TEXT NOT NULL,
-        state     TEXT NOT NULL CHECK (state IN ('inflight', 'ready')),
-        proofJson TEXT NOT NULL,
+        C         TEXT NOT NULL,
+        dleqJson  TEXT,
+        witnessJson   TEXT,
+        state     TEXT NOT NULL CHECK (state IN ('inflight', 'ready', 'spent')),
         createdAt INTEGER NOT NULL,
-        PRIMARY KEY (mintUrl, secret),
-        FOREIGN KEY (mintUrl) REFERENCES coco_cashu_mints(mintUrl) ON DELETE CASCADE
+        PRIMARY KEY (mintUrl, secret)
       );
 
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_state ON coco_cashu_proofs(state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_state ON coco_cashu_proofs(mintUrl, state);
-    `,
-  },
-  {
-    id: '002_drop_fk_keysets',
-    sql: `
-      -- Recreate keysets table without foreign key to mints
-      CREATE TABLE IF NOT EXISTS coco_cashu_keysets_new (
-        mintUrl   TEXT NOT NULL,
-        id        TEXT NOT NULL,
-        keypairs  TEXT NOT NULL,
-        active    INTEGER NOT NULL,
-        feePpk    INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL,
-        PRIMARY KEY (mintUrl, id)
-      );
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_id_state ON coco_cashu_proofs(mintUrl, id, state);
 
-      INSERT INTO coco_cashu_keysets_new (mintUrl, id, keypairs, active, feePpk, updatedAt)
-      SELECT mintUrl, id, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets;
-
-      DROP TABLE IF EXISTS coco_cashu_keysets;
-      ALTER TABLE coco_cashu_keysets_new RENAME TO coco_cashu_keysets;
-    `,
-  },
-  {
-    id: '003_add_mint_quotes',
-    sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_mint_quotes (
         mintUrl TEXT NOT NULL,
         quote   TEXT NOT NULL,
