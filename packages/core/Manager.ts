@@ -6,6 +6,7 @@ import {
   ProofService,
   WalletService,
   SeedService,
+  WalletRestoreService,
 } from './services';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
@@ -20,6 +21,7 @@ export class Manager {
   private counterService: CounterService;
   private proofService: ProofService;
   private seedService: SeedService;
+  private walletRestoreService: WalletRestoreService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
 
@@ -48,6 +50,9 @@ export class Manager {
     const mintQuoteLogger = this.logger.child
       ? this.logger.child({ module: 'MintQuoteService' })
       : this.logger;
+    const walletRestoreLogger = this.logger.child
+      ? this.logger.child({ module: 'WalletRestoreService' })
+      : this.logger;
     const walletApiLogger = this.logger.child
       ? this.logger.child({ module: 'WalletApi' })
       : this.logger;
@@ -73,6 +78,11 @@ export class Manager {
       proofLogger,
       this.eventBus,
     );
+    this.walletRestoreService = new WalletRestoreService(
+      this.proofService,
+      this.counterService,
+      walletRestoreLogger,
+    );
     const quotesService = new MintQuoteService(
       repositories.mintQuoteRepository,
       this.walletService,
@@ -85,7 +95,7 @@ export class Manager {
       this.mintService,
       this.walletService,
       this.proofService,
-      this.counterService,
+      this.walletRestoreService,
       walletApiLogger,
     );
     this.quotes = new QuotesApi(quotesService);

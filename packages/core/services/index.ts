@@ -4,3 +4,4 @@ export * from './WalletService';
 export * from './ProofService';
 export * from './MintQuoteService';
 export * from './SeedService';
+export * from './WalletRestoreService';

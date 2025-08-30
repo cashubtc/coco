@@ -1,5 +1,10 @@
-import type { Proof, Token } from '@cashu/cashu-ts';
-import type { MintService, WalletService, ProofService, CounterService } from '@core/services';
+import type { Token } from '@cashu/cashu-ts';
+import type {
+  MintService,
+  WalletService,
+  ProofService,
+  WalletRestoreService,
+} from '@core/services';
 import { getDecodedToken } from '@cashu/cashu-ts';
 import { UnknownMintError } from '@core/models';
 import { mapProofToCoreProof } from '@core/utils';
@@ -9,20 +14,20 @@ export class WalletApi {
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
-  private counterService: CounterService;
+  private walletRestoreService: WalletRestoreService;
   private readonly logger?: Logger;
 
   constructor(
     mintService: MintService,
     walletService: WalletService,
     proofService: ProofService,
-    counterService: CounterService,
+    walletRestoreService: WalletRestoreService,
     logger?: Logger,
   ) {
     this.mintService = mintService;
     this.walletService = walletService;
     this.proofService = proofService;
-    this.counterService = counterService;
+    this.walletRestoreService = walletRestoreService;
     this.logger = logger;
   }
 
@@ -84,6 +89,8 @@ export class WalletApi {
     return balances;
   }
 
+  // Restoration logic is delegated to WalletRestoreService
+
   async restore(mintUrl: string) {
     this.logger?.info('Starting restore', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl);
@@ -94,85 +101,8 @@ export class WalletApi {
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const failedKeysetIds: { [keysetId: string]: Error } = {};
     for (const keyset of mint.keysets) {
-      this.logger?.debug('Restoring keyset', { mintUrl, keysetId: keyset.id });
-      const oldProofs = await this.proofService.getProofsByKeysetId(mintUrl, keyset.id);
-      this.logger?.debug('Existing proofs before restore', {
-        mintUrl,
-        keysetId: keyset.id,
-        count: oldProofs.length,
-      });
       try {
-        const { proofs, lastCounterWithSignature } = await wallet.batchRestore(
-          300,
-          100,
-          0,
-          keyset.id,
-        );
-        if (proofs.length === 0) {
-          this.logger?.warn('No proofs to restore', {
-            mintUrl,
-            keysetId: keyset.id,
-          });
-          continue;
-        }
-        this.logger?.info('Batch restore result', {
-          mintUrl,
-          keysetId: keyset.id,
-          restored: proofs.length,
-          lastCounterWithSignature,
-        });
-        if (oldProofs.length > proofs.length) {
-          this.logger?.warn('Restored fewer proofs than previously stored', {
-            mintUrl,
-            keysetId: keyset.id,
-            previous: oldProofs.length,
-            restored: proofs.length,
-          });
-          failedKeysetIds[keyset.id] = new Error('Restored less proofs than expected.');
-        }
-        const states = await wallet.checkProofsStates(proofs);
-        const checkedProofs: { spent: Proof[]; ready: Proof[] } = { spent: [], ready: [] };
-        for (const [index, state] of states.entries()) {
-          if (!proofs[index]) {
-            this.logger?.error('Malformed state check', {
-              mintUrl,
-              keysetId: keyset.id,
-              index,
-            });
-            failedKeysetIds[keyset.id] = new Error('Malformed state check');
-            break;
-          }
-          if (state.state === 'SPENT') {
-            checkedProofs.spent.push(proofs[index]);
-          } else {
-            checkedProofs.ready.push(proofs[index]);
-          }
-        }
-        this.logger?.debug('Checked proof states', {
-          mintUrl,
-          keysetId: keyset.id,
-          ready: checkedProofs.ready.length,
-          spent: checkedProofs.spent.length,
-        });
-        await this.counterService.overwriteCounter(
-          mintUrl,
-          keyset.id,
-          lastCounterWithSignature ? lastCounterWithSignature + 1 : 0,
-        );
-        this.logger?.debug('Requested counter overwrite for keyset', {
-          mintUrl,
-          keysetId: keyset.id,
-          counter: lastCounterWithSignature ? lastCounterWithSignature + 1 : 0,
-        });
-        await this.proofService.saveProofs(mintUrl, [
-          ...mapProofToCoreProof(mintUrl, 'ready', checkedProofs.ready),
-          ...mapProofToCoreProof(mintUrl, 'spent', checkedProofs.spent),
-        ]);
-        this.logger?.info('Saved restored proofs for keyset', {
-          mintUrl,
-          keysetId: keyset.id,
-          total: checkedProofs.ready.length + checkedProofs.spent.length,
-        });
+        await this.walletRestoreService.restoreKeyset(mintUrl, wallet, keyset.id);
       } catch (error) {
         this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, error });
         failedKeysetIds[keyset.id] = error as Error;
