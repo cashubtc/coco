@@ -39,4 +39,12 @@ export class CounterService {
     this.logger?.info('Counter incremented', { mintUrl, keysetId, counter: updatedValue });
     return updated;
   }
+
+  async overwriteCounter(mintUrl: string, keysetId: string, counter: number) {
+    await this.counterRepo.setCounter(mintUrl, keysetId, counter);
+    const updated = { mintUrl, keysetId, counter };
+    await this.eventBus?.emit('counter:updated', updated);
+    this.logger?.info('Counter overwritten', { mintUrl, keysetId, counter });
+    return updated;
+  }
 }

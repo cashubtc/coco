@@ -109,6 +109,8 @@ export class WalletService {
 
     const seed = await this.seedService.getSeed();
 
+    console.log('seed', seed);
+
     const wallet = new CashuWallet(new CashuMint(mintUrl), {
       mintInfo: mint.mintInfo,
       keys,
@@ -116,7 +118,7 @@ export class WalletService {
       // @ts-ignore
       logger:
         this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
-      seed,
+      bip39seed: seed,
     });
 
     this.walletCache.set(mintUrl, {

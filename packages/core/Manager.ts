@@ -48,6 +48,9 @@ export class Manager {
     const mintQuoteLogger = this.logger.child
       ? this.logger.child({ module: 'MintQuoteService' })
       : this.logger;
+    const walletApiLogger = this.logger.child
+      ? this.logger.child({ module: 'WalletApi' })
+      : this.logger;
 
     this.mintService = new MintService(
       repositories.mintRepository,
@@ -78,7 +81,13 @@ export class Manager {
       mintQuoteLogger,
     );
     this.mint = new MintApi(this.mintService);
-    this.wallet = new WalletApi(this.mintService, this.walletService, this.proofService);
+    this.wallet = new WalletApi(
+      this.mintService,
+      this.walletService,
+      this.proofService,
+      this.counterService,
+      walletApiLogger,
+    );
     this.quotes = new QuotesApi(quotesService);
   }
 
