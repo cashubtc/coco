@@ -1,7 +1,9 @@
-import type { Token } from '@cashu/cashu-ts';
-import type { MintService, WalletService, ProofService } from '@core/services';
+import type { Proof, Token } from '@cashu/cashu-ts';
+import type { MintService, WalletService, ProofService, CounterService } from '@core/services';
 import { getDecodedToken } from '@cashu/cashu-ts';
 import { UnknownMintError } from '@core/models';
+import { mapProofToCoreProof } from '@core/utils';
+import type { Logger } from '../logging/Logger.ts';
 
 export class WalletApi {
   private mintService: MintService;
@@ -29,7 +31,7 @@ export class WalletApi {
       send: 0,
     });
     const newProofs = await wallet.receive({ mint, proofs }, { outputData });
-    await this.proofService.saveProofs(mint, newProofs);
+    await this.proofService.saveProofs(mint, mapProofToCoreProof(mint, 'ready', newProofs));
   }
 
   async send(mintUrl: string, amount: number): Promise<Token> {
@@ -41,7 +43,10 @@ export class WalletApi {
       send: amount,
     });
     const { send, keep } = await wallet.send(amount, selectedProofs, { outputData });
-    await this.proofService.saveProofs(mintUrl, [...keep, ...send]);
+    await this.proofService.saveProofs(
+      mintUrl,
+      mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
+    );
     await this.proofService.setProofState(
       mintUrl,
       selectedProofs.map((proof) => proof.secret),

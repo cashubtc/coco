@@ -4,6 +4,7 @@ import type { ProofService } from './ProofService';
 import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
+import { mapProofToCoreProof } from '@core/utils.ts';
 
 export class MintQuoteService {
   private readonly mintQuoteRepo: MintQuoteRepository;
@@ -63,7 +64,7 @@ export class MintQuoteService {
         proofs: proofs.length,
       });
       await this.setMintQuoteState(mintUrl, quoteId, 'ISSUED');
-      await this.proofService.saveProofs(mintUrl, proofs);
+      await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', proofs));
       this.logger?.debug('Proofs saved to repository', { mintUrl, count: proofs.length });
     } catch (err) {
       this.logger?.error('Failed to redeem mint quote', { mintUrl, quoteId, err });

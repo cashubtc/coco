@@ -1,8 +1,8 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { ProofRepository, CoreProof } from 'coco-cashu-core';
+import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
-type ProofState = 'inflight' | 'ready' | 'spent';
+// use ProofState from coco-cashu-core
 
 export class IdbProofRepository implements ProofRepository {
   private readonly db: IdbDb;
@@ -11,7 +11,7 @@ export class IdbProofRepository implements ProofRepository {
     this.db = db;
   }
 
-  async saveProofs(mintUrl: string, proofs: Proof[]): Promise<void> {
+  async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!proofs || proofs.length === 0) return;
     const now = Math.floor(Date.now() / 1000);
     await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
@@ -30,7 +30,7 @@ export class IdbProofRepository implements ProofRepository {
           C: p.C,
           dleqJson: p.dleq ? JSON.stringify(p.dleq) : null,
           witness: p.witness ? JSON.stringify(p.witness) : null,
-          state: 'ready',
+          state: p.state,
           createdAt: now,
         };
         await (this.db as any).table('coco_cashu_proofs').put(row);
@@ -53,7 +53,7 @@ export class IdbProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
       };
-      return { ...base, mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -72,7 +72,7 @@ export class IdbProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
       };
-      return { ...base, mintUrl: r.mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl: r.mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -91,7 +91,7 @@ export class IdbProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
       };
-      return { ...base, mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -114,6 +114,19 @@ export class IdbProofRepository implements ProofRepository {
     await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
       for (const s of secrets) {
         await (this.db as any).table('coco_cashu_proofs').delete([mintUrl, s]);
+      }
+    });
+  }
+
+  async wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void> {
+    await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
+      const rows = (await (this.db as any)
+        .table('coco_cashu_proofs')
+        .where('[mintUrl+id]')
+        .equals([mintUrl, keysetId])
+        .toArray()) as ProofRow[];
+      for (const r of rows) {
+        await (this.db as any).table('coco_cashu_proofs').delete([mintUrl, r.secret]);
       }
     });
   }

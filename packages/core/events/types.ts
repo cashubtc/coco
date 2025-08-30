@@ -1,19 +1,21 @@
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { Counter } from '../models/Counter';
-import type { MintQuoteResponse, MintQuoteState, Proof } from '@cashu/cashu-ts';
+import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
+import type { CoreProof, ProofState } from '../types';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
   'counter:updated': Counter;
-  'proofs:saved': { mintUrl: string; keysetId: string; proofs: Proof[] };
+  'proofs:saved': { mintUrl: string; keysetId: string; proofs: CoreProof[] };
   'proofs:state-changed': {
     mintUrl: string;
     secrets: string[];
-    state: 'inflight' | 'ready' | 'spent';
+    state: ProofState;
   };
   'proofs:deleted': { mintUrl: string; secrets: string[] };
+  'proofs:wiped': { mintUrl: string; keysetId: string };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };
   'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
 }

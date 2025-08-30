@@ -84,7 +84,7 @@ export class ProofService {
     return data;
   }
 
-  async saveProofs(mintUrl: string, proofs: Proof[]): Promise<void> {
+  async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -170,6 +170,18 @@ export class ProofService {
     this.logger?.info('Proofs deleted', { mintUrl, count: secrets.length });
   }
 
+  async wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!keysetId || keysetId.trim().length === 0) {
+      throw new ProofValidationError('keysetId is required');
+    }
+    await this.proofRepository.wipeProofsByKeysetId(mintUrl, keysetId);
+    await this.eventBus?.emit('proofs:wiped', { mintUrl, keysetId });
+    this.logger?.info('Proofs wiped by keyset', { mintUrl, keysetId });
+  }
+
   async selectProofsToSend(mintUrl: string, amount: number): Promise<Proof[]> {
     const proofs = await this.getReadyProofs(mintUrl);
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
@@ -186,8 +198,8 @@ export class ProofService {
     });
     return selectedProofs.send;
   }
-  private groupProofsByKeysetId(proofs: Proof[]): Map<string, Proof[]> {
-    const map = new Map<string, Proof[]>();
+  private groupProofsByKeysetId(proofs: CoreProof[]): Map<string, CoreProof[]> {
+    const map = new Map<string, CoreProof[]>();
     for (const proof of proofs) {
       if (!proof.secret) throw new ProofValidationError('Proof missing secret');
       const keysetId = proof.id;
@@ -202,5 +214,30 @@ export class ProofService {
       }
     }
     return map;
+  }
+
+  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+    return this.proofRepository.getProofsByKeysetId(mintUrl, keysetId);
+  }
+
+  async hasProofsForKeyset(mintUrl: string, keysetId: string): Promise<boolean> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!keysetId || keysetId.trim().length === 0) {
+      throw new ProofValidationError('keysetId is required');
+    }
+
+    const proofs = await this.proofRepository.getProofsByKeysetId(mintUrl, keysetId);
+    const hasProofs = proofs.length > 0;
+
+    this.logger?.debug('Checked proofs for keyset', {
+      mintUrl,
+      keysetId,
+      hasProofs,
+      totalProofs: proofs.length,
+    });
+
+    return hasProofs;
   }
 }

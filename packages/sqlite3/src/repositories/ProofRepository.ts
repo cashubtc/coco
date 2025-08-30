@@ -1,8 +1,8 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { ProofRepository, CoreProof } from 'coco-cashu-core';
+import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
-type ProofState = 'inflight' | 'ready' | 'spent';
+// use ProofState from coco-cashu-core
 
 export class SqliteProofRepository implements ProofRepository {
   private readonly db: SqliteDb;
@@ -11,7 +11,7 @@ export class SqliteProofRepository implements ProofRepository {
     this.db = db;
   }
 
-  async saveProofs(mintUrl: string, proofs: Proof[]): Promise<void> {
+  async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!proofs || proofs.length === 0) return;
     const now = getUnixTimeSeconds();
     await this.db.transaction(async (tx) => {
@@ -24,7 +24,7 @@ export class SqliteProofRepository implements ProofRepository {
         }
       }
       const insertSql =
-        'INSERT INTO coco_cashu_proofs (mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, "ready", ?)';
+        'INSERT INTO coco_cashu_proofs (mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
       for (const p of proofs) {
         const dleqJson = p.dleq ? JSON.stringify(p.dleq) : null;
         const witnessJson = p.witness ? JSON.stringify(p.witness) : null;
@@ -36,6 +36,7 @@ export class SqliteProofRepository implements ProofRepository {
           p.C,
           dleqJson,
           witnessJson,
+          p.state,
           now,
         ]);
       }
@@ -63,7 +64,7 @@ export class SqliteProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
       };
-      return { ...base, mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -88,7 +89,7 @@ export class SqliteProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
       };
-      return { ...base, mintUrl: r.mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl: r.mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -113,7 +114,7 @@ export class SqliteProofRepository implements ProofRepository {
         ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
         ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
       };
-      return { ...base, mintUrl } satisfies CoreProof;
+      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
     });
   }
 
@@ -135,5 +136,12 @@ export class SqliteProofRepository implements ProofRepository {
         await tx.run(delSql, [mintUrl, s]);
       }
     });
+  }
+
+  async wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void> {
+    await this.db.run('DELETE FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ?;', [
+      mintUrl,
+      keysetId,
+    ]);
   }
 }
