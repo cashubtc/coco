@@ -7,6 +7,8 @@ type WsRequestMethod = 'subscribe' | 'unsubscribe';
 
 export type SubscriptionKind = 'bolt11_mint_quote' | 'bolt11_melt_quote' | 'proof_state';
 
+export type UnsubscribeHandler = () => Promise<void>;
+
 export interface SubscribeParams {
   kind: SubscriptionKind;
   subId: string;
@@ -171,7 +173,7 @@ export class SubscriptionManager {
     kind: SubscriptionKind,
     filters: string[],
     onNotification?: SubscriptionCallback<TPayload>,
-  ): Promise<{ subId: string; unsubscribe: () => Promise<void> }> {
+  ): Promise<{ subId: string; unsubscribe: UnsubscribeHandler }> {
     if (!filters || filters.length === 0) {
       throw new Error('filters must be a non-empty array');
     }

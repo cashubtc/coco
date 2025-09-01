@@ -5,9 +5,11 @@ import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
 import { mapProofToCoreProof } from '@core/utils.ts';
+import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 
 export class MintQuoteService {
   private readonly mintQuoteRepo: MintQuoteRepository;
+  private readonly subscriptionManager: SubscriptionManager;
   private readonly walletService: WalletService;
   private readonly proofService: ProofService;
   private readonly eventBus: EventBus<CoreEvents>;
@@ -15,12 +17,14 @@ export class MintQuoteService {
 
   constructor(
     mintQuoteRepo: MintQuoteRepository,
+    subscriptionManager: SubscriptionManager,
     walletService: WalletService,
     proofService: ProofService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.mintQuoteRepo = mintQuoteRepo;
+    this.subscriptionManager = subscriptionManager;
     this.walletService = walletService;
     this.proofService = proofService;
     this.eventBus = eventBus;
@@ -34,8 +38,6 @@ export class MintQuoteService {
       const quote = await wallet.createMintQuote(amount);
       await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
       await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
-      this.logger?.info('Mint quote created', { mintUrl, quoteId: quote.quote });
-
       return quote;
     } catch (err) {
       this.logger?.error('Failed to create mint quote', { mintUrl, amount, err });
@@ -70,6 +72,75 @@ export class MintQuoteService {
       this.logger?.error('Failed to redeem mint quote', { mintUrl, quoteId, err });
       throw err;
     }
+  }
+
+  async redeemOnPaid(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<{ unsubscribe: UnsubscribeHandler; completed: Promise<void> }> {
+    this.logger?.info('Redeeming mint quote on paid', { mintUrl, quoteId });
+    let settled = false;
+    let resolveCompleted: (() => void) | undefined;
+    let rejectCompleted: ((err: unknown) => void) | undefined;
+
+    const completed = new Promise<void>((resolve, reject) => {
+      resolveCompleted = resolve;
+      rejectCompleted = reject;
+    });
+
+    const isTerminalState = (state: MintQuoteResponse['state']): boolean =>
+      state === 'PAID' || state === 'ISSUED';
+
+    const settleSuccess = async (
+      subId: string,
+      unsubscribeFn: UnsubscribeHandler,
+    ): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      resolveCompleted?.();
+      unsubscribeFn().catch((err) =>
+        this.logger?.warn('Unsubscribe after redeem failed', { mintUrl, subId, err }),
+      );
+    };
+
+    const settleFailure = async (
+      unsubscribeFn: UnsubscribeHandler,
+      err: unknown,
+    ): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      rejectCompleted?.(err);
+      unsubscribeFn().catch(() => undefined);
+    };
+
+    const { subId, unsubscribe } = await this.subscriptionManager.subscribe<MintQuoteResponse>(
+      mintUrl,
+      'bolt11_mint_quote',
+      [quoteId],
+      async (payload) => {
+        if (!isTerminalState(payload.state)) return;
+        if (payload.state === 'PAID') {
+          try {
+            await this.redeemMintQuote(mintUrl, quoteId);
+            await settleSuccess(subId, unsubscribe);
+          } catch (err) {
+            await settleFailure(unsubscribe, err);
+          }
+        }
+      },
+    );
+
+    this.logger?.debug('Awaiting PAID state via subscription', { mintUrl, quoteId, subId });
+
+    const userUnsubscribe: UnsubscribeHandler = async () => {
+      if (!settled) {
+        settled = true;
+        rejectCompleted?.(new Error('Subscription cancelled by user'));
+      }
+      await unsubscribe();
+    };
+
+    return { unsubscribe: userUnsubscribe, completed };
   }
 
   private async setMintQuoteState(

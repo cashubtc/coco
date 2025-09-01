@@ -1,8 +1,9 @@
-import type { Repositories } from './repositories';
+import type { Repositories, MintQuoteRepository } from './repositories';
 import {
   CounterService,
   MintService,
   MintQuoteService,
+  MintQuoteWatcherService,
   ProofService,
   WalletService,
   SeedService,
@@ -11,12 +12,13 @@ import {
 import { SubscriptionManager, type WebSocketFactory } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi } from './api';
+import { MintApi, WalletApi, QuotesApi, SubscriptionApi } from './api';
 
 export class Manager {
   readonly mint: MintApi;
   readonly wallet: WalletApi;
   readonly quotes: QuotesApi;
+  readonly subscription: SubscriptionApi;
   private mintService: MintService;
   private walletService: WalletService;
   private counterService: CounterService;
@@ -26,6 +28,9 @@ export class Manager {
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
   readonly subscriptions: SubscriptionManager;
+  private mintQuoteService: MintQuoteService;
+  private mintQuoteWatcher?: MintQuoteWatcherService;
+  private mintQuoteRepository: MintQuoteRepository;
 
   constructor(
     repositories: Repositories,
@@ -90,22 +95,6 @@ export class Manager {
       this.counterService,
       walletRestoreLogger,
     );
-    const quotesService = new MintQuoteService(
-      repositories.mintQuoteRepository,
-      this.walletService,
-      this.proofService,
-      this.eventBus,
-      mintQuoteLogger,
-    );
-    this.mint = new MintApi(this.mintService);
-    this.wallet = new WalletApi(
-      this.mintService,
-      this.walletService,
-      this.proofService,
-      this.walletRestoreService,
-      walletApiLogger,
-    );
-    this.quotes = new QuotesApi(quotesService);
 
     const wsLogger = this.logger.child
       ? this.logger.child({ module: 'SubscriptionManager' })
@@ -126,6 +115,31 @@ export class Manager {
     } else {
       this.subscriptions = new SubscriptionManager(wsFactoryToUse, wsLogger);
     }
+
+    const quotesService = new MintQuoteService(
+      repositories.mintQuoteRepository,
+      this.subscriptions,
+      this.walletService,
+      this.proofService,
+      this.eventBus,
+      mintQuoteLogger,
+    );
+    this.mintQuoteService = quotesService;
+    this.mintQuoteRepository = repositories.mintQuoteRepository;
+    this.mint = new MintApi(this.mintService);
+    this.wallet = new WalletApi(
+      this.mintService,
+      this.walletService,
+      this.proofService,
+      this.walletRestoreService,
+      walletApiLogger,
+    );
+    this.quotes = new QuotesApi(quotesService);
+
+    const subscriptionApiLogger = this.logger.child
+      ? this.logger.child({ module: 'SubscriptionApi' })
+      : this.logger;
+    this.subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
   }
 
   on<E extends keyof CoreEvents>(
@@ -147,5 +161,27 @@ export class Manager {
     handler: (payload: CoreEvents[E]) => void | Promise<void>,
   ): void {
     return this.eventBus.off(event, handler);
+  }
+
+  async enableMintQuoteWatcher(options?: { watchExistingPendingOnStart?: boolean }): Promise<void> {
+    if (this.mintQuoteWatcher?.isRunning()) return;
+    const watcherLogger = this.logger.child
+      ? this.logger.child({ module: 'MintQuoteWatcherService' })
+      : this.logger;
+    this.mintQuoteWatcher = new MintQuoteWatcherService(
+      this.mintQuoteRepository,
+      this.subscriptions,
+      this.mintQuoteService,
+      this.eventBus,
+      watcherLogger,
+      { watchExistingPendingOnStart: options?.watchExistingPendingOnStart ?? true },
+    );
+    await this.mintQuoteWatcher.start();
+  }
+
+  async disableMintQuoteWatcher(): Promise<void> {
+    if (!this.mintQuoteWatcher) return;
+    await this.mintQuoteWatcher.stop();
+    this.mintQuoteWatcher = undefined;
   }
 }

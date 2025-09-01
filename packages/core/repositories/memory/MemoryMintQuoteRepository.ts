@@ -28,4 +28,12 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     if (!existing) return;
     this.quotes.set(key, { ...existing, state });
   }
+
+  async getPendingMintQuotes(): Promise<MintQuote[]> {
+    const result: MintQuote[] = [];
+    for (const q of this.quotes.values()) {
+      if (q.state !== 'ISSUED') result.push(q);
+    }
+    return result;
+  }
 }
