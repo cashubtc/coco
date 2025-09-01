@@ -8,6 +8,7 @@ import {
   SeedService,
   WalletRestoreService,
 } from './services';
+import { SubscriptionManager, type WebSocketFactory } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
 import { MintApi, WalletApi, QuotesApi } from './api';
@@ -24,8 +25,14 @@ export class Manager {
   private walletRestoreService: WalletRestoreService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
+  readonly subscriptions: SubscriptionManager;
 
-  constructor(repositories: Repositories, seedGetter: () => Promise<Uint8Array>, logger?: Logger) {
+  constructor(
+    repositories: Repositories,
+    seedGetter: () => Promise<Uint8Array>,
+    logger?: Logger,
+    webSocketFactory?: WebSocketFactory,
+  ) {
     this.logger = logger ?? new NullLogger();
     const eventLogger = this.logger.child ? this.logger.child({ module: 'EventBus' }) : this.logger;
 
@@ -99,6 +106,26 @@ export class Manager {
       walletApiLogger,
     );
     this.quotes = new QuotesApi(quotesService);
+
+    const wsLogger = this.logger.child
+      ? this.logger.child({ module: 'SubscriptionManager' })
+      : this.logger;
+    // Detect global WebSocket if available, otherwise require injected factory
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
+    const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (url: string) => new (globalThis as any).WebSocket(url)
+      : undefined;
+    const wsFactoryToUse = webSocketFactory ?? defaultFactory;
+    if (!wsFactoryToUse) {
+      const throwingFactory: WebSocketFactory = () => {
+        throw new Error('No WebSocketFactory provided and no global WebSocket available');
+      };
+      this.subscriptions = new SubscriptionManager(throwingFactory, wsLogger);
+    } else {
+      this.subscriptions = new SubscriptionManager(wsFactoryToUse, wsLogger);
+    }
   }
 
   on<E extends keyof CoreEvents>(

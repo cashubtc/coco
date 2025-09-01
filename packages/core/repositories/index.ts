@@ -40,6 +40,7 @@ export interface MintQuoteRepository {
   getMintQuote(mintUrl: string, quoteId: string): Promise<MintQuote | null>;
   addMintQuote(quote: MintQuote): Promise<void>;
   setMintQuoteState(mintUrl: string, quoteId: string, state: MintQuote['state']): Promise<void>;
+  getPendingMintQuotes(): Promise<MintQuote[]>;
 }
 
 export interface Repositories {

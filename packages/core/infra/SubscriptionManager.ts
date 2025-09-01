@@ -1,4 +1,5 @@
 import type { Logger } from '../logging/Logger.ts';
+import { WsConnectionManager, type WebSocketFactory } from './WsConnectionManager.ts';
 
 type JsonRpcId = number;
 
@@ -36,20 +37,7 @@ export type WsNotification<TPayload> = {
   params: { subId: string; payload: TPayload };
 };
 
-export interface WebSocketLike {
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-  addEventListener(
-    type: 'open' | 'message' | 'error' | 'close',
-    listener: (event: any) => void,
-  ): void;
-  removeEventListener(
-    type: 'open' | 'message' | 'error' | 'close',
-    listener: (event: any) => void,
-  ): void;
-}
-
-export type WebSocketFactory = (url: string) => WebSocketLike;
+// WebSocket types now live in WsConnectionManager
 
 export type SubscriptionCallback<TPayload = unknown> = (payload: TPayload) => void | Promise<void>;
 
@@ -93,27 +81,19 @@ function generateSubId(): string {
 }
 
 export class SubscriptionManager {
-  private readonly sockets = new Map<string, WebSocketLike>();
   private readonly nextIdByMint = new Map<string, number>();
   private readonly subscriptions = new Map<string, ActiveSubscription<unknown>>();
-  private readonly isOpenByMint = new Map<string, boolean>();
-  private readonly sendQueueByMint = new Map<string, string[]>();
   private readonly pendingSubscribeByMint = new Map<string, Map<number, string>>();
-  private readonly wsFactory: WebSocketFactory;
+  private readonly ws: WsConnectionManager;
   private readonly logger?: Logger;
+  private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
 
-  constructor(wsFactory: WebSocketFactory, logger?: Logger) {
-    this.wsFactory = wsFactory;
+  constructor(wsFactoryOrManager: WebSocketFactory | WsConnectionManager, logger?: Logger) {
     this.logger = logger;
-  }
-
-  private buildWsUrl(baseMintUrl: string): string {
-    const url = new URL(baseMintUrl);
-    const isSecure = url.protocol === 'https:';
-    url.protocol = isSecure ? 'wss:' : 'ws:';
-    const path = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;
-    url.pathname = `${path}/v1/ws`;
-    return url.toString();
+    this.ws =
+      typeof wsFactoryOrManager === 'function'
+        ? new WsConnectionManager(wsFactoryOrManager, logger)
+        : wsFactoryOrManager;
   }
 
   private getNextId(mintUrl: string): number {
@@ -123,16 +103,9 @@ export class SubscriptionManager {
     return next;
   }
 
-  private ensureSocket(mintUrl: string): WebSocketLike {
-    const existing = this.sockets.get(mintUrl);
-    if (existing) return existing;
-
-    const wsUrl = this.buildWsUrl(mintUrl);
-    const socket = this.wsFactory(wsUrl);
-    this.sockets.set(mintUrl, socket);
-    this.isOpenByMint.set(mintUrl, false);
-
-    const onMessage = (evt: any) => {
+  private ensureMessageListener(mintUrl: string): void {
+    if (this.messageHandlerByMint.has(mintUrl)) return;
+    const handler = (evt: any) => {
       try {
         const data = typeof evt.data === 'string' ? evt.data : evt.data?.toString?.();
         if (!data) return;
@@ -177,7 +150,6 @@ export class SubscriptionManager {
           const respId = Number((resp as any).id);
           const pendingMap = this.pendingSubscribeByMint.get(mintUrl);
           if (Number.isFinite(respId) && pendingMap && pendingMap.has(respId)) {
-            // Subscribe accepted, clear pending mapping
             pendingMap.delete(respId);
             this.logger?.info('Subscribe request accepted', {
               mintUrl,
@@ -190,57 +162,8 @@ export class SubscriptionManager {
         this.logger?.error('WS message handling error', { mintUrl, err });
       }
     };
-    const onOpen = () => {
-      this.isOpenByMint.set(mintUrl, true);
-      const queue = this.sendQueueByMint.get(mintUrl);
-      if (queue && queue.length > 0) {
-        for (const payload of queue) {
-          try {
-            socket.send(payload);
-          } catch (err) {
-            this.logger?.error('WS send error while flushing queue', { mintUrl, err });
-          }
-        }
-        this.sendQueueByMint.set(mintUrl, []);
-      }
-      this.logger?.info('WS opened', { mintUrl });
-    };
-    const onError = (err: any) => {
-      this.logger?.error('WS error', { mintUrl, err });
-    };
-    const onClose = () => {
-      this.logger?.info('WS closed', { mintUrl });
-      this.sockets.delete(mintUrl);
-      this.isOpenByMint.set(mintUrl, false);
-      this.pendingSubscribeByMint.delete(mintUrl);
-      this.sendQueueByMint.delete(mintUrl);
-    };
-
-    socket.addEventListener('open', onOpen);
-    socket.addEventListener('message', onMessage);
-    socket.addEventListener('error', onError);
-    socket.addEventListener('close', onClose);
-
-    return socket;
-  }
-
-  private sendOrQueue(mintUrl: string, message: unknown): void {
-    const socket = this.ensureSocket(mintUrl);
-    const payload = typeof message === 'string' ? message : JSON.stringify(message);
-    if (this.isOpenByMint.get(mintUrl)) {
-      try {
-        socket.send(payload);
-      } catch (err) {
-        this.logger?.error('WS send error', { mintUrl, err });
-      }
-      return;
-    }
-    let queue = this.sendQueueByMint.get(mintUrl);
-    if (!queue) {
-      queue = [];
-      this.sendQueueByMint.set(mintUrl, queue);
-    }
-    queue.push(payload);
+    this.ws.on(mintUrl, 'message', handler);
+    this.messageHandlerByMint.set(mintUrl, handler);
   }
 
   async subscribe<TPayload = unknown>(
@@ -252,8 +175,7 @@ export class SubscriptionManager {
     if (!filters || filters.length === 0) {
       throw new Error('filters must be a non-empty array');
     }
-
-    const socket = this.ensureSocket(mintUrl);
+    this.ensureMessageListener(mintUrl);
     const id = this.getNextId(mintUrl);
     const subId = generateSubId();
 
@@ -282,7 +204,7 @@ export class SubscriptionManager {
     }
     pendingById.set(id, subId);
 
-    this.sendOrQueue(mintUrl, req);
+    this.ws.send(mintUrl, req);
     this.logger?.info('Subscribed to NUT-17', {
       mintUrl,
       kind,
@@ -311,7 +233,6 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
-    const socket = this.ensureSocket(mintUrl);
     const id = this.getNextId(mintUrl);
     const req: WsRequest = {
       jsonrpc: '2.0',
@@ -319,23 +240,14 @@ export class SubscriptionManager {
       params: { subId },
       id,
     };
-    this.sendOrQueue(mintUrl, req);
+    this.ws.send(mintUrl, req);
     this.subscriptions.delete(subId);
     this.logger?.info('Unsubscribed from NUT-17', { mintUrl, subId });
   }
 
   closeAll(): void {
-    for (const [mintUrl, socket] of this.sockets.entries()) {
-      try {
-        socket.close(1000, 'Normal Closure');
-      } catch (err) {
-        this.logger?.warn('Error while closing WS', { mintUrl, err });
-      }
-    }
-    this.sockets.clear();
+    this.ws.closeAll();
     this.subscriptions.clear();
-    this.isOpenByMint.clear();
-    this.sendQueueByMint.clear();
     this.pendingSubscribeByMint.clear();
   }
 }
