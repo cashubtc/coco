@@ -9,6 +9,7 @@ import {
   SeedService,
   WalletRestoreService,
   ProofStateWatcherService,
+  MeltQuoteService,
 } from './services';
 import { SubscriptionManager, type WebSocketFactory } from './infra';
 import { EventBus, type CoreEvents } from './events';
@@ -22,9 +23,7 @@ export class Manager {
   readonly subscription: SubscriptionApi;
   private mintService: MintService;
   private walletService: WalletService;
-  private counterService: CounterService;
   private proofService: ProofService;
-  private seedService: SeedService;
   private walletRestoreService: WalletRestoreService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
@@ -33,7 +32,7 @@ export class Manager {
   private mintQuoteWatcher?: MintQuoteWatcherService;
   private mintQuoteRepository: MintQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
-
+  private meltQuoteService: MeltQuoteService;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -45,13 +44,12 @@ export class Manager {
     this.subscriptions = this.createSubscriptionManager(webSocketFactory);
     const core = this.buildCoreServices(repositories, seedGetter);
     this.mintService = core.mintService;
-    this.seedService = core.seedService;
     this.walletService = core.walletService;
-    this.counterService = core.counterService;
     this.proofService = core.proofService;
     this.walletRestoreService = core.walletRestoreService;
     this.mintQuoteService = core.mintQuoteService;
     this.mintQuoteRepository = core.mintQuoteRepository;
+    this.meltQuoteService = core.meltQuoteService;
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -166,6 +164,7 @@ export class Manager {
     walletRestoreService: WalletRestoreService;
     mintQuoteService: MintQuoteService;
     mintQuoteRepository: MintQuoteRepository;
+    meltQuoteService: MeltQuoteService;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -173,7 +172,7 @@ export class Manager {
     const proofLogger = this.getChildLogger('ProofService');
     const mintQuoteLogger = this.getChildLogger('MintQuoteService');
     const walletRestoreLogger = this.getChildLogger('WalletRestoreService');
-
+    const meltQuoteLogger = this.getChildLogger('MeltQuoteService');
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
@@ -212,6 +211,14 @@ export class Manager {
     const mintQuoteService = quotesService;
     const mintQuoteRepository = repositories.mintQuoteRepository;
 
+    const meltQuoteService = new MeltQuoteService(
+      proofService,
+      walletService,
+      repositories.meltQuoteRepository,
+      this.eventBus,
+      meltQuoteLogger,
+    );
+
     return {
       mintService,
       seedService,
@@ -221,6 +228,7 @@ export class Manager {
       walletRestoreService,
       mintQuoteService,
       mintQuoteRepository,
+      meltQuoteService,
     };
   }
 
@@ -240,7 +248,7 @@ export class Manager {
       this.walletRestoreService,
       walletApiLogger,
     );
-    const quotes = new QuotesApi(this.mintQuoteService);
+    const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     return { mint, wallet, quotes, subscription };
   }

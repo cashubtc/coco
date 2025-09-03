@@ -3,6 +3,7 @@ import type { Keyset } from '../models/Keyset';
 import type { Counter } from '../models/Counter';
 import type { CoreProof, ProofState } from '../types';
 import type { MintQuote } from '@core/models/MintQuote';
+import type { MeltQuote } from '@core/models/MeltQuote';
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -43,12 +44,20 @@ export interface MintQuoteRepository {
   getPendingMintQuotes(): Promise<MintQuote[]>;
 }
 
+export interface MeltQuoteRepository {
+  getMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuote | null>;
+  addMeltQuote(quote: MeltQuote): Promise<void>;
+  setMeltQuoteState(mintUrl: string, quoteId: string, state: MeltQuote['state']): Promise<void>;
+  getPendingMeltQuotes(): Promise<MeltQuote[]>;
+}
+
 export interface Repositories {
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
+  meltQuoteRepository: MeltQuoteRepository;
 }
 
 export * from './memory';

@@ -6,3 +6,4 @@ export * from './MintQuoteService';
 export * from './watchers';
 export * from './SeedService';
 export * from './WalletRestoreService';
+export * from './MeltQuoteService';

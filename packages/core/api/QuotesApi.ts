@@ -1,11 +1,12 @@
-import type { MintQuoteResponse } from '@cashu/cashu-ts';
-import type { MintQuoteService } from '@core/services';
+import type { MeltQuoteResponse, MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MintQuoteService, MeltQuoteService } from '@core/services';
 
 export class QuotesApi {
   private mintQuoteService: MintQuoteService;
-
-  constructor(mintQuoteService: MintQuoteService) {
+  private meltQuoteService: MeltQuoteService;
+  constructor(mintQuoteService: MintQuoteService, meltQuoteService: MeltQuoteService) {
     this.mintQuoteService = mintQuoteService;
+    this.meltQuoteService = meltQuoteService;
   }
 
   async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
@@ -14,5 +15,13 @@ export class QuotesApi {
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
     return this.mintQuoteService.redeemMintQuote(mintUrl, quoteId);
+  }
+
+  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse> {
+    return this.meltQuoteService.createMeltQuote(mintUrl, invoice);
+  }
+
+  async payMeltQuote(mintUrl: string, quoteId: string): Promise<void> {
+    return this.meltQuoteService.payMeltQuote(mintUrl, quoteId);
   }
 }
