@@ -5,6 +5,7 @@ import type {
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
+  MeltQuoteRepository,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
@@ -13,6 +14,7 @@ import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
 import { ExpoCounterRepository } from './repositories/CounterRepository.ts';
 import { ExpoProofRepository } from './repositories/ProofRepository.ts';
 import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { ExpoMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 
 export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
@@ -22,6 +24,7 @@ export class ExpoSqliteRepositories implements Repositories {
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly db: ExpoSqliteDb;
 
   constructor(options: ExpoSqliteRepositoriesOptions) {
@@ -31,6 +34,7 @@ export class ExpoSqliteRepositories implements Repositories {
     this.keysetRepository = new ExpoKeysetRepository(this.db);
     this.proofRepository = new ExpoProofRepository(this.db);
     this.mintQuoteRepository = new ExpoMintQuoteRepository(this.db);
+    this.meltQuoteRepository = new ExpoMeltQuoteRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -46,4 +50,5 @@ export {
   ExpoCounterRepository,
   ExpoProofRepository,
   ExpoMintQuoteRepository,
+  ExpoMeltQuoteRepository,
 };

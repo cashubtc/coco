@@ -67,6 +67,26 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_quotes_mint ON coco_cashu_mint_quotes(mintUrl);
     `,
   },
+  {
+    id: '002_melt_quotes',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_melt_quotes (
+        mintUrl TEXT NOT NULL,
+        quote   TEXT NOT NULL,
+        state   TEXT NOT NULL CHECK (state IN ('UNPAID','PENDING','PAID')),
+        request TEXT NOT NULL,
+        amount  INTEGER NOT NULL,
+        unit    TEXT NOT NULL,
+        expiry  INTEGER NOT NULL,
+        fee_reserve INTEGER NOT NULL,
+        payment_preimage TEXT,
+        PRIMARY KEY (mintUrl, quote)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_state ON coco_cashu_melt_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint ON coco_cashu_melt_quotes(mintUrl);
+    `,
+  },
 ];
 
 export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {
