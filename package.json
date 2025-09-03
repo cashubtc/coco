@@ -5,5 +5,8 @@
     "packages/*"
   ],
   "devDependencies": {},
-  "peerDependencies": {}
+  "peerDependencies": {},
+  "dependencies": {
+    "@changesets/cli": "^2.29.6"
+  }
 }
