@@ -54,4 +54,22 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       .table('coco_cashu_mint_quotes')
       .put({ ...existing, state } as MintQuoteRow);
   }
+
+  async getPendingMintQuotes(): Promise<MintQuote[]> {
+    const rows = (await (this.db as any)
+      .table('coco_cashu_mint_quotes')
+      .toArray()) as MintQuoteRow[];
+    return rows
+      .filter((r) => r.state !== 'ISSUED')
+      .map((row) => ({
+        mintUrl: row.mintUrl,
+        quote: row.quote,
+        state: row.state,
+        request: row.request,
+        amount: row.amount,
+        unit: row.unit,
+        expiry: row.expiry,
+        pubkey: row.pubkey ?? undefined,
+      }));
+  }
 }

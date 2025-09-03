@@ -8,6 +8,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_counters: '&[mintUrl+keysetId]',
     coco_cashu_proofs: '&[mintUrl+secret], [mintUrl+state], [mintUrl+id+state], state, mintUrl, id',
     coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
   });
 
   // No migration tracking needed prior to first release

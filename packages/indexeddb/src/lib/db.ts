@@ -61,3 +61,15 @@ export interface MintQuoteRow {
   expiry: number;
   pubkey?: string | null;
 }
+
+export interface MeltQuoteRow {
+  mintUrl: string;
+  quote: string;
+  state: 'UNPAID' | 'PENDING' | 'PAID';
+  request: string;
+  amount: number;
+  unit: string;
+  expiry: number;
+  fee_reserve: number;
+  payment_preimage: string | null;
+}

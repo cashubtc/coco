@@ -5,6 +5,7 @@ import type {
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
+  MeltQuoteRepository,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
@@ -13,6 +14,7 @@ import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
 import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
 import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -22,6 +24,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly db: IdbDb;
 
   constructor(options: IndexedDbRepositoriesOptions) {
@@ -31,6 +34,7 @@ export class IndexedDbRepositories implements Repositories {
     this.keysetRepository = new IdbKeysetRepository(this.db);
     this.proofRepository = new IdbProofRepository(this.db);
     this.mintQuoteRepository = new IdbMintQuoteRepository(this.db);
+    this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -46,4 +50,5 @@ export {
   IdbCounterRepository,
   IdbProofRepository,
   IdbMintQuoteRepository,
+  IdbMeltQuoteRepository,
 };
