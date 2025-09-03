@@ -41,107 +41,22 @@ export class Manager {
     webSocketFactory?: WebSocketFactory,
   ) {
     this.logger = logger ?? new NullLogger();
-    const eventLogger = this.logger.child ? this.logger.child({ module: 'EventBus' }) : this.logger;
-
-    this.eventBus = new EventBus<CoreEvents>({
-      onError: (args) => {
-        eventLogger.error('Event handler error', args);
-      },
-    });
-
-    const mintLogger = this.logger.child
-      ? this.logger.child({ module: 'MintService' })
-      : this.logger;
-    const walletLogger = this.logger.child
-      ? this.logger.child({ module: 'WalletService' })
-      : this.logger;
-    const counterLogger = this.logger.child
-      ? this.logger.child({ module: 'CounterService' })
-      : this.logger;
-    const proofLogger = this.logger.child
-      ? this.logger.child({ module: 'ProofService' })
-      : this.logger;
-    const mintQuoteLogger = this.logger.child
-      ? this.logger.child({ module: 'MintQuoteService' })
-      : this.logger;
-    const walletRestoreLogger = this.logger.child
-      ? this.logger.child({ module: 'WalletRestoreService' })
-      : this.logger;
-    const walletApiLogger = this.logger.child
-      ? this.logger.child({ module: 'WalletApi' })
-      : this.logger;
-
-    this.mintService = new MintService(
-      repositories.mintRepository,
-      repositories.keysetRepository,
-      mintLogger,
-      this.eventBus,
-    );
-    this.seedService = new SeedService(seedGetter);
-    this.walletService = new WalletService(this.mintService, this.seedService, walletLogger);
-    this.counterService = new CounterService(
-      repositories.counterRepository,
-      counterLogger,
-      this.eventBus,
-    );
-    this.proofService = new ProofService(
-      this.counterService,
-      repositories.proofRepository,
-      this.walletService,
-      this.seedService,
-      proofLogger,
-      this.eventBus,
-    );
-    this.walletRestoreService = new WalletRestoreService(
-      this.proofService,
-      this.counterService,
-      walletRestoreLogger,
-    );
-
-    const wsLogger = this.logger.child
-      ? this.logger.child({ module: 'SubscriptionManager' })
-      : this.logger;
-    // Detect global WebSocket if available, otherwise require injected factory
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
-    const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (url: string) => new (globalThis as any).WebSocket(url)
-      : undefined;
-    const wsFactoryToUse = webSocketFactory ?? defaultFactory;
-    if (!wsFactoryToUse) {
-      const throwingFactory: WebSocketFactory = () => {
-        throw new Error('No WebSocketFactory provided and no global WebSocket available');
-      };
-      this.subscriptions = new SubscriptionManager(throwingFactory, wsLogger);
-    } else {
-      this.subscriptions = new SubscriptionManager(wsFactoryToUse, wsLogger);
-    }
-
-    const quotesService = new MintQuoteService(
-      repositories.mintQuoteRepository,
-      this.subscriptions,
-      this.walletService,
-      this.proofService,
-      this.eventBus,
-      mintQuoteLogger,
-    );
-    this.mintQuoteService = quotesService;
-    this.mintQuoteRepository = repositories.mintQuoteRepository;
-    this.mint = new MintApi(this.mintService);
-    this.wallet = new WalletApi(
-      this.mintService,
-      this.walletService,
-      this.proofService,
-      this.walletRestoreService,
-      walletApiLogger,
-    );
-    this.quotes = new QuotesApi(quotesService);
-
-    const subscriptionApiLogger = this.logger.child
-      ? this.logger.child({ module: 'SubscriptionApi' })
-      : this.logger;
-    this.subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
+    this.eventBus = this.createEventBus();
+    this.subscriptions = this.createSubscriptionManager(webSocketFactory);
+    const core = this.buildCoreServices(repositories, seedGetter);
+    this.mintService = core.mintService;
+    this.seedService = core.seedService;
+    this.walletService = core.walletService;
+    this.counterService = core.counterService;
+    this.proofService = core.proofService;
+    this.walletRestoreService = core.walletRestoreService;
+    this.mintQuoteService = core.mintQuoteService;
+    this.mintQuoteRepository = core.mintQuoteRepository;
+    const apis = this.buildApis();
+    this.mint = apis.mint;
+    this.wallet = apis.wallet;
+    this.quotes = apis.quotes;
+    this.subscription = apis.subscription;
   }
 
   on<E extends keyof CoreEvents>(
@@ -205,5 +120,128 @@ export class Manager {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();
     this.proofStateWatcher = undefined;
+  }
+
+  private getChildLogger(moduleName: string): Logger {
+    return this.logger.child ? this.logger.child({ module: moduleName }) : this.logger;
+  }
+
+  private createEventBus(): EventBus<CoreEvents> {
+    const eventLogger = this.getChildLogger('EventBus');
+    return new EventBus<CoreEvents>({
+      onError: (args) => {
+        eventLogger.error('Event handler error', args);
+      },
+    });
+  }
+
+  private createSubscriptionManager(webSocketFactory?: WebSocketFactory): SubscriptionManager {
+    const wsLogger = this.getChildLogger('SubscriptionManager');
+    // Detect global WebSocket if available, otherwise require injected factory
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
+    const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (url: string) => new (globalThis as any).WebSocket(url)
+      : undefined;
+    const wsFactoryToUse = webSocketFactory ?? defaultFactory;
+    if (!wsFactoryToUse) {
+      const throwingFactory: WebSocketFactory = () => {
+        throw new Error('No WebSocketFactory provided and no global WebSocket available');
+      };
+      return new SubscriptionManager(throwingFactory, wsLogger);
+    }
+    return new SubscriptionManager(wsFactoryToUse, wsLogger);
+  }
+
+  private buildCoreServices(
+    repositories: Repositories,
+    seedGetter: () => Promise<Uint8Array>,
+  ): {
+    mintService: MintService;
+    seedService: SeedService;
+    walletService: WalletService;
+    counterService: CounterService;
+    proofService: ProofService;
+    walletRestoreService: WalletRestoreService;
+    mintQuoteService: MintQuoteService;
+    mintQuoteRepository: MintQuoteRepository;
+  } {
+    const mintLogger = this.getChildLogger('MintService');
+    const walletLogger = this.getChildLogger('WalletService');
+    const counterLogger = this.getChildLogger('CounterService');
+    const proofLogger = this.getChildLogger('ProofService');
+    const mintQuoteLogger = this.getChildLogger('MintQuoteService');
+    const walletRestoreLogger = this.getChildLogger('WalletRestoreService');
+
+    const mintService = new MintService(
+      repositories.mintRepository,
+      repositories.keysetRepository,
+      mintLogger,
+      this.eventBus,
+    );
+    const seedService = new SeedService(seedGetter);
+    const walletService = new WalletService(mintService, seedService, walletLogger);
+    const counterService = new CounterService(
+      repositories.counterRepository,
+      counterLogger,
+      this.eventBus,
+    );
+    const proofService = new ProofService(
+      counterService,
+      repositories.proofRepository,
+      walletService,
+      seedService,
+      proofLogger,
+      this.eventBus,
+    );
+    const walletRestoreService = new WalletRestoreService(
+      proofService,
+      counterService,
+      walletRestoreLogger,
+    );
+
+    const quotesService = new MintQuoteService(
+      repositories.mintQuoteRepository,
+      this.subscriptions,
+      walletService,
+      proofService,
+      this.eventBus,
+      mintQuoteLogger,
+    );
+    const mintQuoteService = quotesService;
+    const mintQuoteRepository = repositories.mintQuoteRepository;
+
+    return {
+      mintService,
+      seedService,
+      walletService,
+      counterService,
+      proofService,
+      walletRestoreService,
+      mintQuoteService,
+      mintQuoteRepository,
+    };
+  }
+
+  private buildApis(): {
+    mint: MintApi;
+    wallet: WalletApi;
+    quotes: QuotesApi;
+    subscription: SubscriptionApi;
+  } {
+    const walletApiLogger = this.getChildLogger('WalletApi');
+    const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
+    const mint = new MintApi(this.mintService);
+    const wallet = new WalletApi(
+      this.mintService,
+      this.walletService,
+      this.proofService,
+      this.walletRestoreService,
+      walletApiLogger,
+    );
+    const quotes = new QuotesApi(this.mintQuoteService);
+    const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
+    return { mint, wallet, quotes, subscription };
   }
 }

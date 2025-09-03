@@ -1,9 +1,9 @@
 import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../logging/Logger.ts';
-import type { MintQuoteRepository } from '../repositories';
+import type { Logger } from '../../logging/Logger.ts';
+import type { MintQuoteRepository } from '../../repositories';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
-import { MintQuoteService } from './MintQuoteService';
+import { MintQuoteService } from '../MintQuoteService';
 
 type QuoteKey = string; // `${mintUrl}::${quoteId}`
 

@@ -1,8 +1,8 @@
 import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../logging/Logger.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import { hashToCurve } from '@cashu/cashu-ts/crypto/common';
-import type { ProofService } from './ProofService';
+import type { ProofService } from '../ProofService';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
 
