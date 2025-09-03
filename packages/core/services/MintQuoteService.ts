@@ -59,6 +59,7 @@ export class MintQuoteService {
         send: 0,
       });
       const proofs = await wallet.mintProofs(quote.amount, quote.quote, { outputData: keep });
+      await this.eventBus.emit('mint-quote:redeemed', { mintUrl, quoteId, quote });
       this.logger?.info('Mint quote redeemed, proofs minted', {
         mintUrl,
         quoteId,
