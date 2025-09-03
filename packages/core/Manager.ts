@@ -8,6 +8,7 @@ import {
   WalletService,
   SeedService,
   WalletRestoreService,
+  ProofStateWatcherService,
 } from './services';
 import { SubscriptionManager, type WebSocketFactory } from './infra';
 import { EventBus, type CoreEvents } from './events';
@@ -31,6 +32,7 @@ export class Manager {
   private mintQuoteService: MintQuoteService;
   private mintQuoteWatcher?: MintQuoteWatcherService;
   private mintQuoteRepository: MintQuoteRepository;
+  private proofStateWatcher?: ProofStateWatcherService;
 
   constructor(
     repositories: Repositories,
@@ -183,5 +185,25 @@ export class Manager {
     if (!this.mintQuoteWatcher) return;
     await this.mintQuoteWatcher.stop();
     this.mintQuoteWatcher = undefined;
+  }
+
+  async enableProofStateWatcher(): Promise<void> {
+    if (this.proofStateWatcher?.isRunning()) return;
+    const watcherLogger = this.logger.child
+      ? this.logger.child({ module: 'ProofStateWatcherService' })
+      : this.logger;
+    this.proofStateWatcher = new ProofStateWatcherService(
+      this.subscriptions,
+      this.proofService,
+      this.eventBus,
+      watcherLogger,
+    );
+    await this.proofStateWatcher.start();
+  }
+
+  async disableProofStateWatcher(): Promise<void> {
+    if (!this.proofStateWatcher) return;
+    await this.proofStateWatcher.stop();
+    this.proofStateWatcher = undefined;
   }
 }

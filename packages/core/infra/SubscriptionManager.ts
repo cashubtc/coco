@@ -45,6 +45,7 @@ export type SubscriptionCallback<TPayload = unknown> = (payload: TPayload) => vo
 
 interface ActiveSubscription<TPayload = unknown> {
   subId: string;
+  mintUrl: string;
   kind: SubscriptionKind;
   filters: string[];
   callbacks: Set<SubscriptionCallback<TPayload>>;
@@ -85,10 +86,12 @@ function generateSubId(): string {
 export class SubscriptionManager {
   private readonly nextIdByMint = new Map<string, number>();
   private readonly subscriptions = new Map<string, ActiveSubscription<unknown>>();
+  private readonly activeByMint = new Map<string, Set<string>>();
   private readonly pendingSubscribeByMint = new Map<string, Map<number, string>>();
   private readonly ws: WsConnectionManager;
   private readonly logger?: Logger;
   private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
+  private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
 
   constructor(wsFactoryOrManager: WebSocketFactory | WsConnectionManager, logger?: Logger) {
     this.logger = logger;
@@ -166,6 +169,18 @@ export class SubscriptionManager {
     };
     this.ws.on(mintUrl, 'message', handler);
     this.messageHandlerByMint.set(mintUrl, handler);
+
+    // Also ensure an 'open' listener that re-subscribes active subs on reconnect
+    const onOpen = (_evt: any) => {
+      try {
+        this.logger?.info('WS open detected, re-subscribing active subscriptions', { mintUrl });
+        this.reSubscribeMint(mintUrl);
+      } catch (err) {
+        this.logger?.error('Failed to schedule re-subscribe after open', { mintUrl, err });
+      }
+    };
+    this.ws.on(mintUrl, 'open', onOpen);
+    this.openHandlerByMint.set(mintUrl, onOpen);
   }
 
   async subscribe<TPayload = unknown>(
@@ -190,6 +205,7 @@ export class SubscriptionManager {
 
     const active: ActiveSubscription<unknown> = {
       subId,
+      mintUrl,
       kind,
       filters,
       callbacks: new Set<SubscriptionCallback<unknown>>(),
@@ -197,6 +213,14 @@ export class SubscriptionManager {
     if (onNotification)
       active.callbacks.add(onNotification as unknown as SubscriptionCallback<unknown>);
     this.subscriptions.set(subId, active);
+
+    // index by mint for reconnect
+    let set = this.activeByMint.get(mintUrl);
+    if (!set) {
+      set = new Set<string>();
+      this.activeByMint.set(mintUrl, set);
+    }
+    set.add(subId);
 
     // Track pending subscribe by request id so we can handle error responses
     let pendingById = this.pendingSubscribeByMint.get(mintUrl);
@@ -244,12 +268,46 @@ export class SubscriptionManager {
     };
     this.ws.send(mintUrl, req);
     this.subscriptions.delete(subId);
+    const set = this.activeByMint.get(mintUrl);
+    set?.delete(subId);
     this.logger?.info('Unsubscribed from NUT-17', { mintUrl, subId });
   }
 
   closeAll(): void {
     this.ws.closeAll();
     this.subscriptions.clear();
+    this.activeByMint.clear();
     this.pendingSubscribeByMint.clear();
+  }
+
+  private reSubscribeMint(mintUrl: string): void {
+    const set = this.activeByMint.get(mintUrl);
+    if (!set || set.size === 0) return;
+    // Re-send subscribe requests with the same subId/filters/kind
+    for (const subId of set) {
+      const active = this.subscriptions.get(subId);
+      if (!active) continue;
+      const id = this.getNextId(mintUrl);
+      const req: WsRequest = {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { kind: active.kind, subId: active.subId, filters: active.filters },
+        id,
+      };
+      // Track pending subscribe by id to catch errors
+      let pendingById = this.pendingSubscribeByMint.get(mintUrl);
+      if (!pendingById) {
+        pendingById = new Map<number, string>();
+        this.pendingSubscribeByMint.set(mintUrl, pendingById);
+      }
+      pendingById.set(id, subId);
+      this.ws.send(mintUrl, req);
+      this.logger?.info('Re-subscribed to NUT-17 after reconnect', {
+        mintUrl,
+        kind: active.kind,
+        subId: active.subId,
+        filterCount: active.filters.length,
+      });
+    }
   }
 }

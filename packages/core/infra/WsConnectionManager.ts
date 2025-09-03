@@ -20,6 +20,12 @@ export class WsConnectionManager {
   private readonly isOpenByMint = new Map<string, boolean>();
   private readonly sendQueueByMint = new Map<string, string[]>();
   private readonly logger?: Logger;
+  private readonly listenersByMint = new Map<
+    string,
+    Map<'open' | 'message' | 'error' | 'close', Set<(event: any) => void>>
+  >();
+  private readonly reconnectAttemptsByMint = new Map<string, number>();
+  private readonly reconnectTimeoutByMint = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly wsFactory: WebSocketFactory, logger?: Logger) {
     this.logger = logger;
@@ -45,6 +51,13 @@ export class WsConnectionManager {
 
     const onOpen = () => {
       this.isOpenByMint.set(mintUrl, true);
+      // clear any scheduled reconnect attempts
+      const pending = this.reconnectTimeoutByMint.get(mintUrl);
+      if (pending) {
+        clearTimeout(pending);
+        this.reconnectTimeoutByMint.delete(mintUrl);
+      }
+      this.reconnectAttemptsByMint.delete(mintUrl);
       const queue = this.sendQueueByMint.get(mintUrl);
       if (queue && queue.length > 0) {
         for (const payload of queue) {
@@ -66,13 +79,47 @@ export class WsConnectionManager {
       this.sockets.delete(mintUrl);
       this.isOpenByMint.set(mintUrl, false);
       this.sendQueueByMint.delete(mintUrl);
+      // Schedule reconnect if there are listeners interested
+      const hasListeners = this.listenersByMint.get(mintUrl);
+      if (hasListeners && Array.from(hasListeners.values()).some((s) => s.size > 0)) {
+        this.scheduleReconnect(mintUrl);
+      }
     };
 
     socket.addEventListener('open', onOpen);
     socket.addEventListener('error', onError);
     socket.addEventListener('close', onClose);
 
+    // Attach any previously registered external listeners to this fresh socket
+    const map = this.listenersByMint.get(mintUrl);
+    if (map) {
+      for (const [type, set] of map.entries()) {
+        for (const listener of set.values()) {
+          socket.addEventListener(type, listener);
+        }
+      }
+    }
+
     return socket;
+  }
+
+  private scheduleReconnect(mintUrl: string): void {
+    if (this.reconnectTimeoutByMint.get(mintUrl)) return; // already scheduled
+    const attempt = (this.reconnectAttemptsByMint.get(mintUrl) ?? 0) + 1;
+    this.reconnectAttemptsByMint.set(mintUrl, attempt);
+    const delayMs = Math.min(30000, 1000 * 2 ** Math.min(6, attempt - 1));
+    this.logger?.info('Scheduling WS reconnect', { mintUrl, attempt, delayMs });
+    const timeoutId = setTimeout(() => {
+      this.reconnectTimeoutByMint.delete(mintUrl);
+      try {
+        // ensureSocket will create a new socket and re-attach existing listeners
+        this.ensureSocket(mintUrl);
+      } catch (err) {
+        this.logger?.error('WS reconnect attempt failed to create socket', { mintUrl, err });
+        this.scheduleReconnect(mintUrl);
+      }
+    }, delayMs);
+    this.reconnectTimeoutByMint.set(mintUrl, timeoutId);
   }
 
   on(
@@ -80,6 +127,19 @@ export class WsConnectionManager {
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: any) => void,
   ): void {
+    // Persist listener so it can be re-attached across reconnects
+    let map = this.listenersByMint.get(mintUrl);
+    if (!map) {
+      map = new Map();
+      this.listenersByMint.set(mintUrl, map);
+    }
+    let set = map.get(type);
+    if (!set) {
+      set = new Set();
+      map.set(type, set);
+    }
+    set.add(listener);
+    // Attach to current socket
     const socket = this.ensureSocket(mintUrl);
     socket.addEventListener(type, listener);
   }
@@ -91,6 +151,9 @@ export class WsConnectionManager {
   ): void {
     const socket = this.ensureSocket(mintUrl);
     socket.removeEventListener(type, listener);
+    const map = this.listenersByMint.get(mintUrl);
+    const set = map?.get(type);
+    set?.delete(listener);
   }
 
   send(mintUrl: string, message: unknown): void {
@@ -123,5 +186,9 @@ export class WsConnectionManager {
     this.sockets.clear();
     this.isOpenByMint.clear();
     this.sendQueueByMint.clear();
+    // Do not clear listeners; callers may want to reconnect later
+    for (const timeout of this.reconnectTimeoutByMint.values()) clearTimeout(timeout);
+    this.reconnectTimeoutByMint.clear();
+    this.reconnectAttemptsByMint.clear();
   }
 }
