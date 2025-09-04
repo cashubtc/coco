@@ -127,6 +127,10 @@ export class WsConnectionManager {
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: any) => void,
   ): void {
+    // Ensure socket first so freshly created sockets do not double-attach
+    // the just-added listener via ensureSocket's re-attachment logic.
+    const socket = this.ensureSocket(mintUrl);
+
     // Persist listener so it can be re-attached across reconnects
     let map = this.listenersByMint.get(mintUrl);
     if (!map) {
@@ -138,10 +142,10 @@ export class WsConnectionManager {
       set = new Set();
       map.set(type, set);
     }
-    set.add(listener);
-    // Attach to current socket
-    const socket = this.ensureSocket(mintUrl);
-    socket.addEventListener(type, listener);
+    if (!set.has(listener)) {
+      set.add(listener);
+      socket.addEventListener(type, listener);
+    }
   }
 
   off(

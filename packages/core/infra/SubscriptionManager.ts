@@ -92,6 +92,7 @@ export class SubscriptionManager {
   private readonly logger?: Logger;
   private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
+  private readonly hasOpenedByMint = new Map<string, boolean>();
 
   constructor(wsFactoryOrManager: WebSocketFactory | WsConnectionManager, logger?: Logger) {
     this.logger = logger;
@@ -173,10 +174,16 @@ export class SubscriptionManager {
     // Also ensure an 'open' listener that re-subscribes active subs on reconnect
     const onOpen = (_evt: any) => {
       try {
-        this.logger?.info('WS open detected, re-subscribing active subscriptions', { mintUrl });
-        this.reSubscribeMint(mintUrl);
+        const hasOpened = this.hasOpenedByMint.get(mintUrl) === true;
+        if (hasOpened) {
+          this.logger?.info('WS open detected, re-subscribing active subscriptions', { mintUrl });
+          this.reSubscribeMint(mintUrl);
+        } else {
+          this.hasOpenedByMint.set(mintUrl, true);
+          this.logger?.info('WS open detected, initial open - skipping re-subscribe', { mintUrl });
+        }
       } catch (err) {
-        this.logger?.error('Failed to schedule re-subscribe after open', { mintUrl, err });
+        this.logger?.error('Failed to handle open event', { mintUrl, err });
       }
     };
     this.ws.on(mintUrl, 'open', onOpen);
@@ -278,6 +285,7 @@ export class SubscriptionManager {
     this.subscriptions.clear();
     this.activeByMint.clear();
     this.pendingSubscribeByMint.clear();
+    this.hasOpenedByMint.clear();
   }
 
   private reSubscribeMint(mintUrl: string): void {
