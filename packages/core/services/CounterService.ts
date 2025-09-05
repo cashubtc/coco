@@ -3,6 +3,7 @@ import type { CounterRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { Logger } from '../logging/Logger.ts';
+import { assertNonNegativeInteger } from '../utils.ts';
 
 export class CounterService {
   private readonly counterRepo: CounterRepository;
@@ -31,6 +32,7 @@ export class CounterService {
   }
 
   async incrementCounter(mintUrl: string, keysetId: string, n: number) {
+    assertNonNegativeInteger('n', n, this.logger);
     const current = await this.getCounter(mintUrl, keysetId);
     const updatedValue = current.counter + n;
     await this.counterRepo.setCounter(mintUrl, keysetId, updatedValue);
@@ -41,6 +43,7 @@ export class CounterService {
   }
 
   async overwriteCounter(mintUrl: string, keysetId: string, counter: number) {
+    assertNonNegativeInteger('counter', counter, this.logger);
     await this.counterRepo.setCounter(mintUrl, keysetId, counter);
     const updated = { mintUrl, keysetId, counter };
     await this.eventBus?.emit('counter:updated', updated);
