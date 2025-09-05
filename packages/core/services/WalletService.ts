@@ -2,6 +2,7 @@ import { CashuMint, CashuWallet, type Keys, type MintKeys, type MintKeyset } fro
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
+import { RequestRateLimiter } from '../infra/RequestRateLimiter.ts';
 
 interface CachedWallet {
   wallet: CashuWallet;
@@ -15,11 +16,23 @@ export class WalletService {
   private readonly seedService: SeedService;
   private inFlight: Map<string, Promise<CashuWallet>> = new Map();
   private readonly logger?: Logger;
+  private readonly requestLimiters: Map<string, RequestRateLimiter> = new Map();
+  private readonly requestLimiterOptionsForMint?: (
+    mintUrl: string,
+  ) => Partial<ConstructorParameters<typeof RequestRateLimiter>[0]>;
 
-  constructor(mintService: MintService, seedService: SeedService, logger?: Logger) {
+  constructor(
+    mintService: MintService,
+    seedService: SeedService,
+    logger?: Logger,
+    requestLimiterOptionsForMint?: (
+      mintUrl: string,
+    ) => Partial<ConstructorParameters<typeof RequestRateLimiter>[0]>,
+  ) {
     this.mintService = mintService;
     this.seedService = seedService;
     this.logger = logger;
+    this.requestLimiterOptionsForMint = requestLimiterOptionsForMint;
   }
 
   async getWallet(mintUrl: string): Promise<CashuWallet> {
@@ -111,7 +124,8 @@ export class WalletService {
 
     console.log('seed', seed);
 
-    const wallet = new CashuWallet(new CashuMint(mintUrl), {
+    const requestLimiter = this.getOrCreateRequestLimiter(mintUrl);
+    const wallet = new CashuWallet(new CashuMint(mintUrl, requestLimiter.request), {
       mintInfo: mint.mintInfo,
       keys,
       keysets: compatibleKeysets,
@@ -128,5 +142,22 @@ export class WalletService {
 
     this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
     return wallet;
+  }
+
+  private getOrCreateRequestLimiter(mintUrl: string): RequestRateLimiter {
+    const existing = this.requestLimiters.get(mintUrl);
+    if (existing) return existing;
+    const defaults = this.requestLimiterOptionsForMint?.(mintUrl) ?? {};
+    const limiter = new RequestRateLimiter({
+      capacity: 20,
+      refillPerMinute: 20,
+      bypassPathPrefixes: [],
+      ...defaults,
+      logger: this.logger?.child
+        ? this.logger.child({ module: 'RequestRateLimiter' })
+        : this.logger,
+    });
+    this.requestLimiters.set(mintUrl, limiter);
+    return limiter;
   }
 }

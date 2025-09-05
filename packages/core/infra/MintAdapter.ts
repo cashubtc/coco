@@ -1,6 +1,8 @@
 import { CashuMint, type MintAllKeysets } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 
+//TODO: This adapter is currently not rate limited. As long as it's only used to fetch mint info and keysets, this is fine.
+
 export class MintAdapter {
   private cashuMints: Record<string, CashuMint> = {};
 
