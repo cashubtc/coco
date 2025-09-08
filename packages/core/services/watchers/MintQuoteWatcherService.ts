@@ -67,13 +67,22 @@ export class MintQuoteWatcherService {
       // Also watch any quotes that are not ISSUED yet
       try {
         const pending = await this.repo.getPendingMintQuotes();
+        const byMint = new Map<string, string[]>();
         for (const q of pending) {
+          let arr = byMint.get(q.mintUrl);
+          if (!arr) {
+            arr = [];
+            byMint.set(q.mintUrl, arr);
+          }
+          arr.push(q.quote);
+        }
+        for (const [mintUrl, quoteIds] of byMint.entries()) {
           try {
-            await this.watchQuote(q.mintUrl, q.quote);
+            await this.watchQuote(mintUrl, quoteIds);
           } catch (err) {
-            this.logger?.warn('Failed to watch pending quote', {
-              mintUrl: q.mintUrl,
-              quoteId: q.quote,
+            this.logger?.warn('Failed to watch pending quotes batch', {
+              mintUrl,
+              count: quoteIds.length,
               err,
             });
           }
@@ -112,52 +121,86 @@ export class MintQuoteWatcherService {
     this.logger?.info('MintQuoteWatcherService stopped');
   }
 
-  async watchQuote(mintUrl: string, quoteId: string): Promise<void> {
+  async watchQuote(mintUrl: string, quoteOrQuotes: string | string[]): Promise<void> {
     if (!this.running) return;
-    const key = toKey(mintUrl, quoteId);
-    if (this.unsubscribeByKey.has(key)) return; // already watching
+    const input = Array.isArray(quoteOrQuotes) ? quoteOrQuotes : [quoteOrQuotes];
+    const unique = Array.from(new Set(input));
+    // Filter out already-watched
+    const toWatch = unique.filter((id) => !this.unsubscribeByKey.has(toKey(mintUrl, id)));
+    if (toWatch.length === 0) return;
 
-    const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteResponse>(
-      mintUrl,
-      'bolt11_mint_quote',
-      [quoteId],
-      async (payload) => {
-        // Only act on PAID (redeem) or ISSUED (stop watching)
-        if (payload.state !== 'PAID' && payload.state !== 'ISSUED') return;
+    // Chunk into batches of 100
+    const chunks: string[][] = [];
+    for (let i = 0; i < toWatch.length; i += 100) {
+      chunks.push(toWatch.slice(i, i + 100));
+    }
 
-        if (payload.state === 'ISSUED') {
-          // Someone else redeemed; stop watching
-          this.stopWatching(key).catch(() => undefined);
-          return;
-        }
+    for (const batch of chunks) {
+      const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteResponse>(
+        mintUrl,
+        'bolt11_mint_quote',
+        batch,
+        async (payload) => {
+          // Only act on PAID (redeem) or ISSUED (stop watching)
+          if (payload.state !== 'PAID' && payload.state !== 'ISSUED') return;
+          const quoteId = payload.quote;
+          if (!quoteId) return;
+          const key = toKey(mintUrl, quoteId);
 
-        // state === 'PAID'
-        if (this.inflightByKey.has(key)) return;
-        this.inflightByKey.add(key);
-        try {
-          await this.quotes.redeemMintQuote(mintUrl, quoteId);
-          this.logger?.info('Auto-redeemed PAID mint quote', { mintUrl, quoteId, subId });
-          await this.stopWatching(key);
-        } catch (err) {
-          // Keep subscription so we may retry on any subsequent events
-          this.logger?.error('Auto-redeem failed', { mintUrl, quoteId, subId, err });
-        } finally {
-          this.inflightByKey.delete(key);
-        }
-      },
-    );
+          if (payload.state === 'ISSUED') {
+            // Someone else redeemed; stop watching only this quote
+            this.stopWatching(key).catch(() => undefined);
+            return;
+          }
 
-    // Wrap unsubscribe to be idempotent per key
-    let didUnsubscribe = false;
-    const safeUnsubscribe: UnsubscribeHandler = async () => {
-      if (didUnsubscribe) return;
-      didUnsubscribe = true;
-      await unsubscribe();
-      this.logger?.debug('Unsubscribed watcher for quote', { mintUrl, quoteId, subId });
-    };
+          // state === 'PAID'
+          if (this.inflightByKey.has(key)) return;
+          this.inflightByKey.add(key);
+          try {
+            await this.quotes.redeemMintQuote(mintUrl, quoteId);
+            this.logger?.info('Auto-redeemed PAID mint quote', { mintUrl, quoteId, subId });
+            await this.stopWatching(key);
+          } catch (err) {
+            // Keep subscription so we may retry on any subsequent events
+            this.logger?.error('Auto-redeem failed', { mintUrl, quoteId, subId, err });
+          } finally {
+            this.inflightByKey.delete(key);
+          }
+        },
+      );
 
-    this.unsubscribeByKey.set(key, safeUnsubscribe);
-    this.logger?.debug('Watching mint quote', { mintUrl, quoteId, subId });
+      // Per-batch unsubscribe wrapper
+      let didUnsubscribe = false;
+      const remaining = new Set(batch);
+      const groupUnsubscribeOnce: UnsubscribeHandler = async () => {
+        if (didUnsubscribe) return;
+        didUnsubscribe = true;
+        await unsubscribe();
+        this.logger?.debug('Unsubscribed watcher for mint quote batch', {
+          mintUrl,
+          subId,
+        });
+      };
+
+      // Register per-quote stoppers that shrink the remaining set and
+      // unsubscribe the entire batch when the last quote is removed
+      for (const quoteId of batch) {
+        const key = toKey(mintUrl, quoteId);
+        const perKeyStop: UnsubscribeHandler = async () => {
+          if (remaining.has(quoteId)) remaining.delete(quoteId);
+          if (remaining.size === 0) {
+            await groupUnsubscribeOnce();
+          }
+        };
+        this.unsubscribeByKey.set(key, perKeyStop);
+      }
+
+      this.logger?.debug('Watching mint quote batch', {
+        mintUrl,
+        subId,
+        filterCount: batch.length,
+      });
+    }
   }
 
   private async stopWatching(key: QuoteKey): Promise<void> {
