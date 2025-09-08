@@ -2,3 +2,7 @@ export * from './MintAdapter';
 export * from './SubscriptionManager';
 export * from './WsConnectionManager';
 export * from './RequestRateLimiter';
+export * from './RealTimeTransport';
+export * from './WsTransport';
+export * from './PollingTransport';
+export * from './SubscriptionProtocol';

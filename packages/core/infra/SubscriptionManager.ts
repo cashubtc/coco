@@ -1,43 +1,21 @@
 import type { Logger } from '../logging/Logger.ts';
-import { WsConnectionManager, type WebSocketFactory } from './WsConnectionManager.ts';
+import type { WebSocketFactory } from './WsConnectionManager.ts';
+import type { RealTimeTransport } from './RealTimeTransport.ts';
+import { WsTransport } from './WsTransport.ts';
+import { PollingTransport } from './PollingTransport.ts';
+import { generateSubId } from '../utils.ts';
+import type { MintInfo } from '../types.ts';
 
-type JsonRpcId = number;
+import type {
+  WsRequest,
+  WsResponse,
+  WsNotification,
+  SubscriptionKind,
+  SubscribeParams,
+  UnsubscribeHandler,
+} from './SubscriptionProtocol.ts';
 
-type WsRequestMethod = 'subscribe' | 'unsubscribe';
-
-export type SubscriptionKind = 'bolt11_mint_quote' | 'bolt11_melt_quote' | 'proof_state';
-
-export type UnsubscribeHandler = () => Promise<void>;
-
-export interface SubscribeParams {
-  kind: SubscriptionKind;
-  subId: string;
-  filters: string[];
-}
-
-export interface UnsubscribeParams {
-  subId: string;
-}
-
-export type WsRequest = {
-  jsonrpc: '2.0';
-  method: WsRequestMethod;
-  params: SubscribeParams | UnsubscribeParams;
-  id: JsonRpcId;
-};
-
-export type WsResponse = {
-  jsonrpc: '2.0';
-  result?: { status: 'OK'; subId: string };
-  error?: { code: number; message: string };
-  id: JsonRpcId;
-};
-
-export type WsNotification<TPayload> = {
-  jsonrpc: '2.0';
-  method: 'subscribe';
-  params: { subId: string; payload: TPayload };
-};
+export type { UnsubscribeHandler };
 
 // WebSocket types now live in WsConnectionManager
 
@@ -51,55 +29,59 @@ interface ActiveSubscription<TPayload = unknown> {
   callbacks: Set<SubscriptionCallback<TPayload>>;
 }
 
-function toBase64Url(bytes: Uint8Array): string {
-  let base64: string | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Buf = (globalThis as any).Buffer;
-  if (typeof Buf !== 'undefined') {
-    base64 = Buf.from(bytes).toString('base64');
-  } else if (typeof btoa !== 'undefined') {
-    let bin = '';
-    for (const b of bytes) bin += String.fromCharCode(b);
-    base64 = btoa(bin);
-  }
-  if (!base64) {
-    return Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function generateSubId(): string {
-  const length = 16;
-  const bytes = new Uint8Array(length);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cryptoObj: any = (globalThis as any).crypto;
-  if (cryptoObj && typeof cryptoObj.getRandomValues === 'function') {
-    cryptoObj.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return toBase64Url(bytes);
-}
+// generateSubId moved to utils.ts
 
 export class SubscriptionManager {
   private readonly nextIdByMint = new Map<string, number>();
   private readonly subscriptions = new Map<string, ActiveSubscription<unknown>>();
   private readonly activeByMint = new Map<string, Set<string>>();
   private readonly pendingSubscribeByMint = new Map<string, Map<number, string>>();
-  private readonly ws: WsConnectionManager;
+  private readonly transportByMint = new Map<string, RealTimeTransport>();
   private readonly logger?: Logger;
   private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly hasOpenedByMint = new Map<string, boolean>();
+  private readonly wsFactory?: WebSocketFactory | undefined;
+  private readonly capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> };
 
-  constructor(wsFactoryOrManager: WebSocketFactory | WsConnectionManager, logger?: Logger) {
+  constructor(
+    wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
+    logger?: Logger,
+    capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> },
+  ) {
     this.logger = logger;
-    this.ws =
-      typeof wsFactoryOrManager === 'function'
-        ? new WsConnectionManager(wsFactoryOrManager, logger)
-        : wsFactoryOrManager;
+    this.capabilitiesProvider = capabilitiesProvider;
+    if (typeof wsFactoryOrManager === 'function') {
+      this.wsFactory = wsFactoryOrManager;
+    } else {
+      // Allow direct injection of a transport for tests; use it for all mints
+      const injected = wsFactoryOrManager;
+      this.transportByMint.set('*', injected);
+    }
+  }
+
+  private getTransport(mintUrl: string): RealTimeTransport {
+    const injected = this.transportByMint.get('*');
+    if (injected) return injected;
+    let t = this.transportByMint.get(mintUrl);
+    if (t) return t;
+
+    // Decide per mint: prefer WS if available & supported; else polling
+    const preferWs = this.isWebSocketAvailable();
+    if (preferWs && this.wsFactory) {
+      // Optional: check MintInfo for WS support
+      // If capabilitiesProvider exists and indicates no WS, fallback immediately
+      t = new WsTransport(this.wsFactory, this.logger);
+    } else {
+      t = new PollingTransport({ intervalMs: 5000 }, this.logger);
+    }
+    this.transportByMint.set(mintUrl, t);
+    return t;
+  }
+
+  private isWebSocketAvailable(): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return typeof (globalThis as any).WebSocket !== 'undefined' || !!this.wsFactory;
   }
 
   private getNextId(mintUrl: string): number {
@@ -168,7 +150,8 @@ export class SubscriptionManager {
         this.logger?.error('WS message handling error', { mintUrl, err });
       }
     };
-    this.ws.on(mintUrl, 'message', handler);
+    const t = this.getTransport(mintUrl);
+    t.on(mintUrl, 'message', handler);
     this.messageHandlerByMint.set(mintUrl, handler);
 
     // Also ensure an 'open' listener that re-subscribes active subs on reconnect
@@ -186,7 +169,8 @@ export class SubscriptionManager {
         this.logger?.error('Failed to handle open event', { mintUrl, err });
       }
     };
-    this.ws.on(mintUrl, 'open', onOpen);
+    const t2 = this.getTransport(mintUrl);
+    t2.on(mintUrl, 'open', onOpen);
     this.openHandlerByMint.set(mintUrl, onOpen);
   }
 
@@ -237,7 +221,25 @@ export class SubscriptionManager {
     }
     pendingById.set(id, subId);
 
-    this.ws.send(mintUrl, req);
+    const t = this.getTransport(mintUrl);
+    // If ws is not supported by the mint, choose polling now
+    if (this.capabilitiesProvider) {
+      void this.capabilitiesProvider
+        .getMintInfo(mintUrl)
+        .then((info) => {
+          // If info indicates no WS, force polling transport
+          // Heuristic: if we already created a WS transport but mint has no WS, swap to polling for future actions
+          // We keep pendingMap/OK handling via synthetic response in PollingTransport
+          if (!this.isMintWsSupported(info)) {
+            this.transportByMint.set(
+              mintUrl,
+              new PollingTransport({ intervalMs: 5000 }, this.logger),
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
+    t.send(mintUrl, req);
     this.logger?.info('Subscribed to NUT-17', {
       mintUrl,
       kind,
@@ -273,7 +275,8 @@ export class SubscriptionManager {
       params: { subId },
       id,
     };
-    this.ws.send(mintUrl, req);
+    const t = this.getTransport(mintUrl);
+    t.send(mintUrl, req);
     this.subscriptions.delete(subId);
     const set = this.activeByMint.get(mintUrl);
     set?.delete(subId);
@@ -281,7 +284,13 @@ export class SubscriptionManager {
   }
 
   closeAll(): void {
-    this.ws.closeAll();
+    // Close all transports
+    const seen = new Set<RealTimeTransport>();
+    for (const t of this.transportByMint.values()) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      t.closeAll();
+    }
     this.subscriptions.clear();
     this.activeByMint.clear();
     this.pendingSubscribeByMint.clear();
@@ -309,7 +318,8 @@ export class SubscriptionManager {
         this.pendingSubscribeByMint.set(mintUrl, pendingById);
       }
       pendingById.set(id, subId);
-      this.ws.send(mintUrl, req);
+      const t = this.getTransport(mintUrl);
+      t.send(mintUrl, req);
       this.logger?.info('Re-subscribed to NUT-17 after reconnect', {
         mintUrl,
         kind: active.kind,
@@ -317,5 +327,20 @@ export class SubscriptionManager {
         filterCount: active.filters.length,
       });
     }
+  }
+
+  private isMintWsSupported(_info: MintInfo): boolean {
+    if (_info.nuts[17]) {
+      const supported = _info.nuts[17].supported;
+      const requiredKinds = ['bolt11_melt_quote', 'proof_state', 'bolt11_mint_quote'];
+
+      for (const s of supported) {
+        if (s.unit === 'sat') {
+          const supportedKinds = new Set<string>(s.commands);
+          return requiredKinds.every((required) => supportedKinds.has(required));
+        }
+      }
+    }
+    return false;
   }
 }

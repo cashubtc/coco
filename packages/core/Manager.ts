@@ -11,10 +11,11 @@ import {
   ProofStateWatcherService,
   MeltQuoteService,
 } from './services';
-import { SubscriptionManager, type WebSocketFactory } from './infra';
+import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, SubscriptionApi } from './api';
+import { MintApi, WalletApi, QuotesApi } from './api';
+import { SubscriptionApi } from './api/SubscriptionApi.ts';
 
 export class Manager {
   readonly mint: MintApi;
@@ -143,13 +144,18 @@ export class Manager {
         (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
+    const capabilitiesProvider = {
+      getMintInfo: async (mintUrl: string) => {
+        if (!this.mintService) throw new Error('MintService not initialized yet');
+        return this.mintService.getMintInfo(mintUrl);
+      },
+    };
     if (!wsFactoryToUse) {
-      const throwingFactory: WebSocketFactory = () => {
-        throw new Error('No WebSocketFactory provided and no global WebSocket available');
-      };
-      return new SubscriptionManager(throwingFactory, wsLogger);
+      // Fallback to polling transport when WS is unavailable
+      const polling = new PollingTransport({ intervalMs: 5000 }, wsLogger);
+      return new SubscriptionManager(polling, wsLogger, capabilitiesProvider);
     }
-    return new SubscriptionManager(wsFactoryToUse, wsLogger);
+    return new SubscriptionManager(wsFactoryToUse, wsLogger, capabilitiesProvider);
   }
 
   private buildCoreServices(

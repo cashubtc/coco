@@ -31,4 +31,23 @@ export class MintAdapter {
     }
     return this.cashuMints[mintUrl];
   }
+
+  // Polling helpers - stubbed for now
+  // Check current state of a bolt11 mint quote
+  async checkMintQuoteState(_mintUrl: string, _quoteId: string): Promise<unknown> {
+    // TODO: implement HTTP call
+    return {} as any;
+  }
+
+  // Check current state of a bolt11 melt quote
+  async checkMeltQuoteState(_mintUrl: string, _quoteId: string): Promise<unknown> {
+    // TODO: implement HTTP call
+    return {} as any;
+  }
+
+  // Batch check of proof states by secrets (up to 100 per request)
+  async checkProofStates(_mintUrl: string, _proofSecrets: string[]): Promise<unknown[]> {
+    // TODO: implement HTTP call (batch)
+    return [] as any[];
+  }
 }
