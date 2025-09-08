@@ -1,8 +1,8 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
-import { hashToCurve } from '@cashu/cashu-ts/crypto/common';
 import type { ProofService } from '../ProofService';
+import { buildYHexMapsForSecrets } from '../../utils.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
 
@@ -135,13 +135,7 @@ export class ProofStateWatcherService {
     if (toWatch.length === 0) return;
 
     // Compute Y hex for all secrets and build maps
-    const yHexBySecret = new Map<string, string>();
-    const secretByYHex = new Map<string, string>();
-    for (const secret of toWatch) {
-      const yHex = hashToCurve(new TextEncoder().encode(secret)).toHex(true);
-      yHexBySecret.set(secret, yHex);
-      secretByYHex.set(yHex, secret);
-    }
+    const { secretByYHex, yHexBySecret } = buildYHexMapsForSecrets(toWatch);
     const filters = Array.from(secretByYHex.keys());
 
     const { subId, unsubscribe } = await this.subs.subscribe<ProofStateNotification>(
