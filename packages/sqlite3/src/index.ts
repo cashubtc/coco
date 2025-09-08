@@ -4,6 +4,8 @@ import type {
   KeysetRepository,
   CounterRepository,
   ProofRepository,
+  MintQuoteRepository,
+  MeltQuoteRepository,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
@@ -12,6 +14,7 @@ import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -20,8 +23,8 @@ export class SqliteRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
-  // narrow type is fine in consumers via structural typing
-  readonly mintQuoteRepository: SqliteMintQuoteRepository;
+  readonly mintQuoteRepository: MintQuoteRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -31,6 +34,7 @@ export class SqliteRepositories implements Repositories {
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
+    this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -46,4 +50,5 @@ export {
   SqliteCounterRepository,
   SqliteProofRepository,
   SqliteMintQuoteRepository,
+  SqliteMeltQuoteRepository,
 };
