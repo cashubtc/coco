@@ -15,6 +15,7 @@ import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
 import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
+import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -25,6 +26,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly proofRepository: ProofRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly meltQuoteRepository: MeltQuoteRepository;
+  readonly historyRepository: IdbHistoryRepository;
   readonly db: IdbDb;
 
   constructor(options: IndexedDbRepositoriesOptions) {
@@ -35,6 +37,7 @@ export class IndexedDbRepositories implements Repositories {
     this.proofRepository = new IdbProofRepository(this.db);
     this.mintQuoteRepository = new IdbMintQuoteRepository(this.db);
     this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
+    this.historyRepository = new IdbHistoryRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -51,4 +54,5 @@ export {
   IdbProofRepository,
   IdbMintQuoteRepository,
   IdbMeltQuoteRepository,
+  IdbHistoryRepository,
 };

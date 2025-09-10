@@ -9,6 +9,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_proofs: '&[mintUrl+secret], [mintUrl+state], [mintUrl+id+state], state, mintUrl, id',
     coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
     coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_history: '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type]',
   });
 
   // No migration tracking needed prior to first release
