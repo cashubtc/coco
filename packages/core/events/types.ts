@@ -1,8 +1,15 @@
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { Counter } from '../models/Counter';
-import type { MeltQuoteResponse, MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
+import type {
+  MeltQuoteResponse,
+  MeltQuoteState,
+  MintQuoteResponse,
+  MintQuoteState,
+  Token,
+} from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from '../types';
+import type { HistoryEntry } from '../models/History';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -20,5 +27,9 @@ export interface CoreEvents {
   'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'mint-quote:redeemed': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
+  'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };
   'melt-quote:paid': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
+  'send:created': { mintUrl: string; token: Token };
+  'receive:created': { mintUrl: string; token: Token };
+  'history:updated': { mintUrl: string; entry: HistoryEntry };
 }

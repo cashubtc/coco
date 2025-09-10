@@ -4,6 +4,8 @@ import type { Counter } from '../models/Counter';
 import type { CoreProof, ProofState } from '../types';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltQuote } from '@core/models/MeltQuote';
+import type { HistoryEntry, MeltHistoryEntry, MintHistoryEntry } from '@core/models/History';
+import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 
 export interface MintRepository {
   isKnownMint(mintUrl: string): Promise<boolean>;
@@ -51,6 +53,15 @@ export interface MeltQuoteRepository {
   getPendingMeltQuotes(): Promise<MeltQuote[]>;
 }
 
+export interface HistoryRepository {
+  getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]>;
+  addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry>;
+  getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
+  getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;
+  updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry>;
+  deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void>;
+}
+
 export interface Repositories {
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
@@ -58,6 +69,7 @@ export interface Repositories {
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
+  historyRepository: HistoryRepository;
 }
 
 export * from './memory';
