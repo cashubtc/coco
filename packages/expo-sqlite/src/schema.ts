@@ -87,6 +87,37 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint ON coco_cashu_melt_quotes(mintUrl);
     `,
   },
+  {
+    id: '003_history',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_history (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        mintUrl   TEXT NOT NULL,
+        type      TEXT NOT NULL CHECK (type IN ('mint','melt','send','receive')),
+        unit      TEXT NOT NULL,
+        amount    INTEGER NOT NULL,
+        createdAt INTEGER NOT NULL,
+        quoteId   TEXT,
+        state     TEXT,
+        paymentRequest TEXT,
+        tokenJson TEXT,
+        metadata  TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_mint_createdAt
+        ON coco_cashu_history(mintUrl, createdAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_mint_quote
+        ON coco_cashu_history(mintUrl, quoteId);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_type
+        ON coco_cashu_history(type);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_quote_mint
+        ON coco_cashu_history(mintUrl, quoteId, type)
+        WHERE type = 'mint' AND quoteId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_quote_melt
+        ON coco_cashu_history(mintUrl, quoteId, type)
+        WHERE type = 'melt' AND quoteId IS NOT NULL;
+    `,
+  },
 ];
 
 export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {
