@@ -15,6 +15,7 @@ import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
+import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -25,6 +26,7 @@ export class SqliteRepositories implements Repositories {
   readonly proofRepository: ProofRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly meltQuoteRepository: MeltQuoteRepository;
+  readonly historyRepository: SqliteHistoryRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -35,6 +37,7 @@ export class SqliteRepositories implements Repositories {
     this.proofRepository = new SqliteProofRepository(this.db);
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
     this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
+    this.historyRepository = new SqliteHistoryRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -51,4 +54,5 @@ export {
   SqliteProofRepository,
   SqliteMintQuoteRepository,
   SqliteMeltQuoteRepository,
+  SqliteHistoryRepository,
 };
