@@ -1,4 +1,5 @@
 import type { Logger } from '../logging/Logger.ts';
+import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
 
 type RequestFunction = <T>(
   options: {
@@ -78,7 +79,11 @@ export class RequestRateLimiter {
   ): Promise<T> => {
     const { endpoint, requestBody, headers, ...init } = options;
 
-    const finalHeaders = new Headers(headers || {});
+    // Build headers with sensible defaults and conditional Content-Type
+    const finalHeaders = new Headers({
+      Accept: 'application/json, text/plain, */*',
+      ...(headers || {}),
+    });
     // Avoid DOM-specific BodyInit type to keep this file platform-agnostic
     let body: unknown | undefined = undefined;
     if (requestBody !== undefined) {
@@ -86,34 +91,52 @@ export class RequestRateLimiter {
       body = JSON.stringify(requestBody);
     }
 
-    const response = await fetch(endpoint, {
-      ...(init as any),
-      headers: finalHeaders as any,
-      body: body as any,
-    } as any);
-
-    if (!response.ok) {
-      // Attempt to parse JSON error if available, else throw with status text
-      let message: string | undefined;
-      try {
-        const data: unknown = await response.clone().json();
-        if (data && typeof data === 'object') {
-          const rec = data as Record<string, unknown>;
-          if (typeof rec.message === 'string') message = rec.message;
-          else if (typeof rec.error === 'string') message = rec.error;
-        }
-      } catch {
-        // ignore JSON parse errors
-      }
-      throw new Error(
-        `HTTP ${response.status} ${response.statusText}${message ? ` - ${message}` : ''}`,
-      );
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        ...(init as any),
+        headers: finalHeaders as any,
+        body: body as any,
+      } as any);
+    } catch (err) {
+      throw new NetworkError(err instanceof Error ? err.message : 'Network request failed');
     }
 
-    // The upstream request() returns JSON<T>
-    // We keep parity here
-    const json = (await response.json()) as T;
-    return json;
+    if (!response.ok) {
+      type ErrorShape =
+        | { error?: unknown; detail?: unknown; code?: unknown }
+        | Record<string, unknown>;
+      let errorData: ErrorShape = { error: 'bad response' };
+      try {
+        errorData = (await response.clone().json()) as ErrorShape;
+      } catch {
+        // leave default errorData
+      }
+
+      const hasProtocolError =
+        response.status === 400 &&
+        errorData &&
+        typeof (errorData as any).code === 'number' &&
+        typeof (errorData as any).detail === 'string';
+      if (hasProtocolError) {
+        const { code, detail } = errorData as { code: number; detail: string };
+        throw new MintOperationError(code, detail);
+      }
+
+      let errorMessage = 'HTTP request failed';
+      const anyErr = errorData as any;
+      if (typeof anyErr?.error === 'string') errorMessage = anyErr.error;
+      else if (typeof anyErr?.detail === 'string') errorMessage = anyErr.detail;
+
+      throw new HttpResponseError(errorMessage, response.status);
+    }
+
+    try {
+      return (await response.json()) as T;
+    } catch (err) {
+      this.logger?.error('Failed to parse HTTP response', err as unknown);
+      throw new HttpResponseError('bad response', response.status);
+    }
   };
 
   private acquireToken(): Promise<void> {
