@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { RequestRateLimiter } from '../infra/RequestRateLimiter.ts';
+import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error.ts';
 import type { HeadersInit } from 'bun';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -47,13 +48,14 @@ describe('RequestRateLimiter', () => {
     expect(typeof init?.body).toBe('string');
     expect(init?.body).toBe(JSON.stringify({ a: 1 }));
 
-    // Headers include both custom and content-type
+    // Headers include default Accept, custom, and content-type
     const hdrs = new Headers(init?.headers as HeadersInit);
+    expect(hdrs.get('Accept')).toBe('application/json, text/plain, */*');
     expect(hdrs.get('X-Custom')).toBe('ok');
     expect(hdrs.get('Content-Type')).toBe('application/json');
   });
 
-  it('throws with HTTP status and error message on non-OK responses', async () => {
+  it('throws HttpResponseError with status and message on non-OK responses', async () => {
     // @ts-ignore
     globalThis.fetch = async () => {
       return new Response(JSON.stringify({ error: 'rate limited' }), {
@@ -63,9 +65,54 @@ describe('RequestRateLimiter', () => {
     };
 
     const limiter = new RequestRateLimiter();
-    await expect(
-      limiter.request({ endpoint: 'https://mint.test/v1/keys', method: 'GET' }),
-    ).rejects.toThrow(/429/);
+    try {
+      await limiter.request({ endpoint: 'https://mint.test/v1/keys', method: 'GET' });
+      throw new Error('Expected HttpResponseError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpResponseError);
+      const e = err as HttpResponseError;
+      expect(e.status).toBe(429);
+      expect(e.message).toBe('rate limited');
+    }
+  });
+
+  it('throws MintOperationError for 400 with protocol error shape', async () => {
+    // @ts-ignore
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ code: 4200, detail: 'proof already spent' }), {
+        status: 400,
+        statusText: 'Bad Request',
+      });
+    };
+
+    const limiter = new RequestRateLimiter();
+    try {
+      await limiter.request({ endpoint: 'https://mint.test/v1/melt', method: 'POST' });
+      throw new Error('Expected MintOperationError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MintOperationError);
+      const e = err as MintOperationError;
+      expect(e.status).toBe(400);
+      expect(e.code).toBe(4200);
+      expect(e.message).toBe('proof already spent');
+    }
+  });
+
+  it('throws NetworkError when fetch rejects due to network failure', async () => {
+    // @ts-ignore
+    globalThis.fetch = async () => {
+      throw new Error('getaddrinfo ENOTFOUND');
+    };
+
+    const limiter = new RequestRateLimiter();
+    try {
+      await limiter.request({ endpoint: 'https://mint.test/v1/info', method: 'GET' });
+      throw new Error('Expected NetworkError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(NetworkError);
+      const e = err as NetworkError;
+      expect(e.message).toBe('getaddrinfo ENOTFOUND');
+    }
   });
 
   it('queues requests FIFO when tokens are exhausted', async () => {
