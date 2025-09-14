@@ -9,12 +9,15 @@ import { getDecodedToken } from '@cashu/cashu-ts';
 import { UnknownMintError } from '@core/models';
 import { mapProofToCoreProof } from '@core/utils';
 import type { Logger } from '../logging/Logger.ts';
+import type { CoreEvents } from '@core/events/types.ts';
+import type { EventBus } from '@core/events/EventBus.ts';
 
 export class WalletApi {
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
+  private eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
   constructor(
@@ -22,12 +25,14 @@ export class WalletApi {
     walletService: WalletService,
     proofService: ProofService,
     walletRestoreService: WalletRestoreService,
+    eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.mintService = mintService;
     this.walletService = walletService;
     this.proofService = proofService;
     this.walletRestoreService = walletRestoreService;
+    this.eventBus = eventBus;
     this.logger = logger;
   }
 
@@ -72,10 +77,12 @@ export class WalletApi {
       send.map((proof) => proof.secret),
       'inflight',
     );
-    return {
+    const token = {
       mint: mintUrl,
       proofs: send,
     };
+    await this.eventBus.emit('send:created', { mintUrl, token });
+    return token;
   }
 
   async getBalances(): Promise<{ [mintUrl: string]: number }> {

@@ -267,6 +267,7 @@ export class Manager {
       this.walletService,
       this.proofService,
       this.walletRestoreService,
+      this.eventBus,
       walletApiLogger,
     );
     const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);
