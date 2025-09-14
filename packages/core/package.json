@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-core",
-  "version": "1.0.0-rc1",
+  "version": "1.0.0-rc5",
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
@@ -19,6 +19,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsdown",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {
@@ -32,6 +33,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@cashu/cashu-ts": "^2.6.0"
+    "@cashu/cashu-ts": "^2.7.2"
   }
 }
