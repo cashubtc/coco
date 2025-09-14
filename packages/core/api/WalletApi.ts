@@ -6,7 +6,7 @@ import type {
   WalletRestoreService,
 } from '@core/services';
 import { getDecodedToken } from '@cashu/cashu-ts';
-import { UnknownMintError } from '@core/models';
+import { ProofValidationError, UnknownMintError } from '@core/models';
 import { mapProofToCoreProof } from '@core/utils';
 import type { Logger } from '../logging/Logger.ts';
 import type { CoreEvents } from '@core/events/types.ts';
@@ -37,21 +37,60 @@ export class WalletApi {
   }
 
   async receive(token: Token | string) {
-    const { mint, proofs }: Token = typeof token === 'string' ? getDecodedToken(token) : token;
+    let decoded: Token;
+    try {
+      decoded = typeof token === 'string' ? getDecodedToken(token) : token;
+    } catch (err) {
+      this.logger?.warn('Failed to decode token for receive', { err });
+      throw new ProofValidationError('Invalid token');
+    }
+
+    const { mint, proofs } = decoded;
 
     const known = await this.mintService.isKnownMint(mint);
     if (!known) {
       throw new UnknownMintError(`Mint ${mint} is not known`);
     }
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+    if (!Array.isArray(proofs) || proofs.length === 0) {
+      this.logger?.warn('Token contains no proofs', { mint });
+      throw new ProofValidationError('Token contains no proofs');
+    }
+
     const receiveAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
-    const { keep: outputData } = await this.proofService.createOutputsAndIncrementCounters(mint, {
-      keep: receiveAmount,
-      send: 0,
-    });
-    const newProofs = await wallet.receive({ mint, proofs }, { outputData });
-    await this.proofService.saveProofs(mint, mapProofToCoreProof(mint, 'ready', newProofs));
+    if (!Number.isFinite(receiveAmount) || receiveAmount <= 0) {
+      this.logger?.warn('Token has invalid or non-positive amount', { mint, receiveAmount });
+      throw new ProofValidationError('Token amount must be a positive integer');
+    }
+
+    this.logger?.info('Receiving token', { mint, proofs: proofs.length, amount: receiveAmount });
+
+    try {
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+      const { keep: outputData } = await this.proofService.createOutputsAndIncrementCounters(mint, {
+        keep: receiveAmount,
+        send: 0,
+      });
+
+      if (!outputData || outputData.length === 0) {
+        this.logger?.error('Failed to create deterministic outputs for receive', {
+          mint,
+          amount: receiveAmount,
+        });
+        throw new Error('Failed to create outputs for receive');
+      }
+
+      const newProofs = await wallet.receive({ mint, proofs }, { outputData });
+      await this.proofService.saveProofs(mint, mapProofToCoreProof(mint, 'ready', newProofs));
+      await this.eventBus.emit('receive:created', { mintUrl: mint, token: decoded });
+      this.logger?.debug('Token received and proofs saved', {
+        mint,
+        newProofs: newProofs.length,
+      });
+    } catch (err) {
+      this.logger?.error('Failed to receive token', { mint, err });
+      throw err;
+    }
   }
 
   async send(mintUrl: string, amount: number): Promise<Token> {
