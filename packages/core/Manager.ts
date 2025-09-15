@@ -4,6 +4,7 @@ import {
   MintService,
   MintQuoteService,
   MintQuoteWatcherService,
+  MintQuoteProcessor,
   ProofService,
   WalletService,
   SeedService,
@@ -17,6 +18,8 @@ import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
 import { MintApi, WalletApi, QuotesApi, HistoryApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
+import { PluginHost } from './plugins/PluginHost.ts';
+import type { Plugin, ServiceMap } from './plugins/types.ts';
 
 export class Manager {
   readonly mint: MintApi;
@@ -33,24 +36,34 @@ export class Manager {
   readonly subscriptions: SubscriptionManager;
   private mintQuoteService: MintQuoteService;
   private mintQuoteWatcher?: MintQuoteWatcherService;
+  private mintQuoteProcessor?: MintQuoteProcessor;
   private mintQuoteRepository: MintQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
   private meltQuoteService: MeltQuoteService;
   private historyService: HistoryService;
+  private seedService: SeedService;
+  private counterService: CounterService;
+  private readonly pluginHost: PluginHost = new PluginHost();
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
     logger?: Logger,
     webSocketFactory?: WebSocketFactory,
+    plugins?: Plugin[],
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
     this.subscriptions = this.createSubscriptionManager(webSocketFactory);
+    if (plugins && plugins.length > 0) {
+      for (const p of plugins) this.pluginHost.use(p);
+    }
     const core = this.buildCoreServices(repositories, seedGetter);
     this.mintService = core.mintService;
     this.walletService = core.walletService;
     this.proofService = core.proofService;
     this.walletRestoreService = core.walletRestoreService;
+    this.seedService = core.seedService;
+    this.counterService = core.counterService;
     this.mintQuoteService = core.mintQuoteService;
     this.mintQuoteRepository = core.mintQuoteRepository;
     this.meltQuoteService = core.meltQuoteService;
@@ -61,6 +74,28 @@ export class Manager {
     this.quotes = apis.quotes;
     this.subscription = apis.subscription;
     this.history = apis.history;
+
+    // Initialize plugins asynchronously to keep constructor sync
+    const services: ServiceMap = {
+      mintService: this.mintService,
+      walletService: this.walletService,
+      proofService: this.proofService,
+      seedService: this.seedService,
+      walletRestoreService: this.walletRestoreService,
+      counterService: this.counterService,
+      mintQuoteService: this.mintQuoteService,
+      meltQuoteService: this.meltQuoteService,
+      historyService: this.historyService,
+      subscriptions: this.subscriptions,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    };
+    void this.pluginHost
+      .init(services)
+      .then(() => this.pluginHost.ready())
+      .catch((err) => {
+        this.logger.error('Plugin system initialization failed', err);
+      });
   }
 
   on<E extends keyof CoreEvents>(
@@ -75,6 +110,14 @@ export class Manager {
     handler: (payload: CoreEvents[E]) => void | Promise<void>,
   ): () => void {
     return this.eventBus.once(event, handler);
+  }
+
+  use(plugin: Plugin): void {
+    this.pluginHost.use(plugin);
+  }
+
+  async dispose(): Promise<void> {
+    await this.pluginHost.dispose();
   }
 
   off<E extends keyof CoreEvents>(
@@ -104,6 +147,35 @@ export class Manager {
     if (!this.mintQuoteWatcher) return;
     await this.mintQuoteWatcher.stop();
     this.mintQuoteWatcher = undefined;
+  }
+
+  async enableMintQuoteProcessor(options?: {
+    processIntervalMs?: number;
+    maxRetries?: number;
+    baseRetryDelayMs?: number;
+  }): Promise<void> {
+    if (this.mintQuoteProcessor?.isRunning()) return;
+    const processorLogger = this.logger.child
+      ? this.logger.child({ module: 'MintQuoteProcessor' })
+      : this.logger;
+    this.mintQuoteProcessor = new MintQuoteProcessor(
+      this.mintQuoteService,
+      this.eventBus,
+      processorLogger,
+      options,
+    );
+    await this.mintQuoteProcessor.start();
+  }
+
+  async disableMintQuoteProcessor(): Promise<void> {
+    if (!this.mintQuoteProcessor) return;
+    await this.mintQuoteProcessor.stop();
+    this.mintQuoteProcessor = undefined;
+  }
+
+  async waitForMintQuoteProcessor(): Promise<void> {
+    if (!this.mintQuoteProcessor) return;
+    await this.mintQuoteProcessor.waitForCompletion();
   }
 
   async enableProofStateWatcher(): Promise<void> {

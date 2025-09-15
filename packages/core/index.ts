@@ -7,3 +7,4 @@ export { getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
 export { SubscriptionManager } from './infra/SubscriptionManager.ts';
 export { WsConnectionManager } from './infra/WsConnectionManager.ts';
 export type { WebSocketLike, WebSocketFactory } from './infra/WsConnectionManager.ts';
+export * from './plugins/index.ts';
