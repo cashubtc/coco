@@ -25,6 +25,11 @@ export interface CoreEvents {
   'proofs:wiped': { mintUrl: string; keysetId: string };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };
   'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
+  'mint-quote:added': {
+    mintUrl: string;
+    quoteId: string;
+    quote: MintQuoteResponse;
+  };
   'mint-quote:redeemed': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
   'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };

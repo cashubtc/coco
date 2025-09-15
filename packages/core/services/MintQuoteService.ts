@@ -144,6 +144,69 @@ export class MintQuoteService {
     return { unsubscribe: userUnsubscribe, completed };
   }
 
+  async addExistingMintQuotes(
+    mintUrl: string,
+    quotes: MintQuoteResponse[],
+  ): Promise<{ added: string[]; skipped: string[] }> {
+    this.logger?.info('Adding existing mint quotes', { mintUrl, count: quotes.length });
+
+    const added: string[] = [];
+    const skipped: string[] = [];
+
+    for (const quote of quotes) {
+      try {
+        // Check if quote already exists
+        const existing = await this.mintQuoteRepo.getMintQuote(mintUrl, quote.quote);
+        if (existing) {
+          this.logger?.debug('Quote already exists, skipping', { mintUrl, quoteId: quote.quote });
+          skipped.push(quote.quote);
+          continue;
+        }
+
+        // Add the quote to the repository
+        await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
+        added.push(quote.quote);
+
+        // Emit the added event - processor will handle PAID quotes
+        await this.eventBus.emit('mint-quote:added', {
+          mintUrl,
+          quoteId: quote.quote,
+          quote,
+        });
+
+        this.logger?.debug('Added existing mint quote', {
+          mintUrl,
+          quoteId: quote.quote,
+          state: quote.state,
+        });
+      } catch (err) {
+        this.logger?.error('Failed to add existing mint quote', {
+          mintUrl,
+          quoteId: quote.quote,
+          err,
+        });
+        skipped.push(quote.quote);
+      }
+    }
+
+    this.logger?.info('Finished adding existing mint quotes', {
+      mintUrl,
+      added: added.length,
+      skipped: skipped.length,
+    });
+
+    return { added, skipped };
+  }
+
+  async updateStateFromRemote(
+    mintUrl: string,
+    quoteId: string,
+    state: MintQuoteState,
+  ): Promise<void> {
+    this.logger?.info('Updating mint quote state from remote', { mintUrl, quoteId, state });
+    await this.setMintQuoteState(mintUrl, quoteId, state);
+  }
+
   private async setMintQuoteState(
     mintUrl: string,
     quoteId: string,

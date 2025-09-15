@@ -36,6 +36,9 @@ export class HistoryService {
     this.eventBus.on('mint-quote:created', ({ mintUrl, quoteId, quote }) => {
       this.handleMintQuoteCreated(mintUrl, quoteId, quote);
     });
+    this.eventBus.on('mint-quote:added', ({ mintUrl, quoteId, quote }) => {
+      this.handleMintQuoteAdded(mintUrl, quoteId, quote);
+    });
     this.eventBus.on('melt-quote:created', ({ mintUrl, quoteId, quote }) => {
       this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
     });
@@ -177,6 +180,41 @@ export class HistoryService {
       await this.historyRepository.addHistoryEntry(entry);
     } catch (err) {
       this.logger?.error('Failed to add mint quote created history entry', {
+        mintUrl,
+        quoteId,
+        err,
+      });
+    }
+  }
+
+  async handleMintQuoteAdded(mintUrl: string, quoteId: string, quote: MintQuoteResponse) {
+    // Check if history entry already exists for this quote
+    const existing = await this.historyRepository.getMintHistoryEntry(mintUrl, quoteId);
+    if (existing) {
+      this.logger?.debug('History entry already exists for added mint quote', { mintUrl, quoteId });
+      return;
+    }
+
+    const entry: Omit<MintHistoryEntry, 'id'> = {
+      type: 'mint',
+      mintUrl,
+      unit: quote.unit,
+      paymentRequest: quote.request,
+      quoteId,
+      state: quote.state,
+      createdAt: Date.now(),
+      amount: quote.amount,
+    };
+    try {
+      const created = await this.historyRepository.addHistoryEntry(entry);
+      await this.eventBus.emit('history:updated', { mintUrl, entry: created });
+      this.logger?.debug('Added history entry for externally added mint quote', {
+        mintUrl,
+        quoteId,
+        state: quote.state,
+      });
+    } catch (err) {
+      this.logger?.error('Failed to add mint quote added history entry', {
         mintUrl,
         quoteId,
         err,

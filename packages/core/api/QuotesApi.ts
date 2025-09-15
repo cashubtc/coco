@@ -24,4 +24,11 @@ export class QuotesApi {
   async payMeltQuote(mintUrl: string, quoteId: string): Promise<void> {
     return this.meltQuoteService.payMeltQuote(mintUrl, quoteId);
   }
+
+  async addMintQuote(
+    mintUrl: string,
+    quotes: MintQuoteResponse[],
+  ): Promise<{ added: string[]; skipped: string[] }> {
+    return this.mintQuoteService.addExistingMintQuotes(mintUrl, quotes);
+  }
 }

@@ -3,7 +3,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MintQuoteRepository } from '../../repositories';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
-import { MintQuoteService } from '../MintQuoteService';
+import type { MintQuoteService } from '../MintQuoteService';
 
 type QuoteKey = string; // `${mintUrl}::${quoteId}`
 
@@ -26,8 +26,8 @@ export class MintQuoteWatcherService {
 
   private running = false;
   private unsubscribeByKey = new Map<QuoteKey, UnsubscribeHandler>();
-  private inflightByKey = new Set<QuoteKey>();
   private offCreated?: () => void;
+  private offAdded?: () => void;
 
   constructor(
     repo: MintQuoteRepository,
@@ -60,6 +60,23 @@ export class MintQuoteWatcherService {
         await this.watchQuote(mintUrl, quoteId);
       } catch (err) {
         this.logger?.error('Failed to start watching quote from event', { mintUrl, quoteId, err });
+      }
+    });
+
+    // Also watch added quotes that are not in terminal state
+    this.offAdded = this.bus.on('mint-quote:added', async ({ mintUrl, quoteId, quote }) => {
+      // Only watch if not already in terminal state
+      if (quote.state !== 'ISSUED' && quote.state !== 'PAID') {
+        try {
+          await this.watchQuote(mintUrl, quoteId);
+        } catch (err) {
+          this.logger?.error('Failed to start watching added quote', {
+            mintUrl,
+            quoteId,
+            state: quote.state,
+            err,
+          });
+        }
       }
     });
 
@@ -107,6 +124,16 @@ export class MintQuoteWatcherService {
       }
     }
 
+    if (this.offAdded) {
+      try {
+        this.offAdded();
+      } catch {
+        // ignore
+      } finally {
+        this.offAdded = undefined;
+      }
+    }
+
     const entries = Array.from(this.unsubscribeByKey.entries());
     this.unsubscribeByKey.clear();
     for (const [key, unsub] of entries) {
@@ -117,7 +144,6 @@ export class MintQuoteWatcherService {
         this.logger?.warn('Failed to unsubscribe watcher', { key, err });
       }
     }
-    this.inflightByKey.clear();
     this.logger?.info('MintQuoteWatcherService stopped');
   }
 
@@ -141,30 +167,33 @@ export class MintQuoteWatcherService {
         'bolt11_mint_quote',
         batch,
         async (payload) => {
-          // Only act on PAID (redeem) or ISSUED (stop watching)
+          // Only act on state changes we care about
           if (payload.state !== 'PAID' && payload.state !== 'ISSUED') return;
           const quoteId = payload.quote;
           if (!quoteId) return;
           const key = toKey(mintUrl, quoteId);
 
-          if (payload.state === 'ISSUED') {
-            // Someone else redeemed; stop watching only this quote
-            this.stopWatching(key).catch(() => undefined);
-            return;
+          // Update the local state from the remote state
+          try {
+            await this.quotes.updateStateFromRemote(mintUrl, quoteId, payload.state);
+            this.logger?.debug('Updated quote state from remote', {
+              mintUrl,
+              quoteId,
+              state: payload.state,
+              subId,
+            });
+          } catch (err) {
+            this.logger?.error('Failed to update quote state from remote', {
+              mintUrl,
+              quoteId,
+              state: payload.state,
+              err,
+            });
           }
 
-          // state === 'PAID'
-          if (this.inflightByKey.has(key)) return;
-          this.inflightByKey.add(key);
-          try {
-            await this.quotes.redeemMintQuote(mintUrl, quoteId);
-            this.logger?.info('Auto-redeemed PAID mint quote', { mintUrl, quoteId, subId });
+          // Stop watching if the quote reached a terminal state
+          if (payload.state === 'ISSUED') {
             await this.stopWatching(key);
-          } catch (err) {
-            // Keep subscription so we may retry on any subsequent events
-            this.logger?.error('Auto-redeem failed', { mintUrl, quoteId, subId, err });
-          } finally {
-            this.inflightByKey.delete(key);
           }
         },
       );
