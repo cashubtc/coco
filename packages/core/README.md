@@ -132,6 +132,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `disableMintQuoteWatcher(): Promise<void>`
 - `enableProofStateWatcher(): Promise<void>`
 - `disableProofStateWatcher(): Promise<void>`
+- `use(plugin: Plugin): void`
+- `dispose(): Promise<void>`
 
 ### MintApi
 
@@ -178,6 +180,56 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `melt-quote:created` → `{ mintUrl, quoteId, quote }`
 - `melt-quote:paid` → `{ mintUrl, quoteId, quote }`
 
+## Plugins
+
+### Overview
+
+- **Purpose**: Extend the core by hooking into lifecycle events with access only to the services you declare.
+- **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown). Use `registerCleanup` in hooks to add teardown functions.
+
+### Types
+
+```ts
+import type { Plugin, ServiceKey } from 'coco-cashu-core';
+
+// Service keys you can request:
+// 'mintService' | 'walletService' | 'proofService' | 'seedService' | 'walletRestoreService'
+// 'counterService' | 'mintQuoteService' | 'meltQuoteService' | 'historyService'
+// 'subscriptions' | 'eventBus' | 'logger'
+
+const myPlugin: Plugin<['eventBus', 'logger']> = {
+  name: 'my-plugin',
+  required: ['eventBus', 'logger'] as const,
+  onInit: ({ services: { eventBus, logger }, registerCleanup }) => {
+    const off = eventBus.on('mint:added', (p) => logger.info('mint added', p));
+    registerCleanup(off);
+  },
+  onReady: async () => {
+    // optional
+  },
+  onDispose: () => {
+    // optional
+  },
+};
+```
+
+### Using plugins
+
+```ts
+// Pass plugins at construction
+const manager = new Manager(repos, seedGetter, logger, undefined, [myPlugin]);
+
+// Or register later
+manager.use(myPlugin);
+
+// Dispose (runs onDispose and registered cleanups)
+await manager.dispose();
+```
+
+### Error handling
+
+- Errors thrown in `onInit`, `onReady`, and `onDispose` are caught. Hook errors are logged with the plugin name; a failure during plugin boot is also logged by the injected `Logger`.
+
 ## Exports
 
 From the package root:
@@ -189,3 +241,4 @@ From the package root:
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`
 - Subscription infra: `SubscriptionManager`, `WsConnectionManager`, `WebSocketLike`, `WebSocketFactory`, `SubscriptionCallback`, `SubscriptionKind`
+- Plugins: `Plugin`, `PluginContext`, `ServiceKey`, `PluginHost`

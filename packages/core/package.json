@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-core",
-  "version": "1.0.0-rc5",
+  "version": "1.0.0-rc6",
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
