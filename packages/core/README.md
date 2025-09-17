@@ -2,6 +2,8 @@
 
 Modular, storage-agnostic core for working with Cashu mints and wallets.
 
+> ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
+
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
 - **High-level APIs**: `MintApi`, `WalletApi`, `QuotesApi`, and `SubscriptionApi` for common flows.
@@ -185,7 +187,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### Overview
 
 - **Purpose**: Extend the core by hooking into lifecycle events with access only to the services you declare.
-- **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown). Use `registerCleanup` in hooks to add teardown functions.
+- **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown).
+- **Cleanup**: Hooks may either call `registerCleanup(fn)` or return a cleanup function, similar to React’s `useEffect`.
 
 ### Types
 
@@ -200,9 +203,9 @@ import type { Plugin, ServiceKey } from 'coco-cashu-core';
 const myPlugin: Plugin<['eventBus', 'logger']> = {
   name: 'my-plugin',
   required: ['eventBus', 'logger'] as const,
-  onInit: ({ services: { eventBus, logger }, registerCleanup }) => {
+  onInit: ({ services: { eventBus, logger } }) => {
     const off = eventBus.on('mint:added', (p) => logger.info('mint added', p));
-    registerCleanup(off);
+    return off; // or use registerCleanup(off)
   },
   onReady: async () => {
     // optional

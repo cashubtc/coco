@@ -1,5 +1,7 @@
 # coco-cashu sqlite3 adapter
 
+> ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
+
 ## Install deps
 
 ```bash
