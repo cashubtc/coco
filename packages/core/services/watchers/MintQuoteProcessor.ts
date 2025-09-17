@@ -46,6 +46,7 @@ export class MintQuoteProcessor {
   private processingTimer?: ReturnType<typeof setTimeout>;
   private offStateChanged?: () => void;
   private offQuoteAdded?: () => void;
+  private offRequeue?: () => void;
 
   private handlers = new Map<string, QuoteHandler>();
   private readonly processIntervalMs: number;
@@ -103,6 +104,11 @@ export class MintQuoteProcessor {
       }
     });
 
+    // Subscribe to explicit requeue events (enqueue regardless of stored state)
+    this.offRequeue = this.bus.on('mint-quote:requeue', async ({ mintUrl, quoteId }) => {
+      this.enqueue(mintUrl, quoteId, 'bolt11');
+    });
+
     // Start processing loop
     this.scheduleNextProcess();
   }
@@ -132,6 +138,16 @@ export class MintQuoteProcessor {
       }
     }
 
+    if (this.offRequeue) {
+      try {
+        this.offRequeue();
+      } catch {
+        // ignore
+      } finally {
+        this.offRequeue = undefined;
+      }
+    }
+
     // Clear processing timer
     if (this.processingTimer) {
       clearTimeout(this.processingTimer);
@@ -156,6 +172,10 @@ export class MintQuoteProcessor {
     }
   }
 
+  // TODO: Improve deduplication by tracking an "active" set keyed by `${mintUrl}::${quoteId}`
+  // to prevent re-enqueueing while an item is currently being processed. Today we only
+  // deduplicate within the queue, so an item can be enqueued again if a new event arrives
+  // during in-flight processing.
   private enqueue(mintUrl: string, quoteId: string, quoteType: string): void {
     // Check if already in queue
     const existing = this.queue.find(
