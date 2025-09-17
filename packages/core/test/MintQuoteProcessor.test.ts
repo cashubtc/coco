@@ -120,6 +120,25 @@ describe('MintQuoteProcessor', () => {
       });
     });
 
+    it('processes quotes from mint-quote:requeue events', async () => {
+      await processor.start();
+
+      // Emit a requeue event (no need for full quote payload)
+      await bus.emit('mint-quote:requeue', {
+        mintUrl: 'https://mint.test',
+        quoteId: 'requeued-quote',
+      });
+
+      // Wait for processing (test interval + buffer)
+      await sleep(TEST_PROCESS_INTERVAL + 20);
+
+      expect(redeemCalls.length).toBe(1);
+      expect(redeemCalls[0]).toEqual({
+        mintUrl: 'https://mint.test',
+        quoteId: 'requeued-quote',
+      });
+    });
+
     it('processes added quotes with bolt11 handler', async () => {
       await processor.start();
 

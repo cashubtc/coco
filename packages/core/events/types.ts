@@ -30,6 +30,7 @@ export interface CoreEvents {
     quoteId: string;
     quote: MintQuoteResponse;
   };
+  'mint-quote:requeue': { mintUrl: string; quoteId: string };
   'mint-quote:redeemed': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
   'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };

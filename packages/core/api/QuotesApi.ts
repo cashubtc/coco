@@ -31,4 +31,8 @@ export class QuotesApi {
   ): Promise<{ added: string[]; skipped: string[] }> {
     return this.mintQuoteService.addExistingMintQuotes(mintUrl, quotes);
   }
+
+  async requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }> {
+    return this.mintQuoteService.requeuePaidMintQuotes(mintUrl);
+  }
 }

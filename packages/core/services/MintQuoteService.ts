@@ -217,4 +217,28 @@ export class MintQuoteService {
     await this.eventBus.emit('mint-quote:state-changed', { mintUrl, quoteId, state });
     this.logger?.debug('Mint quote state updated', { mintUrl, quoteId, state });
   }
+
+  /**
+   * Requeue all PAID (but not yet ISSUED) quotes for processing.
+   * Emits `mint-quote:added` for each PAID quote so the processor can enqueue them.
+   */
+  async requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }> {
+    const requeued: string[] = [];
+    try {
+      const pending = await this.mintQuoteRepo.getPendingMintQuotes();
+      for (const q of pending) {
+        if (mintUrl && q.mintUrl !== mintUrl) continue;
+        if (q.state !== 'PAID') continue;
+        await this.eventBus.emit('mint-quote:requeue', {
+          mintUrl: q.mintUrl,
+          quoteId: q.quote,
+        });
+        requeued.push(q.quote);
+      }
+      this.logger?.info('Requeued PAID mint quotes', { count: requeued.length, mintUrl });
+    } catch (err) {
+      this.logger?.error('Failed to requeue PAID mint quotes', { mintUrl, err });
+    }
+    return { requeued };
+  }
 }
