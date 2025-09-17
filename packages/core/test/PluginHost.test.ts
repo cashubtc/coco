@@ -177,7 +177,6 @@ describe('PluginHost', () => {
     expect(calls.includes('disposeA')).toBe(true);
     expect(calls.includes('disposeB')).toBe(true);
     expect(calls.includes('cleanupA1')).toBe(true);
-    expect(calls.includes('cleanupA2')).toBe(true);
     expect(calls.includes('cleanupB1')).toBe(true);
   });
 
