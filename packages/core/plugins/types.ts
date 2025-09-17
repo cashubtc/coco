@@ -47,15 +47,14 @@ export interface PluginContext<Req extends readonly ServiceKey[] = readonly Serv
   services: Pick<ServiceMap, Req[number]>;
 }
 
+export type CleanupFn = () => void | Promise<void>;
+export type Cleanup = void | CleanupFn | Promise<void | CleanupFn>;
+
 export interface Plugin<Req extends readonly ServiceKey[] = readonly ServiceKey[]> {
   name: string;
   required: Req;
   optional?: readonly ServiceKey[];
-  onInit?(
-    ctx: PluginContext<Req>,
-  ): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
-  onReady?(
-    ctx: PluginContext<Req>,
-  ): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
+  onInit?(ctx: PluginContext<Req>): Cleanup;
+  onReady?(ctx: PluginContext<Req>): Cleanup;
   onDispose?(): void | Promise<void>;
 }
