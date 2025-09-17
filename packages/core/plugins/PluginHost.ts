@@ -59,7 +59,8 @@ export class PluginHost {
   private async runInit(plugin: Plugin, services: ServiceMap): Promise<void> {
     const ctx = this.createContext(plugin, services);
     try {
-      await plugin.onInit?.(ctx as any);
+      const cleanup = await plugin.onInit?.(ctx as any);
+      if (typeof cleanup === 'function') this.cleanups.push(cleanup);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('Plugin init error', { plugin: plugin.name, err });
@@ -69,7 +70,8 @@ export class PluginHost {
   private async runReady(plugin: Plugin, services: ServiceMap): Promise<void> {
     const ctx = this.createContext(plugin, services);
     try {
-      await plugin.onReady?.(ctx as any);
+      const cleanup = await plugin.onReady?.(ctx as any);
+      if (typeof cleanup === 'function') this.cleanups.push(cleanup);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('Plugin ready error', { plugin: plugin.name, err });

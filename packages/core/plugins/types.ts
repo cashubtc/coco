@@ -52,7 +52,11 @@ export interface Plugin<Req extends readonly ServiceKey[] = readonly ServiceKey[
   name: string;
   required: Req;
   optional?: readonly ServiceKey[];
-  onInit?(ctx: PluginContext<Req>): void | Promise<void>;
-  onReady?(ctx: PluginContext<Req>): void | Promise<void>;
+  onInit?(
+    ctx: PluginContext<Req>,
+  ): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
+  onReady?(
+    ctx: PluginContext<Req>,
+  ): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
   onDispose?(): void | Promise<void>;
 }
