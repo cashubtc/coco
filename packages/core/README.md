@@ -188,7 +188,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 - **Purpose**: Extend the core by hooking into lifecycle events with access only to the services you declare.
 - **Lifecycle hooks**: `onInit` (after services are created), `onReady` (after APIs are built), `onDispose` (on shutdown).
-- **Cleanup**: Hooks may either call `registerCleanup(fn)` or return a cleanup function, similar to React’s `useEffect`.
+- **Cleanup**: Hooks must return a cleanup function (sync or async), similar to React’s `useEffect`.
 
 ### Types
 
@@ -205,7 +205,7 @@ const myPlugin: Plugin<['eventBus', 'logger']> = {
   required: ['eventBus', 'logger'] as const,
   onInit: ({ services: { eventBus, logger } }) => {
     const off = eventBus.on('mint:added', (p) => logger.info('mint added', p));
-    return off; // or use registerCleanup(off)
+    return off;
   },
   onReady: async () => {
     // optional

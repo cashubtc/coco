@@ -83,7 +83,6 @@ export class PluginHost {
     services: ServiceMap,
   ): {
     services: Partial<ServiceMap>;
-    registerCleanup: (fn: () => void | Promise<void>) => void;
   } {
     const required = (plugin.required ?? []) as readonly ServiceKey[];
     const selected: Partial<ServiceMap> = {};
@@ -93,9 +92,6 @@ export class PluginHost {
     }
     return {
       services: selected,
-      registerCleanup: (fn: () => void | Promise<void>) => {
-        this.cleanups.push(fn);
-      },
     };
   }
 }

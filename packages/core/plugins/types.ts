@@ -45,7 +45,6 @@ export interface ServiceMap {
 
 export interface PluginContext<Req extends readonly ServiceKey[] = readonly ServiceKey[]> {
   services: Pick<ServiceMap, Req[number]>;
-  registerCleanup(fn: () => void | Promise<void>): void;
 }
 
 export interface Plugin<Req extends readonly ServiceKey[] = readonly ServiceKey[]> {
