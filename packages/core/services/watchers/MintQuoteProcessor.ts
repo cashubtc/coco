@@ -33,6 +33,7 @@ export interface MintQuoteProcessorOptions {
   processIntervalMs?: number;
   maxRetries?: number;
   baseRetryDelayMs?: number;
+  initialEnqueueDelayMs?: number;
 }
 
 export class MintQuoteProcessor {
@@ -52,6 +53,7 @@ export class MintQuoteProcessor {
   private readonly processIntervalMs: number;
   private readonly maxRetries: number;
   private readonly baseRetryDelayMs: number;
+  private readonly initialEnqueueDelayMs: number;
 
   constructor(
     quotes: MintQuoteService,
@@ -67,6 +69,7 @@ export class MintQuoteProcessor {
     this.processIntervalMs = options?.processIntervalMs ?? 3000;
     this.maxRetries = options?.maxRetries ?? 3;
     this.baseRetryDelayMs = options?.baseRetryDelayMs ?? 5000;
+    this.initialEnqueueDelayMs = options?.initialEnqueueDelayMs ?? 500;
 
     // Register default handler for bolt11 quotes
     this.registerHandler('bolt11', new Bolt11QuoteHandler(quotes, logger));
@@ -186,6 +189,8 @@ export class MintQuoteProcessor {
       return;
     }
 
+    const wasEmpty = this.queue.length === 0;
+
     this.queue.push({
       mintUrl,
       quoteId,
@@ -200,6 +205,18 @@ export class MintQuoteProcessor {
       quoteType,
       queueLength: this.queue.length,
     });
+
+    // If queue was empty and processor is idle, schedule a faster first run
+    if (wasEmpty && this.running && !this.processing) {
+      if (this.processingTimer) {
+        clearTimeout(this.processingTimer);
+        this.processingTimer = undefined;
+      }
+      this.processingTimer = setTimeout(() => {
+        this.processingTimer = undefined;
+        this.processNext();
+      }, this.initialEnqueueDelayMs);
+    }
   }
 
   private scheduleNextProcess(): void {

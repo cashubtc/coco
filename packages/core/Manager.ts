@@ -153,6 +153,7 @@ export class Manager {
     processIntervalMs?: number;
     maxRetries?: number;
     baseRetryDelayMs?: number;
+    initialEnqueueDelayMs?: number;
   }): Promise<void> {
     if (this.mintQuoteProcessor?.isRunning()) return;
     const processorLogger = this.logger.child
