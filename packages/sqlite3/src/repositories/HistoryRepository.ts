@@ -5,6 +5,7 @@ import type {
   MeltHistoryEntry,
   ReceiveHistoryEntry,
   SendHistoryEntry,
+  HistoryRepository,
 } from 'coco-cashu-core';
 import { SqliteDb } from '../db.ts';
 
@@ -22,17 +23,7 @@ type Row = {
   metadata: string | null;
 };
 
-type NewHistoryEntry =
-  | Omit<MintHistoryEntry, 'id'>
-  | Omit<MeltHistoryEntry, 'id'>
-  | Omit<SendHistoryEntry, 'id'>
-  | Omit<ReceiveHistoryEntry, 'id'>;
-
-type UpdatableHistoryEntry =
-  | Omit<MintHistoryEntry, 'id' | 'createdAt'>
-  | Omit<MeltHistoryEntry, 'id' | 'createdAt'>;
-
-export class SqliteHistoryRepository {
+export class SqliteHistoryRepository implements HistoryRepository {
   private readonly db: SqliteDb;
 
   constructor(db: SqliteDb) {
@@ -50,7 +41,7 @@ export class SqliteHistoryRepository {
     return rows.map((r) => this.rowToEntry(r));
   }
 
-  async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
+  async addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry> {
     const baseParams = [
       history.mintUrl,
       history.type,
@@ -66,18 +57,24 @@ export class SqliteHistoryRepository {
     let metadata: string | null = history.metadata ? JSON.stringify(history.metadata) : null;
 
     switch (history.type) {
-      case 'mint':
-        quoteId = history.quoteId;
-        state = history.state;
-        paymentRequest = history.paymentRequest;
+      case 'mint': {
+        const h = history as Omit<MintHistoryEntry, 'id'>;
+        quoteId = h.quoteId;
+        state = h.state;
+        paymentRequest = h.paymentRequest;
         break;
-      case 'melt':
-        quoteId = history.quoteId;
-        state = history.state;
+      }
+      case 'melt': {
+        const h = history as Omit<MeltHistoryEntry, 'id'>;
+        quoteId = h.quoteId;
+        state = h.state;
         break;
-      case 'send':
-        tokenJson = JSON.stringify(history.token satisfies Token);
+      }
+      case 'send': {
+        const h = history as Omit<SendHistoryEntry, 'id'>;
+        tokenJson = JSON.stringify(h.token as Token);
         break;
+      }
       case 'receive':
         break;
     }
@@ -121,17 +118,25 @@ export class SqliteHistoryRepository {
     return entry.type === 'melt' ? entry : null;
   }
 
-  async updateHistoryEntry(history: UpdatableHistoryEntry): Promise<HistoryEntry> {
-    const quoteId = history.quoteId;
-    if (!quoteId) throw new Error('quoteId required');
+  async updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry> {
+    // Only mint/melt entries are updatable by quoteId
+    let quoteId: string | undefined;
     let state: string | null = null;
     let paymentRequest: string | null = null;
+
     if (history.type === 'mint') {
-      state = history.state;
-      paymentRequest = history.paymentRequest;
+      const h = history as Omit<MintHistoryEntry, 'id' | 'createdAt'>;
+      quoteId = h.quoteId;
+      state = h.state;
+      paymentRequest = h.paymentRequest;
+    } else if (history.type === 'melt') {
+      const h = history as Omit<MeltHistoryEntry, 'id' | 'createdAt'>;
+      quoteId = h.quoteId;
+      state = h.state;
     } else {
-      state = history.state;
+      throw new Error('updateHistoryEntry only supports mint/melt entries');
     }
+    if (!quoteId) throw new Error('quoteId required');
 
     await this.db.run(
       `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?

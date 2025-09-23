@@ -85,8 +85,11 @@ const MIGRATIONS: readonly Migration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_state ON coco_cashu_melt_quotes(state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint ON coco_cashu_melt_quotes(mintUrl);
-
-      -- History table and indexes
+    `,
+  },
+  {
+    id: '003_history',
+    sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_history (
         id        INTEGER PRIMARY KEY AUTOINCREMENT,
         mintUrl   TEXT NOT NULL,
