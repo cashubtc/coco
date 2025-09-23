@@ -20,6 +20,12 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
   const hasMoreRef = useRef(true);
   const modeRef = useRef<'infinite' | 'page'>('infinite');
   const isMountedRef = useRef(true);
+  const isFetchingRef = useRef(false);
+
+  const setFetching = (value: boolean) => {
+    isFetchingRef.current = value;
+    setIsFetching(value);
+  };
 
   useEffect(() => {
     return () => {
@@ -40,20 +46,9 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
     [manager, pageSize],
   );
 
-  const init = useCallback(async () => {
-    if (isFetching) return;
-    setIsFetching(true);
-    modeRef.current = 'infinite';
-    startRef.current = 0;
-    const page = await fetchPage(0);
-    hasMoreRef.current = page.length === pageSize;
-    if (isMountedRef.current) setHistory(page);
-    setIsFetching(false);
-  }, [fetchPage, pageSize, isFetching]);
-
   const refresh = useCallback(async () => {
-    if (isFetching) return;
-    setIsFetching(true);
+    if (isFetchingRef.current) return;
+    setFetching(true);
     try {
       if (modeRef.current === 'infinite' && startRef.current === 0) {
         const top = await fetchPage(0);
@@ -68,21 +63,45 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
         setHistory(page);
       }
     } finally {
-      setIsFetching(false);
+      setFetching(false);
     }
-  }, [fetchPage, isFetching]);
+  }, [fetchPage]);
+
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
 
   useEffect(() => {
-    init();
-    manager.on('history:updated', refresh);
-    return () => {
-      manager.off('history:updated', refresh);
+    const handler = () => {
+      void refreshRef.current();
     };
-  }, [manager, init, refresh]);
+    manager.on('history:updated', handler);
+    return () => {
+      manager.off('history:updated', handler);
+    };
+  }, [manager]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (isFetchingRef.current) return;
+      setFetching(true);
+      modeRef.current = 'infinite';
+      startRef.current = 0;
+      const page = await fetchPage(0);
+      hasMoreRef.current = page.length === pageSize;
+      if (!cancelled && isMountedRef.current) setHistory(page);
+      setFetching(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchPage, pageSize]);
 
   const loadMore = useCallback(async () => {
-    if (!hasMoreRef.current || isFetching) return;
-    setIsFetching(true);
+    if (!hasMoreRef.current || isFetchingRef.current) return;
+    setFetching(true);
     modeRef.current = 'infinite';
     const nextStart = startRef.current + pageSize;
     const page = await fetchPage(nextStart);
@@ -100,14 +119,14 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
       });
       startRef.current = nextStart;
     }
-    setIsFetching(false);
-  }, [fetchPage, pageSize, isFetching]);
+    setFetching(false);
+  }, [fetchPage, pageSize]);
 
   const goToPage = useCallback(
     async (pageNumber: number) => {
       const offset = pageNumber * pageSize;
-      if (isFetching) return;
-      setIsFetching(true);
+      if (isFetchingRef.current) return;
+      setFetching(true);
       modeRef.current = 'page';
       const data = await fetchPage(offset);
       hasMoreRef.current = data.length === pageSize;
@@ -115,9 +134,9 @@ export const usePaginatedHistory = (pageSize = 100): UsePaginatedHistoryResult =
         setHistory(data);
         startRef.current = offset;
       }
-      setIsFetching(false);
+      setFetching(false);
     },
-    [fetchPage, pageSize, isFetching],
+    [fetchPage, pageSize],
   );
 
   return useMemo(
