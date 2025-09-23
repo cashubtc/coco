@@ -18,6 +18,7 @@ describe('MintQuoteProcessor', () => {
   // Use much shorter intervals for tests
   const TEST_PROCESS_INTERVAL = 50; // 50ms instead of 3000ms
   const TEST_RETRY_DELAY = 100; // 100ms instead of 5000ms
+  const TEST_INITIAL_DELAY = 10; // matches initialEnqueueDelayMs passed to processor
 
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
@@ -38,6 +39,7 @@ describe('MintQuoteProcessor', () => {
       processIntervalMs: TEST_PROCESS_INTERVAL,
       baseRetryDelayMs: TEST_RETRY_DELAY,
       maxRetries: 3,
+      initialEnqueueDelayMs: 10,
     });
   });
 
@@ -261,8 +263,8 @@ describe('MintQuoteProcessor', () => {
         state: 'PAID',
       });
 
-      // First should process after ~3s
-      await sleep(TEST_PROCESS_INTERVAL + 20);
+      // First should process after initial delay
+      await sleep(TEST_INITIAL_DELAY + 20);
       expect(redeemCalls.length).toBe(1);
       expect(redeemCalls[0]?.quoteId).toBe('quote1');
 
@@ -327,7 +329,7 @@ describe('MintQuoteProcessor', () => {
       });
 
       // Process first quote
-      await sleep(TEST_PROCESS_INTERVAL + 20);
+      await sleep(TEST_INITIAL_DELAY + 20);
       expect(redeemCalls.length).toBe(1);
       expect(redeemCalls[0]?.quoteId).toBe('state-change-1');
 
@@ -617,7 +619,7 @@ describe('MintQuoteProcessor', () => {
       }
 
       // Let first one process
-      await sleep(TEST_PROCESS_INTERVAL + 20);
+      await sleep(TEST_INITIAL_DELAY + 20);
       expect(redeemCalls.length).toBe(1);
 
       // Stop the processor
