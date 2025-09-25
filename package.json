@@ -8,5 +8,10 @@
   "peerDependencies": {},
   "dependencies": {
     "@changesets/cli": "^2.29.6"
+  },
+  "scripts": {
+    "docs:dev": "vitepress dev packages/docs",
+    "docs:build": "vitepress build packages/docs",
+    "docs:preview": "vitepress preview packages/docs"
   }
 }
