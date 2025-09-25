@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-indexeddb",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "module": "index.ts",
   "type": "module",
   "files": [
