@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-react",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "type": "module",
   "exports": {
     ".": {

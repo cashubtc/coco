@@ -1,9 +1,8 @@
-import type { Token } from '@cashu/cashu-ts';
 import type { Manager } from 'coco-cashu-core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useManager } from '../contexts/ManagerContext';
 
-type ReceiveResult = void | Awaited<ReturnType<Manager['wallet']['receive']>>;
+type ReceiveArg = Parameters<Manager['wallet']['receive']>[0];
 type ReceiveStatus = 'idle' | 'loading' | 'success' | 'error';
 export type ReceiveOptions = {
   onSuccess?: () => void;
@@ -26,13 +25,16 @@ const useReceive = () => {
   }, []);
 
   const receive = useCallback(
-    async (token: Token | string, opts: ReceiveOptions = {}) => {
+    async (token: ReceiveArg, opts: ReceiveOptions = {}) => {
       if (isReceivingRef.current) {
         const err = new Error('Receive already in progress');
         opts.onError?.(err);
         throw err;
       }
-      if (typeof token !== 'string' && (!token || !Array.isArray((token as Token).proofs))) {
+      if (
+        typeof token !== 'string' &&
+        (!token || !Array.isArray((token as { proofs: unknown[] }).proofs))
+      ) {
         const err = new Error('Invalid token');
         if (mountedRef.current) {
           setError(err);
