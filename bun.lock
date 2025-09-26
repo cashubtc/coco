@@ -7,6 +7,15 @@
         "@changesets/cli": "^2.29.6",
       },
     },
+    "packages/adapter-tests": {
+      "name": "coco-cashu-adapter-tests",
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "packages/core": {
       "name": "coco-cashu-core",
       "version": "1.0.0-rc9",
@@ -996,6 +1005,8 @@
     "cliui": ["cliui@8.0.1", "", { "dependencies": { "string-width": "^4.2.0", "strip-ansi": "^6.0.1", "wrap-ansi": "^7.0.0" } }, "sha512-BSeNnyus75C4//NQ9gQt1/csTXyo/8Sb+afLAkzAptFuMsod9HFokGNudZpi/oQV73hnVK+sR+5PVRMd+Dr7YQ=="],
 
     "clone": ["clone@1.0.4", "", {}, "sha512-JQHZ2QMW6l3aH/j6xCqQThY/9OH4D/9ls34cgkUBiEeocRTU04tHfKPBsUK1PqZCUQM7GiA0IIXJSuXHI64Kbg=="],
+
+    "coco-cashu-adapter-tests": ["coco-cashu-adapter-tests@workspace:packages/adapter-tests"],
 
     "coco-cashu-core": ["coco-cashu-core@workspace:packages/core"],
 
