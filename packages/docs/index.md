@@ -3,16 +3,16 @@
 layout: home
 
 hero:
-  name: "Coco Cashu Docs"
-  text: "A VitePress Site"
-  tagline: My great project tagline
+  name: 'Coco'
+  text: 'A Cashu TS toolkit'
+  tagline: Build Cashu applications with ease
   actions:
     - theme: brand
-      text: Markdown Examples
+      text: Get Started
       link: /markdown-examples
     - theme: alt
-      text: API Examples
-      link: /api-examples
+      text: Github
+      link: https://github.com/cashubtc/coco
 
 features:
   - title: Feature A
@@ -22,4 +22,3 @@ features:
   - title: Feature C
     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
 ---
-
