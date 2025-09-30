@@ -4,6 +4,7 @@ import { defineConfig } from 'vitepress';
 export default defineConfig({
   title: 'Coco Cashu Docs',
   description: 'Cashu out of the box',
+  base: '/coco/',
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
