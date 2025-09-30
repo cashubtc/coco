@@ -9,10 +9,18 @@ export default defineConfig({
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: 'Home', link: '/' },
+      { text: 'Docs', link: '/' },
       { text: 'Examples', link: '/markdown-examples' },
     ],
 
     sidebar: [
+      {
+        text: 'Core',
+        items: [
+          { text: 'Storage Adapters', link: '/pages/storage-adapters' },
+          { text: 'Bip39', link: '/pages/bip39' },
+        ],
+      },
       {
         text: 'Examples',
         items: [
