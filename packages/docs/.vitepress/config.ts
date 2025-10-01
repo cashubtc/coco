@@ -19,6 +19,7 @@ export default defineConfig({
         items: [
           { text: 'Storage Adapters', link: '/pages/storage-adapters' },
           { text: 'Bip39', link: '/pages/bip39' },
+          { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
         ],
       },
       {
