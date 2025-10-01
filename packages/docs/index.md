@@ -4,7 +4,7 @@ layout: home
 
 hero:
   name: 'Coco'
-  text: 'A Cashu TS toolkit'
+  text: 'A Cashu toolkit in TypeScript'
   tagline: Build Cashu applications with ease
   actions:
     - theme: brand
@@ -15,10 +15,8 @@ hero:
       link: https://github.com/cashubtc/coco
 
 features:
-  - title: Feature A
-    details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
-  - title: Feature B
-    details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
-  - title: Feature C
-    details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
+  - title: Platform agnostic
+    details: Coco works in the browser, NodeJS or React Native
+  - title: Batteries Included
+    details: Coco brings everything you need to build a Cashu wallet. Without the complexity
 ---
