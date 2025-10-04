@@ -48,7 +48,6 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
     // Create service
     service = new MintQuoteService(
       mockRepo,
-      {} as any, // subscriptionManager not needed
       {} as any, // walletService not needed
       {} as any, // proofService not needed
       eventBus,

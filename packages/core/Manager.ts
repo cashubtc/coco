@@ -288,7 +288,6 @@ export class Manager {
 
     const quotesService = new MintQuoteService(
       repositories.mintQuoteRepository,
-      this.subscriptions,
       walletService,
       proofService,
       this.eventBus,
