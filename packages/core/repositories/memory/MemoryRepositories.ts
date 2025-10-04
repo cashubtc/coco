@@ -34,4 +34,8 @@ export class MemoryRepositories implements Repositories {
     this.meltQuoteRepository = new MemoryMeltQuoteRepository();
     this.historyRepository = new MemoryHistoryRepository();
   }
+
+  async init(): Promise<void> {
+    // No-op: Memory repositories don't require initialization
+  }
 }

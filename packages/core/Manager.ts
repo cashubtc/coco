@@ -21,6 +21,91 @@ import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap } from './plugins/types.ts';
 
+/**
+ * Configuration options for initializing the Coco Cashu manager
+ */
+export interface CocoConfig {
+  /** Repository implementations for data persistence */
+  repo: Repositories;
+  /** Function that returns the wallet seed as Uint8Array */
+  seedGetter: () => Promise<Uint8Array>;
+  /** Optional logger instance (defaults to NullLogger) */
+  logger?: Logger;
+  /** Optional WebSocket factory for real-time subscriptions */
+  webSocketFactory?: WebSocketFactory;
+  /** Optional plugins to extend functionality */
+  plugins?: Plugin[];
+  /**
+   * Watcher configuration (all enabled by default)
+   * - Omit to use defaults (enabled)
+   * - Set `disabled: true` to disable
+   * - Provide options to customize behavior
+   */
+  watchers?: {
+    /** Mint quote watcher (enabled by default) */
+    mintQuoteWatcher?: {
+      disabled?: boolean;
+      watchExistingPendingOnStart?: boolean;
+    };
+    /** Proof state watcher (enabled by default) */
+    proofStateWatcher?: {
+      disabled?: boolean;
+    };
+  };
+  /**
+   * Processor configuration (all enabled by default)
+   * - Omit to use defaults (enabled)
+   * - Set `disabled: true` to disable
+   * - Provide options to customize behavior
+   */
+  processors?: {
+    /** Mint quote processor (enabled by default) */
+    mintQuoteProcessor?: {
+      disabled?: boolean;
+      processIntervalMs?: number;
+      maxRetries?: number;
+      baseRetryDelayMs?: number;
+      initialEnqueueDelayMs?: number;
+    };
+  };
+}
+
+/**
+ * Initializes and configures a new Coco Cashu manager instance
+ * @param config - Configuration options including repositories, seed, and optional features
+ * @returns A fully initialized Manager instance
+ */
+export async function initializeCoco(config: CocoConfig): Promise<Manager> {
+  await config.repo.init();
+  const coco = new Manager(
+    config.repo,
+    config.seedGetter,
+    config.logger,
+    config.webSocketFactory,
+    config.plugins,
+  );
+
+  // Enable watchers (default: all enabled unless explicitly disabled)
+  const mintQuoteWatcherConfig = config.watchers?.mintQuoteWatcher;
+  if (!mintQuoteWatcherConfig?.disabled) {
+    await coco.enableMintQuoteWatcher(mintQuoteWatcherConfig);
+  }
+
+  const proofStateWatcherConfig = config.watchers?.proofStateWatcher;
+  if (!proofStateWatcherConfig?.disabled) {
+    await coco.enableProofStateWatcher();
+  }
+
+  // Enable processors (default: all enabled unless explicitly disabled)
+  const mintQuoteProcessorConfig = config.processors?.mintQuoteProcessor;
+  if (!mintQuoteProcessorConfig?.disabled) {
+    await coco.enableMintQuoteProcessor(mintQuoteProcessorConfig);
+    await coco.quotes.requeuePaidMintQuotes();
+  }
+
+  return coco;
+}
+
 export class Manager {
   readonly mint: MintApi;
   readonly wallet: WalletApi;

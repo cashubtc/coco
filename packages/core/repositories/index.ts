@@ -63,6 +63,7 @@ export interface HistoryRepository {
 }
 
 export interface Repositories {
+  init(): Promise<void>;
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
