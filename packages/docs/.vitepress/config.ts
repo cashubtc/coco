@@ -15,7 +15,11 @@ export default defineConfig({
     sidebar: [
       {
         text: 'Starting',
-        items: [{ text: 'Start Here', link: '/starting/start-here' }],
+        items: [
+          { text: 'Start Here', link: '/starting/start-here' },
+          { text: 'Adding Mints', link: '/starting/adding-mints' },
+          { text: 'Minting Tokens', link: '/starting/minting' },
+        ],
       },
       {
         text: 'Core',
@@ -24,10 +28,9 @@ export default defineConfig({
           { text: 'Storage Adapters', link: '/pages/storage-adapters' },
           { text: 'Bip39', link: '/pages/bip39' },
           { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
+          { text: 'Coco Config', link: '/pages/coco-config' },
+          { text: 'Plugins', link: '/pages/plugins' },
         ],
-      },
-      {
-        text: 'Examples',
       },
     ],
 
