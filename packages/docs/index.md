@@ -9,7 +9,7 @@ hero:
   actions:
     - theme: brand
       text: Get Started
-      link: /markdown-examples
+      link: /starting/start-here
     - theme: alt
       text: Github
       link: https://github.com/cashubtc/coco

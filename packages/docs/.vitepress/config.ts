@@ -15,7 +15,12 @@ export default defineConfig({
 
     sidebar: [
       {
+        text: 'Starting',
+        items: [{ text: 'Start Here', link: '/starting/start-here' }],
+      },
+      {
         text: 'Core',
+        collapsed: true,
         items: [
           { text: 'Storage Adapters', link: '/pages/storage-adapters' },
           { text: 'Bip39', link: '/pages/bip39' },
