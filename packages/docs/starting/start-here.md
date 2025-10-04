@@ -49,3 +49,7 @@ const coco = await initializeCoco({
 // Whenever coco now saves data it will use the provided database
 await coco.wallet.receive('cashuB...');
 ```
+
+## Configuring Coco
+
+Coco can be configured in various ways to fit different environments. When calling `initializeCoco` with only the required options sane defaults will be applies. When you want to further configure Coco check out [Coco Config](../pages/coco-config.md).
