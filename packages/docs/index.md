@@ -6,6 +6,9 @@ hero:
   name: 'Coco'
   text: 'A Cashu toolkit in TypeScript'
   tagline: Build Cashu applications with ease
+  image:
+    src: './assets/coco.png'
+    alt: 'Coco Logo'
   actions:
     - theme: brand
       text: Get Started
