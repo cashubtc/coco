@@ -23,6 +23,10 @@ export default defineConfig({
         ],
       },
       {
+        text: 'Examples',
+        items: [{ text: 'Node', link: '/examples/node' }],
+      },
+      {
         text: 'Core',
         collapsed: true,
         items: [
