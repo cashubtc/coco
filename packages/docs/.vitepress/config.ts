@@ -18,6 +18,7 @@ export default defineConfig({
         items: [
           { text: 'Start Here', link: '/starting/start-here' },
           { text: 'Adding Mints', link: '/starting/adding-mints' },
+          { text: 'Subscriptions', link: '/starting/subscriptions' },
           { text: 'Minting Tokens', link: '/starting/minting' },
         ],
       },
