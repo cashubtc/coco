@@ -43,6 +43,7 @@ export class SubscriptionManager {
   private readonly hasOpenedByMint = new Map<string, boolean>();
   private readonly wsFactory?: WebSocketFactory | undefined;
   private readonly capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> };
+  private paused = false;
 
   constructor(
     wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
@@ -221,6 +222,21 @@ export class SubscriptionManager {
     }
     pendingById.set(id, subId);
 
+    // If paused, subscription is registered but won't be sent until resume
+    if (this.paused) {
+      this.logger?.info('Subscription created while paused, will activate on resume', {
+        mintUrl,
+        kind,
+        subId,
+      });
+      return {
+        subId,
+        unsubscribe: async () => {
+          await this.unsubscribe(mintUrl, subId);
+        },
+      };
+    }
+
     const t = this.getTransport(mintUrl);
     // If ws is not supported by the mint, choose polling now
     if (this.capabilitiesProvider) {
@@ -342,5 +358,33 @@ export class SubscriptionManager {
       }
     }
     return false;
+  }
+
+  pause(): void {
+    this.paused = true;
+    // Pause all transports
+    const seen = new Set<RealTimeTransport>();
+    for (const t of this.transportByMint.values()) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      t.pause();
+    }
+    this.logger?.info('SubscriptionManager paused');
+  }
+
+  resume(): void {
+    this.paused = false;
+    // Resume all transports
+    const seen = new Set<RealTimeTransport>();
+    for (const t of this.transportByMint.values()) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      t.resume();
+    }
+    // Re-subscribe all active subscriptions
+    for (const mintUrl of this.activeByMint.keys()) {
+      this.reSubscribeMint(mintUrl);
+    }
+    this.logger?.info('SubscriptionManager resumed');
   }
 }
