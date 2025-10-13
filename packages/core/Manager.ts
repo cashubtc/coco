@@ -83,6 +83,8 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.logger,
     config.webSocketFactory,
     config.plugins,
+    config.watchers,
+    config.processors,
   );
 
   // Enable watchers (default: all enabled unless explicitly disabled)
@@ -129,16 +131,23 @@ export class Manager {
   private seedService: SeedService;
   private counterService: CounterService;
   private readonly pluginHost: PluginHost = new PluginHost();
+  private subscriptionsPaused = false;
+  private originalWatcherConfig: CocoConfig['watchers'];
+  private originalProcessorConfig: CocoConfig['processors'];
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
     logger?: Logger,
     webSocketFactory?: WebSocketFactory,
     plugins?: Plugin[],
+    watchers?: CocoConfig['watchers'],
+    processors?: CocoConfig['processors'],
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
     this.subscriptions = this.createSubscriptionManager(webSocketFactory);
+    this.originalWatcherConfig = watchers;
+    this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
       for (const p of plugins) this.pluginHost.use(p);
     }
@@ -239,8 +248,8 @@ export class Manager {
     maxRetries?: number;
     baseRetryDelayMs?: number;
     initialEnqueueDelayMs?: number;
-  }): Promise<void> {
-    if (this.mintQuoteProcessor?.isRunning()) return;
+  }): Promise<boolean> {
+    if (this.mintQuoteProcessor?.isRunning()) return false;
     const processorLogger = this.logger.child
       ? this.logger.child({ module: 'MintQuoteProcessor' })
       : this.logger;
@@ -251,6 +260,7 @@ export class Manager {
       options,
     );
     await this.mintQuoteProcessor.start();
+    return true;
   }
 
   async disableMintQuoteProcessor(): Promise<void> {
@@ -282,6 +292,58 @@ export class Manager {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();
     this.proofStateWatcher = undefined;
+  }
+
+  async pauseSubscriptions(): Promise<void> {
+    if (this.subscriptionsPaused) {
+      this.logger.debug('Subscriptions already paused');
+      return;
+    }
+    this.subscriptionsPaused = true;
+    this.logger.info('Pausing subscriptions');
+
+    // Pause transport layer
+    this.subscriptions.pause();
+
+    // Disable watchers
+    await this.disableMintQuoteWatcher();
+    await this.disableProofStateWatcher();
+
+    // Disable processor
+    await this.disableMintQuoteProcessor();
+
+    this.logger.info('Subscriptions paused');
+  }
+
+  async resumeSubscriptions(): Promise<void> {
+    this.subscriptionsPaused = false;
+    this.logger.info('Resuming subscriptions');
+
+    // Resume transport layer
+    this.subscriptions.resume();
+
+    // Re-enable watchers based on original configuration (idempotent)
+    const mintQuoteWatcherConfig = this.originalWatcherConfig?.mintQuoteWatcher;
+    if (!mintQuoteWatcherConfig?.disabled) {
+      await this.enableMintQuoteWatcher(mintQuoteWatcherConfig);
+    }
+
+    const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
+    if (!proofStateWatcherConfig?.disabled) {
+      await this.enableProofStateWatcher();
+    }
+
+    // Re-enable processor based on original configuration (idempotent)
+    const mintQuoteProcessorConfig = this.originalProcessorConfig?.mintQuoteProcessor;
+    if (!mintQuoteProcessorConfig?.disabled) {
+      const wasEnabled = await this.enableMintQuoteProcessor(mintQuoteProcessorConfig);
+      // Only requeue if we actually re-enabled (not already running)
+      if (wasEnabled) {
+        await this.quotes.requeuePaidMintQuotes();
+      }
+    }
+
+    this.logger.info('Subscriptions resumed');
   }
 
   private getChildLogger(moduleName: string): Logger {

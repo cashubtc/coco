@@ -17,3 +17,50 @@ const coco = await initializeCoco({
   webSocketFactory: (url) => new WebSocket(url),
 });
 ```
+
+## Managing Subscription Lifecycle
+
+Coco provides APIs to pause and resume subscriptions for better resource management:
+
+```ts
+// Pause all subscriptions when app goes to background
+await manager.pauseSubscriptions();
+
+// Resume all subscriptions when app comes to foreground
+await manager.resumeSubscriptions();
+```
+
+This is particularly useful for:
+
+- **Mobile apps**: Save battery when the app is backgrounded
+- **Web apps**: Reduce resource usage when the browser tab is hidden
+- **Desktop apps**: Pause when the window is minimized
+
+### Example: React Native App Lifecycle
+
+```ts
+import { AppState } from 'react-native';
+
+// Listen for app state changes
+AppState.addEventListener('change', async (nextAppState) => {
+  if (nextAppState === 'background') {
+    await manager.pauseSubscriptions();
+  } else if (nextAppState === 'active') {
+    await manager.resumeSubscriptions();
+  }
+});
+```
+
+### Example: Web Browser Visibility
+
+```ts
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden) {
+    await manager.pauseSubscriptions();
+  } else {
+    await manager.resumeSubscriptions();
+  }
+});
+```
+
+See [Watchers & Processors](../pages/watchers-processors.md) for more details on pause/resume behavior.

@@ -26,6 +26,7 @@ export class WsConnectionManager {
   >();
   private readonly reconnectAttemptsByMint = new Map<string, number>();
   private readonly reconnectTimeoutByMint = new Map<string, ReturnType<typeof setTimeout>>();
+  private paused = false;
 
   constructor(private readonly wsFactory: WebSocketFactory, logger?: Logger) {
     this.logger = logger;
@@ -79,10 +80,12 @@ export class WsConnectionManager {
       this.sockets.delete(mintUrl);
       this.isOpenByMint.set(mintUrl, false);
       this.sendQueueByMint.delete(mintUrl);
-      // Schedule reconnect if there are listeners interested
-      const hasListeners = this.listenersByMint.get(mintUrl);
-      if (hasListeners && Array.from(hasListeners.values()).some((s) => s.size > 0)) {
-        this.scheduleReconnect(mintUrl);
+      // Schedule reconnect if there are listeners interested and not paused
+      if (!this.paused) {
+        const hasListeners = this.listenersByMint.get(mintUrl);
+        if (hasListeners && Array.from(hasListeners.values()).some((s) => s.size > 0)) {
+          this.scheduleReconnect(mintUrl);
+        }
       }
     };
 
@@ -194,5 +197,45 @@ export class WsConnectionManager {
     for (const timeout of this.reconnectTimeoutByMint.values()) clearTimeout(timeout);
     this.reconnectTimeoutByMint.clear();
     this.reconnectAttemptsByMint.clear();
+  }
+
+  pause(): void {
+    this.paused = true;
+    // Clear all pending reconnect timeouts
+    for (const timeout of this.reconnectTimeoutByMint.values()) {
+      clearTimeout(timeout);
+    }
+    this.reconnectTimeoutByMint.clear();
+    this.reconnectAttemptsByMint.clear();
+    // Close all active sockets
+    for (const [mintUrl, socket] of this.sockets.entries()) {
+      try {
+        socket.close(1000, 'Paused');
+        this.logger?.debug('WS closed for pause', { mintUrl });
+      } catch (err) {
+        this.logger?.warn('Error while closing WS for pause', { mintUrl, err });
+      }
+    }
+    this.sockets.clear();
+    this.isOpenByMint.clear();
+    this.sendQueueByMint.clear();
+    this.logger?.info('WsConnectionManager paused');
+  }
+
+  resume(): void {
+    this.paused = false;
+    // Reconnect for all mints with active listeners
+    for (const [mintUrl, listenerMap] of this.listenersByMint.entries()) {
+      const hasListeners = Array.from(listenerMap.values()).some((s) => s.size > 0);
+      if (hasListeners) {
+        try {
+          this.ensureSocket(mintUrl);
+          this.logger?.debug('WS reconnecting after resume', { mintUrl });
+        } catch (err) {
+          this.logger?.error('Failed to reconnect WS after resume', { mintUrl, err });
+        }
+      }
+    }
+    this.logger?.info('WsConnectionManager resumed');
   }
 }

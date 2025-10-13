@@ -24,4 +24,12 @@ export class WsTransport implements RealTimeTransport {
   closeAll(): void {
     this.ws.closeAll();
   }
+
+  pause(): void {
+    this.ws.pause();
+  }
+
+  resume(): void {
+    this.ws.resume();
+  }
 }

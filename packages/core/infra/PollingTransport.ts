@@ -39,6 +39,7 @@ export class PollingTransport implements RealTimeTransport {
   private readonly proofSetByMint = new Map<string, Set<string>>();
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
+  private paused = false;
 
   constructor(options?: PollingOptions, logger?: Logger) {
     this.logger = logger;
@@ -206,6 +207,20 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.clear();
   }
 
+  pause(): void {
+    this.paused = true;
+    this.logger?.info('PollingTransport paused');
+  }
+
+  resume(): void {
+    this.paused = false;
+    // Trigger maybeRun for all mints with schedulers to restart polling
+    for (const mintUrl of this.schedByMint.keys()) {
+      void this.maybeRun(mintUrl);
+    }
+    this.logger?.info('PollingTransport resumed');
+  }
+
   private ensureScheduler(mintUrl: string): MintScheduler {
     let s = this.schedByMint.get(mintUrl);
     if (!s) {
@@ -221,6 +236,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   private async maybeRun(mintUrl: string): Promise<void> {
+    if (this.paused) return;
     const s = this.ensureScheduler(mintUrl);
     if (s.running) return;
     const now = Date.now();
