@@ -8,9 +8,9 @@ export class IdbMintRepository implements MintRepository {
     this.db = db;
   }
 
-  async isKnownMint(mintUrl: string): Promise<boolean> {
+  async isTrustedMint(mintUrl: string): Promise<boolean> {
     const row = await (this.db as any).table('coco_cashu_mints').get(mintUrl);
-    return !!row;
+    return row?.trusted ?? false;
   }
 
   async getMintByUrl(mintUrl: string): Promise<Mint> {
@@ -22,6 +22,7 @@ export class IdbMintRepository implements MintRepository {
       mintUrl: row.mintUrl,
       name: row.name,
       mintInfo: JSON.parse(row.mintInfo),
+      trusted: row.trusted ?? true,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } satisfies Mint;
@@ -35,10 +36,28 @@ export class IdbMintRepository implements MintRepository {
           mintUrl: r.mintUrl,
           name: r.name,
           mintInfo: JSON.parse(r.mintInfo),
+          trusted: r.trusted ?? true,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         } satisfies Mint),
     );
+  }
+
+  async getAllTrustedMints(): Promise<Mint[]> {
+    const rows = (await (this.db as any).table('coco_cashu_mints').toArray()) as MintRow[];
+    return rows
+      .filter((r) => r.trusted ?? true)
+      .map(
+        (r) =>
+          ({
+            mintUrl: r.mintUrl,
+            name: r.name,
+            mintInfo: JSON.parse(r.mintInfo),
+            trusted: r.trusted ?? true,
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          } satisfies Mint),
+      );
   }
 
   async addNewMint(mint: Mint): Promise<void> {
@@ -46,7 +65,23 @@ export class IdbMintRepository implements MintRepository {
       mintUrl: mint.mintUrl,
       name: mint.name,
       mintInfo: JSON.stringify(mint.mintInfo),
+      trusted: mint.trusted,
       createdAt: mint.createdAt,
+      updatedAt: mint.updatedAt,
+    };
+    await (this.db as any).table('coco_cashu_mints').put(row);
+  }
+
+  async addOrUpdateMint(mint: Mint): Promise<void> {
+    const existing = (await (this.db as any).table('coco_cashu_mints').get(mint.mintUrl)) as
+      | MintRow
+      | undefined;
+    const row: MintRow = {
+      mintUrl: mint.mintUrl,
+      name: mint.name,
+      mintInfo: JSON.stringify(mint.mintInfo),
+      trusted: mint.trusted,
+      createdAt: existing?.createdAt ?? mint.createdAt,
       updatedAt: mint.updatedAt,
     };
     await (this.db as any).table('coco_cashu_mints').put(row);
@@ -54,6 +89,10 @@ export class IdbMintRepository implements MintRepository {
 
   async updateMint(mint: Mint): Promise<void> {
     await this.addNewMint(mint);
+  }
+
+  async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {
+    await (this.db as any).table('coco_cashu_mints').update(mintUrl, { trusted });
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
