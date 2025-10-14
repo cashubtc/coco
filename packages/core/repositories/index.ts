@@ -8,11 +8,14 @@ import type { HistoryEntry, MeltHistoryEntry, MintHistoryEntry } from '@core/mod
 import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 
 export interface MintRepository {
-  isKnownMint(mintUrl: string): Promise<boolean>;
+  isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;
   getAllMints(): Promise<Mint[]>;
+  getAllTrustedMints(): Promise<Mint[]>;
   addNewMint(mint: Mint): Promise<void>;
+  addOrUpdateMint(mint: Mint): Promise<void>;
   updateMint(mint: Mint): Promise<void>;
+  setMintTrusted(mintUrl: string, trusted: boolean): Promise<void>;
   deleteMint(mintUrl: string): Promise<void>;
 }
 

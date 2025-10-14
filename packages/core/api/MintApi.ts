@@ -16,11 +16,23 @@ export class MintApi {
     return this.mintService.getMintInfo(mintUrl);
   }
 
-  async isKnownMint(mintUrl: string): Promise<boolean> {
-    return this.mintService.isKnownMint(mintUrl);
+  async isTrustedMint(mintUrl: string): Promise<boolean> {
+    return this.mintService.isTrustedMint(mintUrl);
   }
 
   async getAllMints(): Promise<Mint[]> {
     return this.mintService.getAllMints();
+  }
+
+  async getAllTrustedMints(): Promise<Mint[]> {
+    return this.mintService.getAllTrustedMints();
+  }
+
+  async trustMint(mintUrl: string): Promise<void> {
+    return this.mintService.trustMint(mintUrl);
+  }
+
+  async untrustMint(mintUrl: string): Promise<void> {
+    return this.mintService.untrustMint(mintUrl);
   }
 }

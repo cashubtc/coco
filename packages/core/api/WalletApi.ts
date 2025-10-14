@@ -47,9 +47,9 @@ export class WalletApi {
 
     const { mint, proofs } = decoded;
 
-    const known = await this.mintService.isKnownMint(mint);
-    if (!known) {
-      throw new UnknownMintError(`Mint ${mint} is not known`);
+    const trusted = await this.mintService.isTrustedMint(mint);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mint} is not trusted`);
     }
 
     if (!Array.isArray(proofs) || proofs.length === 0) {
