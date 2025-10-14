@@ -8,12 +8,12 @@ export class SqliteMintRepository implements MintRepository {
     this.db = db;
   }
 
-  async isKnownMint(mintUrl: string): Promise<boolean> {
-    const row = await this.db.get<{ x: number }>(
-      'SELECT 1 AS x FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
+  async isTrustedMint(mintUrl: string): Promise<boolean> {
+    const row = await this.db.get<{ trusted: number }>(
+      'SELECT trusted FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
       [mintUrl],
     );
-    return !!row;
+    return row?.trusted === 1;
   }
 
   async getMintByUrl(mintUrl: string): Promise<Mint> {
@@ -21,10 +21,11 @@ export class SqliteMintRepository implements MintRepository {
       mintUrl: string;
       name: string;
       mintInfo: string;
+      trusted: number;
       createdAt: number;
       updatedAt: number;
     }>(
-      'SELECT mintUrl, name, mintInfo, createdAt, updatedAt FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
+      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE mintUrl = ? LIMIT 1',
       [mintUrl],
     );
     if (!row) {
@@ -34,6 +35,7 @@ export class SqliteMintRepository implements MintRepository {
       mintUrl: row.mintUrl,
       name: row.name,
       mintInfo: JSON.parse(row.mintInfo),
+      trusted: row.trusted === 1,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } satisfies Mint;
@@ -44,15 +46,41 @@ export class SqliteMintRepository implements MintRepository {
       mintUrl: string;
       name: string;
       mintInfo: string;
+      trusted: number;
       createdAt: number;
       updatedAt: number;
-    }>('SELECT mintUrl, name, mintInfo, createdAt, updatedAt FROM coco_cashu_mints');
+    }>('SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints');
     return rows.map(
       (r) =>
         ({
           mintUrl: r.mintUrl,
           name: r.name,
           mintInfo: JSON.parse(r.mintInfo),
+          trusted: r.trusted === 1,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        } satisfies Mint),
+    );
+  }
+
+  async getAllTrustedMints(): Promise<Mint[]> {
+    const rows = await this.db.all<{
+      mintUrl: string;
+      name: string;
+      mintInfo: string;
+      trusted: number;
+      createdAt: number;
+      updatedAt: number;
+    }>(
+      'SELECT mintUrl, name, mintInfo, trusted, createdAt, updatedAt FROM coco_cashu_mints WHERE trusted = 1',
+    );
+    return rows.map(
+      (r) =>
+        ({
+          mintUrl: r.mintUrl,
+          name: r.name,
+          mintInfo: JSON.parse(r.mintInfo),
+          trusted: r.trusted === 1,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         } satisfies Mint),
@@ -61,19 +89,54 @@ export class SqliteMintRepository implements MintRepository {
 
   async addNewMint(mint: Mint): Promise<void> {
     await this.db.run(
-      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl) DO UPDATE SET
          name=excluded.name,
          mintInfo=excluded.mintInfo,
+         trusted=excluded.trusted,
          createdAt=excluded.createdAt,
          updatedAt=excluded.updatedAt`,
-      [mint.mintUrl, mint.name, JSON.stringify(mint.mintInfo), mint.createdAt, mint.updatedAt],
+      [
+        mint.mintUrl,
+        mint.name,
+        JSON.stringify(mint.mintInfo),
+        mint.trusted ? 1 : 0,
+        mint.createdAt,
+        mint.updatedAt,
+      ],
+    );
+  }
+
+  async addOrUpdateMint(mint: Mint): Promise<void> {
+    await this.db.run(
+      `INSERT INTO coco_cashu_mints (mintUrl, name, mintInfo, trusted, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mintUrl) DO UPDATE SET
+         name=excluded.name,
+         mintInfo=excluded.mintInfo,
+         trusted=excluded.trusted,
+         updatedAt=excluded.updatedAt`,
+      [
+        mint.mintUrl,
+        mint.name,
+        JSON.stringify(mint.mintInfo),
+        mint.trusted ? 1 : 0,
+        mint.createdAt,
+        mint.updatedAt,
+      ],
     );
   }
 
   async updateMint(mint: Mint): Promise<void> {
     await this.addNewMint(mint);
+  }
+
+  async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {
+    await this.db.run('UPDATE coco_cashu_mints SET trusted = ? WHERE mintUrl = ?', [
+      trusted ? 1 : 0,
+      mintUrl,
+    ]);
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
