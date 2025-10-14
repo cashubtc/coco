@@ -33,10 +33,18 @@ export class MintService {
   /**
    * Add a new mint by URL, running a single update cycle to fetch info & keysets.
    * If the mint already exists, it ensures it is updated.
-   * New mints are added as untrusted by default.
+   * New mints are added as untrusted by default unless explicitly specified.
+   *
+   * @param mintUrl - The URL of the mint to add
+   * @param options - Optional configuration
+   * @param options.trusted - Whether to add the mint as trusted (default: false)
    */
-  async addMintByUrl(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    this.logger?.info('Adding mint by URL', { mintUrl });
+  async addMintByUrl(
+    mintUrl: string,
+    options?: { trusted?: boolean },
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    const trusted = options?.trusted ?? false;
+    this.logger?.info('Adding mint by URL', { mintUrl, trusted });
     const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
     if (exists) return this.ensureUpdatedMint(mintUrl);
 
@@ -45,14 +53,14 @@ export class MintService {
       mintUrl,
       name: mintUrl,
       mintInfo: {} as MintInfo,
-      trusted: false,
+      trusted,
       createdAt: now,
       updatedAt: 0,
     };
     // Do not persist before successful sync; updateMint will persist on success
     const added = await this.updateMint(newMint);
     await this.eventBus?.emit('mint:added', added);
-    this.logger?.info('Mint added', { mintUrl });
+    this.logger?.info('Mint added', { mintUrl, trusted });
     return added;
   }
 

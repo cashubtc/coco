@@ -5,11 +5,14 @@ import type { MintInfo } from '@core/types';
 export class MintApi {
   constructor(private readonly mintService: MintService) {}
 
-  async addMint(mintUrl: string): Promise<{
+  async addMint(
+    mintUrl: string,
+    options?: { trusted?: boolean },
+  ): Promise<{
     mint: Mint;
     keysets: Keyset[];
   }> {
-    return this.mintService.addMintByUrl(mintUrl);
+    return this.mintService.addMintByUrl(mintUrl, options);
   }
 
   async getMintInfo(mintUrl: string): Promise<MintInfo> {

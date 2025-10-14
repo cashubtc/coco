@@ -68,6 +68,21 @@ describe('MintService', () => {
       expect(result.keysets.length).toBeGreaterThan(0);
     });
 
+    it('should add new mints as untrusted when explicitly specified', async () => {
+      const result = await service.addMintByUrl(testMintUrl, { trusted: false });
+
+      expect(result.mint.trusted).toBe(false);
+      expect(result.mint.mintUrl).toBe(testMintUrl);
+    });
+
+    it('should add new mints as trusted when option is set', async () => {
+      const result = await service.addMintByUrl(testMintUrl, { trusted: true });
+
+      expect(result.mint.trusted).toBe(true);
+      expect(result.mint.mintUrl).toBe(testMintUrl);
+      expect(result.keysets.length).toBeGreaterThan(0);
+    });
+
     it('should check if mint is trusted', async () => {
       await service.addMintByUrl(testMintUrl);
 
