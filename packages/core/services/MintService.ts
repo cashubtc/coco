@@ -46,7 +46,15 @@ export class MintService {
     const trusted = options?.trusted ?? false;
     this.logger?.info('Adding mint by URL', { mintUrl, trusted });
     const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
-    if (exists) return this.ensureUpdatedMint(mintUrl);
+
+    if (exists) {
+      // If trusted option was explicitly provided and differs from current state, update it
+      if (options?.trusted !== undefined && exists.trusted !== options.trusted) {
+        await this.mintRepo.setMintTrusted(mintUrl, options.trusted);
+        this.logger?.info('Updated mint trust status', { mintUrl, trusted: options.trusted });
+      }
+      return this.ensureUpdatedMint(mintUrl);
+    }
 
     const now = Math.floor(Date.now() / 1000);
     const newMint: Mint = {

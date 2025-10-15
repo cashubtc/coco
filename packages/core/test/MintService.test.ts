@@ -343,6 +343,42 @@ describe('MintService', () => {
       expect(result.keysets.length).toBeGreaterThan(0);
       expect(result.keysets[0]?.id).toBe('keyset-1');
     });
+
+    it('should update trust status when re-adding with trusted=true', async () => {
+      // Add as untrusted
+      await service.addMintByUrl(testMintUrl, { trusted: false });
+      let isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(false);
+
+      // Re-add with trusted=true
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+      isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(true);
+    });
+
+    it('should update trust status when re-adding with trusted=false', async () => {
+      // Add as trusted
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+      let isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(true);
+
+      // Re-add with trusted=false
+      await service.addMintByUrl(testMintUrl, { trusted: false });
+      isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(false);
+    });
+
+    it('should not change trust status when re-adding without options', async () => {
+      // Add as trusted
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+      let isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(true);
+
+      // Re-add without options
+      await service.addMintByUrl(testMintUrl);
+      isTrusted = await service.isTrustedMint(testMintUrl);
+      expect(isTrusted).toBe(true); // Should remain trusted
+    });
   });
 
   describe('error handling', () => {
