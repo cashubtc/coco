@@ -29,9 +29,14 @@ async function seedGetter(): Uint8Array {
 
 const coco = await initializeCoco({ seedGetter });
 
+// Before receiving tokens, you need to add and trust the mint
+await coco.mint.addMint('https://mint.url', { trusted: true });
+
 // Coco will now use the seed to derive deterministic secrets when required.
 await coco.wallet.receive('cashuB...');
 ```
+
+> **Note:** Wallet operations like receiving tokens require the mint to be explicitly trusted. See [Adding a Mint](./adding-mints.md) for more details.
 
 ## Setting up persistence
 
@@ -45,6 +50,9 @@ const repo = new IndexedDbRepositories({ name: 'coco' });
 const coco = await initializeCoco({
   repo,
 });
+
+// Add and trust a mint before performing wallet operations
+await coco.mint.addMint('https://mint.url', { trusted: true });
 
 // Whenever coco now saves data it will use the provided database
 await coco.wallet.receive('cashuB...');
