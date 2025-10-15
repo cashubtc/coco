@@ -33,47 +33,83 @@ export class MintService {
   /**
    * Add a new mint by URL, running a single update cycle to fetch info & keysets.
    * If the mint already exists, it ensures it is updated.
+   * New mints are added as untrusted by default unless explicitly specified.
+   *
+   * @param mintUrl - The URL of the mint to add
+   * @param options - Optional configuration
+   * @param options.trusted - Whether to add the mint as trusted (default: false)
    */
-  async addMintByUrl(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    this.logger?.info('Adding mint by URL', { mintUrl });
-    const exists = await this.mintRepo.isKnownMint(mintUrl);
-    if (exists) return this.ensureUpdatedMint(mintUrl);
+  async addMintByUrl(
+    mintUrl: string,
+    options?: { trusted?: boolean },
+  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    const trusted = options?.trusted ?? false;
+    this.logger?.info('Adding mint by URL', { mintUrl, trusted });
+    const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+
+    if (exists) {
+      // If trusted option was explicitly provided and differs from current state, update it
+      if (options?.trusted !== undefined && exists.trusted !== options.trusted) {
+        await this.mintRepo.setMintTrusted(mintUrl, options.trusted);
+        this.logger?.info('Updated mint trust status', { mintUrl, trusted: options.trusted });
+      }
+      return this.ensureUpdatedMint(mintUrl);
+    }
 
     const now = Math.floor(Date.now() / 1000);
     const newMint: Mint = {
       mintUrl,
       name: mintUrl,
       mintInfo: {} as MintInfo,
+      trusted,
       createdAt: now,
       updatedAt: 0,
     };
     // Do not persist before successful sync; updateMint will persist on success
     const added = await this.updateMint(newMint);
     await this.eventBus?.emit('mint:added', added);
-    this.logger?.info('Mint added', { mintUrl });
+    this.logger?.info('Mint added', { mintUrl, trusted });
     return added;
   }
 
   async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
-    if (!isKnownMint) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not known`);
+    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    if (!mint) {
+      // Mint doesn't exist, create it as untrusted
+      const now = Math.floor(Date.now() / 1000);
+      const newMint: Mint = {
+        mintUrl,
+        name: mintUrl,
+        mintInfo: {} as MintInfo,
+        trusted: false,
+        createdAt: now,
+        updatedAt: 0,
+      };
+      return this.updateMint(newMint);
     }
-    const mint = await this.mintRepo.getMintByUrl(mintUrl);
     return this.updateMint(mint);
   }
 
-  async isKnownMint(mintUrl: string): Promise<boolean> {
-    return await this.mintRepo.isKnownMint(mintUrl);
+  async isTrustedMint(mintUrl: string): Promise<boolean> {
+    return await this.mintRepo.isTrustedMint(mintUrl);
   }
 
   async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    const isKnownMint = await this.mintRepo.isKnownMint(mintUrl);
-    if (!isKnownMint) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not known`);
+    let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+
+    if (!mint) {
+      // Mint doesn't exist, create it as untrusted
+      const now = Math.floor(Date.now() / 1000);
+      mint = {
+        mintUrl,
+        name: mintUrl,
+        mintInfo: {} as MintInfo,
+        trusted: false,
+        createdAt: now,
+        updatedAt: 0,
+      };
     }
 
-    const mint = await this.mintRepo.getMintByUrl(mintUrl);
     const now = Math.floor(Date.now() / 1000);
     if (mint.updatedAt < now - MINT_REFRESH_TTL_S) {
       this.logger?.debug('Refreshing stale mint', { mintUrl });
@@ -87,8 +123,8 @@ export class MintService {
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
-    const isKnown = await this.mintRepo.isKnownMint(mintUrl);
-    if (!isKnown) return;
+    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    if (!mint) return;
 
     const keysets = await this.keysetRepo.getKeysetsByMintUrl(mintUrl);
     await Promise.all(keysets.map((ks) => this.keysetRepo.deleteKeyset(mintUrl, ks.id)));
@@ -103,6 +139,23 @@ export class MintService {
   async getAllMints(): Promise<Mint[]> {
     const mints = await this.mintRepo.getAllMints();
     return mints;
+  }
+
+  async getAllTrustedMints(): Promise<Mint[]> {
+    const mints = await this.mintRepo.getAllTrustedMints();
+    return mints;
+  }
+
+  async trustMint(mintUrl: string): Promise<void> {
+    this.logger?.info('Trusting mint', { mintUrl });
+    await this.mintRepo.setMintTrusted(mintUrl, true);
+    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+  }
+
+  async untrustMint(mintUrl: string): Promise<void> {
+    this.logger?.info('Untrusting mint', { mintUrl });
+    await this.mintRepo.setMintTrusted(mintUrl, false);
+    await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
   private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {
@@ -162,7 +215,7 @@ export class MintService {
     // Persist mint updates only after successful fetch and keyset sync
     mint.mintInfo = mintInfo;
     mint.updatedAt = Math.floor(Date.now() / 1000);
-    await this.mintRepo.updateMint(mint);
+    await this.mintRepo.addOrUpdateMint(mint);
 
     const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
     this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });

@@ -118,6 +118,12 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE type = 'melt' AND quoteId IS NOT NULL;
     `,
   },
+  {
+    id: '004_mint_trusted_field',
+    sql: `
+      ALTER TABLE coco_cashu_mints ADD COLUMN trusted INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
 ];
 
 export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {

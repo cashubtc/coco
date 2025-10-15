@@ -47,9 +47,9 @@ export class WalletApi {
 
     const { mint, proofs } = decoded;
 
-    const known = await this.mintService.isKnownMint(mint);
-    if (!known) {
-      throw new UnknownMintError(`Mint ${mint} is not known`);
+    const trusted = await this.mintService.isTrustedMint(mint);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mint} is not trusted`);
     }
 
     if (!Array.isArray(proofs) || proofs.length === 0) {
@@ -139,7 +139,7 @@ export class WalletApi {
 
   async restore(mintUrl: string) {
     this.logger?.info('Starting restore', { mintUrl });
-    const mint = await this.mintService.addMintByUrl(mintUrl);
+    const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for restore', {
       mintUrl,
       keysetCount: mint.keysets.length,

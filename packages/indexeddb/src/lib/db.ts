@@ -20,6 +20,7 @@ export interface MintRow {
   mintUrl: string;
   name: string;
   mintInfo: string; // JSON string
+  trusted?: boolean;
   createdAt: number;
   updatedAt: number;
 }
