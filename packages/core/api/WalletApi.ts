@@ -139,7 +139,7 @@ export class WalletApi {
 
   async restore(mintUrl: string) {
     this.logger?.info('Starting restore', { mintUrl });
-    const mint = await this.mintService.addMintByUrl(mintUrl);
+    const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for restore', {
       mintUrl,
       keysetCount: mint.keysets.length,
