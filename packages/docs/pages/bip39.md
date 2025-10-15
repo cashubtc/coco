@@ -27,4 +27,7 @@ Once instantiated you can use the deterministic secret restore `Manager.wallet.r
 ```ts
 await coco.wallet.restore('https://mint.url');
 // After this the balance for this mint will be restored.
+// Note: Restore will automatically cache the mint info if not already present
 ```
+
+> **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMintByUrl` as described in [Adding a Mint](./adding-mints.md)

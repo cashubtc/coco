@@ -2,7 +2,13 @@
 
 The process of swapping sats for Cashu token is called "minting". To mint with Coco you need to create a mint quote, specifying a `mintUrl` and an `amount` in Sats.
 
+Before minting, ensure the mint is added and trusted (see [Adding a Mint](./adding-mints.md)):
+
 ```ts
+// Add and trust the mint first
+await coco.mint.addMint('https://minturl.com', { trusted: true });
+
+// Create a mint quote
 const mintQuote = await coco.quotes.createMintQuote('https://minturl.com', 21);
 ```
 
