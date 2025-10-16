@@ -30,4 +30,4 @@ await coco.wallet.restore('https://mint.url');
 // Note: Restore will automatically cache the mint info if not already present
 ```
 
-> **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMintByUrl` as described in [Adding a Mint](./adding-mints.md)
+> **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMintByUrl` as described in [Adding a Mint](../starting/adding-mints.md)
