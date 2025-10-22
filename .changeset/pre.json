@@ -1,0 +1,15 @@
+{
+  "mode": "pre",
+  "tag": "rc",
+  "initialVersions": {
+    "coco-cashu-core": "1.0.0-rc.11",
+    "demo-web": "0.0.0",
+    "coco-cashu-expo-sqlite": "1.0.0-rc.11",
+    "coco-cashu-indexeddb": "1.0.0-rc.11",
+    "coco-cashu-react": "1.1.0",
+    "coco-cashu-sqlite3": "1.0.0-rc.11"
+  },
+  "changesets": [
+    "sad-seas-begin"
+  ]
+}
