@@ -10,6 +10,7 @@
     "coco-cashu-sqlite3": "1.0.0-rc.11"
   },
   "changesets": [
-    "sad-seas-begin"
+    "sad-seas-begin",
+    "thin-bats-end"
   ]
 }
