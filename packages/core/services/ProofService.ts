@@ -52,14 +52,12 @@ export class ProofService {
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
     if (amount.keep > 0) {
-      console.log('amount.keep', amount.keep);
       data.keep = OutputData.createDeterministicData(
         amount.keep,
         seed,
         currentCounter.counter,
         keys,
       );
-      console.log('keep', data.keep);
       if (data.keep.length > 0) {
         await this.counterService.incrementCounter(mintUrl, keys.id, data.keep.length);
       }

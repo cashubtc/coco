@@ -9,6 +9,9 @@ interface CachedWallet {
   lastCheck: number;
 }
 
+//TODO: Allow dynamic units at some point
+const DEFAULT_UNIT = 'sat';
+
 export class WalletService {
   private walletCache: Map<string, CachedWallet> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000;
@@ -100,7 +103,8 @@ export class WalletService {
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
     const validKeysets = keysets.filter(
-      (keyset) => keyset.keypairs && Object.keys(keyset.keypairs).length > 0,
+      (keyset) =>
+        keyset.keypairs && Object.keys(keyset.keypairs).length > 0 && keyset.unit === DEFAULT_UNIT,
     );
 
     if (validKeysets.length === 0) {
@@ -109,7 +113,7 @@ export class WalletService {
 
     const keys = validKeysets.map((keyset) => ({
       id: keyset.id,
-      unit: 'sat' as const,
+      unit: keyset.unit,
       keys: keyset.keypairs,
     }));
 
@@ -122,11 +126,10 @@ export class WalletService {
 
     const seed = await this.seedService.getSeed();
 
-    console.log('seed', seed);
-
     const requestLimiter = this.getOrCreateRequestLimiter(mintUrl);
     const wallet = new CashuWallet(new CashuMint(mintUrl, requestLimiter.request), {
       mintInfo: mint.mintInfo,
+      unit: DEFAULT_UNIT,
       keys,
       keysets: compatibleKeysets,
       // @ts-ignore
