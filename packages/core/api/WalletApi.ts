@@ -96,11 +96,13 @@ export class WalletApi {
   async send(mintUrl: string, amount: number): Promise<Token> {
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
+    const fees = wallet.getFeesForProofs(selectedProofs);
     const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
     const outputData = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-      keep: selectedAmount - amount,
+      keep: selectedAmount - amount - fees,
       send: amount,
     });
+    this.logger?.info('Sending...', { mintUrl, amountToSend: amount, fees, selectedAmount });
     const { send, keep } = await wallet.send(amount, selectedProofs, { outputData });
     await this.proofService.saveProofs(
       mintUrl,

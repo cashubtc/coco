@@ -187,7 +187,7 @@ export class ProofService {
       throw new ProofValidationError('Not enough proofs to send');
     }
     const cashuWallet = await this.walletService.getWallet(mintUrl);
-    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount);
+    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount, true);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
       amount,
