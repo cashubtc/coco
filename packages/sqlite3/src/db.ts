@@ -19,6 +19,7 @@ export interface SqliteDbOptions {
 
 export class SqliteDb {
   private readonly db: DatabaseLike;
+  private transactionQueue: Promise<unknown> = Promise.resolve();
 
   constructor(options: SqliteDbOptions) {
     this.db = options.database;
@@ -72,18 +73,36 @@ export class SqliteDb {
   }
 
   async transaction<T>(fn: (tx: SqliteDb) => Promise<T>): Promise<T> {
-    await this.exec('BEGIN');
+    // Queue transactions to prevent concurrent/nested transaction attempts
+    const previousTransaction = this.transactionQueue;
+    let resolver: () => void;
+
+    // Create a new promise that will be resolved when this transaction completes
+    this.transactionQueue = new Promise<void>((resolve) => {
+      resolver = resolve;
+    });
+
     try {
-      const result = await fn(this);
-      await this.exec('COMMIT');
-      return result;
-    } catch (error) {
+      // Wait for the previous transaction to complete
+      await previousTransaction;
+
+      // Now execute our transaction
+      await this.exec('BEGIN');
       try {
-        await this.exec('ROLLBACK');
-      } catch {
-        // ignore rollback errors
+        const result = await fn(this);
+        await this.exec('COMMIT');
+        return result;
+      } catch (error) {
+        try {
+          await this.exec('ROLLBACK');
+        } catch {
+          // ignore rollback errors
+        }
+        throw error;
       }
-      throw error;
+    } finally {
+      // Signal that this transaction is done
+      resolver!();
     }
   }
 
