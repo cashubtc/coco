@@ -10,6 +10,7 @@ export interface ExpoSqliteDbOptions {
 
 export class ExpoSqliteDb {
   private readonly db: ExpoSqliteDatabaseLike;
+  private transactionQueue: Promise<unknown> = Promise.resolve();
 
   constructor(options: ExpoSqliteDbOptions) {
     this.db = options.database;
@@ -40,26 +41,46 @@ export class ExpoSqliteDb {
   }
 
   async transaction<T>(fn: (tx: ExpoSqliteDb) => Promise<T>): Promise<T> {
-    const dbAny = this.db as any;
-    if (typeof dbAny.withTransactionAsync === 'function') {
-      let result!: T;
-      await dbAny.withTransactionAsync(async () => {
-        result = await fn(this);
-      });
-      return result;
-    }
-    await (this.db as any).execAsync('BEGIN');
+    // Queue transactions to prevent concurrent/nested transaction attempts
+    const previousTransaction = this.transactionQueue;
+    let resolver: () => void;
+
+    // Create a new promise that will be resolved when this transaction completes
+    this.transactionQueue = new Promise<void>((resolve) => {
+      resolver = resolve;
+    });
+
     try {
-      const res = await fn(this);
-      await (this.db as any).execAsync('COMMIT');
-      return res;
-    } catch (error) {
-      try {
-        await (this.db as any).execAsync('ROLLBACK');
-      } catch {
-        // ignore rollback errors
+      // Wait for the previous transaction to complete
+      await previousTransaction;
+
+      // Now execute our transaction
+      const dbAny = this.db as any;
+
+      if (typeof dbAny.withTransactionAsync === 'function') {
+        let result!: T;
+        await dbAny.withTransactionAsync(async () => {
+          result = await fn(this);
+        });
+        return result;
       }
-      throw error;
+
+      await dbAny.execAsync('BEGIN');
+      try {
+        const res = await fn(this);
+        await dbAny.execAsync('COMMIT');
+        return res;
+      } catch (error) {
+        try {
+          await dbAny.execAsync('ROLLBACK');
+        } catch {
+          // ignore rollback errors
+        }
+        throw error;
+      }
+    } finally {
+      // Signal that this transaction is done
+      resolver!();
     }
   }
 }
