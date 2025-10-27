@@ -28,6 +28,7 @@ export interface MintRow {
 export interface KeysetRow {
   mintUrl: string;
   id: string;
+  unit?: string;
   keypairs: string; // JSON string
   active: number; // 0/1
   feePpk: number;
