@@ -124,6 +124,12 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_mints ADD COLUMN trusted INTEGER NOT NULL DEFAULT 1;
     `,
   },
+  {
+    id: '005_keyset_unit_field',
+    sql: `
+      ALTER TABLE coco_cashu_keysets ADD COLUMN unit TEXT;
+    `,
+  },
 ];
 
 export async function ensureSchema(db: SqliteDb): Promise<void> {

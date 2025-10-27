@@ -12,12 +12,13 @@ export class SqliteKeysetRepository implements KeysetRepository {
     const rows = await this.db.all<{
       mintUrl: string;
       id: string;
+      unit: string | null;
       keypairs: string;
       active: number;
       feePpk: number;
       updatedAt: number;
     }>(
-      'SELECT mintUrl, id, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ?',
+      'SELECT mintUrl, id, unit, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ?',
       [mintUrl],
     );
     return rows.map(
@@ -25,11 +26,12 @@ export class SqliteKeysetRepository implements KeysetRepository {
         ({
           mintUrl: r.mintUrl,
           id: r.id,
+          unit: r.unit ?? '',
           keypairs: JSON.parse(r.keypairs),
           active: !!r.active,
           feePpk: r.feePpk,
           updatedAt: r.updatedAt,
-        }) satisfies Keyset,
+        } satisfies Keyset),
     );
   }
 
@@ -37,18 +39,20 @@ export class SqliteKeysetRepository implements KeysetRepository {
     const row = await this.db.get<{
       mintUrl: string;
       id: string;
+      unit: string | null;
       keypairs: string;
       active: number;
       feePpk: number;
       updatedAt: number;
     }>(
-      'SELECT mintUrl, id, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
+      'SELECT mintUrl, id, unit, keypairs, active, feePpk, updatedAt FROM coco_cashu_keysets WHERE mintUrl = ? AND id = ? LIMIT 1',
       [mintUrl, id],
     );
     if (!row) return null;
     return {
       mintUrl: row.mintUrl,
       id: row.id,
+      unit: row.unit ?? '',
       keypairs: JSON.parse(row.keypairs),
       active: !!row.active,
       feePpk: row.feePpk,
@@ -64,23 +68,32 @@ export class SqliteKeysetRepository implements KeysetRepository {
     );
     if (!existing) {
       await this.db.run(
-        'INSERT INTO coco_cashu_keysets (mintUrl, id, keypairs, active, feePpk, updatedAt) VALUES (?, ?, ?, ?, ?, ?)',
-        [keyset.mintUrl, keyset.id, JSON.stringify({}), keyset.active ? 1 : 0, keyset.feePpk, now],
+        'INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          keyset.mintUrl,
+          keyset.id,
+          keyset.unit,
+          JSON.stringify({}),
+          keyset.active ? 1 : 0,
+          keyset.feePpk,
+          now,
+        ],
       );
       return;
     }
     await this.db.run(
-      'UPDATE coco_cashu_keysets SET active = ?, feePpk = ?, updatedAt = ? WHERE mintUrl = ? AND id = ?',
-      [keyset.active ? 1 : 0, keyset.feePpk, now, keyset.mintUrl, keyset.id],
+      'UPDATE coco_cashu_keysets SET unit = ?, active = ?, feePpk = ?, updatedAt = ? WHERE mintUrl = ? AND id = ?',
+      [keyset.unit, keyset.active ? 1 : 0, keyset.feePpk, now, keyset.mintUrl, keyset.id],
     );
   }
 
   async addKeyset(keyset: Omit<Keyset, 'updatedAt'>): Promise<void> {
     const now = getUnixTimeSeconds();
     await this.db.run(
-      `INSERT INTO coco_cashu_keysets (mintUrl, id, keypairs, active, feePpk, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO coco_cashu_keysets (mintUrl, id, unit, keypairs, active, feePpk, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl, id) DO UPDATE SET
+         unit=excluded.unit,
          keypairs=excluded.keypairs,
          active=excluded.active,
          feePpk=excluded.feePpk,
@@ -88,6 +101,7 @@ export class SqliteKeysetRepository implements KeysetRepository {
       [
         keyset.mintUrl,
         keyset.id,
+        keyset.unit,
         JSON.stringify(keyset.keypairs ?? {}),
         keyset.active ? 1 : 0,
         keyset.feePpk,
