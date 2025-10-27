@@ -67,8 +67,9 @@ export class WalletApi {
 
     try {
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+      const fees = wallet.getFeesForProofs(proofs);
       const { keep: outputData } = await this.proofService.createOutputsAndIncrementCounters(mint, {
-        keep: receiveAmount,
+        keep: receiveAmount - fees,
         send: 0,
       });
 
