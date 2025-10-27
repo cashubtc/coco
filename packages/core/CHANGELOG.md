@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.16
+
+### Patch Changes
+
+- Made sure proof pre-selection takes fees into account
+
 ## 1.0.0-rc.15
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # coco-cashu-sqlite3
 
+## 1.0.0-rc.16
+
+### Patch Changes
+
+- Made sure proof pre-selection takes fees into account
+- Updated dependencies
+  - coco-cashu-core@1.0.0-rc.16
+
 ## 1.0.0-rc.15
 
 ### Patch Changes
