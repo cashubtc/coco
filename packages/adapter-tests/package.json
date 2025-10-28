@@ -1,9 +1,25 @@
 {
   "name": "coco-cashu-adapter-tests",
-  "module": "src/index.ts",
+  "module": "index.ts",
+  "version": "1.0.0-rc.16",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "tsdown": "^0.14.1"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown"
   },
   "peerDependencies": {
     "typescript": "^5"
