@@ -38,4 +38,8 @@ export class MemoryRepositories implements Repositories {
   async init(): Promise<void> {
     // No-op: Memory repositories don't require initialization
   }
+
+  async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    return fn(this);
+  }
 }

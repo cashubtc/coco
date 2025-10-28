@@ -65,8 +65,7 @@ export interface HistoryRepository {
   deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void>;
 }
 
-export interface Repositories {
-  init(): Promise<void>;
+interface RepositoriesBase {
   mintRepository: MintRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
@@ -75,5 +74,12 @@ export interface Repositories {
   meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryRepository;
 }
+
+export interface Repositories extends RepositoriesBase {
+  init(): Promise<void>;
+  withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
+}
+
+export type RepositoryTransactionScope = RepositoriesBase;
 
 export * from './memory';
