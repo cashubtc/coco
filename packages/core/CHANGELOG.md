@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.17
+
+### Patch Changes
+
+- make sure to respect fees on receive
+
 ## 1.0.0-rc.16
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # coco-cashu-indexeddb
 
+## 1.0.0-rc.17
+
+### Patch Changes
+
+- make sure to respect fees on receive
+- Updated dependencies
+  - coco-cashu-core@1.0.0-rc.17
+
 ## 1.0.0-rc.16
 
 ### Patch Changes
