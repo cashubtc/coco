@@ -14,9 +14,10 @@ export class IdbProofRepository implements ProofRepository {
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!proofs || proofs.length === 0) return;
     const now = Math.floor(Date.now() / 1000);
-    await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
       for (const p of proofs) {
-        const existing = await (this.db as any).table('coco_cashu_proofs').get([mintUrl, p.secret]);
+        const existing = await table.get([mintUrl, p.secret]);
         if (existing) {
           throw new Error(`Proof with secret already exists: ${p.secret}`);
         }
@@ -33,7 +34,7 @@ export class IdbProofRepository implements ProofRepository {
           state: p.state,
           createdAt: now,
         };
-        await (this.db as any).table('coco_cashu_proofs').put(row);
+        await table.put(row);
       }
     });
   }
@@ -97,13 +98,12 @@ export class IdbProofRepository implements ProofRepository {
 
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
     if (!secrets || secrets.length === 0) return;
-    await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
       for (const s of secrets) {
-        const existing = (await (this.db as any).table('coco_cashu_proofs').get([mintUrl, s])) as
-          | ProofRow
-          | undefined;
+        const existing = (await table.get([mintUrl, s])) as ProofRow | undefined;
         if (existing) {
-          await (this.db as any).table('coco_cashu_proofs').put({ ...existing, state } as ProofRow);
+          await table.put({ ...existing, state } as ProofRow);
         }
       }
     });
@@ -111,22 +111,23 @@ export class IdbProofRepository implements ProofRepository {
 
   async deleteProofs(mintUrl: string, secrets: string[]): Promise<void> {
     if (!secrets || secrets.length === 0) return;
-    await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
       for (const s of secrets) {
-        await (this.db as any).table('coco_cashu_proofs').delete([mintUrl, s]);
+        await table.delete([mintUrl, s]);
       }
     });
   }
 
   async wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void> {
-    await (this.db as any).transaction('rw', ['coco_cashu_proofs'], async (_tx: unknown) => {
-      const rows = (await (this.db as any)
-        .table('coco_cashu_proofs')
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
+      const rows = (await table
         .where('[mintUrl+id]')
         .equals([mintUrl, keysetId])
         .toArray()) as ProofRow[];
       for (const r of rows) {
-        await (this.db as any).table('coco_cashu_proofs').delete([mintUrl, r.secret]);
+        await table.delete([mintUrl, r.secret]);
       }
     });
   }

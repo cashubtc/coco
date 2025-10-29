@@ -1,4 +1,5 @@
 import type { MintQuoteState, MeltQuoteState, Token } from '@cashu/cashu-ts';
+import type { Table } from 'dexie';
 import type {
   HistoryEntry,
   MintHistoryEntry,
@@ -26,9 +27,9 @@ export class IdbHistoryRepository {
   }
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
-    const coll = this.db.table('coco_cashu_history') as Dexie.Table<any, number>;
+    const coll = this.db.table('coco_cashu_history') as Table<any, number>;
     const rows = await coll.orderBy('createdAt').reverse().offset(offset).limit(limit).toArray();
-    return rows.map((r) => this.rowToEntry(r));
+    return rows.map((r: any) => this.rowToEntry(r));
   }
 
   async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
