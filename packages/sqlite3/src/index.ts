@@ -6,6 +6,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
@@ -42,6 +43,22 @@ export class SqliteRepositories implements Repositories {
 
   async init(): Promise<void> {
     await ensureSchema(this.db);
+  }
+
+  async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (txDb) => {
+      const scopedRepositories: RepositoryTransactionScope = {
+        mintRepository: new SqliteMintRepository(txDb),
+        counterRepository: new SqliteCounterRepository(txDb),
+        keysetRepository: new SqliteKeysetRepository(txDb),
+        proofRepository: new SqliteProofRepository(txDb),
+        mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
+        meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
+        historyRepository: new SqliteHistoryRepository(txDb),
+      };
+
+      return fn(scopedRepositories);
+    });
   }
 }
 
