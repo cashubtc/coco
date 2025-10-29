@@ -6,6 +6,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
@@ -42,6 +43,22 @@ export class ExpoSqliteRepositories implements Repositories {
 
   async init(): Promise<void> {
     await ensureSchema(this.db);
+  }
+
+  async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (txDb) => {
+      const scopedRepositories: RepositoryTransactionScope = {
+        mintRepository: new ExpoMintRepository(txDb),
+        counterRepository: new ExpoCounterRepository(txDb),
+        keysetRepository: new ExpoKeysetRepository(txDb),
+        proofRepository: new ExpoProofRepository(txDb),
+        mintQuoteRepository: new ExpoMintQuoteRepository(txDb),
+        meltQuoteRepository: new ExpoMeltQuoteRepository(txDb),
+        historyRepository: new ExpoHistoryRepository(txDb),
+      };
+
+      return fn(scopedRepositories);
+    });
   }
 }
 
