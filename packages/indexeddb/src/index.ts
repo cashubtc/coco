@@ -6,6 +6,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
@@ -42,6 +43,23 @@ export class IndexedDbRepositories implements Repositories {
 
   async init(): Promise<void> {
     await ensureSchema(this.db);
+  }
+
+  async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
+    const stores = this.db.tables.map((t) => t.name);
+    return this.db.runTransaction('rw', stores, async () => {
+      const scopedDb = this.db;
+      const scopedRepositories: RepositoryTransactionScope = {
+        mintRepository: new IdbMintRepository(scopedDb),
+        counterRepository: new IdbCounterRepository(scopedDb),
+        keysetRepository: new IdbKeysetRepository(scopedDb),
+        proofRepository: new IdbProofRepository(scopedDb),
+        mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
+        meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
+        historyRepository: new IdbHistoryRepository(scopedDb),
+      };
+      return fn(scopedRepositories);
+    });
   }
 }
 
