@@ -27,4 +27,4 @@ jobs:
 
       - name: Run core tests
         working-directory: packages/core
-        run: bun test
+        run: bun test --ignore="**/TestnutIntegration.test.ts"

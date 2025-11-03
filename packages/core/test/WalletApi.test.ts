@@ -33,13 +33,14 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockMintService = {
       isTrustedMint: mock(async (mintUrl: string) => false),
-      addMintByUrl: mock(async () => ({ mint: {}, keysets: [] })),
+      addMintByUrl: mock(async () => ({ mint: {}, keysets: [{ id: 'keyset-1' }] })),
     };
 
     mockWalletService = {
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
           receive: mock(async () => []),
+          getFeesForProofs: mock(() => 0),
         },
       })),
     };
@@ -191,6 +192,7 @@ describe('WalletApi - Trust Enforcement', () => {
       mockWalletService.getWalletWithActiveKeysetId.mockImplementation(async () => ({
         wallet: {
           send: mock(async () => ({ send: testProofs, keep: [] })),
+          getFeesForProofs: mock(() => 0),
         },
       }));
 
@@ -206,12 +208,7 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('restore', () => {
-    it('should add mint during restore (creating as untrusted by default)', async () => {
-      mockMintService.addMintByUrl.mockImplementation(async () => ({
-        mint: { mintUrl: testMintUrl, trusted: false },
-        keysets: [{ id: 'keyset-1' }],
-      }));
-
+    it('should add mint during restore (creating as trusted by default)', async () => {
       mockWalletService.getWalletWithActiveKeysetId.mockImplementation(async () => ({
         wallet: {},
       }));
@@ -220,7 +217,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
       await walletApi.restore(testMintUrl);
 
-      expect(mockMintService.addMintByUrl).toHaveBeenCalledWith(testMintUrl);
+      expect(mockMintService.addMintByUrl).toHaveBeenCalledWith(testMintUrl, { trusted: true });
     });
   });
 });
