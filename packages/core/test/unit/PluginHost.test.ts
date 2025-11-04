@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
-import { PluginHost } from '../plugins/PluginHost.ts';
-import type { Plugin } from '../plugins/types.ts';
+import { PluginHost } from '../../plugins/PluginHost.ts';
+import type { Plugin } from '../../plugins/types.ts';
 
 describe('PluginHost', () => {
   let host: PluginHost;

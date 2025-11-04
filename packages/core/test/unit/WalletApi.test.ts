@@ -1,12 +1,12 @@
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
-import { WalletApi } from '../api/WalletApi';
-import { MintService } from '../services/MintService';
-import { WalletService } from '../services/WalletService';
-import { ProofService } from '../services/ProofService';
-import { WalletRestoreService } from '../services/WalletRestoreService';
-import { EventBus } from '../events/EventBus';
-import type { CoreEvents } from '../events/types';
-import { UnknownMintError } from '../models/Error';
+import { WalletApi } from '../../api/WalletApi';
+import { MintService } from '../../services/MintService';
+import { WalletService } from '../../services/WalletService';
+import { ProofService } from '../../services/ProofService';
+import { WalletRestoreService } from '../../services/WalletRestoreService';
+import { EventBus } from '../../events/EventBus';
+import type { CoreEvents } from '../../events/types';
+import { UnknownMintError } from '../../models/Error';
 import { getEncodedToken } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 

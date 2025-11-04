@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
-import { RequestRateLimiter } from '../infra/RequestRateLimiter.ts';
-import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error.ts';
+import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
+import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
 import type { HeadersInit } from 'bun';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));

@@ -1,9 +1,9 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
-import { MintQuoteService } from '../services/MintQuoteService';
-import { EventBus } from '../events/EventBus';
-import type { CoreEvents } from '../events/types';
-import type { MintQuoteRepository } from '../repositories';
-import type { MintQuote } from '../models/MintQuote';
+import { MintQuoteService } from '../../services/MintQuoteService';
+import { EventBus } from '../../events/EventBus';
+import type { CoreEvents } from '../../events/types';
+import type { MintQuoteRepository } from '../../repositories';
+import type { MintQuote } from '../../models/MintQuote';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
 
 describe('MintQuoteService.addExistingMintQuotes', () => {

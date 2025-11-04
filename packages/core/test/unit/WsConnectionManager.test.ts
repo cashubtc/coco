@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
-import { WsConnectionManager, type WebSocketLike } from '../infra/WsConnectionManager';
-import { NullLogger } from '../logging';
+import { WsConnectionManager, type WebSocketLike } from '../../infra/WsConnectionManager';
+import { NullLogger } from '../../logging';
 
 class MockWebSocket implements WebSocketLike {
   private listeners: Map<string, Set<(event: any) => void>> = new Map();

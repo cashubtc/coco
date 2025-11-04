@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsdown",
     "test": "bun test",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
     "prepublishOnly": "bun run build"
   },
   "devDependencies": {

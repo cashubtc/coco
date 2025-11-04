@@ -1,8 +1,8 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
-import { SubscriptionManager } from '../infra/SubscriptionManager';
-import type { RealTimeTransport } from '../infra/RealTimeTransport';
-import type { WsRequest } from '../infra/SubscriptionProtocol';
-import { NullLogger } from '../logging';
+import { SubscriptionManager } from '../../infra/SubscriptionManager';
+import type { RealTimeTransport } from '../../infra/RealTimeTransport';
+import type { WsRequest } from '../../infra/SubscriptionProtocol';
+import { NullLogger } from '../../logging';
 
 class MockTransport implements RealTimeTransport {
   public paused = false;

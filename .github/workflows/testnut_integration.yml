@@ -49,4 +49,4 @@ jobs:
         working-directory: packages/core
         env:
           MINT_URL: http://localhost:3338
-        run: bun test TestnutIntegration.test.ts
+        run: bun run test:integration

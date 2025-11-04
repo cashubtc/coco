@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
-import { CounterService } from '../services/CounterService.ts';
-import { MemoryCounterRepository } from '../repositories/memory/MemoryCounterRepository.ts';
-import { EventBus } from '../events/EventBus.ts';
-import type { CoreEvents } from '../events/types.ts';
+import { CounterService } from '../../services/CounterService.ts';
+import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
+import { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
 
 describe('CounterService', () => {
   const mintUrl = 'https://mint.test';

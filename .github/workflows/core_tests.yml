@@ -3,12 +3,12 @@ name: core-tests
 on:
   push:
     paths:
-      - 'packages/core/**'
-      - '.github/workflows/ci.yml'
+      - "packages/core/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     paths:
-      - 'packages/core/**'
-      - '.github/workflows/ci.yml'
+      - "packages/core/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
   test:
@@ -27,4 +27,4 @@ jobs:
 
       - name: Run core tests
         working-directory: packages/core
-        run: bun test --ignore="**/TestnutIntegration.test.ts"
+        run: bun run test:unit

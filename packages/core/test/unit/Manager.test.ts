@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
-import { initializeCoco, type CocoConfig, Manager } from '../Manager';
-import { MemoryRepositories } from '../repositories/memory';
-import { NullLogger } from '../logging';
+import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
+import { MemoryRepositories } from '../../repositories/memory';
+import { NullLogger } from '../../logging';
 
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;

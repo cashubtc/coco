@@ -1,11 +1,11 @@
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
-import { MintService } from '../services/MintService';
-import { MemoryMintRepository } from '../repositories/memory/MemoryMintRepository';
-import { MemoryKeysetRepository } from '../repositories/memory/MemoryKeysetRepository';
-import { EventBus } from '../events/EventBus';
-import type { CoreEvents } from '../events/types';
-import type { Mint } from '../models/Mint';
-import type { MintInfo } from '../types';
+import { MintService } from '../../services/MintService';
+import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
+import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import { EventBus } from '../../events/EventBus';
+import type { CoreEvents } from '../../events/types';
+import type { Mint } from '../../models/Mint';
+import type { MintInfo } from '../../types';
 
 describe('MintService', () => {
   const testMintUrl = 'https://mint.test';

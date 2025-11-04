@@ -1,9 +1,9 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
-import { HistoryService } from '../services/HistoryService';
-import { EventBus } from '../events/EventBus';
-import type { CoreEvents } from '../events/types';
-import type { HistoryRepository } from '../repositories';
-import type { HistoryEntry, MintHistoryEntry } from '../models/History';
+import { HistoryService } from '../../services/HistoryService';
+import { EventBus } from '../../events/EventBus';
+import type { CoreEvents } from '../../events/types';
+import type { HistoryRepository } from '../../repositories';
+import type { HistoryEntry, MintHistoryEntry } from '../../models/History';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
 
 describe('HistoryService - mint-quote:added', () => {

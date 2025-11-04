@@ -1,13 +1,13 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
-import { EventBus } from '../events/EventBus.ts';
-import type { CoreEvents } from '../events/types.ts';
-import { ProofService } from '../services/ProofService.ts';
-import { MemoryProofRepository } from '../repositories/memory/MemoryProofRepository.ts';
-import { MemoryCounterRepository } from '../repositories/memory/MemoryCounterRepository.ts';
-import { CounterService } from '../services/CounterService.ts';
-import { SeedService } from '../services/SeedService.ts';
-import { ProofOperationError, ProofValidationError } from '../models/Error.ts';
-import type { CoreProof } from '../types.ts';
+import { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
+import { ProofService } from '../../services/ProofService.ts';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
+import { CounterService } from '../../services/CounterService.ts';
+import { SeedService } from '../../services/SeedService.ts';
+import { ProofOperationError, ProofValidationError } from '../../models/Error.ts';
+import type { CoreProof } from '../../types.ts';
 import { OutputData } from '@cashu/cashu-ts';
 
 describe('ProofService', () => {

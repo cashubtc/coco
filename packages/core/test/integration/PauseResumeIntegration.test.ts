@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { initializeCoco, type Manager } from '../Manager';
-import { MemoryRepositories } from '../repositories/memory';
-import { NullLogger } from '../logging';
+import { initializeCoco, type Manager } from '../../Manager';
+import { MemoryRepositories } from '../../repositories/memory';
+import { NullLogger } from '../../logging';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

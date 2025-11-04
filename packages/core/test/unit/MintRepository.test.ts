@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
-import { MemoryMintRepository } from '../repositories/memory/MemoryMintRepository';
-import type { MintRepository } from '../repositories';
-import type { Mint } from '../models/Mint';
+import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
+import type { MintRepository } from '../../repositories';
+import type { Mint } from '../../models/Mint';
 
 /**
  * Shared test suite for MintRepository implementations
