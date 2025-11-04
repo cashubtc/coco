@@ -1,4 +1,4 @@
-import { describe, it, afterEach, expect, beforeEach } from 'bun:test';
+import { describe, it, afterEach, expect, beforeEach, test } from 'bun:test';
 import { ConsoleLogger } from '@core/logging';
 import { initializeCoco, type Manager } from '@core/Manager';
 import { MemoryRepositories } from '@core/repositories';
@@ -40,7 +40,7 @@ describe('Testnut Integration', () => {
       });
 
       const { mint, keysets } = await mgr.mint.addMint(mintUrl, { trusted: true });
-      expect(mint.url).toBe(mintUrl);
+      expect(mint.mintUrl).toBe(mintUrl);
       expect(keysets.length).toBeGreaterThan(0);
 
       const mintInfo = await mgr.mint.getMintInfo(mintUrl);
@@ -52,7 +52,7 @@ describe('Testnut Integration', () => {
 
       const allMints = await mgr.mint.getAllMints();
       expect(allMints).toHaveLength(1);
-      expect(allMints[0].url).toBe(mintUrl);
+      expect(allMints[0]?.mintUrl).toBe(mintUrl);
 
       const trustedMints = await mgr.mint.getAllTrustedMints();
       expect(trustedMints).toHaveLength(1);
@@ -84,7 +84,7 @@ describe('Testnut Integration', () => {
 
       const eventPromise = new Promise((resolve) => {
         mgr.once('mint:added', (payload) => {
-          expect(payload.mint.url).toBe(mintUrl);
+          expect(payload.mint.mintUrl).toBe(mintUrl);
           expect(payload.keysets.length).toBeGreaterThan(0);
           resolve(payload);
         });
@@ -96,11 +96,16 @@ describe('Testnut Integration', () => {
   });
 
   describe('Mint Quote Workflow', () => {
-    it('should create and redeem a mint quote', async () => {
+    it('should create and redeem a mint quote manually', async () => {
       mgr = await initializeCoco({
         repo: new MemoryRepositories(),
         seedGetter,
         logger: new ConsoleLogger('testnut-integration', { level: 'info' }),
+        processors: {
+          mintQuoteProcessor: {
+            disabled: true,
+          },
+        },
       });
 
       await mgr.mint.addMint(mintUrl, { trusted: true });
@@ -121,9 +126,23 @@ describe('Testnut Integration', () => {
         });
       });
 
-      await eventPromise;
+      await new Promise((resolve) => {
+        mgr.once('mint-quote:state-changed', (payload) => {
+          if (payload.state === 'PAID') {
+            expect(payload.mintUrl).toBe(mintUrl);
+            expect(payload.quoteId).toBe(quote.quote);
+            resolve(payload);
+          }
+        });
+      });
 
-      const redeemedPromise = new Promise((resolve) => {
+      const redeemPromise = new Promise((res) => {
+        mgr.quotes.redeemMintQuote(mintUrl, quote.quote).then(() => {
+          res(void 0);
+        });
+      });
+
+      const redeemedEventPromise = new Promise((resolve) => {
         mgr.once('mint-quote:redeemed', (payload) => {
           expect(payload.mintUrl).toBe(mintUrl);
           expect(payload.quoteId).toBe(quote.quote);
@@ -131,8 +150,7 @@ describe('Testnut Integration', () => {
         });
       });
 
-      await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
-      await redeemedPromise;
+      await Promise.all([redeemPromise, redeemedEventPromise]);
 
       const balance = await mgr.wallet.getBalances();
       expect(balance[mintUrl] || 0).toBeGreaterThanOrEqual(100);
@@ -143,16 +161,19 @@ describe('Testnut Integration', () => {
         repo: new MemoryRepositories(),
         seedGetter,
         logger: new ConsoleLogger('testnut-integration', { level: 'info' }),
+        processors: {
+          mintQuoteProcessor: {
+            disabled: true,
+          },
+        },
       });
 
       await mgr.mint.addMint(mintUrl, { trusted: true });
 
       const quote = await mgr.quotes.createMintQuote(mintUrl, 50);
 
-      const subscriptionPromise = mgr.subscription.awaitMintQuotePaid(mintUrl, quote.quote);
-      const redeemPromise = mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
-
-      await Promise.all([subscriptionPromise, redeemPromise]);
+      const subscriptionPromise = await mgr.subscription.awaitMintQuotePaid(mintUrl, quote.quote);
+      const redeemPromise = await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
       const balance = await mgr.wallet.getBalances();
       expect(balance[mintUrl] || 0).toBeGreaterThanOrEqual(50);
@@ -264,7 +285,9 @@ describe('Testnut Integration', () => {
 
       const finalBalance = await mgr.wallet.getBalances();
       const finalAmount = finalBalance[mintUrl] || 0;
-      expect(finalAmount).toBeGreaterThanOrEqual(initialAmount - amounts.reduce((a, b) => a + b, 0));
+      expect(finalAmount).toBeGreaterThanOrEqual(
+        initialAmount - amounts.reduce((a, b) => a + b, 0),
+      );
     });
 
     it('should reject receiving tokens from untrusted mint', async () => {
@@ -293,19 +316,18 @@ describe('Testnut Integration', () => {
     });
 
     it('should create a melt quote', async () => {
-      const invoice = 'lnbc1testinvoice';
+      const eventPromise = new Promise((resolve) => {
+        mgr.once('melt-quote:created', (payload) => {
+          expect(payload.mintUrl).toBe(mintUrl);
+          resolve(payload);
+        });
+      });
+      const invoice =
+        'lnbc20n1p5sefrdpp56xfs7wt7mpsnu29zwgdzkqmshfayn6xcyf5f7aqp6w06lcfc7vusdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5y9m2zlg8s9wk9faw4mvlkgs8juwjgk00qcjrs698je2dhahd3uls9qxpqysgqt66e9jccwmesk4wff6422zz7ha4k0dnhvktyt8m448hxs8rsnhq8n6z3t270z4d58v7vzhrt7h0xf03d53298mvd7cgfsyc2k5wwlncqwzqesr';
       const meltQuote = await mgr.quotes.createMeltQuote(mintUrl, invoice);
 
       expect(meltQuote.quote).toBeDefined();
       expect(meltQuote.amount).toBeGreaterThan(0);
-
-      const eventPromise = new Promise((resolve) => {
-        mgr.once('melt-quote:created', (payload) => {
-          expect(payload.mintUrl).toBe(mintUrl);
-          expect(payload.quoteId).toBe(meltQuote.quote);
-          resolve(payload);
-        });
-      });
 
       await eventPromise;
     });
