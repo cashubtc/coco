@@ -99,6 +99,15 @@ export class SubscriptionManager {
         const data = typeof evt.data === 'string' ? evt.data : evt.data?.toString?.();
         if (!data) return;
         const parsed = JSON.parse(data) as WsNotification<unknown> | WsResponse;
+        this.logger?.debug('Received WS message', {
+          mintUrl,
+          hasMethod: 'method' in parsed,
+          method: 'method' in parsed ? parsed.method : undefined,
+          hasId: 'id' in parsed,
+          id: 'id' in parsed ? parsed.id : undefined,
+          hasResult: 'result' in parsed,
+          hasError: 'error' in parsed,
+        });
         if ('method' in parsed && parsed.method === 'subscribe') {
           const subId = parsed.params?.subId;
           const active = subId ? this.subscriptions.get(subId) : undefined;
@@ -139,11 +148,21 @@ export class SubscriptionManager {
           const respId = Number((resp as any).id);
           const pendingMap = this.pendingSubscribeByMint.get(mintUrl);
           if (Number.isFinite(respId) && pendingMap && pendingMap.has(respId)) {
+            const subId = pendingMap.get(respId);
             pendingMap.delete(respId);
             this.logger?.info('Subscribe request accepted', {
               mintUrl,
               id: resp.id,
-              subId: resp.result?.subId,
+              subId: subId || resp.result?.subId,
+            });
+          } else {
+            // Log unmatched responses for debugging
+            this.logger?.debug('Unmatched subscribe response', {
+              mintUrl,
+              id: resp.id,
+              respId,
+              hasPendingMap: !!pendingMap,
+              pendingMapSize: pendingMap?.size ?? 0,
             });
           }
         }
@@ -185,6 +204,43 @@ export class SubscriptionManager {
       throw new Error('filters must be a non-empty array');
     }
     this.ensureMessageListener(mintUrl);
+
+    // Check if there's already an active subscription with the same filters
+    // If so, reuse it by adding the callback instead of creating a new subscription
+    // Filters are matched by: mintUrl, kind, and sorted filter arrays (order doesn't matter)
+    const filtersKey = JSON.stringify([...filters].sort());
+    for (const [existingSubId, existingSub] of this.subscriptions.entries()) {
+      if (
+        existingSub.mintUrl === mintUrl &&
+        existingSub.kind === kind &&
+        JSON.stringify([...existingSub.filters].sort()) === filtersKey
+      ) {
+        // Found matching subscription - add callback to it
+        if (onNotification) {
+          existingSub.callbacks.add(onNotification as unknown as SubscriptionCallback<unknown>);
+          this.logger?.debug('Reusing existing subscription', {
+            mintUrl,
+            kind,
+            subId: existingSubId,
+            filterCount: filters.length,
+          });
+        }
+        return {
+          subId: existingSubId,
+          unsubscribe: async () => {
+            if (onNotification) {
+              this.removeCallback(existingSubId, onNotification);
+            }
+            // Only unsubscribe if no callbacks remain
+            if (existingSub.callbacks.size === 0) {
+              await this.unsubscribe(mintUrl, existingSubId);
+            }
+          },
+        };
+      }
+    }
+
+    // No existing subscription found - create a new one
     const id = this.getNextId(mintUrl);
     const subId = generateSubId();
 
@@ -255,6 +311,13 @@ export class SubscriptionManager {
         })
         .catch(() => undefined);
     }
+    this.logger?.debug('Sending subscribe request', {
+      mintUrl,
+      kind,
+      subId,
+      id,
+      filterCount: filters.length,
+    });
     t.send(mintUrl, req);
     this.logger?.info('Subscribed to NUT-17', {
       mintUrl,
