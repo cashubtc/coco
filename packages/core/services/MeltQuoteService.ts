@@ -1,4 +1,4 @@
-import type { MeltQuoteResponse } from '@cashu/cashu-ts';
+import type { MeltQuoteResponse, MeltQuoteState } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { ProofService } from './ProofService';
 import type { WalletService } from './WalletService';
@@ -109,10 +109,22 @@ export class MeltQuoteService {
         send.map((proof) => proof.secret),
         'spent',
       );
+      await this.setMeltQuoteState(mintUrl, quoteId, 'PAID');
       await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote });
     } catch (err) {
       this.logger?.error('Failed to pay melt quote', { mintUrl, quoteId, err });
       throw err;
     }
+  }
+
+  private async setMeltQuoteState(
+    mintUrl: string,
+    quoteId: string,
+    state: MeltQuoteState,
+  ): Promise<void> {
+    this.logger?.debug('Setting melt quote state', { mintUrl, quoteId, state });
+    await this.meltQuoteRepo.setMeltQuoteState(mintUrl, quoteId, state);
+    await this.eventBus.emit('melt-quote:state-changed', { mintUrl, quoteId, state });
+    this.logger?.debug('Melt quote state updated', { mintUrl, quoteId, state });
   }
 }
