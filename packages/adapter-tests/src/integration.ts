@@ -246,7 +246,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const quote = await mgr.quotes.createMintQuote(mintUrl, 50);
 
-          const subscriptionPromise = await mgr.subscription.awaitMintQuotePaid(mintUrl, quote.quote);
+          const subscriptionPromise = await mgr.subscription.awaitMintQuotePaid(
+            mintUrl,
+            quote.quote,
+          );
           const redeemPromise = await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
           const balance = await mgr.wallet.getBalances();
@@ -710,4 +713,3 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
   });
 }
-
