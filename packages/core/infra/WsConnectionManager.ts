@@ -61,9 +61,11 @@ export class WsConnectionManager {
       this.reconnectAttemptsByMint.delete(mintUrl);
       const queue = this.sendQueueByMint.get(mintUrl);
       if (queue && queue.length > 0) {
+        this.logger?.debug('Flushing queued messages', { mintUrl, count: queue.length });
         for (const payload of queue) {
           try {
             socket.send(payload);
+            this.logger?.debug('Sent queued message', { mintUrl, payloadLength: payload.length });
           } catch (err) {
             this.logger?.error('WS send error while flushing queue', { mintUrl, err });
           }
@@ -130,9 +132,9 @@ export class WsConnectionManager {
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: any) => void,
   ): void {
-    // Ensure socket first so freshly created sockets do not double-attach
-    // the just-added listener via ensureSocket's re-attachment logic.
-    const socket = this.ensureSocket(mintUrl);
+    // Check if socket already exists - if so, we'll attach directly
+    // If not, we'll add to map first so ensureSocket can attach it
+    const socketExists = this.sockets.has(mintUrl);
 
     // Persist listener so it can be re-attached across reconnects
     let map = this.listenersByMint.get(mintUrl);
@@ -145,8 +147,15 @@ export class WsConnectionManager {
       set = new Set();
       map.set(type, set);
     }
-    if (!set.has(listener)) {
-      set.add(listener);
+    if (set.has(listener)) return;
+    set.add(listener);
+
+    // Ensure socket exists (creates if needed)
+    const socket = this.ensureSocket(mintUrl);
+
+    // Only attach directly if socket already existed
+    // If socket was just created, ensureSocket already attached all listeners from map
+    if (socketExists) {
       socket.addEventListener(type, listener);
     }
   }
@@ -166,9 +175,14 @@ export class WsConnectionManager {
   send(mintUrl: string, message: unknown): void {
     const socket = this.ensureSocket(mintUrl);
     const payload = typeof message === 'string' ? message : JSON.stringify(message);
-    if (this.isOpenByMint.get(mintUrl)) {
+    const isOpen = this.isOpenByMint.get(mintUrl);
+    if (isOpen) {
       try {
         socket.send(payload);
+        this.logger?.debug('Sent message immediately (socket open)', {
+          mintUrl,
+          payloadLength: payload.length,
+        });
       } catch (err) {
         this.logger?.error('WS send error', { mintUrl, err });
       }
@@ -180,6 +194,11 @@ export class WsConnectionManager {
       this.sendQueueByMint.set(mintUrl, queue);
     }
     queue.push(payload);
+    this.logger?.debug('Queued message (socket not open)', {
+      mintUrl,
+      queueLength: queue.length,
+      payloadLength: payload.length,
+    });
   }
 
   closeAll(): void {
