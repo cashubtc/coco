@@ -119,3 +119,6 @@ export function createDummyProof(): CoreProof {
     state: 'ready',
   } satisfies CoreProof;
 }
+
+export { runIntegrationTests } from './integration.ts';
+export type { IntegrationTestRunner, IntegrationTestOptions } from './integration.ts';
