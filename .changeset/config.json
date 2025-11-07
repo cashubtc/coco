@@ -2,15 +2,16 @@
   "$schema": "https://unpkg.com/@changesets/config/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
-  "linked": [
+  "fixed": [
     [
       "coco-cashu-core",
       "coco-cashu-indexeddb",
       "coco-cashu-expo-sqlite",
-      "coco-cashu-sqlite3"
+      "coco-cashu-sqlite3",
+      "coco-cashu-adapter-tests"
     ]
   ],
+  "linked": [],
   "access": "public",
   "baseBranch": "master",
   "updateInternalDependencies": "patch",
