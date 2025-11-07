@@ -9,6 +9,7 @@
   ],
   "devDependencies": {
     "tsdown": "^0.14.1",
+    "@types/sqlite3": "^3.1.8",
     "coco-cashu-adapter-tests": "1.0.0-rc.16"
   },
   "exports": {
@@ -20,7 +21,8 @@
   },
   "dependencies": {},
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "bun test"
   },
   "peerDependencies": {
     "typescript": "^5",
