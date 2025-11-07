@@ -1,0 +1,64 @@
+name: sqlite3-integration-tests
+
+on:
+  pull_request:
+    paths:
+      - "packages/sqlite3/**"
+      - "packages/adapter-tests/**"
+      - "packages/core/**"
+      - ".github/workflows/sqlite3-integration-tests.yml"
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Pull and start mint
+        run: |
+          docker run -d -p 3338:3338 \
+          --name cdk-mint \
+          -e CDK_MINTD_DATABASE=sqlite \
+          -e CDK_MINTD_LN_BACKEND=fakewallet \
+          -e CDK_MINTD_INPUT_FEE_PPK=100 \
+          -e CDK_MINTD_LISTEN_HOST=0.0.0.0 \
+          -e CDK_MINTD_LISTEN_PORT=3338 \
+          -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
+          -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
+          -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
+          cashubtc/mintd:0.13
+
+      - name: Check running containers
+        run: docker ps
+
+      - name: Check container logs
+        run: docker logs cdk-mint
+
+      - name: Sleep 10 seconds and curl on localhost:3338/v1/info
+        run: |
+          sleep 10
+          curl localhost:3338/v1/info
+
+      - name: Check container logs again
+        run: docker logs cdk-mint
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build packages
+        run: |
+          cd packages/adapter-tests && bun run build
+          cd ../core && bun run build
+
+      - name: Run sqlite3 integration tests
+        working-directory: packages/sqlite3
+        env:
+          MINT_URL: http://localhost:3338
+        run: bun test src/test/integration.test.ts
+
