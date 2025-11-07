@@ -2,12 +2,20 @@ import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import sqlite3 from 'sqlite3';
 import { runIntegrationTests } from 'coco-cashu-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
-import { ConsoleLogger } from 'coco-cashu-core';
+import { ConsoleLogger, type Logger, type LogLevel } from 'coco-cashu-core';
 
 const mintUrl = process.env.MINT_URL;
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');
+}
+
+function getTestLogger(): Logger | undefined {
+  const logLevel = process.env.TEST_LOG_LEVEL;
+  if (logLevel && ['error', 'warn', 'info', 'debug'].includes(logLevel)) {
+    return new ConsoleLogger('sqlite3-integration', { level: logLevel as LogLevel });
+  }
+  return undefined;
 }
 
 async function createRepositories() {
@@ -26,7 +34,8 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
-    logger: new ConsoleLogger('sqlite3-integration', { level: 'info' }),
+    logger: getTestLogger(),
+    suiteName: 'SQLite3 Integration Tests',
   },
   { describe, it, beforeEach, afterEach, expect },
 );

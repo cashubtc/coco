@@ -79,10 +79,11 @@
       "name": "coco-cashu-expo-sqlite",
       "version": "1.0.0-rc.17",
       "devDependencies": {
+        "coco-cashu-adapter-tests": "1.0.0-rc.16",
         "tsdown": "^0.14.1",
       },
       "peerDependencies": {
-        "coco-cashu-core": "workspace:^",
+        "coco-cashu-core": "1.0.0-rc.17",
         "expo-sqlite": "*",
         "typescript": "^5",
       },
@@ -129,10 +130,11 @@
       "name": "coco-cashu-sqlite3",
       "version": "1.0.0-rc.17",
       "devDependencies": {
+        "coco-cashu-adapter-tests": "1.0.0-rc.16",
         "tsdown": "^0.14.1",
       },
       "peerDependencies": {
-        "coco-cashu-core": "workspace:^",
+        "coco-cashu-core": "1.0.0-rc.17",
         "sqlite3": "^5",
         "typescript": "^5",
       },

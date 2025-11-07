@@ -33,6 +33,7 @@ export type IntegrationTestOptions<TRepositories extends Repositories = Reposito
   }>;
   mintUrl: string;
   logger?: Logger;
+  suiteName?: string;
 };
 
 export async function runIntegrationTests<TRepositories extends Repositories = Repositories>(
@@ -40,9 +41,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
   runner: IntegrationTestRunner,
 ): Promise<void> {
   const { describe, it, beforeEach, afterEach, expect } = runner;
-  const { createRepositories, mintUrl, logger } = options;
+  const { createRepositories, mintUrl, logger, suiteName = 'Integration Tests' } = options;
 
-  describe('Integration Tests', () => {
+  describe(suiteName, () => {
     let mgr: Manager | undefined;
     let seedGetter: () => Promise<Uint8Array>;
 

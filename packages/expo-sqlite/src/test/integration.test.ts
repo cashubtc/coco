@@ -3,12 +3,20 @@ import { Database } from 'bun:sqlite';
 import { runIntegrationTests } from 'coco-cashu-adapter-tests';
 import { ExpoSqliteRepositories } from '../index.ts';
 import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
-import { ConsoleLogger } from 'coco-cashu-core';
+import { ConsoleLogger, type Logger, type LogLevel } from 'coco-cashu-core';
 
 const mintUrl = process.env.MINT_URL;
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');
+}
+
+function getTestLogger(): Logger | undefined {
+  const logLevel = process.env.TEST_LOG_LEVEL;
+  if (logLevel && ['error', 'warn', 'info', 'debug'].includes(logLevel)) {
+    return new ConsoleLogger('expo-sqlite-integration', { level: logLevel as LogLevel });
+  }
+  return undefined;
 }
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
@@ -78,7 +86,8 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
-    logger: new ConsoleLogger('expo-sqlite-integration', { level: 'info' }),
+    logger: getTestLogger(),
+    suiteName: 'Expo SQLite Integration Tests',
   },
   { describe, it, beforeEach, afterEach, expect },
 );
