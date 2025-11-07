@@ -70,45 +70,102 @@ export class MeltQuoteService {
         this.logger?.warn('Melt quote not found', { mintUrl, quoteId });
         throw new Error('Quote not found');
       }
-      const amountWithFee = quote.amount + quote.fee_reserve;
-      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amountWithFee);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+
+      let targetAmount = quote.amount + quote.fee_reserve;
+      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount);
+      const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
+      targetAmount = targetAmount + selectedInputFee;
       const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
-      if (selectedAmount < amountWithFee) {
+      if (selectedAmount < targetAmount) {
         this.logger?.warn('Insufficient proofs to cover melt amount with fee', {
           mintUrl,
           quoteId,
-          required: amountWithFee,
+          required: targetAmount,
           available: selectedAmount,
         });
         throw new Error('Insufficient proofs to pay melt quote');
       }
-      const outputData = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-        keep: selectedAmount - amountWithFee,
-        send: amountWithFee,
-      });
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-      const { send, keep } = await wallet.send(amountWithFee, selectedProofs, { outputData });
 
-      await this.proofService.saveProofs(
-        mintUrl,
-        mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
-      );
-      await this.proofService.setProofState(
-        mintUrl,
-        selectedProofs.map((proof) => proof.secret),
-        'spent',
-      );
-      await this.proofService.setProofState(
-        mintUrl,
-        send.map((proof) => proof.secret),
-        'inflight',
-      );
-      await wallet.meltProofs(quote, send);
-      await this.proofService.setProofState(
-        mintUrl,
-        send.map((proof) => proof.secret),
-        'spent',
-      );
+      // If we have the exact amount, skip the send/swap operation
+      if (selectedAmount === targetAmount) {
+        this.logger?.debug('Exact amount match, skipping send/swap', {
+          mintUrl,
+          quoteId,
+          amount: targetAmount,
+        });
+        await this.proofService.setProofState(
+          mintUrl,
+          selectedProofs.map((proof) => proof.secret),
+          'inflight',
+        );
+        const { change } = await wallet.meltProofs(quote, selectedProofs);
+        await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
+        await this.proofService.setProofState(
+          mintUrl,
+          selectedProofs.map((proof) => proof.secret),
+          'spent',
+        );
+      } else {
+        this.logger?.debug('Selected amount is greater than amount with fee, need to swap proofs', {
+          mintUrl,
+          quoteId,
+          selectedAmount,
+          targetAmount,
+          selectedProofs,
+        });
+        const swapFees = wallet.getFeesForProofs(selectedProofs);
+        const totalSendAmount = quote.amount + quote.fee_reserve + swapFees;
+        if (selectedAmount < totalSendAmount) {
+          this.logger?.warn('Insufficient proofs after fee calculation', {
+            mintUrl,
+            quoteId,
+            selectedAmount,
+            totalSendAmount,
+            swapFees,
+          });
+          throw new Error('Insufficient proofs to pay melt quote after fees');
+        }
+        const outputData = await this.proofService.createOutputsAndIncrementCounters(
+          mintUrl,
+          {
+            keep: selectedAmount - quote.amount - quote.fee_reserve - swapFees,
+            send: quote.amount + quote.fee_reserve,
+          },
+          { includeFees: true },
+        );
+        const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, {
+          outputData,
+        });
+        this.logger?.debug('Swapped successfully', {
+          mintUrl,
+          quoteId,
+          send,
+          keep,
+        });
+
+        await this.proofService.saveProofs(
+          mintUrl,
+          mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
+        );
+        await this.proofService.setProofState(
+          mintUrl,
+          selectedProofs.map((proof) => proof.secret),
+          'spent',
+        );
+        await this.proofService.setProofState(
+          mintUrl,
+          send.map((proof) => proof.secret),
+          'inflight',
+        );
+        const { change } = await wallet.meltProofs(quote, send);
+        await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
+        await this.proofService.setProofState(
+          mintUrl,
+          send.map((proof) => proof.secret),
+          'spent',
+        );
+      }
       await this.setMeltQuoteState(mintUrl, quoteId, 'PAID');
       await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote });
     } catch (err) {
