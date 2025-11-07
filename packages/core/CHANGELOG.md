@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.18
+
+### Patch Changes
+
+- d40ba84: Fixes output creation for melt flow with proper fee handling
+
 ## 1.0.0-rc.17
 
 ### Patch Changes
