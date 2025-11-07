@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "coco-cashu-adapter-tests": "1.0.0-rc.16",
     "esbuild": "latest",
     "tsdown": "^0.14.1",
     "typescript": "^5.9.2",
