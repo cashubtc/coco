@@ -1,4 +1,4 @@
-import { OutputData, type Proof } from '@cashu/cashu-ts';
+import { OutputData, type Keys, type Proof } from '@cashu/cashu-ts';
 import type { CoreProof } from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
@@ -32,10 +32,38 @@ export class ProofService {
     this.eventBus = eventBus;
   }
 
+  /**
+   * Calculates the send amount including receiver fees.
+   * This is used when the sender pays fees for the receiver.
+   */
+  async calculateSendAmountWithFees(mintUrl: string, sendAmount: number): Promise<number> {
+    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+    );
+    // Split the send amount to determine number of outputs
+    let denominations = splitAmount(sendAmount, keys.keys);
+
+    // Calculate receiver fees (sender pays fees)
+    let receiveFee = wallet.getFeesForKeyset(denominations.length, keysetId);
+    let receiveFeeAmounts = splitAmount(receiveFee, keys.keys);
+
+    // Iterate until fee calculation stabilizes
+    while (
+      wallet.getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId) >
+      receiveFee
+    ) {
+      receiveFee++;
+      receiveFeeAmounts = splitAmount(receiveFee, keys.keys);
+    }
+
+    return sendAmount + receiveFee;
+  }
+
   async createOutputsAndIncrementCounters(
     mintUrl: string,
     amount: { keep: number; send: number },
-  ): Promise<{ keep: OutputData[]; send: OutputData[] }> {
+    options?: { includeFees?: boolean },
+  ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: number; keepAmount: number }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -45,15 +73,36 @@ export class ProofService {
       amount.keep < 0 ||
       amount.send < 0
     ) {
-      return { keep: [], send: [] };
+      return { keep: [], send: [], sendAmount: 0, keepAmount: 0 };
     }
-    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+    );
     const seed = await this.seedService.getSeed();
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
-    if (amount.keep > 0) {
+
+    // Calculate send amount with fees if needed
+    let sendAmount = amount.send;
+    let keepAmount = amount.keep;
+    if (options?.includeFees && amount.send > 0) {
+      sendAmount = await this.calculateSendAmountWithFees(mintUrl, amount.send);
+      const feeAmount = sendAmount - amount.send;
+      // Adjust keep amount: if send increases due to fees, keep decreases
+      keepAmount = Math.max(0, amount.keep - feeAmount);
+      this.logger?.debug('Fee calculation for send amount', {
+        mintUrl,
+        originalSendAmount: amount.send,
+        originalKeepAmount: amount.keep,
+        feeAmount,
+        finalSendAmount: sendAmount,
+        adjustedKeepAmount: keepAmount,
+      });
+    }
+
+    if (keepAmount > 0) {
       data.keep = OutputData.createDeterministicData(
-        amount.keep,
+        keepAmount,
         seed,
         currentCounter.counter,
         keys,
@@ -62,9 +111,9 @@ export class ProofService {
         await this.counterService.incrementCounter(mintUrl, keys.id, data.keep.length);
       }
     }
-    if (amount.send > 0) {
+    if (sendAmount > 0) {
       data.send = OutputData.createDeterministicData(
-        amount.send,
+        sendAmount,
         seed,
         currentCounter.counter + data.keep.length,
         keys,
@@ -79,7 +128,7 @@ export class ProofService {
       amount,
       outputs: data.keep.length + data.send.length,
     });
-    return data;
+    return { keep: data.keep, send: data.send, sendAmount, keepAmount };
   }
 
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
@@ -238,4 +287,43 @@ export class ProofService {
 
     return hasProofs;
   }
+}
+
+/**
+ * Splits the amount into denominations of the provided keyset.
+ *
+ * @remarks
+ * Partial splits will be filled up to value using minimum splits required. Sorting is only applied
+ * if a fill was made - exact custom splits are always returned in the same order.
+ * @param value Amount to split.
+ * @param keyset Keys to look up split amounts.
+ * @param split? Optional custom split amounts.
+ * @param order? Optional order for split amounts (if fill was required)
+ * @returns Array of split amounts.
+ * @throws Error if split sum is greater than value or mint does not have keys for requested split.
+ */
+function splitAmount(value: number, keys: Keys): number[] {
+  const split: number[] = [];
+  // Denomination fill for the remaining value
+  const sortedKeyAmounts = Object.keys(keys)
+    .map((key) => Number(key))
+    .sort((a, b) => b - a);
+  if (!sortedKeyAmounts || sortedKeyAmounts.length === 0) {
+    throw new Error('Cannot split amount, keyset is inactive or contains no keys');
+  }
+  for (const amt of sortedKeyAmounts) {
+    if (amt <= 0) continue;
+    // Calculate how many of amt fit into remaining value
+    const requireCount = Math.floor(value / amt);
+    // Add them to the split and reduce the target value by added amounts
+    split.push(...Array<number>(requireCount).fill(amt));
+    value -= amt * requireCount;
+    // Break early once target is satisfied
+    if (value === 0) break;
+  }
+  if (value !== 0) {
+    throw new Error(`Unable to split remaining amount: ${value}`);
+  }
+
+  return split;
 }

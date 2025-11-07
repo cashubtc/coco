@@ -20,6 +20,7 @@ type ExpectApi = {
   toBeGreaterThan(value: number): void;
   toBeGreaterThanOrEqual(value: number): void;
   toBeLessThan(value: number): void;
+  toBeLessThanOrEqual(value: number): void;
   toHaveLength(len: number): void;
   rejects: {
     toThrow(): Promise<void>;
@@ -410,7 +411,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           logger,
         });
 
-        await mgr.mint.addMint(mintUrl, { trusted: true });
+        const { mint, keysets } = await mgr.mint.addMint(mintUrl, { trusted: true });
 
         const quote = await mgr.quotes.createMintQuote(mintUrl, 500);
         await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
@@ -431,13 +432,54 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
         });
         const invoice =
-          'lnbc20n1p5sefrdpp56xfs7wt7mpsnu29zwgdzkqmshfayn6xcyf5f7aqp6w06lcfc7vusdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5y9m2zlg8s9wk9faw4mvlkgs8juwjgk00qcjrs698je2dhahd3uls9qxpqysgqt66e9jccwmesk4wff6422zz7ha4k0dnhvktyt8m448hxs8rsnhq8n6z3t270z4d58v7vzhrt7h0xf03d53298mvd7cgfsyc2k5wwlncqwzqesr';
+          'lnbc10n1p5sm5j8pp5ud6a93e5cah2dt6psv6fxg480ff9lxp7lq0c5q0c2nvh0g4gxhzsdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5mvpekp0pkkzk8svnl5j20ryuc8uucnhhjfka9dztw8aqhcmhq22q9qxpqysgqerja5tgvsjs4wlywh7uzte53pcxz87stnht783d4athc28fq25hxy767dx9w7dgxszglk697npldtn654cle58wvd9dxglsd0p0mgmgqqk4wnx';
         const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
 
         expect(meltQuote.quote).toBeDefined();
         expect(meltQuote.amount).toBeGreaterThan(0);
 
         await eventPromise;
+      });
+
+      it('should pay a melt quote (may skip swap if exact amount)', async () => {
+        const invoice =
+          'lnbc20n1p5sm5j3pp509qdavqadxfwmggservdg047eylgy9ry8k96lklgvgdmnxxwv7yqdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5nahghzy767gll8s98k9ccm83sclp8t5ftxnmfc3gspamyt30tphq9qxpqysgqh5655ecvl2qfxp8spd90ekn4jrxt26yx90uwqdnnw366wtmknufkwtypjv0v0mwguxj2hvdyr8ltzf4fs67ez9953rsqz5quevl2ntsp4fngdc';
+        const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
+
+        expect(meltQuote.quote).toBeDefined();
+        expect(meltQuote.amount).toBeGreaterThan(0);
+
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const balanceBeforeAmount = balanceBefore[mintUrl] || 0;
+
+        const paidEventPromise = new Promise((resolve) => {
+          mgr!.once('melt-quote:paid', (payload) => {
+            expect(payload.mintUrl).toBe(mintUrl);
+            expect(payload.quoteId).toBe(meltQuote.quote);
+            resolve(payload);
+          });
+        });
+
+        const stateChangedEventPromise = new Promise((resolve) => {
+          mgr!.once('melt-quote:state-changed', (payload) => {
+            if (payload.state === 'PAID') {
+              expect(payload.mintUrl).toBe(mintUrl);
+              expect(payload.quoteId).toBe(meltQuote.quote);
+              resolve(payload);
+            }
+          });
+        });
+
+        await mgr!.quotes.payMeltQuote(mintUrl, meltQuote.quote);
+
+        await Promise.all([paidEventPromise, stateChangedEventPromise]);
+
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const balanceAfterAmount = balanceAfter[mintUrl] || 0;
+        const amountWithFee = meltQuote.amount + meltQuote.fee_reserve;
+
+        // Balance should decrease by at least the amount + fee
+        expect(balanceAfterAmount).toBeLessThanOrEqual(balanceBeforeAmount - amountWithFee);
       });
     });
 
