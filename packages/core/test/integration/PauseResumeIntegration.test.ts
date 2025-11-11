@@ -7,7 +7,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('Pause/Resume Integration Test', () => {
   let manager: Manager;
-  const mintUrl = 'https://nofees.testnut.cashu.space';
+  const mintUrl = 'https://testnut.cashu.space';
   const seedGetter = async () => new Uint8Array(64).fill(1);
 
   beforeEach(async () => {

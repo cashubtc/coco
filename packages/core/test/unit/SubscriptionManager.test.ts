@@ -61,6 +61,17 @@ class MockTransport implements RealTimeTransport {
   resume(): void {
     this.resumed = true;
     this.paused = false;
+    // Simulate socket reconnection by triggering 'open' events for all mints with listeners
+    for (const [mintUrl, eventMap] of this.listeners.entries()) {
+      const openListeners = eventMap.get('open');
+      if (openListeners && openListeners.size > 0) {
+        queueMicrotask(() => {
+          for (const listener of openListeners) {
+            listener({ type: 'open' });
+          }
+        });
+      }
+    }
   }
 
   triggerMessage(mintUrl: string, notification: any): void {
