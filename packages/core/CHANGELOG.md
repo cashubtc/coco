@@ -1,5 +1,12 @@
 # coco-cashu-core
 
+## 1.0.0-rc.19
+
+### Patch Changes
+
+- be6737f: Made sure that WalletApi.send does an offline send (no swap) if the coin selection satisfies the exact amount
+- 0729533: Fix: made sure websocket does not subscribe twice on resume
+
 ## 1.0.0-rc.18
 
 ### Patch Changes
