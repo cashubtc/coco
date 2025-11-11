@@ -96,14 +96,39 @@ export class WalletApi {
 
   async send(mintUrl: string, amount: number): Promise<Token> {
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount);
+    // Try exact send first (without fees)
+    const exactProofs = await this.proofService.selectProofsToSend(mintUrl, amount, false);
+    const exactAmount = exactProofs.reduce((acc, proof) => acc + proof.amount, 0);
+    if (exactAmount === amount && exactProofs.length > 0) {
+      this.logger?.info('Exact amount match, skipping swap', {
+        mintUrl,
+        amountToSend: amount,
+        proofCount: exactProofs.length,
+      });
+      await this.proofService.setProofState(
+        mintUrl,
+        exactProofs.map((proof) => proof.secret),
+        'inflight',
+      );
+      const token = { mint: mintUrl, proofs: exactProofs };
+      await this.eventBus.emit('send:created', { mintUrl, token });
+      return token;
+    }
+    // If not exact send, include fees and perform swap
+    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount, true);
     const fees = wallet.getFeesForProofs(selectedProofs);
     const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
     const outputData = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
       keep: selectedAmount - amount - fees,
       send: amount,
     });
-    this.logger?.info('Sending...', { mintUrl, amountToSend: amount, fees, selectedAmount });
+    this.logger?.info('Sending with swap', {
+      mintUrl,
+      amountToSend: amount,
+      fees,
+      selectedAmount,
+      proofCount: selectedProofs.length,
+    });
     const { send, keep } = await wallet.send(amount, selectedProofs, { outputData });
     await this.proofService.saveProofs(
       mintUrl,
