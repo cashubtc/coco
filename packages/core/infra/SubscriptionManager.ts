@@ -437,17 +437,14 @@ export class SubscriptionManager {
 
   resume(): void {
     this.paused = false;
-    // Resume all transports
+    // Resume all transports - they will trigger 'open' events which handle re-subscription
     const seen = new Set<RealTimeTransport>();
     for (const t of this.transportByMint.values()) {
       if (seen.has(t)) continue;
       seen.add(t);
       t.resume();
     }
-    // Re-subscribe all active subscriptions
-    for (const mintUrl of this.activeByMint.keys()) {
-      this.reSubscribeMint(mintUrl);
-    }
+    // Don't re-subscribe here - the 'open' handler will do it after hasOpened state is set
     this.logger?.info('SubscriptionManager resumed');
   }
 }
