@@ -229,14 +229,18 @@ export class ProofService {
     this.logger?.info('Proofs wiped by keyset', { mintUrl, keysetId });
   }
 
-  async selectProofsToSend(mintUrl: string, amount: number): Promise<Proof[]> {
+  async selectProofsToSend(
+    mintUrl: string,
+    amount: number,
+    includeFees: boolean = true,
+  ): Promise<Proof[]> {
     const proofs = await this.getReadyProofs(mintUrl);
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');
     }
     const cashuWallet = await this.walletService.getWallet(mintUrl);
-    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount, true);
+    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount, includeFees);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
       amount,
