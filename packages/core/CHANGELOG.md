@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.21
+
+### Patch Changes
+
+- 3904f75: Upgraded cashu-ts to fix a bug with base64 keyset ids
+
 ## 1.0.0-rc.20
 
 ### Patch Changes
