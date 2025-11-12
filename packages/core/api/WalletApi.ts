@@ -191,4 +191,35 @@ export class WalletApi {
     }
     this.logger?.info('Restore completed successfully', { mintUrl });
   }
+
+  /**
+   * Sweeps a mint by sweeping each keyset and adds the swept proofs to the wallet
+   * @param mintUrl - The URL of the mint to sweep
+   * @param bip39seed - The BIP39 seed of the wallet to sweep
+   */
+  async sweep(mintUrl: string, bip39seed: Uint8Array) {
+    this.logger?.info('Starting sweep', { mintUrl });
+    const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
+    this.logger?.debug('Mint fetched for sweep', {
+      mintUrl,
+      keysetCount: mint.keysets.length,
+    });
+    const failedKeysetIds: { [keysetId: string]: Error } = {};
+    for (const keyset of mint.keysets) {
+      try {
+        await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed);
+      } catch (error) {
+        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, error });
+        failedKeysetIds[keyset.id] = error as Error;
+      }
+    }
+    if (Object.keys(failedKeysetIds).length > 0) {
+      this.logger?.error('Restore completed with failures', {
+        mintUrl,
+        failedKeysetIds: Object.keys(failedKeysetIds),
+      });
+      throw new Error('Failed to restore some keysets');
+    }
+    this.logger?.info('Restore completed successfully', { mintUrl });
+  }
 }

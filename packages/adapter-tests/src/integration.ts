@@ -1,6 +1,6 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
-import type { Token } from '@cashu/cashu-ts';
+import { CashuMint, CashuWallet, type Token } from '@cashu/cashu-ts';
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -744,6 +744,82 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const finalBalance = await mgr.wallet.getBalances();
           expect(finalBalance[mintUrl] || 0).toBeGreaterThanOrEqual(400);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+    });
+
+    describe('Wallet Restore', () => {
+      it('should sweep a mint from another seed', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          // Create a separate wallet with a different seed that has funds
+          const toBeSweptSeed = crypto.getRandomValues(new Uint8Array(64));
+          const baseWallet = new CashuWallet(new CashuMint(mintUrl), {
+            bip39seed: toBeSweptSeed,
+          });
+
+          // Create and pay mint quote
+          const quote = await baseWallet.createMintQuote(100);
+
+          // Wait for quote to be marked as paid
+          let quoteState = await baseWallet.checkMintQuote(quote.quote);
+          let attempts = 0;
+          while (quoteState.state !== 'PAID' && attempts <= 3) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            quoteState = await baseWallet.checkMintQuote(quote.quote);
+            attempts++;
+          }
+          // Mint proofs to the wallet being swept
+          const toBeSweptProofs = await baseWallet.mintProofs(100, quote.quote, { counter: 0 });
+          expect(toBeSweptProofs.length).toBeGreaterThan(0);
+
+          // Verify balance before sweep
+          const balanceBefore = await mgr.wallet.getBalances();
+          expect(balanceBefore[mintUrl] || 0).toBe(0);
+
+          // Listen for proofs:saved events
+          const sweepEvents: any[] = [];
+          const unsubscribe = mgr!.on('proofs:saved', (payload) => {
+            if (payload.mintUrl === mintUrl) {
+              sweepEvents.push(payload);
+            }
+          });
+
+          // Perform the sweep
+          await mgr.wallet.sweep(mintUrl, toBeSweptSeed);
+
+          // Verify balance increased (allowing for fees)
+          const balanceAfter = await mgr.wallet.getBalances();
+          expect(balanceAfter[mintUrl] || 0).toBeGreaterThan(0);
+          expect(balanceAfter[mintUrl] || 0).toBeLessThanOrEqual(100);
+          expect(balanceAfter[mintUrl] || 0).toBeGreaterThanOrEqual(95); // Allow up to 5 sat fee
+
+          // Verify mint was added and trusted
+          const isTrusted = await mgr.mint.isTrustedMint(mintUrl);
+          expect(isTrusted).toBe(true);
+
+          // Verify events were emitted
+          expect(sweepEvents.length).toBeGreaterThan(0);
+
+          // Verify original proofs are now spent
+          const originalProofStates = await baseWallet.checkProofsStates(toBeSweptProofs);
+          const allSpent = originalProofStates.every((p: any) => p.state === 'SPENT');
+          expect(allSpent).toBe(true);
+
+          unsubscribe();
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
