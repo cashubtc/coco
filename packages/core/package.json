@@ -36,6 +36,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@cashu/cashu-ts": "^2.7.2"
+    "@cashu/cashu-ts": "2.7.4"
   }
 }
