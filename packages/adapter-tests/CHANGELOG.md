@@ -1,5 +1,13 @@
 # coco-cashu-adapter-tests
 
+## 1.0.0-rc.20
+
+### Patch Changes
+
+- 8daa9bd: Added WalletApi.sweep method and tests
+- Updated dependencies [8daa9bd]
+  - coco-cashu-core@1.0.0-rc.20
+
 ## 1.0.0-rc.19
 
 ### Patch Changes
