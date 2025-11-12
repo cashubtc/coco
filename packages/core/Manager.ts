@@ -430,6 +430,7 @@ export class Manager {
     const walletRestoreService = new WalletRestoreService(
       proofService,
       counterService,
+      walletService,
       walletRestoreLogger,
     );
 
