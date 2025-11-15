@@ -57,8 +57,8 @@ export class IdbDb extends Dexie {
     // NESTED TRANSACTION DETECTION:
     // Check if we're already inside a Dexie transaction context
     const currentTx = Dexie.currentTransaction as DexieTransaction | undefined;
-    if (currentTx && currentTx === this.activeTransaction) {
-      // We're nested - reuse the current transaction
+    if (currentTx && currentTx === this.activeTransaction && currentTx.active) {
+      // We're nested and transaction is still active - safe to reuse
       return fn(currentTx);
     }
 
