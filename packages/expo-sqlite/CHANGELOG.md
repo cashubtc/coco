@@ -1,5 +1,11 @@
 # coco-cashu-expo-sqlite
 
+## 1.0.0-rc.22
+
+### Patch Changes
+
+- coco-cashu-core@1.0.0-rc.22
+
 ## 1.0.0-rc.21
 
 ### Patch Changes

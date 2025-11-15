@@ -1,5 +1,12 @@
 # coco-cashu-indexeddb
 
+## 1.0.0-rc.22
+
+### Patch Changes
+
+- 246c67a: Made sure indexeddb transactions are only reused when they are still active
+  - coco-cashu-core@1.0.0-rc.22
+
 ## 1.0.0-rc.21
 
 ### Patch Changes
