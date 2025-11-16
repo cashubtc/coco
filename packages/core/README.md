@@ -129,6 +129,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `wallet: WalletApi`
 - `quotes: QuotesApi`
 - `subscription: SubscriptionApi`
+- `history: HistoryApi`
 - `on/once/off` for `CoreEvents`
 - `enableMintQuoteWatcher(options?: { watchExistingPendingOnStart?: boolean }): Promise<void>`
 - `disableMintQuoteWatcher(): Promise<void>`
@@ -139,10 +140,13 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 ### MintApi
 
-- `addMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }>`
+- `addMint(mintUrl: string, options?: { trusted?: boolean }): Promise<{ mint: Mint; keysets: Keyset[] }>`
 - `getMintInfo(mintUrl: string): Promise<MintInfo>`
-- `isKnownMint(mintUrl: string): Promise<boolean>`
+- `isTrustedMint(mintUrl: string): Promise<boolean>`
 - `getAllMints(): Promise<Mint[]>`
+- `getAllTrustedMints(): Promise<Mint[]>`
+- `trustMint(mintUrl: string): Promise<void>`
+- `untrustMint(mintUrl: string): Promise<void>`
 
 ### WalletApi
 
@@ -150,6 +154,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `send(mintUrl: string, amount: number): Promise<Token>`
 - `getBalances(): Promise<{ [mintUrl: string]: number }>`
 - `restore(mintUrl: string): Promise<void>`
+- `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
 
 ### QuotesApi
 
@@ -157,11 +162,17 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `redeemMintQuote(mintUrl: string, quoteId: string): Promise<void>`
 - `createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse>`
 - `payMeltQuote(mintUrl: string, quoteId: string): Promise<void>`
+- `addMintQuote(mintUrl: string, quotes: MintQuoteResponse[]): Promise<{ added: string[]; skipped: string[] }>`
+- `requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }>`
 
 ### SubscriptionApi
 
-- `awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<MintQuoteResponse>`
-- `awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<MintQuoteResponse>`
+- `awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
+- `awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
+
+### HistoryApi
+
+- `getPaginatedHistory(offset?: number, limit?: number): Promise<HistoryEntry[]>`
 
 ### Subscriptions in Node vs browser
 
@@ -181,6 +192,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `mint-quote:redeemed` → `{ mintUrl, quoteId, quote }`
 - `melt-quote:created` → `{ mintUrl, quoteId, quote }`
 - `melt-quote:paid` → `{ mintUrl, quoteId, quote }`
+- `send:created` → `{ mintUrl, token }`
+- `receive:created` → `{ mintUrl, token }`
 
 ## Plugins
 
