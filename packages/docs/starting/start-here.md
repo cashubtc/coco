@@ -9,10 +9,10 @@ To get started all you got to do is create a Coco `Manager` instance. This insta
 ```ts
 import { initializeCoco } from 'coco-cashu-core';
 
-const coco = await initializeCoco({ seedGetter });
+const coco = await initializeCoco({ repo, seedGetter });
 
-// After initialization you can start to you your coco wallet
-const balance = await coco.wallet.getBalance();
+// After initialization you can start to use your coco wallet
+const balances = await coco.wallet.getBalances();
 ```
 
 ## BIP-39 Seed

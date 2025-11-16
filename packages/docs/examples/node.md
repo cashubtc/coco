@@ -61,7 +61,7 @@ As node does not offer a native Websocket implementation we will provide one to 
 import { WebSocket } from 'ws';
 import { WebSocketFactory } from 'coco-cashu-core';
 
-export const websocketFactory: WebsocketFactory = (url: string) => new Websocket(url);
+export const websocketFactory: WebSocketFactory = (url: string) => new WebSocket(url);
 ```
 
 ## Initialize Coco
@@ -89,7 +89,7 @@ Now that we have instantiated and exported an active coco manager class, we can 
 import { coco } from './coco.ts';
 
 async function apiBalanceController(res, req, next) {
-  const balance = await coco.wallet.getBalance();
-  res.json({ balance });
+  const balances = await coco.wallet.getBalances();
+  res.json({ balances });
 }
 ```

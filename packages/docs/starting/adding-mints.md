@@ -11,7 +11,7 @@ Coco uses a trust-based security model for mints. Wallet operations (receiving, 
 You can fetch and cache mint information without trusting it:
 
 ```ts
-const coco = initializeCoco({ repo, seedGetter });
+const coco = await initializeCoco({ repo, seedGetter });
 
 const mintUrl = 'https://minturl.com';
 

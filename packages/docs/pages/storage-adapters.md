@@ -1,21 +1,22 @@
 # Storage Adapters
 
-Coco is built in a platform agnostic way. As we can not assume anything about the presence of a certain storage API (e.g. IndexedDb), coco exposes a storage interface that needs to be statisfied when instantiating.
+Coco is built in a platform agnostic way. As we can not assume anything about the presence of a certain storage API (e.g. IndexedDB), coco exposes a storage interface that needs to be satisfied when instantiating.
 
 ```ts
-const repo = new ExpoSqliteRepositories({ database: db }); // Implements the CocoRepository interface
+const repo = new ExpoSqliteRepositories({ database: db }); // Implements the Repositories interface
 await repo.init(); // Ensures schema and applies migrations
-const coco = new Manager(
-  repo, // <-- pass the storage implementation to the manager
+const coco = await initializeCoco({
+  repo, // <-- pass the storage implementation
+  seedGetter,
   // other params
-);
+});
 ```
 
-Some storage implementations are maintained as part of the cashubtc/coco repository, but technically you can use any class that implements the CocoRepositories interface.
+Some storage implementations are maintained as part of the cashubtc/coco repository, but technically you can use any class that implements the `Repositories` interface.
 
 ## coco-cashu-indexeddb
 
-Implements CocoRepositories using the Indexeddb Browser API.
+Implements Repositories using the IndexedDB Browser API.
 
 Installation:
 
@@ -26,12 +27,14 @@ npm i coco-cashu-indexeddb
 Usage:
 
 ```ts
+import { initializeCoco } from 'coco-cashu-core';
+import { IndexedDbRepositories } from 'coco-cashu-indexeddb';
+
 const repo = new IndexedDbRepositories({ name: 'your-db-name' });
-await repo.init();
-const coco = new Manager(
+const coco = await initializeCoco({
   repo,
-  // other params
-);
+  seedGetter,
+});
 ```
 
 ## coco-cashu-expo-sqlite
@@ -40,22 +43,25 @@ Installation:
 
 ```sh
 npm i coco-cashu-expo-sqlite
-# coco-cashu-expo-sqlite expects a Expo SQLite client to be passed
+# coco-cashu-expo-sqlite expects an Expo SQLite client to be passed
 npx expo install expo-sqlite
 ```
 
 Usage:
 
 ```ts
-// First we create a expo-sqlite client
+import { initializeCoco } from 'coco-cashu-core';
+import { ExpoSqliteRepositories } from 'coco-cashu-expo-sqlite';
+import { openDatabaseAsync } from 'expo-sqlite';
+
+// First we create an expo-sqlite client
 const db = await openDatabaseAsync('coco-demo.db');
 // Then we pass it to our storage implementation
 const repo = new ExpoSqliteRepositories({ database: db });
-await repo.init();
-const manager = new Manager(
+const coco = await initializeCoco({
   repo,
-  // other params
-);
+  seedGetter,
+});
 ```
 
 ## coco-cashu-sqlite3
@@ -70,13 +76,16 @@ npm i sqlite3
 Usage:
 
 ```ts
+import { initializeCoco } from 'coco-cashu-core';
+import { SqliteRepositories } from 'coco-cashu-sqlite3';
+import { Database } from 'sqlite3';
+
 // First we create a sqlite3 client
 const db = new Database('./test.db');
 // Then we pass it to our storage implementation
 const repo = new SqliteRepositories({ database: db });
-await repo.init();
-const manager = new Manager(
+const coco = await initializeCoco({
   repo,
-  // other params
-);
+  seedGetter,
+});
 ```

@@ -1,11 +1,27 @@
 # Watchers and Processors
 
-By default coco will not automatically watch for state updates or process pending mint quotes. However both can be enabled when instantiating the Manager class
+By default, when using `initializeCoco()`, all watchers and processors are automatically enabled. If you're instantiating the `Manager` class directly, you can manually enable them:
 
 ```ts
-await manager.enableMintQuoteProcessor();
-await manager.enableProofStateWatcher();
-await manager.enableMintQuoteWatcher();
+await coco.enableMintQuoteProcessor();
+await coco.enableProofStateWatcher();
+await coco.enableMintQuoteWatcher();
+```
+
+To disable them during initialization with `initializeCoco()`:
+
+```ts
+const coco = await initializeCoco({
+  repo,
+  seedGetter,
+  watchers: {
+    mintQuoteWatcher: { disabled: true },
+    proofStateWatcher: { disabled: true },
+  },
+  processors: {
+    mintQuoteProcessor: { disabled: true },
+  },
+});
 ```
 
 ## MintQuoteProcessor
@@ -26,10 +42,10 @@ For energy efficiency and battery savings (especially on mobile devices), you ca
 
 ```ts
 // Pause all subscriptions, watchers, and processors
-await manager.pauseSubscriptions();
+await coco.pauseSubscriptions();
 
 // Resume all subscriptions, watchers, and processors
-await manager.resumeSubscriptions();
+await coco.resumeSubscriptions();
 ```
 
 ### What happens during pause?

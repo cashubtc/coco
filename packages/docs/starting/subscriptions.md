@@ -24,10 +24,10 @@ Coco provides APIs to pause and resume subscriptions for better resource managem
 
 ```ts
 // Pause all subscriptions when app goes to background
-await manager.pauseSubscriptions();
+await coco.pauseSubscriptions();
 
 // Resume all subscriptions when app comes to foreground
-await manager.resumeSubscriptions();
+await coco.resumeSubscriptions();
 ```
 
 This is particularly useful for:
@@ -44,9 +44,9 @@ import { AppState } from 'react-native';
 // Listen for app state changes
 AppState.addEventListener('change', async (nextAppState) => {
   if (nextAppState === 'background') {
-    await manager.pauseSubscriptions();
+    await coco.pauseSubscriptions();
   } else if (nextAppState === 'active') {
-    await manager.resumeSubscriptions();
+    await coco.resumeSubscriptions();
   }
 });
 ```
@@ -56,9 +56,9 @@ AppState.addEventListener('change', async (nextAppState) => {
 ```ts
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
-    await manager.pauseSubscriptions();
+    await coco.pauseSubscriptions();
   } else {
-    await manager.resumeSubscriptions();
+    await coco.resumeSubscriptions();
   }
 });
 ```
