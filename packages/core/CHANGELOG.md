@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.24
+
+### Patch Changes
+
+- 67c25bb: Made sure WalletApi.receive has all necessary data to work on keyset v2
+
 ## 1.0.0-rc.23
 
 ### Patch Changes
