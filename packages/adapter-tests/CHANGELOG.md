@@ -1,5 +1,12 @@
 # coco-cashu-adapter-tests
 
+## 1.0.0-rc.23
+
+### Patch Changes
+
+- Updated dependencies [63ea8d6]
+  - coco-cashu-core@1.0.0-rc.23
+
 ## 1.0.0-rc.22
 
 ### Patch Changes

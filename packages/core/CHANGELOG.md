@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.0.0-rc.23
+
+### Patch Changes
+
+- 63ea8d6: bumped cashu-ts
+
 ## 1.0.0-rc.22
 
 ## 1.0.0-rc.21
