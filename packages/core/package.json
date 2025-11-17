@@ -1,29 +1,8 @@
 {
   "name": "coco-cashu-core",
   "version": "1.0.0-rc.22",
-  "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "README.md"
-  ],
-  "sideEffects": false,
-  "scripts": {
-    "build": "tsdown",
-    "test": "bun test",
-    "test:unit": "bun test test/unit",
-    "test:integration": "bun test test/integration",
-    "prepublishOnly": "bun run build"
-  },
   "devDependencies": {
     "@types/bun": "latest",
     "coco-cashu-adapter-tests": "1.0.0-rc.22",
@@ -35,7 +14,28 @@
   "peerDependencies": {
     "typescript": "^5"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "bun test",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
+    "prepublishOnly": "bun run build"
+  },
+  "sideEffects": false,
+  "type": "module",
+  "types": "dist/index.d.ts",
   "dependencies": {
-    "@cashu/cashu-ts": "2.7.4"
+    "@cashu/cashu-ts": "2.8.1"
   }
 }
