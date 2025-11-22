@@ -2,6 +2,7 @@ import type {
   Repositories,
   MintRepository,
   KeysetRepository,
+  KeyRingRepository,
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
@@ -12,6 +13,7 @@ import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
+import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
@@ -22,6 +24,7 @@ export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
 export class SqliteRepositories implements Repositories {
   readonly mintRepository: MintRepository;
+  readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
@@ -33,6 +36,7 @@ export class SqliteRepositories implements Repositories {
   constructor(options: SqliteRepositoriesOptions) {
     this.db = new SqliteDb(options);
     this.mintRepository = new SqliteMintRepository(this.db);
+    this.keyRingRepository = new SqliteKeyRingRepository(this.db);
     this.counterRepository = new SqliteCounterRepository(this.db);
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
@@ -49,6 +53,7 @@ export class SqliteRepositories implements Repositories {
     return this.db.transaction(async (txDb) => {
       const scopedRepositories: RepositoryTransactionScope = {
         mintRepository: new SqliteMintRepository(txDb),
+        keyRingRepository: new SqliteKeyRingRepository(txDb),
         counterRepository: new SqliteCounterRepository(txDb),
         keysetRepository: new SqliteKeysetRepository(txDb),
         proofRepository: new SqliteProofRepository(txDb),
@@ -66,6 +71,7 @@ export {
   SqliteDb,
   ensureSchema,
   SqliteMintRepository,
+  SqliteKeyRingRepository,
   SqliteKeysetRepository,
   SqliteCounterRepository,
   SqliteProofRepository,

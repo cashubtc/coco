@@ -32,6 +32,7 @@ export default defineConfig({
         items: [
           { text: 'Storage Adapters', link: '/pages/storage-adapters' },
           { text: 'Bip39', link: '/pages/bip39' },
+          { text: 'KeyRing (P2PK)', link: '/pages/keyring' },
           { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
           { text: 'Coco Config', link: '/pages/coco-config' },
           { text: 'Plugins', link: '/pages/plugins' },
