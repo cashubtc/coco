@@ -53,7 +53,9 @@ export class WalletApi {
     try {
       const { keysets } = await this.mintService.ensureUpdatedMint(mint);
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
-      const { proofs } = typeof token === 'string' ? getDecodedToken(token, keysets) : token;
+      let proofs =
+        typeof token === 'string' ? getDecodedToken(token, keysets).proofs : token.proofs;
+      proofs = await this.proofService.prepareProofsForReceiving(proofs);
       if (!Array.isArray(proofs) || proofs.length === 0) {
         this.logger?.warn('Token contains no proofs', { mint });
         throw new ProofValidationError('Token contains no proofs');

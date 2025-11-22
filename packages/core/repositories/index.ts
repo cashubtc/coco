@@ -6,6 +6,7 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltQuote } from '@core/models/MeltQuote';
 import type { HistoryEntry, MeltHistoryEntry, MintHistoryEntry } from '@core/models/History';
 import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
+import type { Keypair } from '@core/models/Keypair';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
@@ -49,6 +50,15 @@ export interface MintQuoteRepository {
   getPendingMintQuotes(): Promise<MintQuote[]>;
 }
 
+export interface KeyRingRepository {
+  getPersistedKeyPair(publicKey: string): Promise<Keypair | null>;
+  setPersistedKeyPair(keyPair: Keypair): Promise<void>;
+  deletePersistedKeyPair(publicKey: string): Promise<void>;
+  getAllPersistedKeyPairs(): Promise<Keypair[]>;
+  getLatestKeyPair(): Promise<Keypair | null>;
+  getLastDerivationIndex(): Promise<number>;
+}
+
 export interface MeltQuoteRepository {
   getMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuote | null>;
   addMeltQuote(quote: MeltQuote): Promise<void>;
@@ -67,6 +77,7 @@ export interface HistoryRepository {
 
 interface RepositoriesBase {
   mintRepository: MintRepository;
+  keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;

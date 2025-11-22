@@ -1,5 +1,6 @@
 export * from './Counter';
 export * from './Error';
+export * from './Keypair';
 export * from './Keyset';
 export * from './Mint';
 export * from './MintQuote';

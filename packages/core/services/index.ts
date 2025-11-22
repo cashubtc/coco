@@ -1,4 +1,5 @@
 export * from './CounterService';
+export * from './KeyRingService';
 export * from './MintService';
 export * from './WalletService';
 export * from './ProofService';

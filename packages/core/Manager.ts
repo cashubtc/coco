@@ -12,11 +12,12 @@ import {
   ProofStateWatcherService,
   MeltQuoteService,
   HistoryService,
+  KeyRingService,
 } from './services';
 import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi } from './api';
+import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap } from './plugins/types.ts';
@@ -112,12 +113,14 @@ export class Manager {
   readonly mint: MintApi;
   readonly wallet: WalletApi;
   readonly quotes: QuotesApi;
+  readonly keyring: KeyRingApi;
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
+  private keyRingService: KeyRingService;
   private eventBus: EventBus<CoreEvents>;
   private logger: Logger;
   readonly subscriptions: SubscriptionManager;
@@ -156,6 +159,7 @@ export class Manager {
     this.walletService = core.walletService;
     this.proofService = core.proofService;
     this.walletRestoreService = core.walletRestoreService;
+    this.keyRingService = core.keyRingService;
     this.seedService = core.seedService;
     this.counterService = core.counterService;
     this.mintQuoteService = core.mintQuoteService;
@@ -166,6 +170,7 @@ export class Manager {
     this.mint = apis.mint;
     this.wallet = apis.wallet;
     this.quotes = apis.quotes;
+    this.keyring = apis.keyring;
     this.subscription = apis.subscription;
     this.history = apis.history;
 
@@ -174,6 +179,7 @@ export class Manager {
       mintService: this.mintService,
       walletService: this.walletService,
       proofService: this.proofService,
+      keyRingService: this.keyRingService,
       seedService: this.seedService,
       walletRestoreService: this.walletRestoreService,
       counterService: this.counterService,
@@ -393,6 +399,7 @@ export class Manager {
     counterService: CounterService;
     proofService: ProofService;
     walletRestoreService: WalletRestoreService;
+    keyRingService: KeyRingService;
     mintQuoteService: MintQuoteService;
     mintQuoteRepository: MintQuoteRepository;
     meltQuoteService: MeltQuoteService;
@@ -404,6 +411,7 @@ export class Manager {
     const proofLogger = this.getChildLogger('ProofService');
     const mintQuoteLogger = this.getChildLogger('MintQuoteService');
     const walletRestoreLogger = this.getChildLogger('WalletRestoreService');
+    const keyRingLogger = this.getChildLogger('KeyRingService');
     const meltQuoteLogger = this.getChildLogger('MeltQuoteService');
     const historyLogger = this.getChildLogger('HistoryService');
     const mintService = new MintService(
@@ -413,6 +421,11 @@ export class Manager {
       this.eventBus,
     );
     const seedService = new SeedService(seedGetter);
+    const keyRingService = new KeyRingService(
+      repositories.keyRingRepository,
+      seedService,
+      keyRingLogger,
+    );
     const walletService = new WalletService(mintService, seedService, walletLogger);
     const counterService = new CounterService(
       repositories.counterRepository,
@@ -423,6 +436,7 @@ export class Manager {
       counterService,
       repositories.proofRepository,
       walletService,
+      keyRingService,
       seedService,
       proofLogger,
       this.eventBus,
@@ -465,6 +479,7 @@ export class Manager {
       counterService,
       proofService,
       walletRestoreService,
+      keyRingService,
       mintQuoteService,
       mintQuoteRepository,
       meltQuoteService,
@@ -476,6 +491,7 @@ export class Manager {
     mint: MintApi;
     wallet: WalletApi;
     quotes: QuotesApi;
+    keyring: KeyRingApi;
     subscription: SubscriptionApi;
     history: HistoryApi;
   } {
@@ -491,8 +507,9 @@ export class Manager {
       walletApiLogger,
     );
     const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);
+    const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
-    return { mint, wallet, quotes, subscription, history };
+    return { mint, wallet, quotes, keyring, subscription, history };
   }
 }

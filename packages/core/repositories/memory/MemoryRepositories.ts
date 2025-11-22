@@ -1,7 +1,9 @@
 import type {
   Repositories,
+  RepositoryTransactionScope,
   MintRepository,
   KeysetRepository,
+  KeyRingRepository,
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
@@ -10,6 +12,7 @@ import type {
 } from '..';
 import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
+import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
 import { MemoryCounterRepository } from './MemoryCounterRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
 import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
@@ -18,6 +21,7 @@ import { MemoryHistoryRepository } from './MemoryHistoryRepository';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
+  keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
@@ -27,6 +31,7 @@ export class MemoryRepositories implements Repositories {
 
   constructor() {
     this.mintRepository = new MemoryMintRepository();
+    this.keyRingRepository = new MemoryKeyRingRepository();
     this.counterRepository = new MemoryCounterRepository();
     this.keysetRepository = new MemoryKeysetRepository();
     this.proofRepository = new MemoryProofRepository();

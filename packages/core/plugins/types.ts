@@ -5,6 +5,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type {
   CounterService,
   HistoryService,
+  KeyRingService,
   MeltQuoteService,
   MintQuoteService,
   MintService,
@@ -18,6 +19,7 @@ export type ServiceKey =
   | 'mintService'
   | 'walletService'
   | 'proofService'
+  | 'keyRingService'
   | 'seedService'
   | 'walletRestoreService'
   | 'counterService'
@@ -32,6 +34,7 @@ export interface ServiceMap {
   mintService: MintService;
   walletService: WalletService;
   proofService: ProofService;
+  keyRingService: KeyRingService;
   seedService: SeedService;
   walletRestoreService: WalletRestoreService;
   counterService: CounterService;
