@@ -130,6 +130,20 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_keysets ADD COLUMN unit TEXT;
     `,
   },
+  {
+    id: '006_keypairs',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_keypairs (
+        publicKey TEXT PRIMARY KEY NOT NULL,
+        secretKey TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        derivationIndex INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_keypairs_createdAt ON coco_cashu_keypairs(createdAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_keypairs_derivationIndex ON coco_cashu_keypairs(derivationIndex DESC) WHERE derivationIndex IS NOT NULL;
+    `,
+  },
 ];
 
 export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {

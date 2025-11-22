@@ -2,6 +2,7 @@ import type {
   Repositories,
   MintRepository,
   KeysetRepository,
+  KeyRingRepository,
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
@@ -12,6 +13,7 @@ import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { ExpoMintRepository } from './repositories/MintRepository.ts';
 import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
+import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { ExpoCounterRepository } from './repositories/CounterRepository.ts';
 import { ExpoProofRepository } from './repositories/ProofRepository.ts';
 import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
@@ -22,6 +24,7 @@ export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
 export class ExpoSqliteRepositories implements Repositories {
   readonly mintRepository: MintRepository;
+  readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
@@ -33,6 +36,7 @@ export class ExpoSqliteRepositories implements Repositories {
   constructor(options: ExpoSqliteRepositoriesOptions) {
     this.db = new ExpoSqliteDb(options);
     this.mintRepository = new ExpoMintRepository(this.db);
+    this.keyRingRepository = new ExpoKeyRingRepository(this.db);
     this.counterRepository = new ExpoCounterRepository(this.db);
     this.keysetRepository = new ExpoKeysetRepository(this.db);
     this.proofRepository = new ExpoProofRepository(this.db);
@@ -49,6 +53,7 @@ export class ExpoSqliteRepositories implements Repositories {
     return this.db.transaction(async (txDb) => {
       const scopedRepositories: RepositoryTransactionScope = {
         mintRepository: new ExpoMintRepository(txDb),
+        keyRingRepository: new ExpoKeyRingRepository(txDb),
         counterRepository: new ExpoCounterRepository(txDb),
         keysetRepository: new ExpoKeysetRepository(txDb),
         proofRepository: new ExpoProofRepository(txDb),
@@ -66,6 +71,7 @@ export {
   ExpoSqliteDb,
   ensureSchema,
   ExpoMintRepository,
+  ExpoKeyRingRepository,
   ExpoKeysetRepository,
   ExpoCounterRepository,
   ExpoProofRepository,
