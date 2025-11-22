@@ -2,6 +2,7 @@ import type {
   Repositories,
   MintRepository,
   KeysetRepository,
+  KeyRingRepository,
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
@@ -12,6 +13,7 @@ import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';
 import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
+import { IdbKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
 import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
@@ -22,6 +24,7 @@ export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
 export class IndexedDbRepositories implements Repositories {
   readonly mintRepository: MintRepository;
+  readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
@@ -33,6 +36,7 @@ export class IndexedDbRepositories implements Repositories {
   constructor(options: IndexedDbRepositoriesOptions) {
     this.db = new IdbDb(options);
     this.mintRepository = new IdbMintRepository(this.db);
+    this.keyRingRepository = new IdbKeyRingRepository(this.db);
     this.counterRepository = new IdbCounterRepository(this.db);
     this.keysetRepository = new IdbKeysetRepository(this.db);
     this.proofRepository = new IdbProofRepository(this.db);
@@ -51,6 +55,7 @@ export class IndexedDbRepositories implements Repositories {
       const scopedDb = this.db;
       const scopedRepositories: RepositoryTransactionScope = {
         mintRepository: new IdbMintRepository(scopedDb),
+        keyRingRepository: new IdbKeyRingRepository(scopedDb),
         counterRepository: new IdbCounterRepository(scopedDb),
         keysetRepository: new IdbKeysetRepository(scopedDb),
         proofRepository: new IdbProofRepository(scopedDb),
@@ -67,6 +72,7 @@ export {
   IdbDb,
   ensureSchema,
   IdbMintRepository,
+  IdbKeyRingRepository,
   IdbKeysetRepository,
   IdbCounterRepository,
   IdbProofRepository,
