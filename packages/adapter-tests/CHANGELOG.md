@@ -1,5 +1,13 @@
 # coco-cashu-adapter-tests
 
+## 1.0.0-rc.25
+
+### Patch Changes
+
+- c803f3e: Added keyring / p2pk support
+- Updated dependencies [c803f3e]
+  - coco-cashu-core@1.0.0-rc.25
+
 ## 1.0.0-rc.24
 
 ### Patch Changes
