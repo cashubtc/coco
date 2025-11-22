@@ -28,6 +28,11 @@ describe('ProofService', () => {
     ) => Promise<{ selectProofsToSend: (proofs: any[], amount: number) => { send: any[] } }>;
   };
 
+  // Minimal keyRingService stub
+  let keyRingService: {
+    signProof: (proof: any, publicKey: string) => Promise<any>;
+  };
+
   const makeProof = (overrides: Partial<CoreProof>): CoreProof =>
     ({
       amount: 1,
@@ -64,6 +69,13 @@ describe('ProofService', () => {
       },
     };
 
+    keyRingService = {
+      async signProof(proof: any, _publicKey: string) {
+        // Simple stub that adds a witness field
+        return { ...proof, witness: 'mock-signature' };
+      },
+    };
+
     originalCreateDeterministicData = OutputData.createDeterministicData;
   });
 
@@ -78,6 +90,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -92,6 +105,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -129,6 +143,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -159,6 +174,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -191,6 +207,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -214,6 +231,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -235,6 +253,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -264,6 +283,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -292,6 +312,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -323,6 +344,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -355,6 +377,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,
@@ -395,6 +418,7 @@ describe('ProofService', () => {
         counterService,
         proofRepo,
         walletService as any,
+        keyRingService as any,
         seedService,
         undefined,
         bus,

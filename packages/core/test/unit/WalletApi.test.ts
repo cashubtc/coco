@@ -68,6 +68,7 @@ describe('WalletApi - Trust Enforcement', () => {
         send: [],
       })),
       saveProofs: mock(async () => {}),
+      prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
     };
 
     mockWalletRestoreService = {};

@@ -1,6 +1,8 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
-import { CashuMint, CashuWallet, type Token } from '@cashu/cashu-ts';
+import { CashuMint, CashuWallet, OutputData, type MintKeys, type Token } from '@cashu/cashu-ts';
+
+export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -752,6 +754,237 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await dispose();
         }
+      });
+    });
+
+    describe('P2PK (Pay-to-Public-Key)', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+
+        // Fund the wallet
+        const quote = await mgr.quotes.createMintQuote(mintUrl, 200);
+        await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+      it('should receive token with P2PK locked proofs using added keypair', async () => {
+        // Generate a keypair using the KeyRing API
+        const secretKey = crypto.getRandomValues(new Uint8Array(32));
+        const keypair = await mgr!.keyring.addKeyPair(secretKey);
+        expect(keypair.publicKeyHex).toBeDefined();
+
+        // Create a sender wallet with cashu-ts
+        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+
+        // Fund the sender wallet
+        const senderQuote = await senderWallet.createMintQuote(100);
+        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        let attempts = 0;
+        while (quoteState.state !== 'PAID' && attempts <= 3) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          attempts++;
+        }
+        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote);
+        expect(senderProofs.length).toBeGreaterThan(0);
+
+        // Create P2PK locked token using cashu-ts send method with pubkey
+        const sendAmount = 50;
+        const { send: p2pkProofs } = await senderWallet.send(sendAmount, senderProofs, {
+          pubkey: keypair.publicKeyHex,
+        });
+
+        expect(p2pkProofs.length).toBeGreaterThan(0);
+
+        // Verify the proofs are P2PK locked
+        const firstProof = p2pkProofs[0];
+        expect(firstProof?.secret).toBeDefined();
+        const parsedSecret = JSON.parse(firstProof!.secret);
+        expect(parsedSecret[0]).toBe('P2PK');
+        expect(parsedSecret[1].data).toBe(keypair.publicKeyHex);
+
+        // Create token
+        const p2pkToken: Token = {
+          mint: mintUrl,
+          proofs: p2pkProofs,
+        };
+
+        // Get balance before receiving
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        // Receive the P2PK token - this should automatically sign it
+        await mgr!.wallet.receive(p2pkToken);
+
+        // Verify balance increased
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const amountAfter = balanceAfter[mintUrl] || 0;
+        expect(amountAfter).toBeGreaterThan(amountBefore);
+        expect(amountAfter - amountBefore).toBeGreaterThanOrEqual(sendAmount - 10); // Allow for fees
+
+        // Verify original P2PK proofs are now spent
+        const proofStates = await senderWallet.checkProofsStates(p2pkProofs);
+        const allSpent = proofStates.every((p: any) => p.state === 'SPENT');
+        expect(allSpent).toBe(true);
+      });
+
+      it('should receive P2PK locked token created with cashu-ts', async () => {
+        // Generate a keypair using the KeyRing API
+        const keypair = await mgr!.keyring.generateKeyPair();
+        expect(keypair.publicKeyHex).toBeDefined();
+        expect('secretKey' in keypair).toBe(false);
+
+        // Create a sender wallet with cashu-ts
+        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+
+        // Fund the sender wallet
+        const senderQuote = await senderWallet.createMintQuote(100);
+        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        let attempts = 0;
+        while (quoteState.state !== 'PAID' && attempts <= 3) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          attempts++;
+        }
+        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote);
+        expect(senderProofs.length).toBeGreaterThan(0);
+
+        // Create P2PK locked token using cashu-ts send method with pubkey
+        const sendAmount = 50;
+        const { send: p2pkProofs } = await senderWallet.send(sendAmount, senderProofs, {
+          pubkey: keypair.publicKeyHex,
+        });
+
+        expect(p2pkProofs.length).toBeGreaterThan(0);
+
+        // Verify the proofs are P2PK locked
+        const firstProof = p2pkProofs[0];
+        expect(firstProof?.secret).toBeDefined();
+        const parsedSecret = JSON.parse(firstProof!.secret);
+        expect(parsedSecret[0]).toBe('P2PK');
+        expect(parsedSecret[1].data).toBe(keypair.publicKeyHex);
+
+        // Create token
+        const p2pkToken: Token = {
+          mint: mintUrl,
+          proofs: p2pkProofs,
+        };
+
+        // Get balance before receiving
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        // Receive the P2PK token - this should automatically sign it
+        await mgr!.wallet.receive(p2pkToken);
+
+        // Verify balance increased
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const amountAfter = balanceAfter[mintUrl] || 0;
+        expect(amountAfter).toBeGreaterThan(amountBefore);
+        expect(amountAfter - amountBefore).toBeGreaterThanOrEqual(sendAmount - 10); // Allow for fees
+
+        // Verify original P2PK proofs are now spent
+        const proofStates = await senderWallet.checkProofsStates(p2pkProofs);
+        const allSpent = proofStates.every((p: any) => p.state === 'SPENT');
+        expect(allSpent).toBe(true);
+      });
+
+      it('should fail to receive P2PK token without the private key', async () => {
+        // Create a sender wallet with cashu-ts
+        const senderSeed = crypto.getRandomValues(new Uint8Array(64));
+        const senderWallet = new CashuWallet(new CashuMint(mintUrl), {
+          bip39seed: senderSeed,
+        });
+
+        // Fund the sender wallet
+        const senderQuote = await senderWallet.createMintQuote(100);
+        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        let attempts = 0;
+        while (quoteState.state !== 'PAID' && attempts <= 3) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          attempts++;
+        }
+        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote, { counter: 0 });
+
+        // Lock to a public key we don't have the private key for
+        const fakePublicKey = '02' + '11'.repeat(31);
+        const { send: p2pkProofs } = await senderWallet.send(50, senderProofs, {
+          pubkey: fakePublicKey,
+        });
+
+        const p2pkToken: Token = {
+          mint: mintUrl,
+          proofs: p2pkProofs,
+        };
+
+        // Should fail because we don't have the private key
+        await expect(mgr!.wallet.receive(p2pkToken)).rejects.toThrow();
+      });
+
+      it('should handle multiple P2PK locked proofs in one token', async () => {
+        // Generate a keypair using the KeyRing API
+        const keypair = await mgr!.keyring.generateKeyPair();
+        const keypair2 = await mgr!.keyring.generateKeyPair();
+
+        // Create sender wallet
+        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+        await senderWallet.loadMint();
+        const keyset = await senderWallet.getActiveKeyset(senderWallet.keysets);
+
+        // Fund sender with more amount
+        const senderQuote = await senderWallet.createMintQuote(200);
+        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        let attempts = 0;
+        while (quoteState.state !== 'PAID' && attempts <= 3) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          attempts++;
+        }
+        const senderProofs = await senderWallet.mintProofs(200, senderQuote.quote);
+        const outputData = [
+          OutputData.createSingleP2PKData({ pubkey: keypair.publicKeyHex }, 32, keyset.id),
+          OutputData.createSingleP2PKData({ pubkey: keypair2.publicKeyHex }, 32, keyset.id),
+        ];
+
+        const keepFactory: OutputDataFactory = (a, k) => OutputData.createSingleRandomData(a, k.id);
+        // Create P2PK token with multiple proofs
+        const { send: p2pkProofs } = await senderWallet.send(64, senderProofs, {
+          outputData: { keep: keepFactory, send: outputData },
+        });
+
+        // Should have multiple proofs for 100 sats
+        expect(p2pkProofs.length).toBeGreaterThan(1);
+
+        const p2pkToken: Token = {
+          mint: mintUrl,
+          proofs: p2pkProofs,
+        };
+
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        // Receive all P2PK proofs at once
+        await mgr!.wallet.receive(p2pkToken);
+
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const amountAfter = balanceAfter[mintUrl] || 0;
+        expect(amountAfter - amountBefore).toBeGreaterThanOrEqual(50); // Allow for fees
       });
     });
 
