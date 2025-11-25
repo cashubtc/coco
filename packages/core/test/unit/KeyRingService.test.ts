@@ -453,5 +453,35 @@ describe('KeyRingService', () => {
 
       expect(signed1.witness).not.toBe(signed2.witness);
     });
+
+    it('throws when proof secret is empty', async () => {
+      const kp = await service.generateNewKeyPair();
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: '',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      await expect(service.signProof(proof, kp.publicKeyHex)).rejects.toThrow(
+        'Proof secret is required and must be a string',
+      );
+    });
+
+    it('throws when proof secret is not a string', async () => {
+      const kp = await service.generateNewKeyPair();
+
+      const proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 123,
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      } as unknown as Proof;
+
+      await expect(service.signProof(proof, kp.publicKeyHex)).rejects.toThrow(
+        'Proof secret is required and must be a string',
+      );
+    });
   });
 });
