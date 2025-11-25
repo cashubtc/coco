@@ -1,6 +1,7 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
 import { CashuMint, CashuWallet, OutputData, type MintKeys, type Token } from '@cashu/cashu-ts';
+import { createFakeInvoice } from './utils';
 
 export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
 
@@ -433,8 +434,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             resolve(payload);
           });
         });
-        const invoice =
-          'lnbc10n1p5sm5j8pp5ud6a93e5cah2dt6psv6fxg480ff9lxp7lq0c5q0c2nvh0g4gxhzsdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5mvpekp0pkkzk8svnl5j20ryuc8uucnhhjfka9dztw8aqhcmhq22q9qxpqysgqerja5tgvsjs4wlywh7uzte53pcxz87stnht783d4athc28fq25hxy767dx9w7dgxszglk697npldtn654cle58wvd9dxglsd0p0mgmgqqk4wnx';
+        const invoice = createFakeInvoice(100);
         const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
 
         expect(meltQuote.quote).toBeDefined();
@@ -444,8 +444,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should pay a melt quote (may skip swap if exact amount)', async () => {
-        const invoice =
-          'lnbc20n1p5sm5j3pp509qdavqadxfwmggservdg047eylgy9ry8k96lklgvgdmnxxwv7yqdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5nahghzy767gll8s98k9ccm83sclp8t5ftxnmfc3gspamyt30tphq9qxpqysgqh5655ecvl2qfxp8spd90ekn4jrxt26yx90uwqdnnw366wtmknufkwtypjv0v0mwguxj2hvdyr8ltzf4fs67ez9953rsqz5quevl2ntsp4fngdc';
+        const invoice = createFakeInvoice(20);
         const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
 
         expect(meltQuote.quote).toBeDefined();
