@@ -29,6 +29,32 @@ log_test() {
     echo -e "${BLUE}[TEST]${NC} $1"
 }
 
+# Check if a package uses browser tests (has test:browser script)
+is_browser_test_package() {
+    local package_dir=$1
+    local package_json="$package_dir/package.json"
+    
+    if [ -f "$package_json" ]; then
+        if grep -q '"test:browser"' "$package_json" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Ensure Playwright browsers are installed
+ensure_playwright_browsers() {
+    log_info "Ensuring Playwright browsers are installed..."
+    cd "$PROJECT_ROOT"
+    npx playwright install --with-deps chromium firefox webkit 2>/dev/null || {
+        log_warn "Failed to install all browsers, trying without deps..."
+        npx playwright install chromium firefox webkit || {
+            log_error "Failed to install Playwright browsers"
+            return 1
+        }
+    }
+}
+
 # Discover integration test files
 discover_integration_tests() {
     find "$PROJECT_ROOT/packages" -name "integration.test.ts" -type f | while read -r test_file; do
@@ -151,21 +177,45 @@ run_test() {
     
     # Run the test
     local test_result=0
-    export MINT_URL="$mint_url"
-    if [ -n "$log_level" ]; then
-        export TEST_LOG_LEVEL="$log_level"
+    
+    # Check if this is a browser test package
+    if is_browser_test_package "$package_dir"; then
+        log_test "Using browser test runner (Vitest + Playwright)"
+        
+        # Set environment variables for Vitest (uses VITE_ prefix)
+        export VITE_MINT_URL="$mint_url"
+        if [ -n "$log_level" ]; then
+            export VITE_TEST_LOG_LEVEL="$log_level"
+        else
+            unset VITE_TEST_LOG_LEVEL
+        fi
+        
+        if [ -n "$test_pattern" ]; then
+            bun run test:browser -- --testNamePattern="$test_pattern" || test_result=$?
+        else
+            bun run test:browser || test_result=$?
+        fi
+        
+        unset VITE_MINT_URL
+        unset VITE_TEST_LOG_LEVEL
     else
+        # Standard bun test for non-browser packages
+        export MINT_URL="$mint_url"
+        if [ -n "$log_level" ]; then
+            export TEST_LOG_LEVEL="$log_level"
+        else
+            unset TEST_LOG_LEVEL
+        fi
+        
+        if [ -n "$test_pattern" ]; then
+            bun test -t "$test_pattern" "$test_file" || test_result=$?
+        else
+            bun test "$test_file" || test_result=$?
+        fi
+        
+        unset MINT_URL
         unset TEST_LOG_LEVEL
     fi
-    
-    if [ -n "$test_pattern" ]; then
-        bun test -t "$test_pattern" "$test_file" || test_result=$?
-    else
-        bun test "$test_file" || test_result=$?
-    fi
-    
-    unset MINT_URL
-    unset TEST_LOG_LEVEL
     
     # Stop the mint container
     stop_mint_container "$package_name"
@@ -337,6 +387,42 @@ bun run build
 
 cd "$PROJECT_ROOT/packages/core"
 bun run build
+
+# Check if any browser tests will be run and install Playwright if needed
+check_and_install_playwright() {
+    local needs_playwright=false
+    
+    if [ "$COMMAND" = "all" ]; then
+        # Check all packages for browser tests
+        discover_integration_tests | while IFS='|' read -r package test_file; do
+            [ -z "$package" ] && continue
+            local pkg_dir=$(dirname "$test_file" | sed 's|/src/test||')
+            if is_browser_test_package "$pkg_dir"; then
+                echo "true"
+                return
+            fi
+        done
+    else
+        # Check specific package
+        local test_file_path
+        test_file_path=$(discover_integration_tests | grep "^${COMMAND}|" | cut -d'|' -f2)
+        if [ -n "$test_file_path" ]; then
+            local pkg_dir=$(dirname "$test_file_path" | sed 's|/src/test||')
+            if is_browser_test_package "$pkg_dir"; then
+                echo "true"
+                return
+            fi
+        fi
+    fi
+    echo "false"
+}
+
+if [ "$(check_and_install_playwright)" = "true" ]; then
+    if ! ensure_playwright_browsers; then
+        log_error "Failed to install Playwright browsers"
+        exit 1
+    fi
+fi
 
 # Run tests based on command
 if [ "$COMMAND" = "all" ]; then
