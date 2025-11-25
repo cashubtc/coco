@@ -13,10 +13,10 @@ export default defineConfig({
       provider: 'playwright',
       instances: browsers as any,
       headless: true,
+      screenshotFailures: false,
     },
     include: ['src/test/**/*.test.ts'],
     testTimeout: 60000,
     hookTimeout: 30000,
   },
 });
-

@@ -26,16 +26,9 @@ async function createRepositories() {
   await repositories.init();
   return {
     repositories,
-    dispose: async () => {
-      // Close and delete the database after test
-      repositories.db.close();
-      await new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(dbName);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-        request.onblocked = () => resolve(); // Database might be blocked, but we tried
-      });
-    },
+    // No cleanup needed - each test uses a unique database name and
+    // the browser session is ephemeral (Playwright closes it after tests)
+    dispose: async () => {},
   };
 }
 
@@ -48,4 +41,3 @@ runIntegrationTests(
   },
   { describe, it, beforeEach, afterEach, expect },
 );
-
