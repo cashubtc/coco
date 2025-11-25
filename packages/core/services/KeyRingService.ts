@@ -81,6 +81,9 @@ export class KeyRingService {
 
   async signProof(proof: Proof, publicKey: string): Promise<Proof> {
     this.logger?.debug('Signing proof', { proof, publicKey });
+    if (!proof.secret || typeof proof.secret !== 'string') {
+      throw new Error('Proof secret is required and must be a string');
+    }
     const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey);
     if (!keyPair) {
       const publicKeyPreview = publicKey.substring(0, 8);
@@ -97,6 +100,11 @@ export class KeyRingService {
     return signedProof;
   }
 
+  /**
+   * Converts a secret key to its corresponding public key in SEC1 compressed format.
+   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
+   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
+   */
   private getPublicKeyHex(secretKey: Uint8Array): string {
     const publicKey = schnorr.getPublicKey(secretKey);
     return '02' + bytesToHex(publicKey);

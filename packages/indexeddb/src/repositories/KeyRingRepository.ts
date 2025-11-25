@@ -75,17 +75,15 @@ export class IdbKeyRingRepository implements KeyRingRepository {
 
   async getLastDerivationIndex(): Promise<number> {
     const table = this.db.table('coco_cashu_keypairs');
-    const row = (await table
-      .where('derivationIndex')
-      .above(-1)
-      .reverse()
-      .sortBy('derivationIndex')) as KeypairRow[];
+    // Use orderBy on the index and reverse to get highest first
+    const row = (await table.orderBy('derivationIndex').reverse().first()) as
+      | KeypairRow
+      | undefined;
 
-    if (!row || row.length === 0 || row[0].derivationIndex == null) {
+    if (!row || row.derivationIndex == null) {
       return -1;
     }
 
-    return row[0].derivationIndex;
+    return row.derivationIndex;
   }
 }
-
