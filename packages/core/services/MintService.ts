@@ -7,6 +7,7 @@ import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
+import { normalizeMintUrl } from '../utils';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
@@ -43,6 +44,7 @@ export class MintService {
     mintUrl: string,
     options?: { trusted?: boolean },
   ): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const trusted = options?.trusted ?? false;
     this.logger?.info('Adding mint by URL', { mintUrl, trusted });
     const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
@@ -73,6 +75,7 @@ export class MintService {
   }
 
   async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
     if (!mint) {
       // Mint doesn't exist, create it as untrusted
@@ -91,10 +94,11 @@ export class MintService {
   }
 
   async isTrustedMint(mintUrl: string): Promise<boolean> {
-    return await this.mintRepo.isTrustedMint(mintUrl);
+    return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
   }
 
   async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
+    mintUrl = normalizeMintUrl(mintUrl);
     let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
 
     if (!mint) {
@@ -123,6 +127,7 @@ export class MintService {
   }
 
   async deleteMint(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
     if (!mint) return;
 
@@ -132,7 +137,8 @@ export class MintService {
   }
 
   async getMintInfo(mintUrl: string): Promise<MintInfo> {
-    const { mint } = await this.ensureUpdatedMint(mintUrl);
+    // ensureUpdatedMint already normalizes, but normalize here for consistency
+    const { mint } = await this.ensureUpdatedMint(normalizeMintUrl(mintUrl));
     return mint.mintInfo;
   }
 
@@ -147,12 +153,14 @@ export class MintService {
   }
 
   async trustMint(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Trusting mint', { mintUrl });
     await this.mintRepo.setMintTrusted(mintUrl, true);
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
   async untrustMint(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Untrusting mint', { mintUrl });
     await this.mintRepo.setMintTrusted(mintUrl, false);
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
