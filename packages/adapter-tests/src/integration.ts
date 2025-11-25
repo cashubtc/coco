@@ -1,7 +1,7 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
 import { CashuMint, CashuWallet, OutputData, type MintKeys, type Token } from '@cashu/cashu-ts';
-import { createFakeInvoice } from './utils';
+import { createFakeInvoice } from 'fake-bolt11';
 
 export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
 
@@ -25,6 +25,7 @@ type ExpectApi = {
   toBeLessThan(value: number): void;
   toBeLessThanOrEqual(value: number): void;
   toHaveLength(len: number): void;
+  toContain(value: unknown): void;
   rejects: {
     toThrow(): Promise<void>;
   };
@@ -752,6 +753,242 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mgr = undefined;
           }
           await dispose();
+        }
+      });
+    });
+
+    describe('KeyRing Management', () => {
+      it('should generate keypair and return secret key when dumpSecretKey is true', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const keypair = await mgr.keyring.generateKeyPair(true);
+
+          expect(keypair.publicKeyHex).toBeDefined();
+          expect(keypair.publicKeyHex.length).toBe(66); // 33 bytes in hex
+          expect(keypair.secretKey).toBeDefined();
+          expect(keypair.secretKey.length).toBe(32);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should retrieve a keypair by public key', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const generated = await mgr.keyring.generateKeyPair(true);
+          const retrieved = await mgr.keyring.getKeyPair(generated.publicKeyHex);
+
+          expect(retrieved).toBeDefined();
+          expect(retrieved?.publicKeyHex).toBe(generated.publicKeyHex);
+          expect(retrieved?.secretKey).toBeDefined();
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should return null for non-existent keypair', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const fakePublicKey = '02' + '00'.repeat(32);
+          const retrieved = await mgr.keyring.getKeyPair(fakePublicKey);
+
+          expect(retrieved).toBe(null);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should get latest keypair', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const kp1 = await mgr.keyring.generateKeyPair();
+          const kp2 = await mgr.keyring.generateKeyPair();
+          const kp3 = await mgr.keyring.generateKeyPair();
+
+          const latest = await mgr.keyring.getLatestKeyPair();
+
+          expect(latest).toBeDefined();
+          expect(latest?.publicKeyHex).toBe(kp3.publicKeyHex);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should return null for latest keypair when none exist', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const latest = await mgr.keyring.getLatestKeyPair();
+
+          expect(latest).toBe(null);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should get all keypairs', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const kp1 = await mgr.keyring.generateKeyPair();
+          const kp2 = await mgr.keyring.generateKeyPair();
+          const secretKey = crypto.getRandomValues(new Uint8Array(32));
+          const kp3 = await mgr.keyring.addKeyPair(secretKey);
+
+          const allKeypairs = await mgr.keyring.getAllKeyPairs();
+
+          expect(allKeypairs.length).toBe(3);
+          const publicKeys = allKeypairs.map((kp) => kp.publicKeyHex);
+          expect(publicKeys).toContain(kp1.publicKeyHex);
+          expect(publicKeys).toContain(kp2.publicKeyHex);
+          expect(publicKeys).toContain(kp3.publicKeyHex);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should remove a keypair', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          const kp1 = await mgr.keyring.generateKeyPair();
+          const kp2 = await mgr.keyring.generateKeyPair();
+
+          // Verify both exist
+          let allKeypairs = await mgr.keyring.getAllKeyPairs();
+          expect(allKeypairs.length).toBe(2);
+
+          // Remove one
+          await mgr.keyring.removeKeyPair(kp1.publicKeyHex);
+
+          // Verify only one remains
+          allKeypairs = await mgr.keyring.getAllKeyPairs();
+          expect(allKeypairs.length).toBe(1);
+          expect(allKeypairs[0]?.publicKeyHex).toBe(kp2.publicKeyHex);
+
+          // Verify removed keypair returns null
+          const removed = await mgr.keyring.getKeyPair(kp1.publicKeyHex);
+          expect(removed).toBe(null);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should generate deterministic keypairs from same seed', async () => {
+        const { repositories: repo1, dispose: dispose1 } = await createRepositories();
+        const { repositories: repo2, dispose: dispose2 } = await createRepositories();
+
+        // Use same seed for both managers
+        const sharedSeed = crypto.getRandomValues(new Uint8Array(64));
+        const sharedSeedGetter = async () => sharedSeed;
+
+        try {
+          // First manager generates keypairs
+          const mgr1 = await initializeCoco({
+            repo: repo1,
+            seedGetter: sharedSeedGetter,
+            logger,
+          });
+
+          const kp1_1 = await mgr1.keyring.generateKeyPair(true);
+          const kp1_2 = await mgr1.keyring.generateKeyPair(true);
+
+          await mgr1.pauseSubscriptions();
+          await mgr1.dispose();
+
+          // Second manager with same seed generates keypairs
+          const mgr2 = await initializeCoco({
+            repo: repo2,
+            seedGetter: sharedSeedGetter,
+            logger,
+          });
+
+          const kp2_1 = await mgr2.keyring.generateKeyPair(true);
+          const kp2_2 = await mgr2.keyring.generateKeyPair(true);
+
+          await mgr2.pauseSubscriptions();
+          await mgr2.dispose();
+
+          // Keypairs should be identical (deterministic derivation)
+          expect(kp1_1.publicKeyHex).toBe(kp2_1.publicKeyHex);
+          expect(kp1_2.publicKeyHex).toBe(kp2_2.publicKeyHex);
+        } finally {
+          await dispose1();
+          await dispose2();
         }
       });
     });

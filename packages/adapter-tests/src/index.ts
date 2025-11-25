@@ -122,5 +122,5 @@ export function createDummyProof(): CoreProof {
 
 export { runIntegrationTests } from './integration.ts';
 export type { IntegrationTestRunner, IntegrationTestOptions } from './integration.ts';
-export { createFakeInvoice, createInvoice } from './utils.ts';
-export type { FakeInvoiceOptions } from './utils.ts';
+export { createFakeInvoice } from 'fake-bolt11';
+export type { FakeInvoiceOptions } from 'fake-bolt11';

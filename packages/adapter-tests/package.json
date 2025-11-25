@@ -24,8 +24,9 @@
   "peerDependencies": {
     "typescript": "^5",
     "coco-cashu-core": "^1.0.0-rc.25",
-    "@cashu/cashu-ts": "^2.7.2",
-    "@noble/curves": "^1.9.5",
-    "@noble/hashes": "^1.5.0"
+    "@cashu/cashu-ts": "^2.7.2"
+  },
+  "dependencies": {
+    "fake-bolt11": "^0.1.0"
   }
 }
