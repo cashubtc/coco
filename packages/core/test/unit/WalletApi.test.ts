@@ -4,6 +4,8 @@ import { MintService } from '../../services/MintService';
 import { WalletService } from '../../services/WalletService';
 import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
+import { TransactionService } from '../../services/TransactionService';
+import { PaymentRequestService } from '../../services/PaymentRequestService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
@@ -16,6 +18,8 @@ describe('WalletApi - Trust Enforcement', () => {
   let mockWalletService: any;
   let mockProofService: any;
   let mockWalletRestoreService: any;
+  let transactionService: TransactionService;
+  let paymentRequestService: PaymentRequestService;
   let eventBus: EventBus<CoreEvents>;
 
   const testMintUrl = 'https://mint.test';
@@ -73,12 +77,22 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
+    transactionService = new TransactionService(
+      mockMintService,
+      mockWalletService,
+      mockProofService,
+      eventBus,
+    );
+
+    paymentRequestService = new PaymentRequestService(transactionService);
+
     walletApi = new WalletApi(
       mockMintService,
       mockWalletService,
       mockProofService,
       mockWalletRestoreService,
-      eventBus,
+      transactionService,
+      paymentRequestService,
     );
   });
 
