@@ -27,15 +27,15 @@ bun install
 - [x] NUT-07
 - [x] NUT-08
 - [x] NUT-09
-- [ ] NUT-10
-- [ ] NUT-11
+- [x] NUT-10
+- [x] NUT-11
 - [x] NUT-12
 - [x] NUT-13
 - [ ] NUT-14
 - [ ] NUT-15
 - [ ] NUT-16
 - [x] NUT-17
-- [ ] NUT-18
+- [x] NUT-18
 - [ ] NUT-19
 - [ ] NUT-20
 - [ ] NUT-21
