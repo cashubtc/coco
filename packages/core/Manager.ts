@@ -13,6 +13,8 @@ import {
   MeltQuoteService,
   HistoryService,
   KeyRingService,
+  TransactionService,
+  PaymentRequestService,
 } from './services';
 import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
 import { EventBus, type CoreEvents } from './events';
@@ -133,6 +135,8 @@ export class Manager {
   private historyService: HistoryService;
   private seedService: SeedService;
   private counterService: CounterService;
+  private transactionService: TransactionService;
+  private paymentRequestService: PaymentRequestService;
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
@@ -166,6 +170,8 @@ export class Manager {
     this.mintQuoteRepository = core.mintQuoteRepository;
     this.meltQuoteService = core.meltQuoteService;
     this.historyService = core.historyService;
+    this.transactionService = core.transactionService;
+    this.paymentRequestService = core.paymentRequestService;
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -186,6 +192,7 @@ export class Manager {
       mintQuoteService: this.mintQuoteService,
       meltQuoteService: this.meltQuoteService,
       historyService: this.historyService,
+      transactionService: this.transactionService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -404,6 +411,8 @@ export class Manager {
     mintQuoteRepository: MintQuoteRepository;
     meltQuoteService: MeltQuoteService;
     historyService: HistoryService;
+    transactionService: TransactionService;
+    paymentRequestService: PaymentRequestService;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -472,6 +481,21 @@ export class Manager {
       historyLogger,
     );
 
+    const transactionLogger = this.getChildLogger('TransactionService');
+    const transactionService = new TransactionService(
+      mintService,
+      walletService,
+      proofService,
+      this.eventBus,
+      transactionLogger,
+    );
+
+    const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
+    const paymentRequestService = new PaymentRequestService(
+      transactionService,
+      paymentRequestLogger,
+    );
+
     return {
       mintService,
       seedService,
@@ -484,6 +508,8 @@ export class Manager {
       mintQuoteRepository,
       meltQuoteService,
       historyService,
+      transactionService,
+      paymentRequestService,
     };
   }
 
@@ -503,7 +529,8 @@ export class Manager {
       this.walletService,
       this.proofService,
       this.walletRestoreService,
-      this.eventBus,
+      this.transactionService,
+      this.paymentRequestService,
       walletApiLogger,
     );
     const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);

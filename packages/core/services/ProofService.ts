@@ -193,6 +193,34 @@ export class ProofService {
     return this.proofRepository.getAllReadyProofs();
   }
 
+  /**
+   * Gets the balance for a single mint by summing ready proof amounts.
+   * @param mintUrl - The URL of the mint
+   * @returns The total balance for the mint
+   */
+  async getBalance(mintUrl: string): Promise<number> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    const proofs = await this.getReadyProofs(mintUrl);
+    return proofs.reduce((acc, proof) => acc + proof.amount, 0);
+  }
+
+  /**
+   * Gets balances for all mints by summing ready proof amounts.
+   * @returns An object mapping mint URLs to their balances
+   */
+  async getBalances(): Promise<{ [mintUrl: string]: number }> {
+    const proofs = await this.getAllReadyProofs();
+    const balances: { [mintUrl: string]: number } = {};
+    for (const proof of proofs) {
+      const mintUrl = proof.mintUrl;
+      const balance = balances[mintUrl] || 0;
+      balances[mintUrl] = balance + proof.amount;
+    }
+    return balances;
+  }
+
   async setProofState(
     mintUrl: string,
     secrets: string[],
