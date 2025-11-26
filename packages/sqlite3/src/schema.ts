@@ -1,8 +1,10 @@
 import { SqliteDb, getUnixTimeSeconds } from './db.ts';
+import { normalizeMintUrl } from 'coco-cashu-core';
 
 interface Migration {
   id: string;
-  sql: string;
+  sql?: string;
+  run?: (db: SqliteDb) => Promise<void>;
 }
 
 const MIGRATIONS: readonly Migration[] = [
@@ -144,6 +146,52 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_keypairs_derivationIndex ON coco_cashu_keypairs(derivationIndex DESC) WHERE derivationIndex IS NOT NULL;
     `,
   },
+  {
+    id: '007_normalize_mint_urls',
+    run: async (db: SqliteDb) => {
+      // Get all distinct mintUrls from the mints table
+      const mints = await db.all<{ mintUrl: string }>('SELECT mintUrl FROM coco_cashu_mints');
+
+      // Build mapping of old -> normalized URLs
+      const urlMapping = new Map<string, string>();
+      for (const { mintUrl } of mints) {
+        const normalized = normalizeMintUrl(mintUrl);
+        urlMapping.set(mintUrl, normalized);
+      }
+
+      // Check for conflicts: two different URLs normalizing to the same value
+      const normalizedToOriginal = new Map<string, string>();
+      for (const [original, normalized] of urlMapping) {
+        const existing = normalizedToOriginal.get(normalized);
+        if (existing && existing !== original) {
+          throw new Error(
+            `Mint URL normalization conflict: "${existing}" and "${original}" both normalize to "${normalized}". ` +
+              `Please manually resolve this conflict before running the migration.`,
+          );
+        }
+        normalizedToOriginal.set(normalized, original);
+      }
+
+      // Update all tables with normalized URLs
+      const tables = [
+        'coco_cashu_mints',
+        'coco_cashu_keysets',
+        'coco_cashu_counters',
+        'coco_cashu_proofs',
+        'coco_cashu_mint_quotes',
+        'coco_cashu_melt_quotes',
+        'coco_cashu_history',
+      ];
+
+      for (const [original, normalized] of urlMapping) {
+        if (original === normalized) continue; // No change needed
+
+        for (const table of tables) {
+          await db.run(`UPDATE ${table} SET mintUrl = ? WHERE mintUrl = ?`, [normalized, original]);
+        }
+      }
+    },
+  },
 ];
 
 export async function ensureSchema(db: SqliteDb): Promise<void> {
@@ -169,7 +217,12 @@ export async function ensureSchema(db: SqliteDb): Promise<void> {
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.id)) continue;
     await db.transaction(async (tx) => {
-      await tx.exec(migration.sql);
+      if (migration.sql) {
+        await tx.exec(migration.sql);
+      }
+      if (migration.run) {
+        await migration.run(tx);
+      }
       await tx.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
         migration.id,
         getUnixTimeSeconds(),

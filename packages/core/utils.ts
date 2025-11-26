@@ -83,3 +83,34 @@ export function buildYHexMapsForSecrets(secrets: string[]): {
   }
   return { yHexBySecret, secretByYHex };
 }
+
+/**
+ * Normalize a mint URL to prevent duplicates from variations like:
+ * - Trailing slashes: https://mint.com/ -> https://mint.com
+ * - Case differences in hostname: https://MINT.com -> https://mint.com
+ * - Default ports: https://mint.com:443 -> https://mint.com
+ * - Redundant path segments: https://mint.com/./path -> https://mint.com/path
+ */
+export function normalizeMintUrl(mintUrl: string): string {
+  const url = new URL(mintUrl);
+
+  // URL constructor already lowercases hostname and normalizes path
+  // Remove default ports
+  if ((url.protocol === 'https:' && url.port === '443') || 
+      (url.protocol === 'http:' && url.port === '80')) {
+    url.port = '';
+  }
+
+  // Build normalized URL without trailing slash
+  let normalized = `${url.protocol}//${url.host}${url.pathname}`;
+  
+  // Remove trailing slash (but keep root path as just the origin)
+  if (normalized.endsWith('/') && url.pathname !== '/') {
+    normalized = normalized.slice(0, -1);
+  } else if (url.pathname === '/') {
+    // For root path, remove the trailing slash entirely
+    normalized = `${url.protocol}//${url.host}`;
+  }
+
+  return normalized;
+}
