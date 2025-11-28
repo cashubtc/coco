@@ -1,5 +1,16 @@
 # coco-cashu-indexeddb
 
+## 1.1.2-rc.26
+
+### Patch Changes
+
+- b0a4428: Added URL normalization and respective migration
+- e2e3374: Fix a bug in Indexeddb adapter for getLatestDerivationIndex
+- Updated dependencies [b0a4428]
+- Updated dependencies [0fb58a0]
+- Updated dependencies [e2e3374]
+  - coco-cashu-core@1.1.2-rc.26
+
 ## 1.0.0-rc.25
 
 ### Patch Changes

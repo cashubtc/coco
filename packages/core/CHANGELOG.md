@@ -1,5 +1,13 @@
 # coco-cashu-core
 
+## 1.1.2-rc.26
+
+### Patch Changes
+
+- b0a4428: Added URL normalization and respective migration
+- 0fb58a0: Added PaymentRequestServices and API layer to read and handle payment requests
+- e2e3374: Fix a bug in Indexeddb adapter for getLatestDerivationIndex
+
 ## 1.0.0-rc.25
 
 ### Patch Changes
