@@ -379,6 +379,75 @@ describe('MintService', () => {
       isTrusted = await service.isTrustedMint(testMintUrl);
       expect(isTrusted).toBe(true); // Should remain trusted
     });
+
+    it('should emit mint:updated and mint:trusted events when re-adding with trusted=true', async () => {
+      // Add as untrusted
+      await service.addMintByUrl(testMintUrl, { trusted: false });
+
+      const trustedEvents: any[] = [];
+      const updatedEvents: any[] = [];
+      eventBus.on('mint:trusted', (payload) => {
+        trustedEvents.push(payload);
+      });
+      eventBus.on('mint:updated', (payload) => {
+        updatedEvents.push(payload);
+      });
+
+      // Re-add with trusted=true
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+
+      expect(trustedEvents.length).toBe(1);
+      expect(trustedEvents[0]?.mintUrl).toBe(testMintUrl);
+      expect(updatedEvents.length).toBe(1);
+      expect(updatedEvents[0]?.mint.trusted).toBe(true);
+    });
+
+    it('should emit mint:updated and mint:untrusted events when re-adding with trusted=false', async () => {
+      // Add as trusted
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+
+      const untrustedEvents: any[] = [];
+      const updatedEvents: any[] = [];
+      eventBus.on('mint:untrusted', (payload) => {
+        untrustedEvents.push(payload);
+      });
+      eventBus.on('mint:updated', (payload) => {
+        updatedEvents.push(payload);
+      });
+
+      // Re-add with trusted=false
+      await service.addMintByUrl(testMintUrl, { trusted: false });
+
+      expect(untrustedEvents.length).toBe(1);
+      expect(untrustedEvents[0]?.mintUrl).toBe(testMintUrl);
+      expect(updatedEvents.length).toBe(1);
+      expect(updatedEvents[0]?.mint.trusted).toBe(false);
+    });
+
+    it('should not emit trust events when re-adding without trust change', async () => {
+      // Add as trusted
+      await service.addMintByUrl(testMintUrl, { trusted: true });
+
+      const trustedEvents: any[] = [];
+      const untrustedEvents: any[] = [];
+      const updatedEvents: any[] = [];
+      eventBus.on('mint:trusted', (payload) => {
+        trustedEvents.push(payload);
+      });
+      eventBus.on('mint:untrusted', (payload) => {
+        untrustedEvents.push(payload);
+      });
+      eventBus.on('mint:updated', (payload) => {
+        updatedEvents.push(payload);
+      });
+
+      // Re-add without changing trust
+      await service.addMintByUrl(testMintUrl);
+
+      expect(trustedEvents.length).toBe(0);
+      expect(untrustedEvents.length).toBe(0);
+      // mint:updated might be emitted if mint is stale, but no trust events
+    });
   });
 
   describe('error handling', () => {

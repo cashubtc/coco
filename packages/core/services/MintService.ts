@@ -54,6 +54,15 @@ export class MintService {
       if (options?.trusted !== undefined && exists.trusted !== options.trusted) {
         await this.mintRepo.setMintTrusted(mintUrl, options.trusted);
         this.logger?.info('Updated mint trust status', { mintUrl, trusted: options.trusted });
+        // Emit trust change events
+        if (options.trusted) {
+          await this.eventBus?.emit('mint:trusted', { mintUrl });
+        } else {
+          await this.eventBus?.emit('mint:untrusted', { mintUrl });
+        }
+        const updated = await this.ensureUpdatedMint(mintUrl);
+        await this.eventBus?.emit('mint:updated', updated);
+        return updated;
       }
       return this.ensureUpdatedMint(mintUrl);
     }
