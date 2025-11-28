@@ -6,6 +6,7 @@ export interface RealTimeTransport {
   on(mintUrl: string, event: TransportEvent, handler: (evt: any) => void): void;
   send(mintUrl: string, req: WsRequest): void;
   closeAll(): void;
+  closeMint(mintUrl: string): void;
   pause(): void;
   resume(): void;
 }

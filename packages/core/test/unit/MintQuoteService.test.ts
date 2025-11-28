@@ -45,9 +45,14 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
       emittedEvents.push({ event: 'mint-quote:added', payload });
     });
 
-    // Create service
+    // Create service with mock mintService
+    const mockMintService = {
+      isTrustedMint: async () => true,
+    } as any;
+
     service = new MintQuoteService(
       mockRepo,
+      mockMintService,
       {} as any, // walletService not needed
       {} as any, // proofService not needed
       eventBus,

@@ -180,6 +180,12 @@ export class Manager {
     this.subscription = apis.subscription;
     this.history = apis.history;
 
+    // Close subscriptions for untrusted mints
+    this.eventBus.on('mint:untrusted', ({ mintUrl }) => {
+      this.logger.info('Mint untrusted, closing subscriptions', { mintUrl });
+      this.subscriptions.closeMint(mintUrl);
+    });
+
     // Initialize plugins asynchronously to keep constructor sync
     const services: ServiceMap = {
       mintService: this.mintService,
@@ -242,6 +248,7 @@ export class Manager {
     this.mintQuoteWatcher = new MintQuoteWatcherService(
       this.mintQuoteRepository,
       this.subscriptions,
+      this.mintService,
       this.mintQuoteService,
       this.eventBus,
       watcherLogger,
@@ -294,6 +301,7 @@ export class Manager {
       : this.logger;
     this.proofStateWatcher = new ProofStateWatcherService(
       this.subscriptions,
+      this.mintService,
       this.proofService,
       this.eventBus,
       watcherLogger,
@@ -459,6 +467,7 @@ export class Manager {
 
     const quotesService = new MintQuoteService(
       repositories.mintQuoteRepository,
+      mintService,
       walletService,
       proofService,
       this.eventBus,
@@ -468,6 +477,7 @@ export class Manager {
     const mintQuoteRepository = repositories.mintQuoteRepository;
 
     const meltQuoteService = new MeltQuoteService(
+      mintService,
       proofService,
       walletService,
       repositories.meltQuoteRepository,

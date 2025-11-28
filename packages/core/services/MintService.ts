@@ -156,6 +156,7 @@ export class MintService {
     mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Trusting mint', { mintUrl });
     await this.mintRepo.setMintTrusted(mintUrl, true);
+    await this.eventBus?.emit('mint:trusted', { mintUrl });
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
@@ -163,6 +164,7 @@ export class MintService {
     mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Untrusting mint', { mintUrl });
     await this.mintRepo.setMintTrusted(mintUrl, false);
+    await this.eventBus?.emit('mint:untrusted', { mintUrl });
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 

@@ -48,6 +48,7 @@ export class MintQuoteProcessor {
   private offStateChanged?: () => void;
   private offQuoteAdded?: () => void;
   private offRequeue?: () => void;
+  private offUntrusted?: () => void;
 
   private handlers = new Map<string, QuoteHandler>();
   private readonly processIntervalMs: number;
@@ -112,6 +113,11 @@ export class MintQuoteProcessor {
       this.enqueue(mintUrl, quoteId, 'bolt11');
     });
 
+    // Clear queue items when mint is untrusted
+    this.offUntrusted = this.bus.on('mint:untrusted', ({ mintUrl }) => {
+      this.clearMintFromQueue(mintUrl);
+    });
+
     // Start processing loop
     this.scheduleNextProcess();
   }
@@ -151,6 +157,16 @@ export class MintQuoteProcessor {
       }
     }
 
+    if (this.offUntrusted) {
+      try {
+        this.offUntrusted();
+      } catch {
+        // ignore
+      } finally {
+        this.offUntrusted = undefined;
+      }
+    }
+
     // Clear processing timer
     if (this.processingTimer) {
       clearTimeout(this.processingTimer);
@@ -172,6 +188,19 @@ export class MintQuoteProcessor {
   async waitForCompletion(): Promise<void> {
     while (this.queue.length > 0 || this.processing) {
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  /**
+   * Remove all queued items for a specific mint.
+   * Called when a mint is untrusted to stop processing its quotes.
+   */
+  clearMintFromQueue(mintUrl: string): void {
+    const before = this.queue.length;
+    this.queue = this.queue.filter((item) => item.mintUrl !== mintUrl);
+    const removed = before - this.queue.length;
+    if (removed > 0) {
+      this.logger?.info('Cleared mint quotes from processor queue', { mintUrl, removed });
     }
   }
 

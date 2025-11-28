@@ -1,13 +1,16 @@
 import type { MintQuoteRepository } from '../repositories';
+import type { MintService } from './MintService';
 import type { WalletService } from './WalletService';
 import type { ProofService } from './ProofService';
 import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
 import { mapProofToCoreProof } from '@core/utils.ts';
+import { UnknownMintError } from '../models/Error';
 
 export class MintQuoteService {
   private readonly mintQuoteRepo: MintQuoteRepository;
+  private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly proofService: ProofService;
   private readonly eventBus: EventBus<CoreEvents>;
@@ -15,12 +18,14 @@ export class MintQuoteService {
 
   constructor(
     mintQuoteRepo: MintQuoteRepository,
+    mintService: MintService,
     walletService: WalletService,
     proofService: ProofService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.mintQuoteRepo = mintQuoteRepo;
+    this.mintService = mintService;
     this.walletService = walletService;
     this.proofService = proofService;
     this.eventBus = eventBus;
@@ -29,6 +34,12 @@ export class MintQuoteService {
 
   async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
     this.logger?.info('Creating mint quote', { mintUrl, amount });
+
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    }
+
     try {
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
       const quote = await wallet.createMintQuote(amount);
@@ -43,6 +54,12 @@ export class MintQuoteService {
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
     this.logger?.info('Redeeming mint quote', { mintUrl, quoteId });
+
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    }
+
     try {
       const quote = await this.mintQuoteRepo.getMintQuote(mintUrl, quoteId);
       if (!quote) {
@@ -147,7 +164,8 @@ export class MintQuoteService {
 
   /**
    * Requeue all PAID (but not yet ISSUED) quotes for processing.
-   * Emits `mint-quote:added` for each PAID quote so the processor can enqueue them.
+   * Only requeues quotes for trusted mints.
+   * Emits `mint-quote:requeue` for each PAID quote so the processor can enqueue them.
    */
   async requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }> {
     const requeued: string[] = [];
@@ -156,6 +174,17 @@ export class MintQuoteService {
       for (const q of pending) {
         if (mintUrl && q.mintUrl !== mintUrl) continue;
         if (q.state !== 'PAID') continue;
+
+        // Only requeue for trusted mints
+        const trusted = await this.mintService.isTrustedMint(q.mintUrl);
+        if (!trusted) {
+          this.logger?.debug('Skipping requeue for untrusted mint', {
+            mintUrl: q.mintUrl,
+            quoteId: q.quote,
+          });
+          continue;
+        }
+
         await this.eventBus.emit('mint-quote:requeue', {
           mintUrl: q.mintUrl,
           quoteId: q.quote,

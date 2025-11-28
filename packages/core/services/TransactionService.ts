@@ -90,6 +90,11 @@ export class TransactionService {
   }
 
   async send(mintUrl: string, amount: number): Promise<Token> {
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    }
+
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     // Try exact send first (without fees)
     const exactProofs = await this.proofService.selectProofsToSend(mintUrl, amount, false);
@@ -147,5 +152,6 @@ export class TransactionService {
     return token;
   }
 }
+
 
 
