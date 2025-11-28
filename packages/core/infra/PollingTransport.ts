@@ -207,6 +207,16 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.clear();
   }
 
+  closeMint(mintUrl: string): void {
+    this.schedByMint.delete(mintUrl);
+    this.listenersByMint.delete(mintUrl);
+    this.proofQueueByMint.delete(mintUrl);
+    this.proofSetByMint.delete(mintUrl);
+    this.yToSubsByMint.delete(mintUrl);
+    this.subToYsByMint.delete(mintUrl);
+    this.logger?.info('PollingTransport closed mint', { mintUrl });
+  }
+
   pause(): void {
     this.paused = true;
     this.logger?.info('PollingTransport paused');

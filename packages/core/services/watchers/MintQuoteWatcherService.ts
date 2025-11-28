@@ -4,6 +4,7 @@ import type { MintQuoteRepository } from '../../repositories';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
 import type { MintQuoteService } from '../MintQuoteService';
+import type { MintService } from '../MintService';
 
 type QuoteKey = string; // `${mintUrl}::${quoteId}`
 
@@ -19,6 +20,7 @@ export interface MintQuoteWatcherOptions {
 export class MintQuoteWatcherService {
   private readonly repo: MintQuoteRepository;
   private readonly subs: SubscriptionManager;
+  private readonly mintService: MintService;
   private readonly quotes: MintQuoteService;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
@@ -28,10 +30,12 @@ export class MintQuoteWatcherService {
   private unsubscribeByKey = new Map<QuoteKey, UnsubscribeHandler>();
   private offCreated?: () => void;
   private offAdded?: () => void;
+  private offUntrusted?: () => void;
 
   constructor(
     repo: MintQuoteRepository,
     subs: SubscriptionManager,
+    mintService: MintService,
     quotes: MintQuoteService,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
@@ -39,6 +43,7 @@ export class MintQuoteWatcherService {
   ) {
     this.repo = repo;
     this.subs = subs;
+    this.mintService = mintService;
     this.quotes = quotes;
     this.bus = bus;
     this.logger = logger;
@@ -80,8 +85,17 @@ export class MintQuoteWatcherService {
       }
     });
 
+    // Stop watching quotes when mint is untrusted
+    this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
+      try {
+        await this.stopWatchingMint(mintUrl);
+      } catch (err) {
+        this.logger?.error('Failed to stop watching mint quotes on untrust', { mintUrl, err });
+      }
+    });
+
     if (this.options.watchExistingPendingOnStart) {
-      // Also watch any quotes that are not ISSUED yet
+      // Also watch any quotes that are not ISSUED yet (only for trusted mints)
       try {
         const pending = await this.repo.getPendingMintQuotes();
         const byMint = new Map<string, string[]>();
@@ -94,6 +108,16 @@ export class MintQuoteWatcherService {
           arr.push(q.quote);
         }
         for (const [mintUrl, quoteIds] of byMint.entries()) {
+          // Only watch quotes for trusted mints
+          const trusted = await this.mintService.isTrustedMint(mintUrl);
+          if (!trusted) {
+            this.logger?.debug('Skipping pending quotes for untrusted mint', {
+              mintUrl,
+              count: quoteIds.length,
+            });
+            continue;
+          }
+
           try {
             await this.watchQuote(mintUrl, quoteIds);
           } catch (err) {
@@ -134,6 +158,16 @@ export class MintQuoteWatcherService {
       }
     }
 
+    if (this.offUntrusted) {
+      try {
+        this.offUntrusted();
+      } catch {
+        // ignore
+      } finally {
+        this.offUntrusted = undefined;
+      }
+    }
+
     const entries = Array.from(this.unsubscribeByKey.entries());
     this.unsubscribeByKey.clear();
     for (const [key, unsub] of entries) {
@@ -149,6 +183,14 @@ export class MintQuoteWatcherService {
 
   async watchQuote(mintUrl: string, quoteOrQuotes: string | string[]): Promise<void> {
     if (!this.running) return;
+
+    // Only watch quotes for trusted mints
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
+      return;
+    }
+
     const input = Array.isArray(quoteOrQuotes) ? quoteOrQuotes : [quoteOrQuotes];
     const unique = Array.from(new Set(input));
     // Filter out already-watched
@@ -242,5 +284,23 @@ export class MintQuoteWatcherService {
     } finally {
       this.unsubscribeByKey.delete(key);
     }
+  }
+
+  async stopWatchingMint(mintUrl: string): Promise<void> {
+    this.logger?.info('Stopping all quote watchers for mint', { mintUrl });
+    const prefix = `${mintUrl}::`;
+    const keysToStop: QuoteKey[] = [];
+
+    for (const key of this.unsubscribeByKey.keys()) {
+      if (key.startsWith(prefix)) {
+        keysToStop.push(key);
+      }
+    }
+
+    for (const key of keysToStop) {
+      await this.stopWatching(key);
+    }
+
+    this.logger?.info('Stopped quote watchers for mint', { mintUrl, count: keysToStop.length });
   }
 }

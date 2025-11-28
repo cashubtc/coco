@@ -3,6 +3,7 @@ import { MeltQuoteService } from '../../services/MeltQuoteService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MeltQuoteRepository } from '../../repositories';
+import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { Proof } from '@cashu/cashu-ts';
@@ -13,6 +14,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
   const quoteId = 'quote-123';
 
   let service: MeltQuoteService;
+  let mockMintService: MintService;
   let mockProofService: ProofService;
   let mockWalletService: WalletService;
   let mockMeltQuoteRepo: MeltQuoteRepository;
@@ -36,6 +38,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     eventBus.on('melt-quote:state-changed', (payload) => {
       emittedEvents.push({ event: 'melt-quote:state-changed', payload });
     });
+
+    mockMintService = {
+      isTrustedMint: mock(() => Promise.resolve(true)),
+    } as any;
 
     mockMeltQuoteRepo = {
       async getMeltQuote() {
@@ -72,6 +78,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     } as any;
 
     service = new MeltQuoteService(
+      mockMintService,
       mockProofService,
       mockWalletService,
       mockMeltQuoteRepo,

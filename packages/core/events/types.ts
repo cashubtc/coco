@@ -14,6 +14,8 @@ import type { HistoryEntry } from '../models/History';
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
+  'mint:trusted': { mintUrl: string };
+  'mint:untrusted': { mintUrl: string };
   'counter:updated': Counter;
   'proofs:saved': { mintUrl: string; keysetId: string; proofs: CoreProof[] };
   'proofs:state-changed': {

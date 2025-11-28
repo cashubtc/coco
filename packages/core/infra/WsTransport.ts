@@ -25,6 +25,10 @@ export class WsTransport implements RealTimeTransport {
     this.ws.closeAll();
   }
 
+  closeMint(mintUrl: string): void {
+    this.ws.closeMint(mintUrl);
+  }
+
   pause(): void {
     this.ws.pause();
   }

@@ -54,6 +54,10 @@ class MockTransport implements RealTimeTransport {
     this.listeners.clear();
   }
 
+  closeMint(mintUrl: string): void {
+    this.listeners.delete(mintUrl);
+  }
+
   pause(): void {
     this.paused = true;
   }

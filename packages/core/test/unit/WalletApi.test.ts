@@ -215,11 +215,20 @@ describe('WalletApi - Trust Enforcement', () => {
     });
   });
 
-  describe('send - trust not required', () => {
-    it('should allow sending from any mint (trusted or not)', async () => {
-      // Note: send() doesn't check trust status
-      // This is by design - users can send from any mint they have proofs for
+  describe('send - trust enforcement', () => {
+    it('should reject sending from untrusted mints', async () => {
       const amount = 10;
+
+      mockMintService.isTrustedMint.mockImplementation(async () => false);
+
+      await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow(UnknownMintError);
+      await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow('not trusted');
+    });
+
+    it('should allow sending from trusted mints', async () => {
+      const amount = 10;
+
+      mockMintService.isTrustedMint.mockImplementation(async () => true);
 
       mockWalletService.getWalletWithActiveKeysetId.mockImplementation(async () => ({
         wallet: {
@@ -231,7 +240,6 @@ describe('WalletApi - Trust Enforcement', () => {
       mockProofService.selectProofsToSend = mock(async () => testProofs);
       mockProofService.setProofState = mock(async () => {});
 
-      // Should work regardless of trust status
       const result = await walletApi.send(testMintUrl, amount);
 
       expect(result.mint).toBe(testMintUrl);

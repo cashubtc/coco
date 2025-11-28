@@ -218,6 +218,35 @@ export class WsConnectionManager {
     this.reconnectAttemptsByMint.clear();
   }
 
+  closeMint(mintUrl: string): void {
+    // Close socket for this mint
+    const socket = this.sockets.get(mintUrl);
+    if (socket) {
+      try {
+        socket.close(1000, 'Mint closed');
+        this.logger?.debug('WS closed for mint', { mintUrl });
+      } catch (err) {
+        this.logger?.warn('Error while closing WS for mint', { mintUrl, err });
+      }
+      this.sockets.delete(mintUrl);
+    }
+
+    // Clear state for this mint
+    this.isOpenByMint.delete(mintUrl);
+    this.sendQueueByMint.delete(mintUrl);
+    this.listenersByMint.delete(mintUrl);
+
+    // Clear reconnect state
+    const timeout = this.reconnectTimeoutByMint.get(mintUrl);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.reconnectTimeoutByMint.delete(mintUrl);
+    }
+    this.reconnectAttemptsByMint.delete(mintUrl);
+
+    this.logger?.info('WsConnectionManager closed mint', { mintUrl });
+  }
+
   pause(): void {
     this.paused = true;
     // Clear all pending reconnect timeouts

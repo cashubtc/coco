@@ -46,8 +46,8 @@ describe('Pause/Resume Integration Test', () => {
     expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
     expect(manager['mintQuoteProcessor']?.isRunning()).toBe(true);
 
-    // Add mint first
-    await manager.mint.addMint(mintUrl);
+    // Add mint first (as trusted, since createMintQuote requires trust)
+    await manager.mint.addMint(mintUrl, { trusted: true });
 
     // Create a mint quote
     const quote1 = await manager.quotes.createMintQuote(mintUrl, 1);
@@ -84,7 +84,7 @@ describe('Pause/Resume Integration Test', () => {
   }, 30000); // 30 second timeout for this integration test
 
   it('should handle multiple pause/resume cycles', async () => {
-    await manager.mint.addMint(mintUrl);
+    await manager.mint.addMint(mintUrl, { trusted: true });
 
     // First pause/resume cycle
     await manager.pauseSubscriptions();
@@ -112,7 +112,7 @@ describe('Pause/Resume Integration Test', () => {
   }, 20000);
 
   it('should resume successfully even without explicit pause (simulating OS connection teardown)', async () => {
-    await manager.mint.addMint(mintUrl);
+    await manager.mint.addMint(mintUrl, { trusted: true });
 
     // Create a quote with subscriptions active
     const quote = await manager.quotes.createMintQuote(mintUrl, 1);

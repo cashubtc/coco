@@ -1,13 +1,16 @@
 import type { MeltQuoteResponse, MeltQuoteState } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
+import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
 import type { WalletService } from './WalletService';
 import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
 import { mapProofToCoreProof } from '@core/utils';
+import { UnknownMintError } from '../models/Error';
 
 export class MeltQuoteService {
+  private readonly mintService: MintService;
   private readonly proofService: ProofService;
   private readonly walletService: WalletService;
   private readonly meltQuoteRepo: MeltQuoteRepository;
@@ -15,12 +18,14 @@ export class MeltQuoteService {
   private readonly eventBus: EventBus<CoreEvents>;
 
   constructor(
+    mintService: MintService,
     proofService: ProofService,
     walletService: WalletService,
     meltQuoteRepo: MeltQuoteRepository,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
+    this.mintService = mintService;
     this.proofService = proofService;
     this.walletService = walletService;
     this.meltQuoteRepo = meltQuoteRepo;
@@ -38,6 +43,11 @@ export class MeltQuoteService {
         mintUrl,
       });
       throw new Error('invoice is required');
+    }
+
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
     this.logger?.info('Creating melt quote', { mintUrl });
@@ -61,6 +71,11 @@ export class MeltQuoteService {
     if (!quoteId || !quoteId.trim()) {
       this.logger?.warn('Invalid parameter: quoteId is required for payMeltQuote', { mintUrl });
       throw new Error('quoteId is required');
+    }
+
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
     this.logger?.info('Paying melt quote', { mintUrl, quoteId });

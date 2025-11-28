@@ -376,6 +376,35 @@ export class SubscriptionManager {
     this.hasOpenedByMint.clear();
   }
 
+  closeMint(mintUrl: string): void {
+    this.logger?.info('Closing all subscriptions for mint', { mintUrl });
+
+    // Get all subscriptions for this mint
+    const subIds = this.activeByMint.get(mintUrl);
+    if (subIds) {
+      for (const subId of subIds) {
+        this.subscriptions.delete(subId);
+      }
+    }
+
+    // Clear all tracking state for this mint
+    this.activeByMint.delete(mintUrl);
+    this.pendingSubscribeByMint.delete(mintUrl);
+    this.nextIdByMint.delete(mintUrl);
+    this.messageHandlerByMint.delete(mintUrl);
+    this.openHandlerByMint.delete(mintUrl);
+    this.hasOpenedByMint.delete(mintUrl);
+
+    // Close transport for this mint
+    const transport = this.transportByMint.get(mintUrl);
+    if (transport) {
+      transport.closeMint(mintUrl);
+      this.transportByMint.delete(mintUrl);
+    }
+
+    this.logger?.info('SubscriptionManager closed mint', { mintUrl });
+  }
+
   private reSubscribeMint(mintUrl: string): void {
     const set = this.activeByMint.get(mintUrl);
     if (!set || set.size === 0) return;

@@ -1,6 +1,7 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
+import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
@@ -25,6 +26,7 @@ export interface ProofStateWatcherOptions {
 
 export class ProofStateWatcherService {
   private readonly subs: SubscriptionManager;
+  private readonly mintService: MintService;
   private readonly proofs: ProofService;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
@@ -34,15 +36,18 @@ export class ProofStateWatcherService {
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
   private inflightByKey = new Set<ProofKey>();
   private offProofsStateChanged?: () => void;
+  private offUntrusted?: () => void;
 
   constructor(
     subs: SubscriptionManager,
+    mintService: MintService,
     proofs: ProofService,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: false },
   ) {
     this.subs = subs;
+    this.mintService = mintService;
     this.proofs = proofs;
     this.bus = bus;
     this.logger = logger;
@@ -95,6 +100,15 @@ export class ProofStateWatcherService {
       },
     );
 
+    // Stop watching proofs when mint is untrusted
+    this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
+      try {
+        await this.stopWatchingMint(mintUrl);
+      } catch (err) {
+        this.logger?.error('Failed to stop watching mint proofs on untrust', { mintUrl, err });
+      }
+    });
+
     // Optionally: could scan existing inflight proofs here if repository supports it
   }
 
@@ -109,6 +123,16 @@ export class ProofStateWatcherService {
         // ignore
       } finally {
         this.offProofsStateChanged = undefined;
+      }
+    }
+
+    if (this.offUntrusted) {
+      try {
+        this.offUntrusted();
+      } catch {
+        // ignore
+      } finally {
+        this.offUntrusted = undefined;
       }
     }
 
@@ -128,6 +152,13 @@ export class ProofStateWatcherService {
 
   async watchProof(mintUrl: string, secrets: string[]): Promise<void> {
     if (!this.running) return;
+
+    // Only watch proofs for trusted mints
+    const trusted = await this.mintService.isTrustedMint(mintUrl);
+    if (!trusted) {
+      this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
+      return;
+    }
 
     // Filter out secrets already being watched
     const unique = Array.from(new Set(secrets));
@@ -205,5 +236,30 @@ export class ProofStateWatcherService {
     } finally {
       this.unsubscribeByKey.delete(key);
     }
+  }
+
+  async stopWatchingMint(mintUrl: string): Promise<void> {
+    this.logger?.info('Stopping all proof watchers for mint', { mintUrl });
+    const prefix = `${mintUrl}::`;
+    const keysToStop: ProofKey[] = [];
+
+    for (const key of this.unsubscribeByKey.keys()) {
+      if (key.startsWith(prefix)) {
+        keysToStop.push(key);
+      }
+    }
+
+    // Also clear inflight tracking for this mint
+    for (const key of this.inflightByKey) {
+      if (key.startsWith(prefix)) {
+        this.inflightByKey.delete(key);
+      }
+    }
+
+    for (const key of keysToStop) {
+      await this.stopWatching(key);
+    }
+
+    this.logger?.info('Stopped proof watchers for mint', { mintUrl, count: keysToStop.length });
   }
 }
