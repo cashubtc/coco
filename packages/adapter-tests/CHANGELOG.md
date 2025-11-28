@@ -1,5 +1,12 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.28
+
+### Patch Changes
+
+- Updated dependencies [d300ecd]
+  - coco-cashu-core@1.1.2-rc.28
+
 ## 1.1.2-rc.27
 
 ### Patch Changes

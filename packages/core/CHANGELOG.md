@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.28
+
+### Patch Changes
+
+- d300ecd: Make sure that untrusted mints don't have active subscriptions
+
 ## 1.1.2-rc.27
 
 ### Patch Changes
