@@ -1,5 +1,12 @@
 # coco-cashu-sqlite3
 
+## 1.1.2-rc.27
+
+### Patch Changes
+
+- Updated dependencies
+  - coco-cashu-core@1.1.2-rc.27
+
 ## 1.1.2-rc.26
 
 ### Patch Changes
