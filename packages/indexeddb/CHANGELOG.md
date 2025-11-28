@@ -1,5 +1,12 @@
 # coco-cashu-indexeddb
 
+## 1.1.2-rc.30
+
+### Patch Changes
+
+- Updated dependencies
+  - coco-cashu-core@1.1.2-rc.30
+
 ## 1.1.2-rc.29
 
 ### Patch Changes

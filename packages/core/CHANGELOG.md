@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.30
+
+### Patch Changes
+
+- Fixed the mintservice not emitting events when re-trusting an already added mint
+
 ## 1.1.2-rc.29
 
 ### Patch Changes
