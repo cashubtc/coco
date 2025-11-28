@@ -1,5 +1,13 @@
 # demo-web
 
+## 0.0.1-rc.1
+
+### Patch Changes
+
+- Updated dependencies
+  - coco-cashu-core@1.1.2-rc.29
+  - coco-cashu-indexeddb@1.1.2-rc.29
+
 ## 0.0.1-rc.0
 
 ### Patch Changes

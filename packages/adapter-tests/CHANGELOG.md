@@ -1,5 +1,13 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.29
+
+### Patch Changes
+
+- fixed build issue
+- Updated dependencies
+  - coco-cashu-core@1.1.2-rc.29
+
 ## 1.1.2-rc.28
 
 ### Patch Changes

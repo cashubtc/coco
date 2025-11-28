@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.29
+
+### Patch Changes
+
+- fixed build issue
+
 ## 1.1.2-rc.28
 
 ### Patch Changes
