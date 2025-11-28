@@ -1,6 +1,14 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
-import { CashuMint, CashuWallet, OutputData, type MintKeys, type Token } from '@cashu/cashu-ts';
+import {
+  CashuMint,
+  CashuWallet,
+  OutputData,
+  PaymentRequest,
+  PaymentRequestTransportType,
+  type MintKeys,
+  type Token,
+} from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
 export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
@@ -1297,6 +1305,226 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await dispose();
         }
+      });
+    });
+
+    describe('Payment Requests', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+
+        // Fund the wallet
+        const quote = await mgr.quotes.createMintQuote(mintUrl, 200);
+        await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should read an inband payment request', async () => {
+        const pr = new PaymentRequest(
+          [], // empty transport = inband
+          'test-request-id',
+          50,
+          'sat',
+          [mintUrl],
+          'Test payment',
+        );
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+
+        expect(prepared.transport.type).toBe('inband');
+        expect(prepared.amount).toBe(50);
+        expect(prepared.mints).toContain(mintUrl);
+      });
+
+      it('should read an HTTP POST payment request', async () => {
+        const targetUrl = 'https://receiver.example.com/callback';
+        const pr = new PaymentRequest(
+          [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
+          'test-request-id-2',
+          75,
+          'sat',
+          [mintUrl],
+          'HTTP payment',
+        );
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+
+        expect(prepared.transport.type).toBe('http');
+        if (prepared.transport.type === 'http') {
+          expect(prepared.transport.url).toBe(targetUrl);
+        }
+        expect(prepared.amount).toBe(75);
+      });
+
+      it('should read a payment request without amount', async () => {
+        const pr = new PaymentRequest(
+          [],
+          'test-request-no-amount',
+          undefined, // no amount
+          'sat',
+          [mintUrl],
+        );
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+
+        expect(prepared.transport.type).toBe('inband');
+        expect(prepared.amount).toBe(undefined);
+      });
+
+      it('should handle inband payment request with amount in request', async () => {
+        const pr = new PaymentRequest([], 'inband-with-amount', 30, 'sat', [mintUrl]);
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        expect(prepared.transport.type).toBe('inband');
+
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        let receivedToken: Token | undefined;
+        if (prepared.transport.type === 'inband') {
+          await mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async (token) => {
+            receivedToken = token;
+          });
+        }
+
+        expect(receivedToken).toBeDefined();
+        expect(receivedToken!.mint).toBe(mintUrl);
+        expect(receivedToken!.proofs.length).toBeGreaterThan(0);
+
+        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        expect(tokenAmount).toBeGreaterThanOrEqual(30);
+
+        // Balance should have decreased
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const amountAfter = balanceAfter[mintUrl] || 0;
+        expect(amountAfter).toBeLessThan(amountBefore);
+      });
+
+      it('should handle inband payment request with amount as parameter', async () => {
+        const pr = new PaymentRequest(
+          [],
+          'inband-no-amount',
+          undefined, // no amount in request
+          'sat',
+          [mintUrl],
+        );
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        expect(prepared.transport.type).toBe('inband');
+        expect(prepared.amount).toBe(undefined);
+
+        let receivedToken: Token | undefined;
+        if (prepared.transport.type === 'inband') {
+          await mgr!.wallet.handleInbandPaymentRequest(
+            mintUrl,
+            prepared,
+            async (token) => {
+              receivedToken = token;
+            },
+            25, // amount as parameter
+          );
+        }
+
+        expect(receivedToken).toBeDefined();
+        expect(receivedToken!.mint).toBe(mintUrl);
+
+        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        expect(tokenAmount).toBeGreaterThanOrEqual(25);
+      });
+
+      it('should throw if mint is not in allowed mints list', async () => {
+        const otherMintUrl = 'https://other-mint.example.com';
+        const pr = new PaymentRequest(
+          [],
+          'wrong-mint-request',
+          50,
+          'sat',
+          [otherMintUrl], // only allows other mint
+        );
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+
+        if (prepared.transport.type === 'inband') {
+          await expect(
+            mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async () => {}),
+          ).rejects.toThrow();
+        }
+      });
+
+      it('should throw if amount is missing', async () => {
+        const pr = new PaymentRequest([], 'no-amount-request', undefined, 'sat', [mintUrl]);
+        const encoded = pr.toEncodedRequest();
+
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+
+        if (prepared.transport.type === 'inband') {
+          // Not providing amount when request doesn't have one should throw
+          await expect(
+            mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async () => {}),
+          ).rejects.toThrow();
+        }
+      });
+
+      it('should throw for unsupported transport (nostr)', async () => {
+        const pr = new PaymentRequest(
+          [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
+          'nostr-request',
+          50,
+          'sat',
+          [mintUrl],
+        );
+        const encoded = pr.toEncodedRequest();
+
+        await expect(mgr!.wallet.readPaymentRequest(encoded)).rejects.toThrow();
+      });
+
+      it('should complete full payment request flow with token reuse', async () => {
+        // Create inband payment request
+        const pr = new PaymentRequest([], 'full-flow-test', 40, 'sat', [mintUrl]);
+        const encoded = pr.toEncodedRequest();
+
+        // Read the payment request
+        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        expect(prepared.transport.type).toBe('inband');
+
+        // Handle the payment request
+        let sentToken: Token | undefined;
+        if (prepared.transport.type === 'inband') {
+          await mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async (token) => {
+            sentToken = token;
+          });
+        }
+
+        expect(sentToken).toBeDefined();
+
+        // The token should be receivable (simulate receiver getting the token)
+        const balanceBefore = await mgr!.wallet.getBalances();
+        await mgr!.wallet.receive(sentToken!);
+        const balanceAfter = await mgr!.wallet.getBalances();
+
+        // Balance should increase after receiving
+        expect((balanceAfter[mintUrl] || 0) - (balanceBefore[mintUrl] || 0)).toBeGreaterThan(0);
       });
     });
   });

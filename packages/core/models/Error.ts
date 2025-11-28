@@ -86,3 +86,14 @@ export class MintOperationError extends HttpResponseError {
     Object.setPrototypeOf(this, MintOperationError.prototype);
   }
 }
+
+/**
+ * This error is thrown when a payment request is invalid or cannot be processed.
+ */
+export class PaymentRequestError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'PaymentRequestError';
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}

@@ -9,3 +9,5 @@ export * from './SeedService';
 export * from './WalletRestoreService';
 export * from './MeltQuoteService';
 export * from './HistoryService';
+export * from './TransactionService';
+export * from './PaymentRequestService';

@@ -11,6 +11,7 @@ import type {
   MintService,
   ProofService,
   SeedService,
+  TransactionService,
   WalletRestoreService,
   WalletService,
 } from '../services';
@@ -26,6 +27,7 @@ export type ServiceKey =
   | 'mintQuoteService'
   | 'meltQuoteService'
   | 'historyService'
+  | 'transactionService'
   | 'subscriptions'
   | 'eventBus'
   | 'logger';
@@ -41,6 +43,7 @@ export interface ServiceMap {
   mintQuoteService: MintQuoteService;
   meltQuoteService: MeltQuoteService;
   historyService: HistoryService;
+  transactionService: TransactionService;
   subscriptions: SubscriptionManager;
   eventBus: EventBus<CoreEvents>;
   logger: Logger;
