@@ -20,6 +20,7 @@ export default defineConfig({
           { text: 'Adding Mints', link: '/starting/adding-mints' },
           { text: 'Subscriptions', link: '/starting/subscriptions' },
           { text: 'Minting Tokens', link: '/starting/minting' },
+          { text: 'Payment Requests', link: '/starting/payment-requests' },
         ],
       },
       {
