@@ -9,6 +9,7 @@ import type {
   MintQuoteRepository,
   MeltQuoteRepository,
   HistoryRepository,
+  SendOperationRepository,
 } from '..';
 import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
@@ -18,6 +19,7 @@ import { MemoryProofRepository } from './MemoryProofRepository';
 import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
 import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
 import { MemoryHistoryRepository } from './MemoryHistoryRepository';
+import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
@@ -28,6 +30,7 @@ export class MemoryRepositories implements Repositories {
   mintQuoteRepository: MintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryRepository;
+  sendOperationRepository: SendOperationRepository;
 
   constructor() {
     this.mintRepository = new MemoryMintRepository();
@@ -38,6 +41,7 @@ export class MemoryRepositories implements Repositories {
     this.mintQuoteRepository = new MemoryMintQuoteRepository();
     this.meltQuoteRepository = new MemoryMeltQuoteRepository();
     this.historyRepository = new MemoryHistoryRepository();
+    this.sendOperationRepository = new MemorySendOperationRepository();
   }
 
   async init(): Promise<void> {

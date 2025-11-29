@@ -38,10 +38,9 @@ describe('initializeCoco', () => {
 
     it('should initialize repositories', async () => {
       const initSpy = mock(() => Promise.resolve());
-      const mockRepo = {
-        ...repositories,
+      const mockRepo = Object.assign(Object.create(repositories), {
         init: initSpy,
-      };
+      });
 
       await initializeCoco({
         ...baseConfig,

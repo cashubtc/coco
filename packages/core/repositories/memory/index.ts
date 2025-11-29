@@ -7,3 +7,4 @@ export * from './MemoryRepositories';
 export * from './MemoryMintQuoteRepository';
 export * from './MemoryMeltQuoteRepository';
 export * from './MemoryHistoryRepository';
+export * from './MemorySendOperationRepository';

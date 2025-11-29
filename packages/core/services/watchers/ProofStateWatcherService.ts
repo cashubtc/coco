@@ -3,6 +3,8 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
+import type { SendOperationService } from '../../operations/send/SendOperationService';
+import type { ProofRepository } from '../../repositories';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
@@ -28,9 +30,11 @@ export class ProofStateWatcherService {
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
   private readonly proofs: ProofService;
+  private readonly proofRepository: ProofRepository;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: ProofStateWatcherOptions;
+  private sendOperationService?: SendOperationService;
 
   private running = false;
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
@@ -42,6 +46,7 @@ export class ProofStateWatcherService {
     subs: SubscriptionManager,
     mintService: MintService,
     proofs: ProofService,
+    proofRepository: ProofRepository,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: false },
@@ -49,9 +54,18 @@ export class ProofStateWatcherService {
     this.subs = subs;
     this.mintService = mintService;
     this.proofs = proofs;
+    this.proofRepository = proofRepository;
     this.bus = bus;
     this.logger = logger;
     this.options = options;
+  }
+
+  /**
+   * Set the SendOperationService for auto-finalizing send operations.
+   * This is set after construction to avoid circular dependencies.
+   */
+  setSendOperationService(service: SendOperationService): void {
+    this.sendOperationService = service;
   }
 
   isRunning(): boolean {
@@ -187,6 +201,9 @@ export class ProofStateWatcherService {
             subId,
           });
           await this.stopWatching(key);
+
+          // Check if this proof is part of a send operation and finalize it
+          await this.tryFinalizeSendOperation(mintUrl, secret);
         } catch (err) {
           this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
         } finally {
@@ -261,5 +278,44 @@ export class ProofStateWatcherService {
     }
 
     this.logger?.info('Stopped proof watchers for mint', { mintUrl, count: keysToStop.length });
+  }
+
+  /**
+   * Check if a spent proof is part of a send operation and finalize it if all send proofs are spent.
+   */
+  private async tryFinalizeSendOperation(mintUrl: string, secret: string): Promise<void> {
+    if (!this.sendOperationService) return;
+
+    try {
+      // Look up the specific proof that was just spent
+      const spentProof = await this.proofRepository.getProofBySecret(mintUrl, secret);
+      if (!spentProof?.usedByOperationId) return;
+
+      const operationId = spentProof.usedByOperationId;
+      const operation = await this.sendOperationService.getOperation(operationId);
+      
+      if (!operation || operation.state !== 'pending') return;
+
+      // Check if all send proofs are spent
+      const sendProofSecrets = operation.sendProofSecrets ?? [];
+      if (sendProofSecrets.length === 0) return;
+
+      // Check state of all send proofs
+      let allSpent = true;
+      for (const sendSecret of sendProofSecrets) {
+        const proof = await this.proofRepository.getProofBySecret(mintUrl, sendSecret);
+        if (!proof || proof.state !== 'spent') {
+          allSpent = false;
+          break;
+        }
+      }
+
+      if (allSpent) {
+        this.logger?.info('All send proofs spent, finalizing operation', { operationId });
+        await this.sendOperationService.finalize(operationId);
+      }
+    } catch (err) {
+      this.logger?.error('Failed to check/finalize send operation', { mintUrl, secret, err });
+    }
   }
 }
