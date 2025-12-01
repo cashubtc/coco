@@ -74,6 +74,12 @@ export interface ProofRepository {
    * This filters out proofs that have usedByOperationId set.
    */
   getAvailableProofs(mintUrl: string): Promise<CoreProof[]>;
+
+  /**
+   * Get all proofs that are reserved (have usedByOperationId set) and are still in ready state.
+   * Used for detecting orphaned reservations during recovery.
+   */
+  getReservedProofs(): Promise<CoreProof[]>;
 }
 
 export interface MintQuoteRepository {

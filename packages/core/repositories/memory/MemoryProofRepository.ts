@@ -147,4 +147,16 @@ export class MemoryProofRepository implements ProofRepository {
       .filter((p) => p.state === 'ready' && !p.usedByOperationId)
       .map((p) => ({ ...p }));
   }
+
+  async getReservedProofs(): Promise<CoreProof[]> {
+    const all: CoreProof[] = [];
+    for (const map of this.proofsByMint.values()) {
+      for (const p of map.values()) {
+        if (p.state === 'ready' && p.usedByOperationId) {
+          all.push({ ...p });
+        }
+      }
+    }
+    return all;
+  }
 }
