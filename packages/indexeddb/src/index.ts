@@ -7,6 +7,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  SendOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
@@ -19,6 +20,7 @@ import { IdbProofRepository } from './repositories/ProofRepository.ts';
 import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
+import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -31,6 +33,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: IdbHistoryRepository;
+  readonly sendOperationRepository: SendOperationRepository;
   readonly db: IdbDb;
 
   constructor(options: IndexedDbRepositoriesOptions) {
@@ -43,6 +46,7 @@ export class IndexedDbRepositories implements Repositories {
     this.mintQuoteRepository = new IdbMintQuoteRepository(this.db);
     this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
     this.historyRepository = new IdbHistoryRepository(this.db);
+    this.sendOperationRepository = new IdbSendOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -62,6 +66,7 @@ export class IndexedDbRepositories implements Repositories {
         mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
         meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
         historyRepository: new IdbHistoryRepository(scopedDb),
+        sendOperationRepository: new IdbSendOperationRepository(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -79,4 +84,5 @@ export {
   IdbMintQuoteRepository,
   IdbMeltQuoteRepository,
   IdbHistoryRepository,
+  IdbSendOperationRepository,
 };

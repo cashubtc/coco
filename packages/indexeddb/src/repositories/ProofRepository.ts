@@ -2,7 +2,23 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
-// use ProofState from coco-cashu-core
+function rowToProof(r: ProofRow): CoreProof {
+  const base: Proof = {
+    id: r.id,
+    amount: r.amount,
+    secret: r.secret,
+    C: r.C,
+    ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+    ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
+  };
+  return {
+    ...base,
+    mintUrl: r.mintUrl,
+    state: r.state,
+    ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
+    ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
+  };
+}
 
 export class IdbProofRepository implements ProofRepository {
   private readonly db: IdbDb;
@@ -33,6 +49,8 @@ export class IdbProofRepository implements ProofRepository {
           witness: p.witness ? JSON.stringify(p.witness) : null,
           state: p.state,
           createdAt: now,
+          usedByOperationId: p.usedByOperationId ?? null,
+          createdByOperationId: p.createdByOperationId ?? null,
         };
         await table.put(row);
       }
@@ -45,17 +63,7 @@ export class IdbProofRepository implements ProofRepository {
       .where('[mintUrl+state]')
       .equals([mintUrl, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
-      };
-      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async getAllReadyProofs(): Promise<CoreProof[]> {
@@ -64,17 +72,7 @@ export class IdbProofRepository implements ProofRepository {
       .where('state')
       .equals('ready')
       .toArray()) as ProofRow[];
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
-      };
-      return { ...base, mintUrl: r.mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
@@ -83,17 +81,7 @@ export class IdbProofRepository implements ProofRepository {
       .where('[mintUrl+id+state]')
       .equals([mintUrl, keysetId, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
-      };
-      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
@@ -130,5 +118,119 @@ export class IdbProofRepository implements ProofRepository {
         await table.delete([mintUrl, r.secret]);
       }
     });
+  }
+
+  async reserveProofs(mintUrl: string, secrets: string[], operationId: string): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
+      // Pre-check: all proofs must exist, be ready, and not already reserved
+      for (const secret of secrets) {
+        const row = (await table.get([mintUrl, secret])) as ProofRow | undefined;
+        if (!row) {
+          throw new Error(`Proof with secret not found: ${secret}`);
+        }
+        if (row.state !== 'ready') {
+          throw new Error(`Proof is not ready, cannot reserve: ${secret}`);
+        }
+        if (row.usedByOperationId) {
+          throw new Error(
+            `Proof already reserved by operation ${row.usedByOperationId}: ${secret}`,
+          );
+        }
+      }
+      // Apply reservation
+      for (const secret of secrets) {
+        const existing = (await table.get([mintUrl, secret])) as ProofRow;
+        await table.put({ ...existing, usedByOperationId: operationId });
+      }
+    });
+  }
+
+  async releaseProofs(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
+      for (const secret of secrets) {
+        const existing = (await table.get([mintUrl, secret])) as ProofRow | undefined;
+        if (existing) {
+          const { usedByOperationId: _, ...rest } = existing;
+          await table.put({ ...rest, usedByOperationId: null } as ProofRow);
+        }
+      }
+    });
+  }
+
+  async setCreatedByOperation(
+    mintUrl: string,
+    secrets: string[],
+    operationId: string,
+  ): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
+      const table = tx.table('coco_cashu_proofs');
+      for (const secret of secrets) {
+        const existing = (await table.get([mintUrl, secret])) as ProofRow | undefined;
+        if (existing) {
+          await table.put({ ...existing, createdByOperationId: operationId });
+        }
+      }
+    });
+  }
+
+  async getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null> {
+    const row = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .get([mintUrl, secret])) as ProofRow | undefined;
+    return row ? rowToProof(row) : null;
+  }
+
+  async getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]> {
+    // Note: IndexedDB doesn't support OR queries easily, so we do two queries
+    const byUsed = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('usedByOperationId')
+      .equals(operationId)
+      .toArray()) as ProofRow[];
+
+    const byCreated = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('createdByOperationId')
+      .equals(operationId)
+      .toArray()) as ProofRow[];
+
+    // Combine and deduplicate by [mintUrl, secret]
+    const seen = new Set<string>();
+    const results: CoreProof[] = [];
+
+    for (const row of [...byUsed, ...byCreated]) {
+      if (row.mintUrl !== mintUrl) continue;
+      const key = `${row.mintUrl}::${row.secret}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push(rowToProof(row));
+      }
+    }
+
+    return results;
+  }
+
+  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+state]')
+      .equals([mintUrl, 'ready'])
+      .toArray()) as ProofRow[];
+    return rows.filter((r) => !r.usedByOperationId).map(rowToProof);
+  }
+
+  async getReservedProofs(): Promise<CoreProof[]> {
+    // Get all proofs with usedByOperationId set that are still in ready state
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('state')
+      .equals('ready')
+      .toArray()) as ProofRow[];
+    return rows.filter((r) => r.usedByOperationId).map(rowToProof);
   }
 }
