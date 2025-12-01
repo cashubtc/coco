@@ -7,6 +7,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  SendOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
@@ -19,6 +20,7 @@ import { SqliteProofRepository } from './repositories/ProofRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
+import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -31,6 +33,7 @@ export class SqliteRepositories implements Repositories {
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: SqliteHistoryRepository;
+  readonly sendOperationRepository: SendOperationRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -43,6 +46,7 @@ export class SqliteRepositories implements Repositories {
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
     this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
     this.historyRepository = new SqliteHistoryRepository(this.db);
+    this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -60,6 +64,7 @@ export class SqliteRepositories implements Repositories {
         mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
         meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
         historyRepository: new SqliteHistoryRepository(txDb),
+        sendOperationRepository: new SqliteSendOperationRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -78,4 +83,5 @@ export {
   SqliteMintQuoteRepository,
   SqliteMeltQuoteRepository,
   SqliteHistoryRepository,
+  SqliteSendOperationRepository,
 };

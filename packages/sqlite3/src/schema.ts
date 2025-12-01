@@ -192,6 +192,44 @@ const MIGRATIONS: readonly Migration[] = [
       }
     },
   },
+  {
+    id: '008_send_operations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_send_operations (
+        id         TEXT PRIMARY KEY,
+        mintUrl    TEXT NOT NULL,
+        amount     INTEGER NOT NULL,
+        state      TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'completed', 'rolling_back', 'rolled_back')),
+        createdAt  INTEGER NOT NULL,
+        updatedAt  INTEGER NOT NULL,
+        error      TEXT,
+        needsSwap  INTEGER,
+        fee        INTEGER,
+        inputAmount INTEGER,
+        inputProofSecretsJson TEXT,
+        outputDataJson TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_state ON coco_cashu_send_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_mint ON coco_cashu_send_operations(mintUrl);
+
+      ALTER TABLE coco_cashu_proofs ADD COLUMN usedByOperationId TEXT;
+      ALTER TABLE coco_cashu_proofs ADD COLUMN createdByOperationId TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_usedByOp ON coco_cashu_proofs(usedByOperationId) WHERE usedByOperationId IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
+    `,
+  },
+  {
+    id: '009_history_send_operation',
+    sql: `
+      ALTER TABLE coco_cashu_history ADD COLUMN operationId TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_operation_send
+        ON coco_cashu_history(mintUrl, operationId)
+        WHERE type = 'send' AND operationId IS NOT NULL;
+    `,
+  },
 ];
 
 export async function ensureSchema(db: SqliteDb): Promise<void> {
