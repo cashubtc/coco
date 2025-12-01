@@ -7,6 +7,7 @@ import type {
   ProofRepository,
   MintQuoteRepository,
   MeltQuoteRepository,
+  SendOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
@@ -19,6 +20,7 @@ import { ExpoProofRepository } from './repositories/ProofRepository.ts';
 import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { ExpoMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { ExpoHistoryRepository } from './repositories/HistoryRepository.ts';
+import { ExpoSendOperationRepository } from './repositories/SendOperationRepository.ts';
 
 export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
@@ -31,6 +33,7 @@ export class ExpoSqliteRepositories implements Repositories {
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: ExpoHistoryRepository;
+  readonly sendOperationRepository: SendOperationRepository;
   readonly db: ExpoSqliteDb;
 
   constructor(options: ExpoSqliteRepositoriesOptions) {
@@ -43,6 +46,7 @@ export class ExpoSqliteRepositories implements Repositories {
     this.mintQuoteRepository = new ExpoMintQuoteRepository(this.db);
     this.meltQuoteRepository = new ExpoMeltQuoteRepository(this.db);
     this.historyRepository = new ExpoHistoryRepository(this.db);
+    this.sendOperationRepository = new ExpoSendOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -60,6 +64,7 @@ export class ExpoSqliteRepositories implements Repositories {
         mintQuoteRepository: new ExpoMintQuoteRepository(txDb),
         meltQuoteRepository: new ExpoMeltQuoteRepository(txDb),
         historyRepository: new ExpoHistoryRepository(txDb),
+        sendOperationRepository: new ExpoSendOperationRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -78,4 +83,5 @@ export {
   ExpoMintQuoteRepository,
   ExpoMeltQuoteRepository,
   ExpoHistoryRepository,
+  ExpoSendOperationRepository,
 };
