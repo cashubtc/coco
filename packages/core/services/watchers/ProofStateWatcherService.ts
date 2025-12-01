@@ -4,6 +4,7 @@ import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/Subscr
 import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
+import { getSendProofSecrets, hasPreparedData } from '../../operations/send/SendOperation';
 import type { ProofRepository } from '../../repositories';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
@@ -293,11 +294,14 @@ export class ProofStateWatcherService {
 
       const operationId = spentProof.usedByOperationId;
       const operation = await this.sendOperationService.getOperation(operationId);
-      
+
       if (!operation || operation.state !== 'pending') return;
 
-      // Check if all send proofs are spent
-      const sendProofSecrets = operation.sendProofSecrets ?? [];
+      // Operation must have prepared data to derive send secrets
+      if (!hasPreparedData(operation)) return;
+
+      // Derive send proof secrets from operation data
+      const sendProofSecrets = getSendProofSecrets(operation);
       if (sendProofSecrets.length === 0) return;
 
       // Check state of all send proofs

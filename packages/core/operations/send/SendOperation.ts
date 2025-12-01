@@ -20,20 +20,18 @@ export type SendOperationState =
   | 'completed'
   | 'rolled_back';
 
+import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+
+// ============================================================================
+// Base and Data Interfaces
+// ============================================================================
+
 /**
- * Represents a send operation saga.
- *
- * The operation tracks all data needed to:
- * - Resume after a crash
- * - Rollback if the token is not claimed
- * - Audit the operation history
+ * Base fields present in all send operations
  */
-export interface SendOperation {
+interface SendOperationBase {
   /** Unique identifier for this operation */
   id: string;
-
-  /** Current state of the operation */
-  state: SendOperationState;
 
   /** The mint URL for this operation */
   mintUrl: string;
@@ -47,45 +45,200 @@ export interface SendOperation {
   /** Timestamp when the operation was last updated */
   updatedAt: number;
 
-  // --- Set during prepare ---
-
-  /** Whether the operation requires a swap (false = exact match send) */
-  needsSwap?: boolean;
-
-  /** Calculated fee for the swap (0 if exact match) */
-  fee?: number;
-
-  /** Total amount of input proofs selected */
-  inputAmount?: number;
-
-  /** Secrets of proofs reserved as input for this operation */
-  inputProofSecrets?: string[];
-
-  /** The keyset ID used for creating outputs */
-  keysetId?: string;
-
-  /** Counter value at the start of output creation (for deterministic recovery) */
-  counterStart?: number;
-
-  /** Calculated keep amount (change) after fees */
-  keepAmount?: number;
-
-  /** Calculated send amount (may differ from requested amount if including receiver fees) */
-  sendAmount?: number;
-
-  // --- Set during execute ---
-
-  /** Secrets of proofs we keep (change from swap) */
-  keepProofSecrets?: string[];
-
-  /** Secrets of proofs in the send token */
-  sendProofSecrets?: string[];
-
-  // --- Error tracking ---
-
   /** Error message if the operation failed */
   error?: string;
 }
+
+/**
+ * Data set during the prepare phase
+ */
+interface PreparedData {
+  /** Whether the operation requires a swap (false = exact match send) */
+  needsSwap: boolean;
+
+  /** Calculated fee for the swap (0 if exact match) */
+  fee: number;
+
+  /** Total amount of input proofs selected */
+  inputAmount: number;
+
+  /** Secrets of proofs reserved as input for this operation */
+  inputProofSecrets: string[];
+
+  /**
+   * Serialized OutputData for the swap operation.
+   * Only present if needsSwap is true.
+   * Contains all information needed for recovery:
+   * - Blinded messages (with keyset ID)
+   * - Blinding factors
+   * - Secrets (for deriving proof secrets)
+   */
+  outputData?: SerializedOutputData;
+}
+
+// ============================================================================
+// State-specific Operation Types
+// ============================================================================
+
+/**
+ * Initial state - operation just created, nothing reserved yet
+ */
+export interface InitSendOperation extends SendOperationBase {
+  state: 'init';
+}
+
+/**
+ * Prepared state - proofs reserved, outputs calculated, ready to execute
+ */
+export interface PreparedSendOperation extends SendOperationBase, PreparedData {
+  state: 'prepared';
+}
+
+/**
+ * Executing state - swap/token creation in progress
+ */
+export interface ExecutingSendOperation extends SendOperationBase, PreparedData {
+  state: 'executing';
+}
+
+/**
+ * Pending state - token returned, awaiting confirmation that proofs are spent
+ */
+export interface PendingSendOperation extends SendOperationBase, PreparedData {
+  state: 'pending';
+}
+
+/**
+ * Completed state - sent proofs confirmed spent, operation finalized
+ */
+export interface CompletedSendOperation extends SendOperationBase, PreparedData {
+  state: 'completed';
+}
+
+/**
+ * Rolled back state - operation cancelled, proofs reclaimed
+ * Can be rolled back from prepared, executing, or pending states
+ */
+export interface RolledBackSendOperation extends SendOperationBase, PreparedData {
+  state: 'rolled_back';
+}
+
+// ============================================================================
+// Union Type
+// ============================================================================
+
+/**
+ * Discriminated union of all send operation states.
+ * TypeScript will narrow the type based on the `state` field.
+ */
+export type SendOperation =
+  | InitSendOperation
+  | PreparedSendOperation
+  | ExecutingSendOperation
+  | PendingSendOperation
+  | CompletedSendOperation
+  | RolledBackSendOperation;
+
+// ============================================================================
+// Utility Types
+// ============================================================================
+
+/**
+ * Any operation that has been prepared (has PreparedData)
+ */
+export type PreparedOrLaterOperation =
+  | PreparedSendOperation
+  | ExecutingSendOperation
+  | PendingSendOperation
+  | CompletedSendOperation
+  | RolledBackSendOperation;
+
+/**
+ * Terminal states - operation is finished
+ */
+export type TerminalSendOperation = CompletedSendOperation | RolledBackSendOperation;
+
+// ============================================================================
+// Type Guards
+// ============================================================================
+
+export function isInitOperation(op: SendOperation): op is InitSendOperation {
+  return op.state === 'init';
+}
+
+export function isPreparedOperation(op: SendOperation): op is PreparedSendOperation {
+  return op.state === 'prepared';
+}
+
+export function isExecutingOperation(op: SendOperation): op is ExecutingSendOperation {
+  return op.state === 'executing';
+}
+
+export function isPendingOperation(op: SendOperation): op is PendingSendOperation {
+  return op.state === 'pending';
+}
+
+export function isCompletedOperation(op: SendOperation): op is CompletedSendOperation {
+  return op.state === 'completed';
+}
+
+export function isRolledBackOperation(op: SendOperation): op is RolledBackSendOperation {
+  return op.state === 'rolled_back';
+}
+
+/**
+ * Check if operation has PreparedData (any state after init)
+ */
+export function hasPreparedData(op: SendOperation): op is PreparedOrLaterOperation {
+  return op.state !== 'init';
+}
+
+/**
+ * Check if operation is in a terminal state
+ */
+export function isTerminalOperation(op: SendOperation): op is TerminalSendOperation {
+  return op.state === 'completed' || op.state === 'rolled_back';
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Get the secrets of proofs that will be sent (for finalization tracking).
+ * - If needsSwap: secrets come from outputData.send
+ * - If !needsSwap: secrets are the inputProofSecrets (exact match)
+ */
+export function getSendProofSecrets(op: PreparedOrLaterOperation): string[] {
+  if (!op.needsSwap) {
+    return op.inputProofSecrets;
+  }
+  if (!op.outputData) {
+    return [];
+  }
+  const { sendSecrets } = getSecretsFromSerializedOutputData(op.outputData);
+  return sendSecrets;
+}
+
+/**
+ * Get the secrets of proofs we keep (change from swap).
+ * - If needsSwap: secrets come from outputData.keep
+ * - If !needsSwap: empty (no change proofs)
+ */
+export function getKeepProofSecrets(op: PreparedOrLaterOperation): string[] {
+  if (!op.needsSwap) {
+    return [];
+  }
+  if (!op.outputData) {
+    return [];
+  }
+  const { keepSecrets } = getSecretsFromSerializedOutputData(op.outputData);
+  return keepSecrets;
+}
+
+// ============================================================================
+// Factory Function
+// ============================================================================
 
 /**
  * Creates a new SendOperation in init state
@@ -94,7 +247,7 @@ export function createSendOperation(
   id: string,
   mintUrl: string,
   amount: number,
-): SendOperation {
+): InitSendOperation {
   const now = Date.now();
   return {
     id,
@@ -105,4 +258,3 @@ export function createSendOperation(
     updatedAt: now,
   };
 }
-

@@ -1,16 +1,33 @@
-import { OutputData, type Token, type Proof } from '@cashu/cashu-ts';
+import { type Token, type Proof } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
-import type { SendOperation } from './SendOperation';
-import { createSendOperation } from './SendOperation';
+import type {
+  SendOperation,
+  InitSendOperation,
+  PreparedSendOperation,
+  ExecutingSendOperation,
+  PendingSendOperation,
+  CompletedSendOperation,
+  RolledBackSendOperation,
+  PreparedOrLaterOperation,
+} from './SendOperation';
+import {
+  createSendOperation,
+  hasPreparedData,
+  getSendProofSecrets,
+  getKeepProofSecrets,
+} from './SendOperation';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
-import type { CounterService } from '../../services/CounterService';
-import type { SeedService } from '../../services/SeedService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import {
+  generateSubId,
+  mapProofToCoreProof,
+  serializeOutputData,
+  deserializeOutputData,
+} from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 
 /**
@@ -25,8 +42,6 @@ export class SendOperationService {
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
-  private readonly counterService: CounterService;
-  private readonly seedService: SeedService;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -36,8 +51,6 @@ export class SendOperationService {
     proofService: ProofService,
     mintService: MintService,
     walletService: WalletService,
-    counterService: CounterService,
-    seedService: SeedService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
@@ -46,8 +59,6 @@ export class SendOperationService {
     this.proofService = proofService;
     this.mintService = mintService;
     this.walletService = walletService;
-    this.counterService = counterService;
-    this.seedService = seedService;
     this.eventBus = eventBus;
     this.logger = logger;
   }
@@ -56,7 +67,7 @@ export class SendOperationService {
    * Create a new send operation.
    * This is the entry point for the saga.
    */
-  private async init(mintUrl: string, amount: number): Promise<SendOperation> {
+  private async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -79,11 +90,7 @@ export class SendOperationService {
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
    */
-  private async prepare(operation: SendOperation): Promise<SendOperation> {
-    if (operation.state !== 'init') {
-      throw new Error(`Cannot prepare operation in state ${operation.state}`);
-    }
-
+  private async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
     const { mintUrl, amount } = operation;
     const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
@@ -104,13 +111,10 @@ export class SendOperationService {
 
     let selectedProofs: Proof[];
     let fee = 0;
-    let keepAmount = 0;
-    let sendAmount = amount;
-    let counterStart: number | undefined;
-    let keysetId: string | undefined;
+    let serializedOutputData: PreparedSendOperation['outputData'];
 
     if (!needsSwap && exactProofs.send.length > 0) {
-      // Exact match - no swap needed
+      // Exact match - no swap needed, no OutputData
       selectedProofs = exactProofs.send;
       this.logger?.debug('Exact match found for send', {
         operationId: operation.id,
@@ -123,13 +127,19 @@ export class SendOperationService {
       selectedProofs = selected.send;
       const selectedAmount = selectedProofs.reduce((acc, p) => acc + p.amount, 0);
       fee = wallet.getFeesForProofs(selectedProofs);
-      keepAmount = selectedAmount - amount - fee;
-      sendAmount = amount;
+      const keepAmount = selectedAmount - amount - fee;
 
-      // Get counter for deterministic output creation
-      const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
-      counterStart = currentCounter.counter;
-      keysetId = keys.id;
+      // Use ProofService to create outputs and increment counters
+      const outputResult = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+        keep: keepAmount,
+        send: amount,
+      });
+
+      // Serialize for storage
+      serializedOutputData = serializeOutputData({
+        keep: outputResult.keep,
+        send: outputResult.send,
+      });
 
       this.logger?.debug('Swap required for send', {
         operationId: operation.id,
@@ -138,7 +148,8 @@ export class SendOperationService {
         keepAmount,
         selectedAmount,
         proofCount: selectedProofs.length,
-        counterStart,
+        keepOutputs: outputResult.keep.length,
+        sendOutputs: outputResult.send.length,
       });
     }
 
@@ -146,36 +157,20 @@ export class SendOperationService {
     const inputSecrets = selectedProofs.map((p) => p.secret);
     await this.proofRepository.reserveProofs(mintUrl, inputSecrets, operation.id);
 
-    // Increment counters if swap is needed (outputs will be created deterministically)
-    if (needsSwap && counterStart !== undefined && keysetId) {
-      const seed = await this.seedService.getSeed();
-      // Calculate how many outputs will be created
-      const keepOutputCount =
-        keepAmount > 0
-          ? this.calculateOutputCount(keepAmount, keys.keys)
-          : 0;
-      const sendOutputCount = this.calculateOutputCount(sendAmount, keys.keys);
-
-      // Increment counter for all outputs
-      const totalOutputs = keepOutputCount + sendOutputCount;
-      if (totalOutputs > 0) {
-        await this.counterService.incrementCounter(mintUrl, keysetId, totalOutputs);
-      }
-    }
-
-    // Update operation with prepared data
-    const prepared: SendOperation = {
-      ...operation,
+    // Build prepared operation
+    const prepared: PreparedSendOperation = {
+      id: operation.id,
       state: 'prepared',
+      mintUrl: operation.mintUrl,
+      amount: operation.amount,
+      createdAt: operation.createdAt,
+      updatedAt: Date.now(),
+      error: operation.error,
       needsSwap,
       fee,
       inputAmount: selectedProofs.reduce((acc, p) => acc + p.amount, 0),
       inputProofSecrets: inputSecrets,
-      keysetId,
-      counterStart,
-      keepAmount,
-      sendAmount,
-      updatedAt: Date.now(),
+      outputData: serializedOutputData,
     };
 
     await this.sendOperationRepository.update(prepared);
@@ -194,36 +189,23 @@ export class SendOperationService {
    * Performs the swap (if needed) and creates the token.
    */
   private async execute(
-    operation: SendOperation,
-  ): Promise<{ operation: SendOperation; token: Token }> {
-    if (operation.state !== 'prepared') {
-      throw new Error(`Cannot execute operation in state ${operation.state}`);
-    }
-
+    operation: PreparedSendOperation,
+  ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const { mintUrl, amount, needsSwap, inputProofSecrets } = operation;
 
-    if (!inputProofSecrets || inputProofSecrets.length === 0) {
-      throw new Error('No input proofs found for operation');
-    }
-
     // Mark as executing
-    const executing: SendOperation = {
+    const executing: ExecutingSendOperation = {
       ...operation,
       state: 'executing',
       updatedAt: Date.now(),
     };
     await this.sendOperationRepository.update(executing);
 
-    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
     // Get the reserved proofs
-    const reservedProofs = await this.proofRepository.getProofsByOperationId(
-      mintUrl,
-      operation.id,
-    );
-    const inputProofs = reservedProofs.filter((p) =>
-      inputProofSecrets.includes(p.secret),
-    );
+    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operation.id);
+    const inputProofs = reservedProofs.filter((p) => inputProofSecrets.includes(p.secret));
 
     if (inputProofs.length !== inputProofSecrets.length) {
       throw new Error('Could not find all reserved proofs');
@@ -240,22 +222,13 @@ export class SendOperationService {
         proofCount: sendProofs.length,
       });
     } else {
-      // Perform swap
-      const { counterStart, keepAmount, sendAmount, keysetId } = operation;
-
-      if (counterStart === undefined || keysetId === undefined) {
-        throw new Error('Missing counter or keyset information for swap');
+      // Perform swap using stored OutputData
+      if (!operation.outputData) {
+        throw new Error('Missing output data for swap operation');
       }
 
-      // Recreate deterministic outputs
-      const seed = await this.seedService.getSeed();
-      const outputData = this.createDeterministicOutputs(
-        seed,
-        counterStart,
-        keys,
-        keepAmount ?? 0,
-        sendAmount ?? amount,
-      );
+      // Deserialize OutputData
+      const outputData = deserializeOutputData(operation.outputData);
 
       this.logger?.debug('Executing swap', {
         operationId: operation.id,
@@ -290,12 +263,10 @@ export class SendOperationService {
     const sendSecrets = sendProofs.map((p) => p.secret);
     await this.proofService.setProofState(mintUrl, sendSecrets, 'inflight');
 
-    // Update operation to pending
-    const pending: SendOperation = {
+    // Build pending operation
+    const pending: PendingSendOperation = {
       ...executing,
       state: 'pending',
-      keepProofSecrets: keepProofs.map((p) => p.secret),
-      sendProofSecrets: sendSecrets,
       updatedAt: Date.now(),
     };
     await this.sendOperationRepository.update(pending);
@@ -322,9 +293,9 @@ export class SendOperationService {
    * This is the main entry point for consumers.
    */
   async send(mintUrl: string, amount: number): Promise<Token> {
-    let operation = await this.init(mintUrl, amount);
-    operation = await this.prepare(operation);
-    const { token } = await this.execute(operation);
+    const initOp = await this.init(mintUrl, amount);
+    const preparedOp = await this.prepare(initOp);
+    const { token } = await this.execute(preparedOp);
     return token;
   }
 
@@ -341,23 +312,31 @@ export class SendOperationService {
       throw new Error(`Cannot finalize operation in state ${operation.state}`);
     }
 
-    const completed: SendOperation = {
-      ...operation,
+    // TypeScript knows operation is PendingSendOperation
+    const pendingOp = operation as PendingSendOperation;
+
+    const completed: CompletedSendOperation = {
+      ...pendingOp,
       state: 'completed',
       updatedAt: Date.now(),
     };
     await this.sendOperationRepository.update(completed);
 
     // Release proof reservations (they're already spent)
-    if (operation.inputProofSecrets) {
-      await this.proofRepository.releaseProofs(operation.mintUrl, operation.inputProofSecrets);
+    // Derive secrets from operation data
+    const sendSecrets = getSendProofSecrets(pendingOp);
+    const keepSecrets = getKeepProofSecrets(pendingOp);
+
+    await this.proofRepository.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
+    if (sendSecrets.length > 0) {
+      await this.proofRepository.releaseProofs(pendingOp.mintUrl, sendSecrets);
     }
-    if (operation.sendProofSecrets) {
-      await this.proofRepository.releaseProofs(operation.mintUrl, operation.sendProofSecrets);
+    if (keepSecrets.length > 0) {
+      await this.proofRepository.releaseProofs(pendingOp.mintUrl, keepSecrets);
     }
 
     await this.eventBus.emit('send:finalized', {
-      mintUrl: operation.mintUrl,
+      mintUrl: pendingOp.mintUrl,
       operationId,
       operation: completed,
     });
@@ -367,7 +346,7 @@ export class SendOperationService {
 
   /**
    * Rollback an operation by reclaiming the proofs.
-   * Only works for operations in 'prepared' or 'pending' state where proofs are not spent.
+   * Only works for operations in 'prepared', 'executing', or 'pending' state.
    */
   async rollback(operationId: string): Promise<void> {
     const operation = await this.sendOperationRepository.getById(operationId);
@@ -375,29 +354,38 @@ export class SendOperationService {
       throw new Error(`Operation ${operationId} not found`);
     }
 
-    if (operation.state === 'completed' || operation.state === 'rolled_back') {
+    if (
+      operation.state === 'completed' ||
+      operation.state === 'rolled_back' ||
+      operation.state === 'init'
+    ) {
       throw new Error(`Cannot rollback operation in state ${operation.state}`);
     }
 
-    const { mintUrl } = operation;
+    // At this point, operation has PreparedData
+    if (!hasPreparedData(operation)) {
+      throw new Error(`Operation ${operationId} is not in a rollbackable state`);
+    }
 
-    if (operation.state === 'prepared') {
+    const { mintUrl, inputProofSecrets } = operation;
+
+    if (operation.state === 'prepared' || operation.state === 'executing') {
       // Just release the reserved proofs - no swap was done yet
-      if (operation.inputProofSecrets) {
-        await this.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
-      }
-      this.logger?.info('Rolling back prepared operation - released reserved proofs', {
+      await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+      this.logger?.info('Rolling back prepared/executing operation - released reserved proofs', {
         operationId,
       });
     } else if (operation.state === 'pending') {
       // Need to reclaim the send proofs by swapping them back
-      if (operation.sendProofSecrets && operation.sendProofSecrets.length > 0) {
+      const sendSecrets = getSendProofSecrets(operation);
+
+      if (sendSecrets.length > 0) {
         const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
         // Get the send proofs
         const allProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
         const sendProofs = allProofs.filter(
-          (p) => operation.sendProofSecrets?.includes(p.secret) && p.state === 'inflight',
+          (p) => sendSecrets.includes(p.secret) && p.state === 'inflight',
         );
 
         if (sendProofs.length > 0) {
@@ -406,25 +394,15 @@ export class SendOperationService {
           const reclaimAmount = totalAmount - fee;
 
           if (reclaimAmount > 0) {
-            // Get new counter for reclaim outputs
-            const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
-            const seed = await this.seedService.getSeed();
-
-            // Create outputs for reclaim (all goes to keep)
-            const outputData = this.createDeterministicOutputs(
-              seed,
-              currentCounter.counter,
-              keys,
-              reclaimAmount,
-              0,
+            // Use ProofService to create outputs for reclaim
+            const outputResult = await this.proofService.createOutputsAndIncrementCounters(
+              mintUrl,
+              { keep: reclaimAmount, send: 0 },
             );
-
-            // Increment counter
-            await this.counterService.incrementCounter(mintUrl, keys.id, outputData.keep.length);
 
             // Swap to reclaim
             const { keep } = await wallet.send(0, sendProofs, {
-              outputData: { keep: outputData.keep, send: [] },
+              outputData: { keep: outputResult.keep, send: [] },
             });
 
             // Save reclaimed proofs
@@ -450,16 +428,15 @@ export class SendOperationService {
       }
 
       // Release any remaining reservations
-      if (operation.inputProofSecrets) {
-        await this.proofRepository.releaseProofs(mintUrl, operation.inputProofSecrets);
-      }
-      if (operation.sendProofSecrets) {
-        await this.proofRepository.releaseProofs(mintUrl, operation.sendProofSecrets);
+      await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+      const keepSecrets = getKeepProofSecrets(operation);
+      if (keepSecrets.length > 0) {
+        await this.proofRepository.releaseProofs(mintUrl, keepSecrets);
       }
     }
 
-    // Mark as rolled back
-    const rolledBack: SendOperation = {
+    // Build rolled back operation
+    const rolledBack: RolledBackSendOperation = {
       ...operation,
       state: 'rolled_back',
       updatedAt: Date.now(),
@@ -472,7 +449,10 @@ export class SendOperationService {
       operation: rolledBack,
     });
 
-    this.logger?.info('Send operation rolled back', { operationId, previousState: operation.state });
+    this.logger?.info('Send operation rolled back', {
+      operationId,
+      previousState: operation.state,
+    });
   }
 
   /**
@@ -507,57 +487,4 @@ export class SendOperationService {
   async getPendingOperations(): Promise<SendOperation[]> {
     return this.sendOperationRepository.getPending();
   }
-
-  /**
-   * Calculate how many outputs will be created for a given amount.
-   */
-  private calculateOutputCount(amount: number, keys: Record<string, string>): number {
-    if (amount <= 0) return 0;
-
-    const sortedAmounts = Object.keys(keys)
-      .map(Number)
-      .sort((a, b) => b - a);
-
-    let remaining = amount;
-    let count = 0;
-
-    for (const denomination of sortedAmounts) {
-      if (denomination <= 0) continue;
-      const numOutputs = Math.floor(remaining / denomination);
-      count += numOutputs;
-      remaining -= numOutputs * denomination;
-      if (remaining === 0) break;
-    }
-
-    return count;
-  }
-
-  /**
-   * Create deterministic outputs for a swap operation.
-   */
-  private createDeterministicOutputs(
-    seed: Uint8Array,
-    counterStart: number,
-    keys: { keys: Record<string, string>; id: string },
-    keepAmount: number,
-    sendAmount: number,
-  ): { keep: OutputData[]; send: OutputData[] } {
-    const result: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
-
-    if (keepAmount > 0) {
-      result.keep = OutputData.createDeterministicData(keepAmount, seed, counterStart, keys);
-    }
-
-    if (sendAmount > 0) {
-      result.send = OutputData.createDeterministicData(
-        sendAmount,
-        seed,
-        counterStart + result.keep.length,
-        keys,
-      );
-    }
-
-    return result;
-  }
 }
-

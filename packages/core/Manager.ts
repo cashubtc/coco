@@ -532,8 +532,6 @@ export class Manager {
       proofService,
       mintService,
       walletService,
-      counterService,
-      seedService,
       this.eventBus,
       sendOperationLogger,
     );
