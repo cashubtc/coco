@@ -297,7 +297,8 @@ export class HistoryService {
 
   async handleHistoryUpdated(mintUrl: string, entry: HistoryEntry) {
     try {
-      await this.eventBus.emit('history:updated', { mintUrl, entry });
+      // Emit a shallow copy to prevent mutation after emission
+      await this.eventBus.emit('history:updated', { mintUrl, entry: { ...entry } });
     } catch (err) {
       this.logger?.error('Failed to emit history entry', { mintUrl, entry, err });
     }
