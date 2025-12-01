@@ -14,8 +14,10 @@ import type {
   MintHistoryEntry,
   ReceiveHistoryEntry,
   SendHistoryEntry,
+  SendHistoryState,
 } from '@core/models/History';
 import type { Logger } from '@core/logging';
+import type { SendOperation } from '@core/operations/send/SendOperation';
 
 export class HistoryService {
   private readonly historyRepository: HistoryRepository;
@@ -45,36 +47,85 @@ export class HistoryService {
     this.eventBus.on('melt-quote:state-changed', ({ mintUrl, quoteId, state }) => {
       this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
     });
-    this.eventBus.on('send:created', ({ mintUrl, token }) => {
-      this.handleSendCreated(mintUrl, token);
+    this.eventBus.on('send:prepared', ({ mintUrl, operationId, operation }) => {
+      this.handleSendPrepared(mintUrl, operationId, operation);
+    });
+    this.eventBus.on('send:pending', ({ mintUrl, operationId, token }) => {
+      this.handleSendPending(mintUrl, operationId, token);
+    });
+    this.eventBus.on('send:finalized', ({ mintUrl, operationId }) => {
+      this.handleSendStateChanged(mintUrl, operationId, 'completed');
+    });
+    this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
+      this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
     this.eventBus.on('receive:created', ({ mintUrl, token }) => {
       this.handleReceiveCreated(mintUrl, token);
     });
-    // this.eventBus.on('send:state-changed', this.handleSendStateChanged.bind(this));
-    // this.eventBus.on('receive:state-changed', this.handleReceiveStateChanged.bind(this));
   }
 
   async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
     return this.historyRepository.getPaginatedHistoryEntries(limit, offset);
   }
 
-  async handleSendCreated(mintUrl: string, token: Token) {
+  async handleSendPrepared(mintUrl: string, operationId: string, operation: SendOperation) {
     const entry: Omit<SendHistoryEntry, 'id'> = {
       type: 'send',
       createdAt: Date.now(),
-      unit: token.unit || 'sat',
-      amount: token.proofs.reduce((acc, proof) => acc + proof.amount, 0),
+      unit: 'sat', // TODO: get unit from operation/mint
+      amount: operation.amount,
       mintUrl,
-      token,
+      operationId,
+      state: 'prepared',
     };
     try {
       const entryRes = await this.historyRepository.addHistoryEntry(entry);
       await this.handleHistoryUpdated(mintUrl, entryRes);
     } catch (err) {
-      this.logger?.error('Failed to add send created history entry', {
+      this.logger?.error('Failed to add send prepared history entry', {
         mintUrl,
-        token,
+        operationId,
+        err,
+      });
+    }
+  }
+
+  async handleSendPending(mintUrl: string, operationId: string, token: Token) {
+    try {
+      const entry = await this.historyRepository.getSendHistoryEntry(mintUrl, operationId);
+      if (!entry) {
+        this.logger?.error('Send pending history entry not found', {
+          mintUrl,
+          operationId,
+        });
+        return;
+      }
+      entry.state = 'pending';
+      entry.token = token;
+      entry.unit = token.unit || 'sat';
+      await this.historyRepository.updateHistoryEntry(entry);
+      await this.handleHistoryUpdated(mintUrl, entry);
+    } catch (err) {
+      this.logger?.error('Failed to update send pending history entry', {
+        mintUrl,
+        operationId,
+        err,
+      });
+    }
+  }
+
+  async handleSendStateChanged(mintUrl: string, operationId: string, state: SendHistoryState) {
+    try {
+      await this.historyRepository.updateSendHistoryState(mintUrl, operationId, state);
+      const entry = await this.historyRepository.getSendHistoryEntry(mintUrl, operationId);
+      if (entry) {
+        await this.handleHistoryUpdated(mintUrl, entry);
+      }
+    } catch (err) {
+      this.logger?.error('Failed to update send state history entry', {
+        mintUrl,
+        operationId,
+        state,
         err,
       });
     }

@@ -4,7 +4,13 @@ import type { Counter } from '../models/Counter';
 import type { CoreProof, ProofState } from '../types';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltQuote } from '@core/models/MeltQuote';
-import type { HistoryEntry, MeltHistoryEntry, MintHistoryEntry } from '@core/models/History';
+import type {
+  HistoryEntry,
+  MeltHistoryEntry,
+  MintHistoryEntry,
+  SendHistoryEntry,
+  SendHistoryState,
+} from '@core/models/History';
 import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
@@ -110,7 +116,13 @@ export interface HistoryRepository {
   addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry>;
   getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
   getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;
+  getSendHistoryEntry(mintUrl: string, operationId: string): Promise<SendHistoryEntry | null>;
   updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry>;
+  updateSendHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: SendHistoryState,
+  ): Promise<void>;
   deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void>;
 }
 

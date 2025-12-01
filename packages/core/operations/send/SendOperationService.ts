@@ -176,6 +176,14 @@ export class SendOperationService {
     };
 
     await this.sendOperationRepository.update(prepared);
+
+    // Emit prepared event
+    await this.eventBus.emit('send:prepared', {
+      mintUrl,
+      operationId: prepared.id,
+      operation: prepared,
+    });
+
     this.logger?.info('Send operation prepared', {
       operationId: operation.id,
       needsSwap,
@@ -278,8 +286,13 @@ export class SendOperationService {
       proofs: sendProofs,
     };
 
-    // Emit event
-    await this.eventBus.emit('send:created', { mintUrl, token });
+    // Emit pending event
+    await this.eventBus.emit('send:pending', {
+      mintUrl,
+      operationId: pending.id,
+      operation: pending,
+      token,
+    });
 
     this.logger?.info('Send operation executed', {
       operationId: operation.id,
