@@ -11,4 +11,8 @@ export class HistoryApi {
   async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
     return this.historyService.getPaginatedHistory(offset, limit);
   }
+
+  async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    return this.historyService.getHistoryEntryById(id);
+  }
 }

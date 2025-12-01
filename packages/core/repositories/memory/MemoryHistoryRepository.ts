@@ -26,6 +26,10 @@ export class MemoryHistoryRepository implements HistoryRepository {
     return sorted.slice(offset, offset + limit);
   }
 
+  async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    return this.entries.find((e) => e.id === id) ?? null;
+  }
+
   async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
     const entry: HistoryEntry = { id: String(this.nextId++), ...history } as HistoryEntry;
     this.entries.push(entry);

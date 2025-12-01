@@ -290,9 +290,9 @@ export class ProofStateWatcherService {
     try {
       // Look up the specific proof that was just spent
       const spentProof = await this.proofRepository.getProofBySecret(mintUrl, secret);
-      if (!spentProof?.usedByOperationId) return;
-
-      const operationId = spentProof.usedByOperationId;
+      // Check both usedByOperationId (for exact match sends) and createdByOperationId (for swap sends)
+      const operationId = spentProof?.usedByOperationId || spentProof?.createdByOperationId;
+      if (!operationId) return;
       const operation = await this.sendOperationService.getOperation(operationId);
 
       if (!operation || operation.state !== 'pending') return;

@@ -3,13 +3,16 @@
  *
  * init ──► prepared ──► executing ──► pending ──► completed
  *   │         │            │            │
- *   └─────────┴────────────┴────────────┴──► rolled_back
+ *   │         │            │            └──► rolling_back ──► rolled_back
+ *   │         │            │                      │
+ *   └─────────┴────────────┴──────────────────────┴──► rolled_back
  *
  * - init: Operation created, nothing reserved yet
  * - prepared: Proofs reserved, outputs created, ready to execute
  * - executing: Swap/token creation in progress
  * - pending: Token returned to consumer, awaiting confirmation (proofs spent)
  * - completed: Sent proofs confirmed spent, operation finalized
+ * - rolling_back: Rollback in progress (reclaim swap being executed)
  * - rolled_back: Operation cancelled, proofs reclaimed
  */
 export type SendOperationState =
@@ -18,6 +21,7 @@ export type SendOperationState =
   | 'executing'
   | 'pending'
   | 'completed'
+  | 'rolling_back'
   | 'rolled_back';
 
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
@@ -116,6 +120,15 @@ export interface CompletedSendOperation extends SendOperationBase, PreparedData 
 }
 
 /**
+ * Rolling back state - rollback in progress, reclaim swap being executed.
+ * This is a transient state used to prevent race conditions with ProofStateWatcher.
+ * Only used when rolling back from 'pending' state (which requires a reclaim swap).
+ */
+export interface RollingBackSendOperation extends SendOperationBase, PreparedData {
+  state: 'rolling_back';
+}
+
+/**
  * Rolled back state - operation cancelled, proofs reclaimed
  * Can be rolled back from prepared, executing, or pending states
  */
@@ -137,6 +150,7 @@ export type SendOperation =
   | ExecutingSendOperation
   | PendingSendOperation
   | CompletedSendOperation
+  | RollingBackSendOperation
   | RolledBackSendOperation;
 
 // ============================================================================
@@ -151,10 +165,12 @@ export type PreparedOrLaterOperation =
   | ExecutingSendOperation
   | PendingSendOperation
   | CompletedSendOperation
+  | RollingBackSendOperation
   | RolledBackSendOperation;
 
 /**
  * Terminal states - operation is finished
+ * Note: 'rolling_back' is NOT terminal - it's a transient state that needs recovery
  */
 export type TerminalSendOperation = CompletedSendOperation | RolledBackSendOperation;
 
@@ -180,6 +196,10 @@ export function isPendingOperation(op: SendOperation): op is PendingSendOperatio
 
 export function isCompletedOperation(op: SendOperation): op is CompletedSendOperation {
   return op.state === 'completed';
+}
+
+export function isRollingBackOperation(op: SendOperation): op is RollingBackSendOperation {
+  return op.state === 'rolling_back';
 }
 
 export function isRolledBackOperation(op: SendOperation): op is RolledBackSendOperation {

@@ -68,6 +68,28 @@ export class HistoryService {
     return this.historyRepository.getPaginatedHistoryEntries(limit, offset);
   }
 
+  async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    return this.historyRepository.getHistoryEntryById(id);
+  }
+
+  /**
+   * Get the operationId for a send history entry.
+   * @throws Error if entry not found or is not a send entry
+   */
+  async getOperationIdFromHistoryEntry(historyId: string): Promise<string> {
+    const entry = await this.historyRepository.getHistoryEntryById(historyId);
+
+    if (!entry) {
+      throw new Error(`History entry ${historyId} not found`);
+    }
+
+    if (entry.type !== 'send') {
+      throw new Error(`History entry ${historyId} is not a send entry`);
+    }
+
+    return entry.operationId;
+  }
+
   async handleSendPrepared(mintUrl: string, operationId: string, operation: SendOperation) {
     const entry: Omit<SendHistoryEntry, 'id'> = {
       type: 'send',

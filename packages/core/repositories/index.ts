@@ -113,6 +113,7 @@ export interface MeltQuoteRepository {
 
 export interface HistoryRepository {
   getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]>;
+  getHistoryEntryById(id: string): Promise<HistoryEntry | null>;
   addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry>;
   getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
   getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;

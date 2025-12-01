@@ -310,8 +310,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(initialAmount).toBeGreaterThanOrEqual(200);
 
         const sendAmount = 50;
-        const sendPromise = new Promise((resolve) => {
-          mgr!.once('send:created', (payload) => {
+        const sendPendingPromise = new Promise((resolve) => {
+          mgr!.once('send:pending', (payload) => {
             expect(payload.mintUrl).toBe(mintUrl);
             expect(payload.token.proofs.length).toBeGreaterThan(0);
             const tokenAmount = payload.token.proofs.reduce((sum, p) => sum + p.amount, 0);
@@ -321,7 +321,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         const token = await mgr!.wallet.send(mintUrl, sendAmount);
-        await sendPromise;
+        await sendPendingPromise;
 
         expect(token.mint).toBe(mintUrl);
         expect(token.proofs.length).toBeGreaterThan(0);
@@ -329,6 +329,36 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const balanceAfterSend = await mgr!.wallet.getBalances();
         const amountAfterSend = balanceAfterSend[mintUrl] || 0;
         expect(amountAfterSend).toBeLessThan(initialAmount);
+      });
+
+      it('should emit send:prepared and send:pending events', async () => {
+        const sendAmount = 30;
+        let preparedOperationId: string | undefined;
+
+        const preparedPromise = new Promise((resolve) => {
+          mgr!.once('send:prepared', (payload) => {
+            expect(payload.mintUrl).toBe(mintUrl);
+            expect(payload.operationId).toBeDefined();
+            expect(payload.operation.state).toBe('prepared');
+            preparedOperationId = payload.operationId;
+            resolve(payload);
+          });
+        });
+
+        const pendingPromise = new Promise((resolve) => {
+          mgr!.once('send:pending', (payload) => {
+            expect(payload.mintUrl).toBe(mintUrl);
+            expect(payload.operationId).toBeDefined();
+            expect(payload.operation.state).toBe('pending');
+            expect(payload.token.proofs.length).toBeGreaterThan(0);
+            resolve(payload);
+          });
+        });
+
+        await mgr!.wallet.send(mintUrl, sendAmount);
+
+        await preparedPromise;
+        await pendingPromise;
       });
 
       it('should receive tokens and update balance', async () => {
@@ -521,6 +551,252 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should retrieve paginated history', async () => {
         const history = await mgr!.history.getPaginatedHistory(0, 10);
         expect(Array.isArray(history)).toBe(true);
+      });
+
+      it('should create send history entry with state when send operation is executed', async () => {
+        const sendAmount = 20;
+        await mgr!.wallet.send(mintUrl, sendAmount);
+
+        // Wait for events to settle
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const history = await mgr!.history.getPaginatedHistory(0, 10);
+        const sendEntry = history.find((e) => e.type === 'send')!;
+
+        expect(sendEntry).toBeDefined();
+        expect(sendEntry!.type).toBe('send');
+        if (sendEntry!.type === 'send') {
+          expect(sendEntry.operationId).toBeDefined();
+          expect(sendEntry.state).toBe('pending');
+          expect(sendEntry.amount).toBe(sendAmount);
+          expect(sendEntry.token).toBeDefined();
+          expect(sendEntry.token!.proofs.length).toBeGreaterThan(0);
+        }
+      });
+
+      it('should emit history:updated events for send state changes', async () => {
+        const historyEvents: any[] = [];
+        const unsubscribe = mgr!.on('history:updated', (payload) => {
+          if (payload.entry.type === 'send') {
+            historyEvents.push(payload);
+          }
+        });
+
+        const sendAmount = 15;
+        await mgr!.wallet.send(mintUrl, sendAmount);
+
+        // Wait for events to settle
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // Should have at least 2 history events: prepared and pending
+        expect(historyEvents.length).toBeGreaterThanOrEqual(2);
+
+        // First event should be prepared state
+        const preparedEvent = historyEvents.find(
+          (e) => e.entry.type === 'send' && e.entry.state === 'prepared',
+        );
+        expect(preparedEvent).toBeDefined();
+
+        // Second event should be pending state with token
+        const pendingEvent = historyEvents.find(
+          (e) => e.entry.type === 'send' && e.entry.state === 'pending',
+        );
+        expect(pendingEvent).toBeDefined();
+        if (pendingEvent && pendingEvent.entry.type === 'send') {
+          expect(pendingEvent.entry.token).toBeDefined();
+        }
+
+        unsubscribe();
+      });
+    });
+
+    describe('Send Operations API', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+          watchers: {
+            mintQuoteWatcher: {
+              disabled: true,
+            },
+          },
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+
+        const quote = await mgr.quotes.createMintQuote(mintUrl, 200);
+        await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should get pending send operations', async () => {
+        // Initially no pending operations
+        const pendingBefore = await mgr!.send.getPendingOperations();
+        expect(Array.isArray(pendingBefore)).toBe(true);
+
+        // Send tokens to create a pending operation
+        await mgr!.wallet.send(mintUrl, 30);
+
+        const pendingAfter = await mgr!.send.getPendingOperations();
+        expect(pendingAfter.length).toBeGreaterThan(0);
+
+        const operation = pendingAfter[0];
+        expect(operation?.state).toBe('pending');
+        expect(operation?.mintUrl).toBe(mintUrl);
+      });
+
+      it('should get operation by ID', async () => {
+        let operationId: string | undefined;
+
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        await mgr!.wallet.send(mintUrl, 25);
+
+        expect(operationId).toBeDefined();
+
+        const operation = await mgr!.send.getOperation(operationId!);
+        expect(operation).toBeDefined();
+        expect(operation!.id).toBe(operationId);
+        expect(operation!.state).toBe('pending');
+      });
+
+      it('should rollback a pending send operation', async () => {
+        let operationId: string | undefined;
+
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        const token = await mgr!.wallet.send(mintUrl, 40);
+
+        const balanceAfterSend = await mgr!.wallet.getBalances();
+        const amountAfterSend = balanceAfterSend[mintUrl] || 0;
+
+        // Balance should be lower after send
+        expect(amountAfterSend).toBeLessThan(amountBefore);
+
+        // Listen for rollback event
+        const rolledBackPromise = new Promise((resolve) => {
+          mgr!.once('send:rolled-back', (payload) => {
+            expect(payload.operationId).toBe(operationId);
+            expect(payload.operation.state).toBe('rolled_back');
+            resolve(payload);
+          });
+        });
+
+        // Rollback the operation
+        await mgr!.send.rollback(operationId!);
+        await rolledBackPromise;
+
+        // Operation should be rolled back
+        const operation = await mgr!.send.getOperation(operationId!);
+        expect(operation!.state).toBe('rolled_back');
+
+        // Balance should be restored (minus fees for swap if any)
+        const balanceAfterRollback = await mgr!.wallet.getBalances();
+        const amountAfterRollback = balanceAfterRollback[mintUrl] || 0;
+        expect(amountAfterRollback).toBeGreaterThan(amountAfterSend);
+      });
+
+      it('should update history state to rolledBack on rollback', async () => {
+        let operationId: string | undefined;
+
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        await mgr!.wallet.send(mintUrl, 35);
+
+        // Wait for history to be updated
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Check initial history state
+        let history = await mgr!.history.getPaginatedHistory(0, 10);
+        let sendEntry = history.find(
+          (e) => e.type === 'send' && (e as any).operationId === operationId,
+        );
+        expect(sendEntry).toBeDefined();
+        expect((sendEntry as any).state).toBe('pending');
+
+        // Rollback
+        await mgr!.send.rollback(operationId!);
+
+        // Wait for history to be updated
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Check updated history state
+        history = await mgr!.history.getPaginatedHistory(0, 10);
+        sendEntry = history.find(
+          (e) => e.type === 'send' && (e as any).operationId === operationId,
+        );
+        expect(sendEntry).toBeDefined();
+        expect((sendEntry as any).state).toBe('rolledBack');
+      });
+
+      it('should finalize a pending send operation when proofs are spent', async () => {
+        let operationId: string | undefined;
+
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        const token = await mgr!.wallet.send(mintUrl, 20);
+        console.log('token', token);
+
+        // Receive the token (simulates recipient claiming)
+        await mgr!.wallet.receive(token);
+
+        // Wait for proof state watcher to detect spent proofs and finalize
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+
+        // Operation should be finalized
+        const operation = await mgr!.send.getOperation(operationId!);
+        expect(operation!.state).toBe('completed');
+
+        // Check history state
+        const history = await mgr!.history.getPaginatedHistory(0, 10);
+        const sendEntry = history.find(
+          (e) => e.type === 'send' && (e as any).operationId === operationId,
+        );
+        expect(sendEntry).toBeDefined();
+        expect((sendEntry as any).state).toBe('completed');
+      }, 10000);
+
+      it('should recover pending operations on startup', async () => {
+        // Create a pending operation
+        let operationId: string | undefined;
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        await mgr!.wallet.send(mintUrl, 25);
+
+        // Verify operation is pending
+        const operationBefore = await mgr!.send.getOperation(operationId!);
+        expect(operationBefore!.state).toBe('pending');
+
+        // Manually call recovery (simulates restart)
+        await mgr!.send.recoverPendingOperations();
+
+        // Operation should still exist (recovery handles it)
+        const operationAfter = await mgr!.send.getOperation(operationId!);
+        expect(operationAfter).toBeDefined();
       });
     });
 

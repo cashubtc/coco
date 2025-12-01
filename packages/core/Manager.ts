@@ -20,7 +20,7 @@ import { SendOperationService } from './operations/send/SendOperationService';
 import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi } from './api';
+import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap } from './plugins/types.ts';
@@ -122,6 +122,7 @@ export class Manager {
   readonly keyring: KeyRingApi;
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
+  readonly send: SendApi;
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
@@ -189,6 +190,7 @@ export class Manager {
     this.keyring = apis.keyring;
     this.subscription = apis.subscription;
     this.history = apis.history;
+    this.send = apis.send;
 
     // Close subscriptions for untrusted mints
     this.eventBus.on('mint:untrusted', ({ mintUrl }) => {
@@ -563,6 +565,7 @@ export class Manager {
     keyring: KeyRingApi;
     subscription: SubscriptionApi;
     history: HistoryApi;
+    send: SendApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -581,6 +584,7 @@ export class Manager {
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
-    return { mint, wallet, quotes, keyring, subscription, history };
+    const send = new SendApi(this.sendOperationService, this.historyService);
+    return { mint, wallet, quotes, keyring, subscription, history, send };
   }
 }

@@ -1,5 +1,5 @@
 import type { SendOperationService } from '../operations/send/SendOperationService';
-import type { HistoryRepository } from '../repositories';
+import type { HistoryService } from '../services/HistoryService';
 import type { SendOperation } from '../operations/send/SendOperation';
 
 /**
@@ -12,11 +12,11 @@ import type { SendOperation } from '../operations/send/SendOperation';
  */
 export class SendApi {
   private readonly sendOperationService: SendOperationService;
-  private readonly historyRepository: HistoryRepository;
+  private readonly historyService: HistoryService;
 
-  constructor(sendOperationService: SendOperationService, historyRepository: HistoryRepository) {
+  constructor(sendOperationService: SendOperationService, historyService: HistoryService) {
     this.sendOperationService = sendOperationService;
-    this.historyRepository = historyRepository;
+    this.historyService = historyService;
   }
 
   /**
@@ -54,8 +54,8 @@ export class SendApi {
    * Finalize a send operation by history entry ID.
    * Looks up the operationId from the history entry and finalizes.
    */
-  async finalizeByHistoryId(historyId: string, mintUrl: string): Promise<void> {
-    const operationId = await this.getOperationIdFromHistoryId(historyId, mintUrl);
+  async finalizeByHistoryId(historyId: string): Promise<void> {
+    const operationId = await this.historyService.getOperationIdFromHistoryEntry(historyId);
     return this.sendOperationService.finalize(operationId);
   }
 
@@ -63,8 +63,8 @@ export class SendApi {
    * Rollback a send operation by history entry ID.
    * Looks up the operationId from the history entry and rolls back.
    */
-  async rollbackByHistoryId(historyId: string, mintUrl: string): Promise<void> {
-    const operationId = await this.getOperationIdFromHistoryId(historyId, mintUrl);
+  async rollbackByHistoryId(historyId: string): Promise<void> {
+    const operationId = await this.historyService.getOperationIdFromHistoryEntry(historyId);
     return this.sendOperationService.rollback(operationId);
   }
 
@@ -74,26 +74,5 @@ export class SendApi {
    */
   async recoverPendingOperations(): Promise<void> {
     return this.sendOperationService.recoverPendingOperations();
-  }
-
-  /**
-   * Helper to look up operationId from a history entry.
-   */
-  private async getOperationIdFromHistoryId(historyId: string, mintUrl: string): Promise<string> {
-    // We need to find the history entry and extract the operationId
-    // Since HistoryRepository doesn't have getById, we look up by iterating
-    // TODO: Consider adding getHistoryEntryById to HistoryRepository
-    const entries = await this.historyRepository.getPaginatedHistoryEntries(1000, 0);
-    const entry = entries.find((e) => e.id === historyId && e.mintUrl === mintUrl);
-
-    if (!entry) {
-      throw new Error(`History entry ${historyId} not found`);
-    }
-
-    if (entry.type !== 'send') {
-      throw new Error(`History entry ${historyId} is not a send entry`);
-    }
-
-    return entry.operationId;
   }
 }

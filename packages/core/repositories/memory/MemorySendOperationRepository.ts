@@ -36,7 +36,7 @@ export class MemorySendOperationRepository implements SendOperationRepository {
   async getPending(): Promise<SendOperation[]> {
     const results: SendOperation[] = [];
     for (const op of this.operations.values()) {
-      if (op.state === 'executing' || op.state === 'pending') {
+      if (op.state === 'executing' || op.state === 'pending' || op.state === 'rolling_back') {
         results.push({ ...op });
       }
     }
