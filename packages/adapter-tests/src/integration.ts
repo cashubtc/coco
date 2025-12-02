@@ -882,8 +882,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
           const stateChanges: unknown[] = [];
-          const unsubscribe = mgr.on('proofs:state-changed', (payload) => {
+          const savedProofs: unknown[] = [];
+          const unsubStateChange = mgr.on('proofs:state-changed', (payload) => {
             stateChanges.push(payload);
+          });
+          const unsubSaved = mgr.on('proofs:saved', (payload) => {
+            savedProofs.push(payload);
           });
 
           await mgr.wallet.send(mintUrl, 50);
@@ -896,12 +900,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           );
           expect(spentChange).toBeDefined();
 
-          const inflightChange = stateChanges.find(
+          // Inflight proofs can come from either:
+          // 1. proofs:state-changed with state='inflight' (exact match case)
+          // 2. proofs:saved with inflight proofs (swap case)
+          const inflightStateChange = stateChanges.find(
             (p: any) => p.mintUrl === mintUrl && p.state === 'inflight',
           );
-          expect(inflightChange).toBeDefined();
+          const inflightSaved = savedProofs.find(
+            (p: any) =>
+              p.mintUrl === mintUrl && p.proofs?.some((proof: any) => proof.state === 'inflight'),
+          );
+          expect(inflightStateChange || inflightSaved).toBeDefined();
 
-          unsubscribe();
+          unsubStateChange();
+          unsubSaved();
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();

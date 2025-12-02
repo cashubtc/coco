@@ -41,6 +41,7 @@ export class ProofStateWatcherService {
   private unsubscribeByKey = new Map<ProofKey, UnsubscribeHandler>();
   private inflightByKey = new Set<ProofKey>();
   private offProofsStateChanged?: () => void;
+  private offProofsSaved?: () => void;
   private offUntrusted?: () => void;
 
   constructor(
@@ -78,7 +79,7 @@ export class ProofStateWatcherService {
     this.running = true;
     this.logger?.info('ProofStateWatcherService started');
 
-    // React to proofs being marked inflight
+    // React to proofs being marked inflight via state change
     this.offProofsStateChanged = this.bus.on(
       'proofs:state-changed',
       async ({ mintUrl, secrets, state }) => {
@@ -115,6 +116,27 @@ export class ProofStateWatcherService {
       },
     );
 
+    // React to proofs being saved with inflight state (e.g., from swap operations)
+    this.offProofsSaved = this.bus.on('proofs:saved', async ({ mintUrl, proofs }) => {
+      try {
+        if (!this.running) return;
+        const inflightSecrets = proofs.filter((p) => p.state === 'inflight').map((p) => p.secret);
+        if (inflightSecrets.length > 0) {
+          try {
+            await this.watchProof(mintUrl, inflightSecrets);
+          } catch (err) {
+            this.logger?.warn('Failed to watch inflight proofs from saved event', {
+              mintUrl,
+              count: inflightSecrets.length,
+              err,
+            });
+          }
+        }
+      } catch (err) {
+        this.logger?.error('Error handling proofs:saved', { err });
+      }
+    });
+
     // Stop watching proofs when mint is untrusted
     this.offUntrusted = this.bus.on('mint:untrusted', async ({ mintUrl }) => {
       try {
@@ -138,6 +160,16 @@ export class ProofStateWatcherService {
         // ignore
       } finally {
         this.offProofsStateChanged = undefined;
+      }
+    }
+
+    if (this.offProofsSaved) {
+      try {
+        this.offProofsSaved();
+      } catch {
+        // ignore
+      } finally {
+        this.offProofsSaved = undefined;
       }
     }
 
