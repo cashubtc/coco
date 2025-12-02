@@ -584,7 +584,7 @@ export class Manager {
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
-    const send = new SendApi(this.sendOperationService, this.historyService);
+    const send = new SendApi(this.sendOperationService);
     return { mint, wallet, quotes, keyring, subscription, history, send };
   }
 }

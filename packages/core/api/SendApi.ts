@@ -1,6 +1,5 @@
 import type { Token } from '@cashu/cashu-ts';
 import type { SendOperationService } from '../operations/send/SendOperationService';
-import type { HistoryService } from '../services/HistoryService';
 import type {
   SendOperation,
   PreparedSendOperation,
@@ -12,16 +11,14 @@ import type {
  *
  * Provides methods to:
  * - Query pending send operations
- * - Rollback or finalize operations (by operationId or historyId)
+ * - Rollback or finalize operations by operationId
  * - Recover pending operations on startup
  */
 export class SendApi {
   private readonly sendOperationService: SendOperationService;
-  private readonly historyService: HistoryService;
 
-  constructor(sendOperationService: SendOperationService, historyService: HistoryService) {
+  constructor(sendOperationService: SendOperationService) {
     this.sendOperationService = sendOperationService;
-    this.historyService = historyService;
   }
 
   /**
@@ -96,24 +93,6 @@ export class SendApi {
    * Reclaims proofs and cancels the operation.
    */
   async rollback(operationId: string): Promise<void> {
-    return this.sendOperationService.rollback(operationId);
-  }
-
-  /**
-   * Finalize a send operation by history entry ID.
-   * Looks up the operationId from the history entry and finalizes.
-   */
-  async finalizeByHistoryId(historyId: string): Promise<void> {
-    const operationId = await this.historyService.getOperationIdFromHistoryEntry(historyId);
-    return this.sendOperationService.finalize(operationId);
-  }
-
-  /**
-   * Rollback a send operation by history entry ID.
-   * Looks up the operationId from the history entry and rolls back.
-   */
-  async rollbackByHistoryId(historyId: string): Promise<void> {
-    const operationId = await this.historyService.getOperationIdFromHistoryEntry(historyId);
     return this.sendOperationService.rollback(operationId);
   }
 
