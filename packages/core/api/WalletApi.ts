@@ -45,6 +45,15 @@ export class WalletApi {
     return this.transactionService.receive(token);
   }
 
+  /**
+   * Send tokens from a mint.
+   *
+   * @deprecated Use `SendApi.prepareSend()` and SendApi.executePreparedSend() instead.
+   *
+   * @param mintUrl - The mint URL to send from
+   * @param amount - The amount to send
+   * @returns The token to share with the recipient
+   */
   async send(mintUrl: string, amount: number): Promise<Token> {
     return this.sendOperationService.send(mintUrl, amount);
   }

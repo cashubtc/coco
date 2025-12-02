@@ -1,6 +1,11 @@
+import type { Token } from '@cashu/cashu-ts';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { HistoryService } from '../services/HistoryService';
-import type { SendOperation } from '../operations/send/SendOperation';
+import type {
+  SendOperation,
+  PreparedSendOperation,
+  PendingSendOperation,
+} from '../operations/send/SendOperation';
 
 /**
  * API for managing send operations.
@@ -17,6 +22,50 @@ export class SendApi {
   constructor(sendOperationService: SendOperationService, historyService: HistoryService) {
     this.sendOperationService = sendOperationService;
     this.historyService = historyService;
+  }
+
+  /**
+   * Prepare a send operation without executing it.
+   * This reserves the proofs and calculates the fee.
+   *
+   * Use this when you want to show the user the fee before committing.
+   * The returned operation contains:
+   * - `fee`: The swap fee (0 if exact match)
+   * - `needsSwap`: Whether a swap is required
+   * - `inputAmount`: Total input proof amount
+   *
+   * After reviewing, call `executePreparedSend()` to execute, or `rollback()` to cancel.
+   *
+   * @param mintUrl - The mint URL to send from
+   * @param amount - The amount to send
+   * @returns The prepared operation with fee information
+   */
+  async prepareSend(mintUrl: string, amount: number): Promise<PreparedSendOperation> {
+    const initOp = await this.sendOperationService.init(mintUrl, amount);
+    return this.sendOperationService.prepare(initOp);
+  }
+
+  /**
+   * Execute a prepared send operation.
+   * Call this after `prepareSend()` to complete the send.
+   *
+   * @param operationId - The ID of the prepared operation
+   * @returns The pending operation and the token to share
+   * @throws If the operation is not in 'prepared' state
+   */
+  async executePreparedSend(
+    operationId: string,
+  ): Promise<{ operation: PendingSendOperation; token: Token }> {
+    const operation = await this.sendOperationService.getOperation(operationId);
+    if (!operation) {
+      throw new Error(`Operation ${operationId} not found`);
+    }
+    if (operation.state !== 'prepared') {
+      throw new Error(
+        `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
+      );
+    }
+    return this.sendOperationService.execute(operation);
   }
 
   /**
