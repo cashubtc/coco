@@ -70,7 +70,7 @@ export class SendOperationService {
    * Create a new send operation.
    * This is the entry point for the saga.
    */
-  private async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
+  async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -93,7 +93,7 @@ export class SendOperationService {
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
    */
-  private async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+  async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
     const { mintUrl, amount } = operation;
     const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
@@ -199,7 +199,7 @@ export class SendOperationService {
    * Execute the prepared operation.
    * Performs the swap (if needed) and creates the token.
    */
-  private async execute(
+  async execute(
     operation: PreparedSendOperation,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const { mintUrl, amount, needsSwap, inputProofSecrets } = operation;
@@ -232,6 +232,10 @@ export class SendOperationService {
         operationId: operation.id,
         proofCount: sendProofs.length,
       });
+
+      // Mark send proofs as inflight
+      const sendSecrets = sendProofs.map((p) => p.secret);
+      await this.proofService.setProofState(mintUrl, sendSecrets, 'inflight');
     } else {
       // Perform swap using stored OutputData
       if (!operation.outputData) {
@@ -252,27 +256,18 @@ export class SendOperationService {
       sendProofs = result.send;
       keepProofs = result.keep;
 
-      // Save new proofs (use proofService to emit events)
-      const allNewProofs = [...keepProofs, ...sendProofs];
-      await this.proofService.saveProofs(
-        mintUrl,
-        mapProofToCoreProof(mintUrl, 'ready', allNewProofs),
-      );
-
-      // Mark new proofs as created by this operation
-      await this.proofRepository.setCreatedByOperation(
-        mintUrl,
-        allNewProofs.map((p) => p.secret),
-        operation.id,
-      );
+      // Save new proofs with correct states and operationId in a single call
+      const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
+        createdByOperationId: operation.id,
+      });
+      const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
+        createdByOperationId: operation.id,
+      });
+      await this.proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
 
       // Mark input proofs as spent (use proofService to emit events)
       await this.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
     }
-
-    // Mark send proofs as inflight (use proofService to emit events)
-    const sendSecrets = sendProofs.map((p) => p.secret);
-    await this.proofService.setProofState(mintUrl, sendSecrets, 'inflight');
 
     // Build pending operation
     const pending: PendingSendOperation = {
