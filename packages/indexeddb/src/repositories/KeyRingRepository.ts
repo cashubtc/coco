@@ -36,11 +36,20 @@ export class IdbKeyRingRepository implements KeyRingRepository {
     const table = this.db.table('coco_cashu_keypairs');
     const secretKeyHex = bytesToHex(keyPair.secretKey);
 
+    // Preserve existing derivationIndex if new one is not provided
+    let derivationIndex = keyPair.derivationIndex;
+    if (derivationIndex == null) {
+      const existing = (await table.get(keyPair.publicKeyHex)) as KeypairRow | undefined;
+      if (existing?.derivationIndex != null) {
+        derivationIndex = existing.derivationIndex;
+      }
+    }
+
     await table.put({
       publicKey: keyPair.publicKeyHex,
       secretKey: secretKeyHex,
       createdAt: Date.now(),
-      derivationIndex: keyPair.derivationIndex,
+      derivationIndex,
     });
   }
 
