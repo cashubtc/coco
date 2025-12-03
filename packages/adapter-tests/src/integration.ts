@@ -1287,6 +1287,98 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await dispose2();
         }
       });
+
+      it('should preserve derivation index when adding a keypair that was previously generated', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          // Generate a keypair with dumpSecretKey to get the secret key
+          const generated = await mgr.keyring.generateKeyPair(true);
+          expect(generated.publicKeyHex).toBeDefined();
+          expect(generated.secretKey).toBeDefined();
+
+          // Retrieve and verify it has a derivation index
+          const retrievedBefore = await mgr.keyring.getKeyPair(generated.publicKeyHex);
+          expect(retrievedBefore).toBeDefined();
+          expect(retrievedBefore?.derivationIndex).toBeDefined();
+          const originalDerivationIndex = retrievedBefore!.derivationIndex;
+
+          // Now add the same keypair via addKeyPair (which doesn't pass derivation index)
+          await mgr.keyring.addKeyPair(generated.secretKey);
+
+          // Retrieve again and verify derivation index is preserved
+          const retrievedAfter = await mgr.keyring.getKeyPair(generated.publicKeyHex);
+          expect(retrievedAfter).toBeDefined();
+          expect(retrievedAfter?.derivationIndex).toBe(originalDerivationIndex);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should set derivation index when generating a keypair that was previously added', async () => {
+        const { repositories: repo1, dispose: dispose1 } = await createRepositories();
+        const { repositories: repo2, dispose: dispose2 } = await createRepositories();
+
+        // Use same seed for both managers
+        const sharedSeed = crypto.getRandomValues(new Uint8Array(64));
+        const sharedSeedGetter = async () => sharedSeed;
+
+        try {
+          // First manager: generate a keypair to discover what the first derived key will be
+          const mgr1 = await initializeCoco({
+            repo: repo1,
+            seedGetter: sharedSeedGetter,
+            logger,
+          });
+
+          const derivedKp = await mgr1.keyring.generateKeyPair(true);
+          expect(derivedKp.secretKey).toBeDefined();
+
+          await mgr1.pauseSubscriptions();
+          await mgr1.dispose();
+
+          // Second manager: add the key first (without derivation index), then generate
+          const mgr2 = await initializeCoco({
+            repo: repo2,
+            seedGetter: sharedSeedGetter,
+            logger,
+          });
+
+          // Add the keypair first (no derivation index)
+          const addedKp = await mgr2.keyring.addKeyPair(derivedKp.secretKey);
+          expect(addedKp.publicKeyHex).toBe(derivedKp.publicKeyHex);
+
+          // Verify it has no derivation index initially
+          const retrievedBefore = await mgr2.keyring.getKeyPair(addedKp.publicKeyHex);
+          expect(retrievedBefore).toBeDefined();
+          expect(retrievedBefore?.derivationIndex).toBe(undefined);
+
+          // Now generate - this will derive the same key and should set the derivation index
+          const generatedKp = await mgr2.keyring.generateKeyPair();
+          expect(generatedKp.publicKeyHex).toBe(derivedKp.publicKeyHex);
+
+          // Verify derivation index is now set
+          const retrievedAfter = await mgr2.keyring.getKeyPair(addedKp.publicKeyHex);
+          expect(retrievedAfter).toBeDefined();
+          expect(retrievedAfter?.derivationIndex).toBeDefined();
+
+          await mgr2.pauseSubscriptions();
+          await mgr2.dispose();
+        } finally {
+          await dispose1();
+          await dispose2();
+        }
+      });
     });
 
     describe('P2PK (Pay-to-Public-Key)', () => {

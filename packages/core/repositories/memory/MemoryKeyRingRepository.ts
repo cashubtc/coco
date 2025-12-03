@@ -13,7 +13,20 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
     if (!this.keyPairs.has(keyPair.publicKeyHex)) {
       this.insertionOrder.push(keyPair.publicKeyHex);
     }
-    this.keyPairs.set(keyPair.publicKeyHex, keyPair);
+
+    // Preserve existing derivationIndex if new one is not provided
+    let derivationIndex = keyPair.derivationIndex;
+    if (derivationIndex == null) {
+      const existing = this.keyPairs.get(keyPair.publicKeyHex);
+      if (existing?.derivationIndex != null) {
+        derivationIndex = existing.derivationIndex;
+      }
+    }
+
+    this.keyPairs.set(keyPair.publicKeyHex, {
+      ...keyPair,
+      derivationIndex,
+    });
   }
 
   async deletePersistedKeyPair(publicKey: string): Promise<void> {

@@ -44,7 +44,7 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
        VALUES (?, ?, ?, ?)
        ON CONFLICT(publicKey) DO UPDATE SET
          secretKey=excluded.secretKey,
-         derivationIndex=excluded.derivationIndex`,
+         derivationIndex=COALESCE(excluded.derivationIndex, coco_cashu_keypairs.derivationIndex)`,
       [keyPair.publicKeyHex, secretKeyHex, Date.now(), keyPair.derivationIndex ?? null],
     );
   }
