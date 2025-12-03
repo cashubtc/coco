@@ -92,8 +92,23 @@ export class SendOperationService {
   /**
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
+   *
+   * If preparation fails, automatically attempts to recover the init operation.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+    try {
+      return await this.prepareInternal(operation);
+    } catch (e) {
+      // Attempt to clean up the init operation before re-throwing
+      await this.tryRecoverInitOperation(operation);
+      throw e;
+    }
+  }
+
+  /**
+   * Internal prepare logic, separated for error handling.
+   */
+  private async prepareInternal(operation: InitSendOperation): Promise<PreparedSendOperation> {
     const { mintUrl, amount } = operation;
     const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
@@ -198,13 +213,16 @@ export class SendOperationService {
   /**
    * Execute the prepared operation.
    * Performs the swap (if needed) and creates the token.
+   *
+   * If execution fails after transitioning to 'executing' state,
+   * automatically attempts to recover the operation.
    */
   async execute(
     operation: PreparedSendOperation,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
-    const { mintUrl, amount, needsSwap, inputProofSecrets } = operation;
+    const { mintUrl } = operation;
 
-    // Mark as executing
+    // Mark as executing FIRST - this must happen before any mint interaction
     const executing: ExecutingSendOperation = {
       ...operation,
       state: 'executing',
@@ -212,10 +230,27 @@ export class SendOperationService {
     };
     await this.sendOperationRepository.update(executing);
 
+    try {
+      return await this.executeInternal(executing);
+    } catch (e) {
+      // Attempt to recover the executing operation before re-throwing
+      await this.tryRecoverExecutingOperation(executing);
+      throw e;
+    }
+  }
+
+  /**
+   * Internal execute logic, separated for error handling.
+   */
+  private async executeInternal(
+    executing: ExecutingSendOperation,
+  ): Promise<{ operation: PendingSendOperation; token: Token }> {
+    const { mintUrl, amount, needsSwap, inputProofSecrets } = executing;
+
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
     // Get the reserved proofs
-    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operation.id);
+    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, executing.id);
     const inputProofs = reservedProofs.filter((p) => inputProofSecrets.includes(p.secret));
 
     if (inputProofs.length !== inputProofSecrets.length) {
@@ -229,7 +264,7 @@ export class SendOperationService {
       // Exact match - just use the proofs directly
       sendProofs = inputProofs;
       this.logger?.debug('Executing exact match send', {
-        operationId: operation.id,
+        operationId: executing.id,
         proofCount: sendProofs.length,
       });
 
@@ -238,15 +273,15 @@ export class SendOperationService {
       await this.proofService.setProofState(mintUrl, sendSecrets, 'inflight');
     } else {
       // Perform swap using stored OutputData
-      if (!operation.outputData) {
+      if (!executing.outputData) {
         throw new Error('Missing output data for swap operation');
       }
 
       // Deserialize OutputData
-      const outputData = deserializeOutputData(operation.outputData);
+      const outputData = deserializeOutputData(executing.outputData);
 
       this.logger?.debug('Executing swap', {
-        operationId: operation.id,
+        operationId: executing.id,
         keepOutputs: outputData.keep.length,
         sendOutputs: outputData.send.length,
       });
@@ -258,10 +293,10 @@ export class SendOperationService {
 
       // Save new proofs with correct states and operationId in a single call
       const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
-        createdByOperationId: operation.id,
+        createdByOperationId: executing.id,
       });
       const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
-        createdByOperationId: operation.id,
+        createdByOperationId: executing.id,
       });
       await this.proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
 
@@ -291,7 +326,7 @@ export class SendOperationService {
     });
 
     this.logger?.info('Send operation executed', {
-      operationId: operation.id,
+      operationId: executing.id,
       sendProofCount: sendProofs.length,
       keepProofCount: keepProofs.length,
     });
@@ -600,6 +635,22 @@ export class SendOperationService {
   }
 
   /**
+   * Attempts to recover an init operation, swallowing recovery errors.
+   * If recovery fails, logs warning and leaves for startup recovery.
+   */
+  private async tryRecoverInitOperation(op: InitSendOperation): Promise<void> {
+    try {
+      await this.recoverInitOperation(op);
+      this.logger?.info('Recovered init operation after failure', { operationId: op.id });
+    } catch (recoveryError) {
+      this.logger?.warn('Failed to recover init operation, will retry on next startup', {
+        operationId: op.id,
+        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+      });
+    }
+  }
+
+  /**
    * Recover an executing operation.
    * Determines if swap happened and recovers accordingly.
    */
@@ -648,6 +699,23 @@ export class SendOperationService {
       // Mark input proofs as spent (they were consumed by the swap)
       await this.proofService.setProofState(op.mintUrl, op.inputProofSecrets, 'spent');
       await this.markAsRolledBack(op, 'Recovered: swap completed but token never returned');
+    }
+  }
+
+  /**
+   * Attempts to recover an executing operation, swallowing recovery errors.
+   * If recovery fails (e.g., mint unreachable), logs warning and leaves
+   * for startup recovery.
+   */
+  private async tryRecoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
+    try {
+      await this.recoverExecutingOperation(op);
+      this.logger?.info('Recovered executing operation after failure', { operationId: op.id });
+    } catch (recoveryError) {
+      this.logger?.warn('Failed to recover executing operation, will retry on next startup', {
+        operationId: op.id,
+        error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+      });
     }
   }
 
