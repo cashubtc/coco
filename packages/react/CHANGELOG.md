@@ -1,5 +1,13 @@
 # coco-cashu-react
 
+## 1.1.2-rc.32
+
+### Patch Changes
+
+- 914a862: Implemented the new Send API in useSend
+- Updated dependencies [b8d70c5]
+  - coco-cashu-core@1.1.2-rc.32
+
 ## 1.1.2-rc.31
 
 ### Patch Changes

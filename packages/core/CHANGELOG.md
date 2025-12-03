@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.32
+
+### Patch Changes
+
+- b8d70c5: Added auto-recovery on throws inside SendOperationService
+
 ## 1.1.2-rc.31
 
 ### Patch Changes

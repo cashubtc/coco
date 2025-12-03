@@ -1,7 +1,7 @@
 {
   "name": "coco-cashu-adapter-tests",
   "module": "index.ts",
-  "version": "1.1.2-rc.31",
+  "version": "1.1.2-rc.32",
   "type": "module",
   "devDependencies": {
     "@types/bun": "latest",
@@ -23,7 +23,7 @@
   },
   "peerDependencies": {
     "typescript": "^5",
-    "coco-cashu-core": "^1.1.2-rc.31",
+    "coco-cashu-core": "^1.1.2-rc.32",
     "@cashu/cashu-ts": "^2.7.2"
   },
   "dependencies": {
