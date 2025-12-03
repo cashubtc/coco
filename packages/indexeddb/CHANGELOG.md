@@ -1,5 +1,14 @@
 # coco-cashu-indexeddb
 
+## 1.1.2-rc.31
+
+### Patch Changes
+
+- 1b3ba7b: Making sure adding keypairs to the keyring will never override the derivation index on conflict
+- 3d270d4: Refactored Send to use saga/statemachine for state management and consistency
+- Updated dependencies [3d270d4]
+  - coco-cashu-core@1.1.2-rc.31
+
 ## 1.1.2-rc.30
 
 ### Patch Changes

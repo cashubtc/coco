@@ -1,5 +1,13 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.31
+
+### Patch Changes
+
+- 3d270d4: Refactored Send to use saga/statemachine for state management and consistency
+- Updated dependencies [3d270d4]
+  - coco-cashu-core@1.1.2-rc.31
+
 ## 1.1.2-rc.30
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # coco-cashu-react
 
+## 1.1.2-rc.31
+
+### Patch Changes
+
+- Updated dependencies [3d270d4]
+  - coco-cashu-core@1.1.2-rc.31
+
 ## 1.1.2-rc.30
 
 ### Patch Changes
