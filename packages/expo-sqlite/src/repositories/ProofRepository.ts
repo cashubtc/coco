@@ -2,6 +2,37 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
+interface ProofRow {
+  mintUrl: string;
+  id: string;
+  amount: number;
+  secret: string;
+  C: string;
+  dleqJson: string | null;
+  witnessJson: string | null;
+  state: ProofState;
+  usedByOperationId: string | null;
+  createdByOperationId: string | null;
+}
+
+function rowToProof(r: ProofRow): CoreProof {
+  const base: Proof = {
+    id: r.id,
+    amount: r.amount,
+    secret: r.secret,
+    C: r.C,
+    ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
+    ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
+  };
+  return {
+    ...base,
+    mintUrl: r.mintUrl,
+    state: r.state,
+    ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
+    ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
+  };
+}
+
 export class ExpoProofRepository implements ProofRepository {
   private readonly db: ExpoSqliteDb;
 
@@ -22,7 +53,7 @@ export class ExpoProofRepository implements ProofRepository {
         }
       }
       const insertSql =
-        'INSERT INTO coco_cashu_proofs (mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        'INSERT INTO coco_cashu_proofs (mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
       for (const p of proofs) {
         const dleqJson = p.dleq ? JSON.stringify(p.dleq) : null;
         const witnessJson = p.witness ? JSON.stringify(p.witness) : null;
@@ -36,84 +67,34 @@ export class ExpoProofRepository implements ProofRepository {
           witnessJson,
           p.state,
           now,
+          p.usedByOperationId ?? null,
+          p.createdByOperationId ?? null,
         ]);
       }
     });
   }
 
   async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
-    const rows = await this.db.all<{
-      id: string;
-      amount: number;
-      secret: string;
-      C: string;
-      dleqJson: string | null;
-      witnessJson: string | null;
-    }>(
-      'SELECT id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready"',
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready"',
       [mintUrl],
     );
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
-      };
-      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async getAllReadyProofs(): Promise<CoreProof[]> {
-    const rows = await this.db.all<{
-      mintUrl: string;
-      id: string;
-      amount: number;
-      secret: string;
-      C: string;
-      dleqJson: string | null;
-      witnessJson: string | null;
-    }>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE state = "ready"',
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "ready"',
     );
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
-      };
-      return { ...base, mintUrl: r.mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
-    const rows = await this.db.all<{
-      id: string;
-      amount: number;
-      secret: string;
-      C: string;
-      dleqJson: string | null;
-      witnessJson: string | null;
-    }>(
-      'SELECT id, amount, secret, C, dleqJson, witnessJson FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = "ready"',
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = "ready"',
       [mintUrl, keysetId],
     );
-    return rows.map((r) => {
-      const base: Proof = {
-        id: r.id,
-        amount: r.amount,
-        secret: r.secret,
-        C: r.C,
-        ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-        ...(r.witnessJson ? { witness: JSON.parse(r.witnessJson) } : {}),
-      };
-      return { ...base, mintUrl, state: 'ready' } satisfies CoreProof;
-    });
+    return rows.map(rowToProof);
   }
 
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
@@ -141,5 +122,95 @@ export class ExpoProofRepository implements ProofRepository {
       mintUrl,
       keysetId,
     ]);
+  }
+
+  async reserveProofs(mintUrl: string, secrets: string[], operationId: string): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.transaction(async (tx) => {
+      // Pre-check: all proofs must exist, be ready, and not already reserved
+      const selectSql =
+        'SELECT secret, state, usedByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?';
+      for (const secret of secrets) {
+        const row = await tx.get<{
+          secret: string;
+          state: string;
+          usedByOperationId: string | null;
+        }>(selectSql, [mintUrl, secret]);
+        if (!row) {
+          throw new Error(`Proof with secret not found: ${secret}`);
+        }
+        if (row.state !== 'ready') {
+          throw new Error(`Proof is not ready, cannot reserve: ${secret}`);
+        }
+        if (row.usedByOperationId) {
+          throw new Error(
+            `Proof already reserved by operation ${row.usedByOperationId}: ${secret}`,
+          );
+        }
+      }
+      // Apply reservation
+      const updateSql =
+        'UPDATE coco_cashu_proofs SET usedByOperationId = ? WHERE mintUrl = ? AND secret = ?';
+      for (const secret of secrets) {
+        await tx.run(updateSql, [operationId, mintUrl, secret]);
+      }
+    });
+  }
+
+  async releaseProofs(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.transaction(async (tx) => {
+      const updateSql =
+        'UPDATE coco_cashu_proofs SET usedByOperationId = NULL WHERE mintUrl = ? AND secret = ?';
+      for (const secret of secrets) {
+        await tx.run(updateSql, [mintUrl, secret]);
+      }
+    });
+  }
+
+  async setCreatedByOperation(
+    mintUrl: string,
+    secrets: string[],
+    operationId: string,
+  ): Promise<void> {
+    if (!secrets || secrets.length === 0) return;
+    await this.db.transaction(async (tx) => {
+      const updateSql =
+        'UPDATE coco_cashu_proofs SET createdByOperationId = ? WHERE mintUrl = ? AND secret = ?';
+      for (const secret of secrets) {
+        await tx.run(updateSql, [operationId, mintUrl, secret]);
+      }
+    });
+  }
+
+  async getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null> {
+    const row = await this.db.get<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?',
+      [mintUrl, secret],
+    );
+    return row ? rowToProof(row) : null;
+  }
+
+  async getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]> {
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND (usedByOperationId = ? OR createdByOperationId = ?)',
+      [mintUrl, operationId, operationId],
+    );
+    return rows.map(rowToProof);
+  }
+
+  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready" AND usedByOperationId IS NULL',
+      [mintUrl],
+    );
+    return rows.map(rowToProof);
+  }
+
+  async getReservedProofs(): Promise<CoreProof[]> {
+    const rows = await this.db.all<ProofRow>(
+      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "ready" AND usedByOperationId IS NOT NULL',
+    );
+    return rows.map(rowToProof);
   }
 }

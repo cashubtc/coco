@@ -5,6 +5,7 @@ import type {
   MeltHistoryEntry,
   ReceiveHistoryEntry,
   SendHistoryEntry,
+  SendHistoryState,
 } from '@core/models/History';
 
 type NewHistoryEntry =
@@ -23,6 +24,10 @@ export class MemoryHistoryRepository implements HistoryRepository {
       return Number(b.id) - Number(a.id);
     });
     return sorted.slice(offset, offset + limit);
+  }
+
+  async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    return this.entries.find((e) => e.id === id) ?? null;
   }
 
   async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
@@ -49,14 +54,33 @@ export class MemoryHistoryRepository implements HistoryRepository {
     return null;
   }
 
+  async getSendHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<SendHistoryEntry | null> {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (!e) continue;
+      if (e.type === 'send' && e.mintUrl === mintUrl && e.operationId === operationId) return e;
+    }
+    return null;
+  }
+
   async updateHistoryEntry(
     history:
       | Omit<MintHistoryEntry, 'id' | 'createdAt'>
-      | Omit<MeltHistoryEntry, 'id' | 'createdAt'>,
+      | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
+      | Omit<SendHistoryEntry, 'id' | 'createdAt'>,
   ): Promise<HistoryEntry> {
     const idx = this.entries.findIndex((e) => {
-      if ((e.type === 'mint' || e.type === 'melt') && e.type === history.type) {
+      if (e.type === 'mint' && history.type === 'mint') {
         return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
+      }
+      if (e.type === 'melt' && history.type === 'melt') {
+        return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
+      }
+      if (e.type === 'send' && history.type === 'send') {
+        return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
       }
       return false;
     });
@@ -65,6 +89,18 @@ export class MemoryHistoryRepository implements HistoryRepository {
     const updated: HistoryEntry = { ...existing, ...history } as HistoryEntry;
     this.entries[idx] = updated;
     return updated;
+  }
+
+  async updateSendHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: SendHistoryState,
+  ): Promise<void> {
+    const entry = await this.getSendHistoryEntry(mintUrl, operationId);
+    if (!entry) {
+      throw new Error(`Send history entry not found for operationId: ${operationId}`);
+    }
+    entry.state = state;
   }
 
   async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {

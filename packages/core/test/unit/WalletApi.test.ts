@@ -6,6 +6,7 @@ import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { TransactionService } from '../../services/TransactionService';
 import { PaymentRequestService } from '../../services/PaymentRequestService';
+import type { SendOperationService } from '../../operations/send/SendOperationService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
@@ -18,6 +19,7 @@ describe('WalletApi - Trust Enforcement', () => {
   let mockWalletService: any;
   let mockProofService: any;
   let mockWalletRestoreService: any;
+  let mockSendOperationService: any;
   let transactionService: TransactionService;
   let paymentRequestService: PaymentRequestService;
   let eventBus: EventBus<CoreEvents>;
@@ -77,6 +79,10 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
+    mockSendOperationService = {
+      send: mock(async () => ({ mint: testMintUrl, proofs: testProofs })),
+    };
+
     transactionService = new TransactionService(
       mockMintService,
       mockWalletService,
@@ -93,6 +99,7 @@ describe('WalletApi - Trust Enforcement', () => {
       mockWalletRestoreService,
       transactionService,
       paymentRequestService,
+      mockSendOperationService as SendOperationService,
     );
   });
 
@@ -219,7 +226,10 @@ describe('WalletApi - Trust Enforcement', () => {
     it('should reject sending from untrusted mints', async () => {
       const amount = 10;
 
-      mockMintService.isTrustedMint.mockImplementation(async () => false);
+      // Mock SendOperationService to throw UnknownMintError for untrusted mint
+      mockSendOperationService.send.mockImplementation(async () => {
+        throw new UnknownMintError(`Mint ${testMintUrl} is not trusted`);
+      });
 
       await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow(UnknownMintError);
       await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow('not trusted');
@@ -228,22 +238,17 @@ describe('WalletApi - Trust Enforcement', () => {
     it('should allow sending from trusted mints', async () => {
       const amount = 10;
 
-      mockMintService.isTrustedMint.mockImplementation(async () => true);
-
-      mockWalletService.getWalletWithActiveKeysetId.mockImplementation(async () => ({
-        wallet: {
-          send: mock(async () => ({ send: testProofs, keep: [] })),
-          getFeesForProofs: mock(() => 0),
-        },
+      // Mock SendOperationService to return token
+      mockSendOperationService.send.mockImplementation(async () => ({
+        mint: testMintUrl,
+        proofs: testProofs,
       }));
-
-      mockProofService.selectProofsToSend = mock(async () => testProofs);
-      mockProofService.setProofState = mock(async () => {});
 
       const result = await walletApi.send(testMintUrl, amount);
 
       expect(result.mint).toBe(testMintUrl);
       expect(result.proofs).toEqual(testProofs);
+      expect(mockSendOperationService.send).toHaveBeenCalledWith(testMintUrl, amount);
     });
   });
 

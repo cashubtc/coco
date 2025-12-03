@@ -23,10 +23,19 @@ export type MeltHistoryEntry = BaseHistoryEntry & {
   amount: number;
 };
 
+/**
+ * Simplified state for send history entries.
+ * Maps from SendOperationState to a user-facing state.
+ */
+export type SendHistoryState = 'prepared' | 'pending' | 'completed' | 'rolledBack';
+
 export type SendHistoryEntry = BaseHistoryEntry & {
   type: 'send';
   amount: number;
-  token: Token;
+  operationId: string;
+  state: SendHistoryState;
+  /** Token is only available after execute (state >= pending) */
+  token?: Token;
 };
 
 export type ReceiveHistoryEntry = BaseHistoryEntry & {

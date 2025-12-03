@@ -1,4 +1,4 @@
-import type { Repositories, MintQuoteRepository } from './repositories';
+import type { Repositories, MintQuoteRepository, SendOperationRepository } from './repositories';
 import {
   CounterService,
   MintService,
@@ -16,10 +16,11 @@ import {
   TransactionService,
   PaymentRequestService,
 } from './services';
+import { SendOperationService } from './operations/send/SendOperationService';
 import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi } from './api';
+import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap } from './plugins/types.ts';
@@ -108,6 +109,9 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     await coco.quotes.requeuePaidMintQuotes();
   }
 
+  // Recover any pending send operations from previous session
+  await coco.recoverPendingSendOperations();
+
   return coco;
 }
 
@@ -118,6 +122,7 @@ export class Manager {
   readonly keyring: KeyRingApi;
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
+  readonly send: SendApi;
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
@@ -137,6 +142,9 @@ export class Manager {
   private counterService: CounterService;
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
+  private sendOperationService: SendOperationService;
+  private sendOperationRepository: SendOperationRepository;
+  private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
@@ -172,6 +180,9 @@ export class Manager {
     this.historyService = core.historyService;
     this.transactionService = core.transactionService;
     this.paymentRequestService = core.paymentRequestService;
+    this.sendOperationService = core.sendOperationService;
+    this.sendOperationRepository = core.sendOperationRepository;
+    this.proofRepository = repositories.proofRepository;
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -179,6 +190,7 @@ export class Manager {
     this.keyring = apis.keyring;
     this.subscription = apis.subscription;
     this.history = apis.history;
+    this.send = apis.send;
 
     // Close subscriptions for untrusted mints
     this.eventBus.on('mint:untrusted', ({ mintUrl }) => {
@@ -199,6 +211,7 @@ export class Manager {
       meltQuoteService: this.meltQuoteService,
       historyService: this.historyService,
       transactionService: this.transactionService,
+      sendOperationService: this.sendOperationService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -303,9 +316,11 @@ export class Manager {
       this.subscriptions,
       this.mintService,
       this.proofService,
+      this.proofRepository,
       this.eventBus,
       watcherLogger,
     );
+    this.proofStateWatcher.setSendOperationService(this.sendOperationService);
     await this.proofStateWatcher.start();
   }
 
@@ -313,6 +328,10 @@ export class Manager {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();
     this.proofStateWatcher = undefined;
+  }
+
+  async recoverPendingSendOperations(): Promise<void> {
+    await this.sendOperationService.recoverPendingOperations();
   }
 
   async pauseSubscriptions(): Promise<void> {
@@ -421,6 +440,8 @@ export class Manager {
     historyService: HistoryService;
     transactionService: TransactionService;
     paymentRequestService: PaymentRequestService;
+    sendOperationService: SendOperationService;
+    sendOperationRepository: SendOperationRepository;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -506,6 +527,18 @@ export class Manager {
       paymentRequestLogger,
     );
 
+    const sendOperationLogger = this.getChildLogger('SendOperationService');
+    const sendOperationService = new SendOperationService(
+      repositories.sendOperationRepository,
+      repositories.proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      this.eventBus,
+      sendOperationLogger,
+    );
+    const sendOperationRepository = repositories.sendOperationRepository;
+
     return {
       mintService,
       seedService,
@@ -520,6 +553,8 @@ export class Manager {
       historyService,
       transactionService,
       paymentRequestService,
+      sendOperationService,
+      sendOperationRepository,
     };
   }
 
@@ -530,6 +565,7 @@ export class Manager {
     keyring: KeyRingApi;
     subscription: SubscriptionApi;
     history: HistoryApi;
+    send: SendApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -541,12 +577,14 @@ export class Manager {
       this.walletRestoreService,
       this.transactionService,
       this.paymentRequestService,
+      this.sendOperationService,
       walletApiLogger,
     );
     const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
-    return { mint, wallet, quotes, keyring, subscription, history };
+    const send = new SendApi(this.sendOperationService);
+    return { mint, wallet, quotes, keyring, subscription, history, send };
   }
 }

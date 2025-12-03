@@ -10,6 +10,7 @@ import type {
 } from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from '../types';
 import type { HistoryEntry } from '../models/History';
+import type { SendOperation } from '../operations/send/SendOperation';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -37,7 +38,14 @@ export interface CoreEvents {
   'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
   'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };
   'melt-quote:paid': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
-  'send:created': { mintUrl: string; token: Token };
+  /** Emitted when send operation is prepared (proofs reserved) */
+  'send:prepared': { mintUrl: string; operationId: string; operation: SendOperation };
+  /** Emitted when send operation is executed (token created) */
+  'send:pending': { mintUrl: string; operationId: string; operation: SendOperation; token: Token };
+  /** Emitted when send operation is finalized (proofs confirmed spent) */
+  'send:finalized': { mintUrl: string; operationId: string; operation: SendOperation };
+  /** Emitted when send operation is rolled back */
+  'send:rolled-back': { mintUrl: string; operationId: string; operation: SendOperation };
   'receive:created': { mintUrl: string; token: Token };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
 }

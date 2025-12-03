@@ -13,6 +13,7 @@ type Row = {
   paymentRequest: string | null;
   tokenJson: string | null;
   metadata: string | null;
+  operationId: string | null;
 };
 
 type BaseHistoryEntry = {
@@ -38,10 +39,14 @@ export type MeltHistoryEntry = BaseHistoryEntry & {
   amount: number;
 };
 
+export type SendHistoryState = 'prepared' | 'pending' | 'completed' | 'rolledBack';
+
 export type SendHistoryEntry = BaseHistoryEntry & {
   type: 'send';
   amount: number;
-  token: Token;
+  operationId: string;
+  state: SendHistoryState;
+  token?: Token;
 };
 
 export type ReceiveHistoryEntry = BaseHistoryEntry & {
@@ -63,7 +68,8 @@ type NewHistoryEntry =
 
 type UpdatableHistoryEntry =
   | Omit<MintHistoryEntry, 'id' | 'createdAt'>
-  | Omit<MeltHistoryEntry, 'id' | 'createdAt'>;
+  | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
+  | Omit<SendHistoryEntry, 'id' | 'createdAt'>;
 
 export class ExpoHistoryRepository {
   private readonly db: ExpoSqliteDb;
@@ -74,7 +80,7 @@ export class ExpoHistoryRepository {
 
   async getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null> {
     const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
        FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'
        ORDER BY createdAt DESC, id DESC LIMIT 1`,
       [mintUrl, quoteId],
@@ -86,7 +92,7 @@ export class ExpoHistoryRepository {
 
   async getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null> {
     const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
        FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'
        ORDER BY createdAt DESC, id DESC LIMIT 1`,
       [mintUrl, quoteId],
@@ -96,15 +102,40 @@ export class ExpoHistoryRepository {
     return entry.type === 'melt' ? entry : null;
   }
 
+  async getSendHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<SendHistoryEntry | null> {
+    const row = await this.db.get<Row>(
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'send'
+       ORDER BY createdAt DESC, id DESC LIMIT 1`,
+      [mintUrl, operationId],
+    );
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'send' ? entry : null;
+  }
+
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
     const rows = await this.db.all<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
        FROM coco_cashu_history
        ORDER BY createdAt DESC, id DESC
        LIMIT ? OFFSET ?`,
       [limit, offset],
     );
     return rows.map((r) => this.rowToEntry(r));
+  }
+
+  async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    const row = await this.db.get<Row>(
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+       FROM coco_cashu_history WHERE id = ?`,
+      [id],
+    );
+    if (!row) return null;
+    return this.rowToEntry(row);
   }
 
   async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
@@ -122,6 +153,7 @@ export class ExpoHistoryRepository {
     let paymentRequest: string | null = null;
     let tokenJson: string | null = null;
     let metadata: string | null = history.metadata ? JSON.stringify(history.metadata) : null;
+    let operationId: string | null = null;
 
     switch (history.type) {
       case 'mint':
@@ -134,7 +166,9 @@ export class ExpoHistoryRepository {
         state = history.state;
         break;
       case 'send':
-        tokenJson = JSON.stringify(history.token);
+        tokenJson = history.token ? JSON.stringify(history.token) : null;
+        operationId = history.operationId;
+        state = history.state;
         break;
       case 'receive':
         // no extra fields
@@ -142,9 +176,9 @@ export class ExpoHistoryRepository {
     }
 
     const result = await this.db.run(
-      `INSERT INTO coco_cashu_history (mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [...baseParams, quoteId, state, paymentRequest, tokenJson, metadata],
+      `INSERT INTO coco_cashu_history (mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [...baseParams, quoteId, state, paymentRequest, tokenJson, metadata, operationId],
     );
     const id = result.lastID;
     return this.getById(id);
@@ -189,41 +223,104 @@ export class ExpoHistoryRepository {
   }
 
   async updateHistoryEntry(history: UpdatableHistoryEntry): Promise<HistoryEntry> {
-    const quoteId = history.quoteId;
-    if (!quoteId) throw new Error('quoteId required to update history entry');
-
     let state: string | null = null;
     let paymentRequest: string | null = null;
+    let tokenJson: string | null = null;
+
     if (history.type === 'mint') {
+      if (!history.quoteId) throw new Error('quoteId required for mint entry');
       state = history.state;
       paymentRequest = history.paymentRequest;
-    } else {
+
+      await this.db.run(
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?
+         WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
+        [
+          history.unit,
+          history.amount,
+          state,
+          paymentRequest,
+          history.metadata ? JSON.stringify(history.metadata) : null,
+          history.mintUrl,
+          history.quoteId,
+        ],
+      );
+
+      const row = await this.db.get<Row>(
+        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'
+         ORDER BY createdAt DESC, id DESC LIMIT 1`,
+        [history.mintUrl, history.quoteId],
+      );
+      if (!row) throw new Error('Updated history entry not found');
+      return this.rowToEntry(row);
+    } else if (history.type === 'melt') {
+      if (!history.quoteId) throw new Error('quoteId required for melt entry');
       state = history.state;
+
+      await this.db.run(
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?
+         WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
+        [
+          history.unit,
+          history.amount,
+          state,
+          history.metadata ? JSON.stringify(history.metadata) : null,
+          history.mintUrl,
+          history.quoteId,
+        ],
+      );
+
+      const row = await this.db.get<Row>(
+        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'
+         ORDER BY createdAt DESC, id DESC LIMIT 1`,
+        [history.mintUrl, history.quoteId],
+      );
+      if (!row) throw new Error('Updated history entry not found');
+      return this.rowToEntry(row);
+    } else if (history.type === 'send') {
+      if (!history.operationId) throw new Error('operationId required for send entry');
+      state = history.state;
+      tokenJson = history.token ? JSON.stringify(history.token) : null;
+
+      await this.db.run(
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, tokenJson = ?, metadata = ?
+         WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
+        [
+          history.unit,
+          history.amount,
+          state,
+          tokenJson,
+          history.metadata ? JSON.stringify(history.metadata) : null,
+          history.mintUrl,
+          history.operationId,
+        ],
+      );
+
+      const row = await this.db.get<Row>(
+        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+         FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'send'
+         ORDER BY createdAt DESC, id DESC LIMIT 1`,
+        [history.mintUrl, history.operationId],
+      );
+      if (!row) throw new Error('Updated history entry not found');
+      return this.rowToEntry(row);
+    } else {
+      throw new Error('updateHistoryEntry does not support receive entries');
     }
+  }
 
+  async updateSendHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: SendHistoryState,
+  ): Promise<void> {
     await this.db.run(
-      `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?
-       WHERE mintUrl = ? AND quoteId = ? AND type = ?`,
-      [
-        history.unit,
-        history.amount,
-        state,
-        paymentRequest,
-        history.metadata ? JSON.stringify(history.metadata) : null,
-        history.mintUrl,
-        quoteId,
-        history.type,
-      ],
+      `UPDATE coco_cashu_history SET state = ?
+       WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
+      [state, mintUrl, operationId],
     );
-
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata
-       FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?
-       ORDER BY createdAt DESC, id DESC LIMIT 1`,
-      [history.mintUrl, quoteId, history.type],
-    );
-    if (!row) throw new Error('Updated history entry not found');
-    return this.rowToEntry(row);
   }
 
   async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
@@ -235,7 +332,7 @@ export class ExpoHistoryRepository {
 
   private async getById(id: number): Promise<HistoryEntry> {
     const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
        FROM coco_cashu_history WHERE id = ? LIMIT 1`,
       [id],
     );
@@ -276,7 +373,9 @@ export class ExpoHistoryRepository {
         ...base,
         type: 'send',
         amount: row.amount,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as Token) : ({} as Token),
+        operationId: row.operationId ?? '',
+        state: (row.state ?? 'pending') as SendHistoryState,
+        token: row.tokenJson ? (JSON.parse(row.tokenJson) as Token) : undefined,
       };
     }
     return {

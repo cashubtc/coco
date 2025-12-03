@@ -141,6 +141,8 @@ export interface ProofRow {
   witness?: string | null;
   state: 'inflight' | 'ready' | 'spent';
   createdAt: number;
+  usedByOperationId?: string | null;
+  createdByOperationId?: string | null;
 }
 
 export interface MintQuoteRow {
@@ -164,4 +166,19 @@ export interface MeltQuoteRow {
   expiry: number;
   fee_reserve: number;
   payment_preimage: string | null;
+}
+
+export interface SendOperationRow {
+  id: string;
+  mintUrl: string;
+  amount: number;
+  state: 'init' | 'prepared' | 'executing' | 'pending' | 'completed' | 'rolling_back' | 'rolled_back';
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  needsSwap?: number | null;
+  fee?: number | null;
+  inputAmount?: number | null;
+  inputProofSecretsJson?: string | null;
+  outputDataJson?: string | null;
 }

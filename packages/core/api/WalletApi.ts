@@ -8,6 +8,7 @@ import type {
   PaymentRequestService,
   PreparedPaymentRequest,
 } from '@core/services';
+import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { Logger } from '../logging/Logger.ts';
 
 export class WalletApi {
@@ -17,6 +18,7 @@ export class WalletApi {
   private walletRestoreService: WalletRestoreService;
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
+  private sendOperationService: SendOperationService;
   private readonly logger?: Logger;
 
   constructor(
@@ -26,6 +28,7 @@ export class WalletApi {
     walletRestoreService: WalletRestoreService,
     transactionService: TransactionService,
     paymentRequestService: PaymentRequestService,
+    sendOperationService: SendOperationService,
     logger?: Logger,
   ) {
     this.mintService = mintService;
@@ -34,6 +37,7 @@ export class WalletApi {
     this.walletRestoreService = walletRestoreService;
     this.transactionService = transactionService;
     this.paymentRequestService = paymentRequestService;
+    this.sendOperationService = sendOperationService;
     this.logger = logger;
   }
 
@@ -41,8 +45,17 @@ export class WalletApi {
     return this.transactionService.receive(token);
   }
 
+  /**
+   * Send tokens from a mint.
+   *
+   * @deprecated Use `SendApi.prepareSend()` and SendApi.executePreparedSend() instead.
+   *
+   * @param mintUrl - The mint URL to send from
+   * @param amount - The amount to send
+   * @returns The token to share with the recipient
+   */
   async send(mintUrl: string, amount: number): Promise<Token> {
-    return this.transactionService.send(mintUrl, amount);
+    return this.sendOperationService.send(mintUrl, amount);
   }
 
   async getBalances(): Promise<{ [mintUrl: string]: number }> {

@@ -91,6 +91,13 @@ export class RequestRateLimiter {
       body = JSON.stringify(requestBody);
     }
 
+    // Log request payload
+    this.logger?.debug('Mint request', {
+      method: init.method || 'GET',
+      endpoint,
+      requestBody: requestBody ? JSON.stringify(requestBody, null, 2) : undefined,
+    });
+
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -99,6 +106,10 @@ export class RequestRateLimiter {
         body: body as any,
       } as any);
     } catch (err) {
+      this.logger?.debug('Mint request network error', {
+        endpoint,
+        error: err instanceof Error ? err.message : String(err),
+      });
       throw new NetworkError(err instanceof Error ? err.message : 'Network request failed');
     }
 
@@ -112,6 +123,13 @@ export class RequestRateLimiter {
       } catch {
         // leave default errorData
       }
+
+      // Log error response
+      this.logger?.debug('Mint response error', {
+        endpoint,
+        status: response.status,
+        errorData: JSON.stringify(errorData, null, 2),
+      });
 
       const hasProtocolError =
         response.status === 400 &&
@@ -132,7 +150,14 @@ export class RequestRateLimiter {
     }
 
     try {
-      return (await response.json()) as T;
+      const responseData = (await response.json()) as T;
+      // Log successful response
+      this.logger?.debug('Mint response success', {
+        endpoint,
+        status: response.status,
+        responseData: JSON.stringify(responseData, null, 2),
+      });
+      return responseData;
     } catch (err) {
       this.logger?.error('Failed to parse HTTP response', err as unknown);
       throw new HttpResponseError('bad response', response.status);

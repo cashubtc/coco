@@ -3,6 +3,7 @@ export * from './repositories/index.ts';
 export * from './models/index.ts';
 export * from './api/index.ts';
 export * from './services/index.ts';
+export * from './operations/index.ts';
 export type { CoreProof, ProofState } from './types.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
