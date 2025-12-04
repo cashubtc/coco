@@ -479,13 +479,13 @@ export class SendOperationService {
             });
 
             // Save reclaimed proofs
-            await this.proofRepository.saveProofs(
+            await this.proofService.saveProofs(
               mintUrl,
               mapProofToCoreProof(mintUrl, 'ready', keep),
             );
 
             // Mark send proofs as spent
-            await this.proofRepository.setProofState(
+            await this.proofService.setProofState(
               mintUrl,
               sendProofs.map((p) => p.secret),
               'spent',
