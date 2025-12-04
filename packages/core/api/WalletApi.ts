@@ -1,4 +1,4 @@
-import type { Token } from '@cashu/cashu-ts';
+import type { PaymentRequest, Token } from '@cashu/cashu-ts';
 import type {
   MintService,
   WalletService,
@@ -6,7 +6,8 @@ import type {
   WalletRestoreService,
   TransactionService,
   PaymentRequestService,
-  PreparedPaymentRequest,
+  ParsedPaymentRequest,
+  PaymentRequestTransaction,
 } from '@core/services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { Logger } from '../logging/Logger.ts';
@@ -67,8 +68,23 @@ export class WalletApi {
   /**
    * Parse and validate a payment request string.
    */
-  async readPaymentRequest(paymentRequest: string): Promise<PreparedPaymentRequest> {
-    return this.paymentRequestService.readPaymentRequest(paymentRequest);
+  async processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest> {
+    return this.paymentRequestService.processPaymentRequest(paymentRequest);
+  }
+
+  /**
+   * Prepare a payment request transaction.
+   * @param mintUrl - The mint to send from
+   * @param request - The parsed payment request
+   * @param amount - Optional amount (required if not specified in request)
+   * @returns The payment request transaction
+   */
+  async preparePaymentRequestTransaction(
+    mintUrl: string,
+    request: ParsedPaymentRequest,
+    amount?: number,
+  ): Promise<PaymentRequestTransaction> {
+    return this.paymentRequestService.preparePaymentRequestTransaction(mintUrl, request, amount);
   }
 
   /**
@@ -79,17 +95,10 @@ export class WalletApi {
    * @param amount - Optional amount (required if not specified in request)
    */
   async handleInbandPaymentRequest(
-    mintUrl: string,
-    request: PreparedPaymentRequest & { transport: { type: 'inband' } },
-    inbandHandler: (t: Token) => Promise<void>,
-    amount?: number,
+    transaction: PaymentRequestTransaction,
+    inbandHandler: (token: Token) => Promise<void>,
   ): Promise<void> {
-    return this.paymentRequestService.handleInbandPaymentRequest(
-      mintUrl,
-      request,
-      inbandHandler,
-      amount,
-    );
+    return this.paymentRequestService.handleInbandPaymentRequest(transaction, inbandHandler);
   }
 
   /**
@@ -99,12 +108,8 @@ export class WalletApi {
    * @param amount - Optional amount (required if not specified in request)
    * @returns The HTTP response from the payment endpoint
    */
-  async handleHttpPaymentRequest(
-    mintUrl: string,
-    request: PreparedPaymentRequest & { transport: { type: 'http'; url: string } },
-    amount?: number,
-  ): Promise<Response> {
-    return this.paymentRequestService.handleHttpPaymentRequest(mintUrl, request, amount);
+  async handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response> {
+    return this.paymentRequestService.handleHttpPaymentRequest(transaction);
   }
 
   // Restoration logic is delegated to WalletRestoreService

@@ -54,7 +54,7 @@ export class HistoryService {
       this.handleSendPending(mintUrl, operationId, token);
     });
     this.eventBus.on('send:finalized', ({ mintUrl, operationId }) => {
-      this.handleSendStateChanged(mintUrl, operationId, 'completed');
+      this.handleSendStateChanged(mintUrl, operationId, 'finalized');
     });
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
       this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
