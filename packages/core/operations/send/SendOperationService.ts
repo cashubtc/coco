@@ -852,7 +852,7 @@ export class SendOperationService {
   /**
    * Check a pending operation to see if it should be finalized.
    */
-  private async checkPendingOperation(op: PendingSendOperation): Promise<void> {
+  async checkPendingOperation(op: PendingSendOperation): Promise<void> {
     const sendSecrets = getSendProofSecrets(op);
 
     let sendStates: CashuProofState[];
