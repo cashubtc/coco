@@ -1,4 +1,5 @@
 export * from './MintAdapter';
+export * from './MintRequestProvider';
 export * from './SubscriptionManager';
 export * from './WsConnectionManager';
 export * from './RequestRateLimiter';

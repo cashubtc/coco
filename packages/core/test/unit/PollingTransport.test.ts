@@ -1,14 +1,25 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { PollingTransport } from '../../infra/PollingTransport';
+import type { MintAdapter } from '../../infra/MintAdapter';
 import { NullLogger } from '../../logging';
+
+// Mock MintAdapter for testing
+const createMockMintAdapter = (): MintAdapter =>
+  ({
+    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkProofStates: mock(() => Promise.resolve([])),
+  } as unknown as MintAdapter);
 
 describe('PollingTransport per-mint intervals', () => {
   let transport: PollingTransport;
+  let mockMintAdapter: MintAdapter;
   const mintUrl1 = 'https://mint1.example.com';
   const mintUrl2 = 'https://mint2.example.com';
 
   beforeEach(() => {
-    transport = new PollingTransport({ intervalMs: 5000 }, new NullLogger());
+    mockMintAdapter = createMockMintAdapter();
+    transport = new PollingTransport(mockMintAdapter, { intervalMs: 5000 }, new NullLogger());
   });
 
   it('should use default interval when no per-mint interval is set', () => {
@@ -67,4 +78,3 @@ describe('PollingTransport per-mint intervals', () => {
     expect(getInterval(mintUrl2)).toBe(3000);
   });
 });
-

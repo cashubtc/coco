@@ -1,6 +1,7 @@
 import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { RealTimeTransport } from './RealTimeTransport.ts';
+import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
 import { generateSubId } from '../utils.ts';
@@ -49,18 +50,21 @@ export class SubscriptionManager {
   private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly hasOpenedByMint = new Map<string, boolean>();
   private readonly wsFactory?: WebSocketFactory | undefined;
+  private readonly mintAdapter: MintAdapter;
   private readonly capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> };
   private readonly options: Required<SubscriptionManagerOptions>;
   private paused = false;
 
   constructor(
     wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
+    mintAdapter: MintAdapter,
     logger?: Logger,
     capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> },
     options?: SubscriptionManagerOptions,
   ) {
     this.logger = logger;
     this.capabilitiesProvider = capabilitiesProvider;
+    this.mintAdapter = mintAdapter;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
       fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
@@ -86,6 +90,7 @@ export class SubscriptionManager {
       // Use HybridTransport: runs both WS (no reconnect) and polling in parallel
       t = new HybridTransport(
         this.wsFactory,
+        this.mintAdapter,
         {
           slowPollingIntervalMs: this.options.slowPollingIntervalMs,
           fastPollingIntervalMs: this.options.fastPollingIntervalMs,
@@ -94,7 +99,11 @@ export class SubscriptionManager {
       );
     } else {
       // No WS available, use polling only at fast interval
-      t = new PollingTransport({ intervalMs: this.options.fastPollingIntervalMs }, this.logger);
+      t = new PollingTransport(
+        this.mintAdapter,
+        { intervalMs: this.options.fastPollingIntervalMs },
+        this.logger,
+      );
     }
     this.transportByMint.set(mintUrl, t);
     return t;
@@ -326,7 +335,11 @@ export class SubscriptionManager {
           if (!this.isMintWsSupported(info)) {
             this.transportByMint.set(
               mintUrl,
-              new PollingTransport({ intervalMs: this.options.fastPollingIntervalMs }, this.logger),
+              new PollingTransport(
+                this.mintAdapter,
+                { intervalMs: this.options.fastPollingIntervalMs },
+                this.logger,
+              ),
             );
           }
         })

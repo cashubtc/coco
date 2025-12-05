@@ -6,7 +6,7 @@ import type {
   SubscribeParams,
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
-import { MintAdapter } from './MintAdapter.ts';
+import type { MintAdapter } from './MintAdapter.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -42,9 +42,9 @@ export class PollingTransport implements RealTimeTransport {
   private readonly intervalByMint = new Map<string, number>();
   private paused = false;
 
-  constructor(options?: PollingOptions, logger?: Logger) {
+  constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
     this.logger = logger;
-    this.mintAdapter = new MintAdapter();
+    this.mintAdapter = mintAdapter;
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };

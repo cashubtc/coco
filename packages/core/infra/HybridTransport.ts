@@ -2,6 +2,7 @@ import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { Logger } from '../logging/Logger.ts';
+import type { MintAdapter } from './MintAdapter.ts';
 import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
 
@@ -41,7 +42,12 @@ export class HybridTransport implements RealTimeTransport {
   // Track paused state to avoid marking WS as failed during intentional pause
   private paused = false;
 
-  constructor(wsFactory: WebSocketFactory, options?: HybridTransportOptions, logger?: Logger) {
+  constructor(
+    wsFactory: WebSocketFactory,
+    mintAdapter: MintAdapter,
+    options?: HybridTransportOptions,
+    logger?: Logger,
+  ) {
     this.logger = logger;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
@@ -53,6 +59,7 @@ export class HybridTransport implements RealTimeTransport {
 
     // Create PollingTransport with slow interval initially
     this.pollingTransport = new PollingTransport(
+      mintAdapter,
       { intervalMs: this.options.slowPollingIntervalMs },
       logger,
     );

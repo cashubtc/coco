@@ -1,7 +1,16 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { HybridTransport } from '../../infra/HybridTransport';
+import type { MintAdapter } from '../../infra/MintAdapter';
 import type { WebSocketLike } from '../../infra/WsConnectionManager';
 import { NullLogger } from '../../logging';
+
+// Mock MintAdapter for testing
+const createMockMintAdapter = (): MintAdapter =>
+  ({
+    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkProofStates: mock(() => Promise.resolve([])),
+  } as unknown as MintAdapter);
 
 class MockWebSocket implements WebSocketLike {
   private listeners: Map<string, Set<(event: any) => void>> = new Map();
@@ -62,13 +71,16 @@ class MockWebSocket implements WebSocketLike {
 describe('HybridTransport', () => {
   let transport: HybridTransport;
   let mockSocket: MockWebSocket;
+  let mockMintAdapter: MintAdapter;
   const mintUrl = 'https://mint.example.com';
 
   beforeEach(() => {
     mockSocket = new MockWebSocket();
+    mockMintAdapter = createMockMintAdapter();
     const wsFactory = (_url: string) => mockSocket;
     transport = new HybridTransport(
       wsFactory,
+      mockMintAdapter,
       {
         slowPollingIntervalMs: 20000,
         fastPollingIntervalMs: 5000,
@@ -80,13 +92,13 @@ describe('HybridTransport', () => {
   describe('constructor', () => {
     it('should create transport with default options', () => {
       const wsFactory = (_url: string) => new MockWebSocket();
-      const t = new HybridTransport(wsFactory);
+      const t = new HybridTransport(wsFactory, createMockMintAdapter());
       expect(t).toBeDefined();
     });
 
     it('should create transport with custom options', () => {
       const wsFactory = (_url: string) => new MockWebSocket();
-      const t = new HybridTransport(wsFactory, {
+      const t = new HybridTransport(wsFactory, createMockMintAdapter(), {
         slowPollingIntervalMs: 30000,
         fastPollingIntervalMs: 3000,
       });
@@ -147,7 +159,7 @@ describe('HybridTransport', () => {
         return s;
       };
 
-      const t = new HybridTransport(wsFactory, {}, new NullLogger());
+      const t = new HybridTransport(wsFactory, createMockMintAdapter(), {}, new NullLogger());
 
       const handler1 = mock(() => {});
       const handler2 = mock(() => {});
@@ -457,6 +469,7 @@ describe('HybridTransport', () => {
 
       const t = new HybridTransport(
         wsFactory,
+        createMockMintAdapter(),
         { slowPollingIntervalMs: 20000, fastPollingIntervalMs: 5000 },
         new NullLogger(),
       );
