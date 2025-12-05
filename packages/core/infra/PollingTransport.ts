@@ -40,6 +40,8 @@ export class PollingTransport implements RealTimeTransport {
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly intervalByMint = new Map<string, number>();
+  // Track unsubscribed subIds to prevent re-enqueuing tasks that are currently being processed
+  private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
 
   constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
@@ -165,6 +167,15 @@ export class PollingTransport implements RealTimeTransport {
       const subId = (req.params as any).subId as string;
       const scheduler = this.ensureScheduler(mintUrl);
       scheduler.queue = scheduler.queue.filter((t) => t.subId !== subId);
+
+      // Track unsubscribed subId to prevent re-enqueuing if task is currently being processed
+      let unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      if (!unsubscribed) {
+        unsubscribed = new Set();
+        this.unsubscribedByMint.set(mintUrl, unsubscribed);
+      }
+      unsubscribed.add(subId);
+
       // Clean proof mappings
       const subToYs = this.subToYsByMint.get(mintUrl);
       const yToSubs = this.yToSubsByMint.get(mintUrl);
@@ -207,6 +218,7 @@ export class PollingTransport implements RealTimeTransport {
     this.yToSubsByMint.clear();
     this.subToYsByMint.clear();
     this.intervalByMint.clear();
+    this.unsubscribedByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -217,12 +229,11 @@ export class PollingTransport implements RealTimeTransport {
     this.yToSubsByMint.delete(mintUrl);
     this.subToYsByMint.delete(mintUrl);
     this.intervalByMint.delete(mintUrl);
-    this.logger?.info('PollingTransport closed mint', { mintUrl });
+    this.unsubscribedByMint.delete(mintUrl);
   }
 
   pause(): void {
     this.paused = true;
-    this.logger?.info('PollingTransport paused');
   }
 
   resume(): void {
@@ -231,7 +242,6 @@ export class PollingTransport implements RealTimeTransport {
     for (const mintUrl of this.schedByMint.keys()) {
       void this.maybeRun(mintUrl);
     }
-    this.logger?.info('PollingTransport resumed');
   }
 
   /**
@@ -240,7 +250,6 @@ export class PollingTransport implements RealTimeTransport {
    */
   setIntervalForMint(mintUrl: string, intervalMs: number): void {
     this.intervalByMint.set(mintUrl, intervalMs);
-    this.logger?.debug('Polling interval changed for mint', { mintUrl, intervalMs });
   }
 
   /**
@@ -273,11 +282,21 @@ export class PollingTransport implements RealTimeTransport {
     if (s.queue.length === 0) return;
 
     s.running = true;
+    const task = s.queue.shift()!;
+
     try {
-      const task = s.queue.shift()!;
       await this.performTask(mintUrl, task);
-      // re-enqueue for fairness
-      s.queue.push(task);
+
+      // Re-enqueue for fairness, but only if not unsubscribed during processing
+      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      const wasUnsubscribed = task.subId && unsubscribed?.has(task.subId);
+
+      if (wasUnsubscribed) {
+        // Task was unsubscribed during processing, don't re-enqueue
+        unsubscribed!.delete(task.subId!);
+      } else {
+        s.queue.push(task);
+      }
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
     } finally {

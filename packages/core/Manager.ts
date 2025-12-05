@@ -450,12 +450,6 @@ export class Manager {
         (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
-    const capabilitiesProvider = {
-      getMintInfo: async (mintUrl: string) => {
-        if (!this.mintService) throw new Error('MintService not initialized yet');
-        return this.mintService.getMintInfo(mintUrl);
-      },
-    };
     const options = {
       slowPollingIntervalMs: subscriptionOptions?.slowPollingIntervalMs ?? 20000,
       fastPollingIntervalMs: subscriptionOptions?.fastPollingIntervalMs ?? 5000,
@@ -467,21 +461,9 @@ export class Manager {
         { intervalMs: options.fastPollingIntervalMs },
         wsLogger,
       );
-      return new SubscriptionManager(
-        polling,
-        this.mintAdapter,
-        wsLogger,
-        capabilitiesProvider,
-        options,
-      );
+      return new SubscriptionManager(polling, this.mintAdapter, wsLogger, options);
     }
-    return new SubscriptionManager(
-      wsFactoryToUse,
-      this.mintAdapter,
-      wsLogger,
-      capabilitiesProvider,
-      options,
-    );
+    return new SubscriptionManager(wsFactoryToUse, this.mintAdapter, wsLogger, options);
   }
 
   private buildCoreServices(

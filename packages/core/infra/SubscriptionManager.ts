@@ -5,20 +5,16 @@ import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
 import { generateSubId } from '../utils.ts';
-import type { MintInfo } from '../types.ts';
 
 import type {
   WsRequest,
   WsResponse,
   WsNotification,
   SubscriptionKind,
-  SubscribeParams,
   UnsubscribeHandler,
 } from './SubscriptionProtocol.ts';
 
 export type { UnsubscribeHandler };
-
-// WebSocket types now live in WsConnectionManager
 
 export type SubscriptionCallback<TPayload = unknown> = (payload: TPayload) => void | Promise<void>;
 
@@ -37,8 +33,6 @@ interface ActiveSubscription<TPayload = unknown> {
   callbacks: Set<SubscriptionCallback<TPayload>>;
 }
 
-// generateSubId moved to utils.ts
-
 export class SubscriptionManager {
   private readonly nextIdByMint = new Map<string, number>();
   private readonly subscriptions = new Map<string, ActiveSubscription<unknown>>();
@@ -49,9 +43,8 @@ export class SubscriptionManager {
   private readonly messageHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly openHandlerByMint = new Map<string, (evt: any) => void>();
   private readonly hasOpenedByMint = new Map<string, boolean>();
-  private readonly wsFactory?: WebSocketFactory | undefined;
+  private readonly wsFactory?: WebSocketFactory;
   private readonly mintAdapter: MintAdapter;
-  private readonly capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> };
   private readonly options: Required<SubscriptionManagerOptions>;
   private paused = false;
 
@@ -59,11 +52,9 @@ export class SubscriptionManager {
     wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
     mintAdapter: MintAdapter,
     logger?: Logger,
-    capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> },
     options?: SubscriptionManagerOptions,
   ) {
     this.logger = logger;
-    this.capabilitiesProvider = capabilitiesProvider;
     this.mintAdapter = mintAdapter;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
@@ -78,16 +69,25 @@ export class SubscriptionManager {
     }
   }
 
+  /**
+   * Get or create a transport for a mint.
+   *
+   * Uses HybridTransport (WS + polling in parallel) when a wsFactory is available.
+   * HybridTransport handles WS failures gracefully by speeding up polling, so we
+   * don't need to check mint capabilities or WebSocket availability upfront.
+   *
+   * Falls back to pure PollingTransport only when no wsFactory is provided.
+   */
   private getTransport(mintUrl: string): RealTimeTransport {
     const injected = this.transportByMint.get('*');
     if (injected) return injected;
     let t = this.transportByMint.get(mintUrl);
     if (t) return t;
 
-    // Decide per mint: prefer HybridTransport (WS + polling) if WS available; else polling only
-    const preferWs = this.isWebSocketAvailable();
-    if (preferWs && this.wsFactory) {
-      // Use HybridTransport: runs both WS (no reconnect) and polling in parallel
+    if (this.wsFactory) {
+      // Use HybridTransport: runs both WS and polling in parallel.
+      // If WS fails (no WebSocket in environment, mint doesn't support it, etc.),
+      // the transport automatically speeds up polling as a fallback.
       t = new HybridTransport(
         this.wsFactory,
         this.mintAdapter,
@@ -98,7 +98,7 @@ export class SubscriptionManager {
         this.logger,
       );
     } else {
-      // No WS available, use polling only at fast interval
+      // No wsFactory available, use polling only at fast interval
       t = new PollingTransport(
         this.mintAdapter,
         { intervalMs: this.options.fastPollingIntervalMs },
@@ -107,11 +107,6 @@ export class SubscriptionManager {
     }
     this.transportByMint.set(mintUrl, t);
     return t;
-  }
-
-  private isWebSocketAvailable(): boolean {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return typeof (globalThis as any).WebSocket !== 'undefined' || !!this.wsFactory;
   }
 
   private getNextId(mintUrl: string): number {
@@ -323,28 +318,6 @@ export class SubscriptionManager {
     }
 
     const t = this.getTransport(mintUrl);
-    // If ws is not supported by the mint, choose polling now
-    // Note: With HybridTransport this is less critical since polling is always running,
-    // but we still check to potentially save resources by not maintaining WS connections
-    if (this.capabilitiesProvider) {
-      void this.capabilitiesProvider
-        .getMintInfo(mintUrl)
-        .then((info) => {
-          // If info indicates no WS, force polling transport
-          // This replaces HybridTransport with pure polling if mint doesn't support WS
-          if (!this.isMintWsSupported(info)) {
-            this.transportByMint.set(
-              mintUrl,
-              new PollingTransport(
-                this.mintAdapter,
-                { intervalMs: this.options.fastPollingIntervalMs },
-                this.logger,
-              ),
-            );
-          }
-        })
-        .catch(() => undefined);
-    }
     this.logger?.debug('Sending subscribe request', {
       mintUrl,
       kind,
@@ -381,6 +354,13 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
+    this.logger?.debug('SubscriptionManager: unsubscribe called', {
+      mintUrl,
+      subId,
+      hasSubscription: this.subscriptions.has(subId),
+      activeForMint: this.activeByMint.get(mintUrl)?.size ?? 0,
+    });
+
     const id = this.getNextId(mintUrl);
     const req: WsRequest = {
       jsonrpc: '2.0',
@@ -389,11 +369,21 @@ export class SubscriptionManager {
       id,
     };
     const t = this.getTransport(mintUrl);
+    this.logger?.debug('SubscriptionManager: sending unsubscribe to transport', {
+      mintUrl,
+      subId,
+      requestId: id,
+    });
     t.send(mintUrl, req);
     this.subscriptions.delete(subId);
     const set = this.activeByMint.get(mintUrl);
     set?.delete(subId);
-    this.logger?.info('Unsubscribed from NUT-17', { mintUrl, subId });
+    this.logger?.info('Unsubscribed from NUT-17', {
+      mintUrl,
+      subId,
+      remainingSubscriptions: this.subscriptions.size,
+      remainingActiveForMint: set?.size ?? 0,
+    });
   }
 
   closeAll(): void {
@@ -469,21 +459,6 @@ export class SubscriptionManager {
         filterCount: active.filters.length,
       });
     }
-  }
-
-  private isMintWsSupported(_info: MintInfo): boolean {
-    if (_info.nuts[17]) {
-      const supported = _info.nuts[17].supported;
-      const requiredKinds = ['bolt11_melt_quote', 'proof_state', 'bolt11_mint_quote'];
-
-      for (const s of supported) {
-        if (s.unit === 'sat') {
-          const supportedKinds = new Set<string>(s.commands);
-          return requiredKinds.every((required) => supportedKinds.has(required));
-        }
-      }
-    }
-    return false;
   }
 
   pause(): void {

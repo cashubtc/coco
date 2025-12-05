@@ -111,8 +111,6 @@ export class HybridTransport implements RealTimeTransport {
         this.lastStateByKey.delete(key);
       }
     }
-
-    this.logger?.info('HybridTransport closed mint', { mintUrl });
   }
 
   pause(): void {
@@ -129,8 +127,6 @@ export class HybridTransport implements RealTimeTransport {
     this.hasEmittedOpenByMint.clear();
     // Keep hasInternalHandlersByMint - handlers are still registered
     // Keep lastStateByKey - we want to dedupe across pause/resume
-
-    this.logger?.info('HybridTransport paused');
   }
 
   resume(): void {
@@ -138,7 +134,6 @@ export class HybridTransport implements RealTimeTransport {
 
     this.wsTransport.resume();
     this.pollingTransport.resume();
-    this.logger?.info('HybridTransport resumed');
   }
 
   /**
@@ -152,7 +147,6 @@ export class HybridTransport implements RealTimeTransport {
     // Track successful WS connection
     this.wsTransport.on(mintUrl, 'open', () => {
       this.wsConnectedByMint.add(mintUrl);
-      this.logger?.debug('HybridTransport: WS connected', { mintUrl });
     });
 
     // Track WS close - mark as failed (no reconnect, polling compensates)
@@ -178,10 +172,6 @@ export class HybridTransport implements RealTimeTransport {
    */
   private updatePollingInterval(mintUrl: string): void {
     this.pollingTransport.setIntervalForMint(mintUrl, this.options.fastPollingIntervalMs);
-    this.logger?.debug('HybridTransport: Polling interval updated', {
-      mintUrl,
-      intervalMs: this.options.fastPollingIntervalMs,
-    });
   }
 
   /**
@@ -195,10 +185,7 @@ export class HybridTransport implements RealTimeTransport {
     return (evt: any) => {
       // Dedupe 'open' events - only emit once per mint
       if (event === 'open') {
-        if (this.hasEmittedOpenByMint.has(mintUrl)) {
-          this.logger?.debug('HybridTransport: Deduped open event', { mintUrl });
-          return;
-        }
+        if (this.hasEmittedOpenByMint.has(mintUrl)) return;
         this.hasEmittedOpenByMint.add(mintUrl);
         originalHandler(evt);
         return;
@@ -233,7 +220,6 @@ export class HybridTransport implements RealTimeTransport {
         const lastState = this.lastStateByKey.get(key);
         if (lastState === stateJson) {
           // Duplicate state, skip
-          this.logger?.debug('HybridTransport: Deduped notification', { mintUrl, key });
           return;
         }
 

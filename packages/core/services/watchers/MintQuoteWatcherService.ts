@@ -211,6 +211,7 @@ export class MintQuoteWatcherService {
         async (payload) => {
           // Only act on state changes we care about
           if (payload.state !== 'PAID' && payload.state !== 'ISSUED') return;
+
           const quoteId = payload.quote;
           if (!quoteId) return;
           const key = toKey(mintUrl, quoteId);
@@ -218,12 +219,6 @@ export class MintQuoteWatcherService {
           // Update the local state from the remote state
           try {
             await this.quotes.updateStateFromRemote(mintUrl, quoteId, payload.state);
-            this.logger?.debug('Updated quote state from remote', {
-              mintUrl,
-              quoteId,
-              state: payload.state,
-              subId,
-            });
           } catch (err) {
             this.logger?.error('Failed to update quote state from remote', {
               mintUrl,
@@ -247,10 +242,6 @@ export class MintQuoteWatcherService {
         if (didUnsubscribe) return;
         didUnsubscribe = true;
         await unsubscribe();
-        this.logger?.debug('Unsubscribed watcher for mint quote batch', {
-          mintUrl,
-          subId,
-        });
       };
 
       // Register per-quote stoppers that shrink the remaining set and
@@ -266,11 +257,7 @@ export class MintQuoteWatcherService {
         this.unsubscribeByKey.set(key, perKeyStop);
       }
 
-      this.logger?.debug('Watching mint quote batch', {
-        mintUrl,
-        subId,
-        filterCount: batch.length,
-      });
+      this.logger?.debug('Watching mint quote batch', { mintUrl, subId, count: batch.length });
     }
   }
 
