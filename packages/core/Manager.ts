@@ -72,6 +72,24 @@ export interface CocoConfig {
       initialEnqueueDelayMs?: number;
     };
   };
+  /**
+   * Subscription transport configuration
+   * Controls the hybrid WebSocket + polling behavior
+   */
+  subscriptions?: {
+    /**
+     * Polling interval (ms) while WebSocket is connected.
+     * Only used as backup to catch silent WS failures.
+     * Default: 20000 (20 seconds)
+     */
+    slowPollingIntervalMs?: number;
+    /**
+     * Polling interval (ms) after WebSocket fails.
+     * Used as primary transport when WS is unavailable.
+     * Default: 5000 (5 seconds)
+     */
+    fastPollingIntervalMs?: number;
+  };
 }
 
 /**
@@ -89,6 +107,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.plugins,
     config.watchers,
     config.processors,
+    config.subscriptions,
   );
 
   // Enable watchers (default: all enabled unless explicitly disabled)
@@ -157,10 +176,11 @@ export class Manager {
     plugins?: Plugin[],
     watchers?: CocoConfig['watchers'],
     processors?: CocoConfig['processors'],
+    subscriptions?: CocoConfig['subscriptions'],
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
-    this.subscriptions = this.createSubscriptionManager(webSocketFactory);
+    this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
@@ -399,7 +419,10 @@ export class Manager {
     });
   }
 
-  private createSubscriptionManager(webSocketFactory?: WebSocketFactory): SubscriptionManager {
+  private createSubscriptionManager(
+    webSocketFactory?: WebSocketFactory,
+    subscriptionOptions?: CocoConfig['subscriptions'],
+  ): SubscriptionManager {
     const wsLogger = this.getChildLogger('SubscriptionManager');
     // Detect global WebSocket if available, otherwise require injected factory
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -415,12 +438,16 @@ export class Manager {
         return this.mintService.getMintInfo(mintUrl);
       },
     };
+    const options = {
+      slowPollingIntervalMs: subscriptionOptions?.slowPollingIntervalMs ?? 20000,
+      fastPollingIntervalMs: subscriptionOptions?.fastPollingIntervalMs ?? 5000,
+    };
     if (!wsFactoryToUse) {
       // Fallback to polling transport when WS is unavailable
-      const polling = new PollingTransport({ intervalMs: 5000 }, wsLogger);
-      return new SubscriptionManager(polling, wsLogger, capabilitiesProvider);
+      const polling = new PollingTransport({ intervalMs: options.fastPollingIntervalMs }, wsLogger);
+      return new SubscriptionManager(polling, wsLogger, capabilitiesProvider, options);
     }
-    return new SubscriptionManager(wsFactoryToUse, wsLogger, capabilitiesProvider);
+    return new SubscriptionManager(wsFactoryToUse, wsLogger, capabilitiesProvider, options);
   }
 
   private buildCoreServices(
