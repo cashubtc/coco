@@ -105,6 +105,20 @@ export class SendApi {
   }
 
   /**
+   * Check a pending operation and finalize it if it should be finalized.
+   */
+  async checkPendingOperation(operationId: string): Promise<void> {
+    const operation = await this.sendOperationService.getOperation(operationId);
+    if (!operation) {
+      throw new Error(`Operation ${operationId} not found`);
+    }
+    if (operation.state !== 'pending') {
+      throw new Error(`Operation ${operationId} is not in pending state`);
+    }
+    return this.sendOperationService.checkPendingOperation(operation);
+  }
+
+  /**
    * Check if a specific operation is currently locked (in progress).
    * Useful for UI to disable buttons while an operation is executing.
    */
