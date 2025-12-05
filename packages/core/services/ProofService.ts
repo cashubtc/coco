@@ -6,6 +6,7 @@ import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
 import { WalletService } from './WalletService';
+import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
@@ -15,6 +16,7 @@ export class ProofService {
   private readonly proofRepository: ProofRepository;
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly walletService: WalletService;
+  private readonly mintService: MintService;
   private readonly keyRingService: KeyRingService;
   private readonly seedService: SeedService;
   private readonly logger?: Logger;
@@ -22,6 +24,7 @@ export class ProofService {
     counterService: CounterService,
     proofRepository: ProofRepository,
     walletService: WalletService,
+    mintService: MintService,
     keyRingService: KeyRingService,
     seedService: SeedService,
     logger?: Logger,
@@ -29,6 +32,7 @@ export class ProofService {
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
+    this.mintService = mintService;
     this.keyRingService = keyRingService;
     this.proofRepository = proofRepository;
     this.seedService = seedService;
@@ -219,6 +223,24 @@ export class ProofService {
       balances[mintUrl] = balance + proof.amount;
     }
     return balances;
+  }
+
+  /**
+   * Gets balances for trusted mints only by summing ready proof amounts.
+   * @returns An object mapping trusted mint URLs to their balances
+   */
+  async getTrustedBalances(): Promise<{ [mintUrl: string]: number }> {
+    const balances = await this.getBalances();
+    const trustedMints = await this.mintService.getAllTrustedMints();
+    const trustedUrls = new Set(trustedMints.map((m) => m.mintUrl));
+
+    const trustedBalances: { [mintUrl: string]: number } = {};
+    for (const [mintUrl, balance] of Object.entries(balances)) {
+      if (trustedUrls.has(mintUrl)) {
+        trustedBalances[mintUrl] = balance;
+      }
+    }
+    return trustedBalances;
   }
 
   async setProofState(

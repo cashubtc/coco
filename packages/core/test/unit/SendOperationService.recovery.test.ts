@@ -282,7 +282,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       // Operation should be rolled back
       const op = await sendOpRepo.getById('exec-op-1');
       expect(op?.state).toBe('rolled_back');
-      expect(op?.error).toBe('Recovered: no swap needed, operation never completed');
+      expect(op?.error).toBe('Recovered: no swap needed, operation never finalized');
 
       // Proofs should be released
       const proof1 = await proofRepo.getProofBySecret(mintUrl, 'input-1');
@@ -368,7 +368,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       // Operation should be rolled back
       const op = await sendOpRepo.getById('exec-op-3');
       expect(op?.state).toBe('rolled_back');
-      expect(op?.error).toBe('Recovered: swap completed but token never returned');
+      expect(op?.error).toBe('Recovered: swap succeeded but token never returned');
 
       // Input proofs should be marked as spent (they were consumed by the swap)
       const proof = await proofRepo.getProofBySecret(mintUrl, 'input-1');
@@ -428,7 +428,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       // Operation should be rolled back
       const op = await sendOpRepo.getById('exec-op-4');
       expect(op?.state).toBe('rolled_back');
-      expect(op?.error).toBe('Recovered: swap completed but token never returned');
+      expect(op?.error).toBe('Recovered: swap succeeded but token never returned');
     });
 
     it('should construct proofs correctly from mint restore response', async () => {
@@ -570,9 +570,9 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
       await service.recoverPendingOperations();
 
-      // Operation should be completed (finalized)
+      // Operation should be finalized
       const op = await sendOpRepo.getById('pending-op-1');
-      expect(op?.state).toBe('completed');
+      expect(op?.state).toBe('finalized');
 
       // Logger should info about finalization
       expect(logger.info).toHaveBeenCalledWith('Send operation finalized during recovery', {
@@ -605,9 +605,9 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
       await service.recoverPendingOperations();
 
-      // Operation should be completed
+      // Operation should be finalized
       const op = await sendOpRepo.getById('pending-op-2');
-      expect(op?.state).toBe('completed');
+      expect(op?.state).toBe('finalized');
     });
   });
 
@@ -706,17 +706,17 @@ describe('SendOperationService - recoverPendingOperations', () => {
       });
     });
 
-    it('should release proofs reserved by completed operations', async () => {
-      // Create a completed operation
-      const completedOp = {
-        ...makePreparedOp('completed-op'),
-        state: 'completed' as const,
+    it('should release proofs reserved by finalized operations', async () => {
+      // Create a finalized operation
+      const finalizedOp = {
+        ...makePreparedOp('finalized-op'),
+        state: 'finalized' as const,
       };
-      await sendOpRepo.create(completedOp);
+      await sendOpRepo.create(finalizedOp);
 
       // Proof still has reservation (should have been cleaned up)
       await proofRepo.saveProofs(mintUrl, [
-        makeProof('stale-reservation', { usedByOperationId: 'completed-op' }),
+        makeProof('stale-reservation', { usedByOperationId: 'finalized-op' }),
       ]);
 
       await service.recoverPendingOperations();
@@ -888,7 +888,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
       expect(events.length).toBe(1);
       expect(events[0].operationId).toBe('pending-finalize');
-      expect(events[0].operation.state).toBe('completed');
+      expect(events[0].operation.state).toBe('finalized');
     });
   });
 });

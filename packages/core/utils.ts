@@ -1,7 +1,8 @@
-import { OutputData, type Proof } from '@cashu/cashu-ts';
+import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from './types';
 import type { Logger } from './logging/Logger.ts';
 import { hashToCurve } from '@cashu/cashu-ts/crypto/common';
+import { TokenValidationError } from './models/Error.ts';
 
 // ============================================================================
 // OutputData Serialization Types
@@ -249,4 +250,22 @@ export function normalizeMintUrl(mintUrl: string): string {
   }
 
   return normalized;
+}
+
+export function isValidToken(token: Token): void {
+  if (!token) {
+    throw new TokenValidationError('Token is required');
+  }
+  if (!token.mint) {
+    throw new TokenValidationError('Token mint URL is required');
+  }
+  if (!token.proofs) {
+    throw new TokenValidationError('Token proofs are required');
+  }
+  if (token.proofs.length === 0) {
+    throw new TokenValidationError('Token proofs are required');
+  }
+  if (token.proofs.some((p) => !p.amount || p.amount <= 0)) {
+    throw new TokenValidationError('Token proofs must have a positive amount');
+  }
 }

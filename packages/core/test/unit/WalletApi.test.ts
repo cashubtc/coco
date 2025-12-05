@@ -90,7 +90,10 @@ describe('WalletApi - Trust Enforcement', () => {
       eventBus,
     );
 
-    paymentRequestService = new PaymentRequestService(transactionService);
+    paymentRequestService = new PaymentRequestService(
+      mockSendOperationService as SendOperationService,
+      mockProofService,
+    );
 
     walletApi = new WalletApi(
       mockMintService,

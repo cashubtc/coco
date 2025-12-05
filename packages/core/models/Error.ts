@@ -34,6 +34,12 @@ export class ProofValidationError extends Error {
     this.name = 'ProofValidationError';
   }
 }
+export class TokenValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TokenValidationError';
+  }
+}
 
 export class ProofOperationError extends Error {
   readonly mintUrl: string;
@@ -95,5 +101,17 @@ export class PaymentRequestError extends Error {
     super(message);
     this.name = 'PaymentRequestError';
     (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
+/**
+ * This error is thrown when attempting to modify an operation that is already in progress.
+ */
+export class OperationInProgressError extends Error {
+  readonly operationId: string;
+  constructor(operationId: string) {
+    super(`Operation ${operationId} is already in progress`);
+    this.name = 'OperationInProgressError';
+    this.operationId = operationId;
   }
 }

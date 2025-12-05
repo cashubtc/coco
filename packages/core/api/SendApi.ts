@@ -103,4 +103,20 @@ export class SendApi {
   async recoverPendingOperations(): Promise<void> {
     return this.sendOperationService.recoverPendingOperations();
   }
+
+  /**
+   * Check if a specific operation is currently locked (in progress).
+   * Useful for UI to disable buttons while an operation is executing.
+   */
+  isOperationLocked(operationId: string): boolean {
+    return this.sendOperationService.isOperationLocked(operationId);
+  }
+
+  /**
+   * Check if recovery is currently in progress.
+   * Useful to prevent multiple recovery calls.
+   */
+  isRecoveryInProgress(): boolean {
+    return this.sendOperationService.isRecoveryInProgress();
+  }
 }

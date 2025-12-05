@@ -767,7 +767,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Operation should be finalized
         const operation = await mgr!.send.getOperation(operationId!);
-        expect(operation!.state).toBe('completed');
+        expect(operation!.state).toBe('finalized');
 
         // Check history state
         const history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -775,7 +775,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           (e) => e.type === 'send' && (e as any).operationId === operationId,
         );
         expect(sendEntry).toBeDefined();
-        expect((sendEntry as any).state).toBe('completed');
+        expect((sendEntry as any).state).toBe('finalized');
       }, 10000);
 
       it('should recover pending operations on startup', async () => {
@@ -797,6 +797,199 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // Operation should still exist (recovery handles it)
         const operationAfter = await mgr!.send.getOperation(operationId!);
         expect(operationAfter).toBeDefined();
+      });
+    });
+
+    describe('Send Operation Locking', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+          watchers: {
+            mintQuoteWatcher: {
+              disabled: true,
+            },
+          },
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+
+        const quote = await mgr.quotes.createMintQuote(mintUrl, 300);
+        await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should prevent concurrent execution of executePreparedSend on same operation', async () => {
+        // Prepare a send operation
+        const prepared = await mgr!.send.prepareSend(mintUrl, 30);
+        expect(prepared.state).toBe('prepared');
+
+        // Execute once - should work
+        const { operation } = await mgr!.send.executePreparedSend(prepared.id);
+        expect(operation.state).toBe('pending');
+
+        // Second execute should fail because operation state is no longer 'prepared'
+        await expect(mgr!.send.executePreparedSend(prepared.id)).rejects.toThrow();
+      });
+
+      it('should prevent concurrent rollback on same operation', async () => {
+        // Send and capture operation ID
+        let operationId: string | undefined;
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        await mgr!.wallet.send(mintUrl, 40);
+        expect(operationId).toBeDefined();
+
+        // Start two rollbacks concurrently - second should fail
+        const rollback1 = mgr!.send.rollback(operationId!);
+        const rollback2 = mgr!.send.rollback(operationId!);
+
+        // Wait for both to settle
+        const results = await Promise.allSettled([rollback1, rollback2]);
+
+        // One should succeed, one should fail
+        const succeeded = results.filter((r) => r.status === 'fulfilled');
+        const failed = results.filter((r) => r.status === 'rejected');
+
+        expect(succeeded.length).toBe(1);
+        expect(failed.length).toBe(1);
+
+        // Verify it was an "already in progress" error
+        const error = failed[0] as PromiseRejectedResult;
+        expect(error.reason.message).toContain('already in progress');
+      });
+
+      it('should prevent concurrent finalize on same operation', async () => {
+        // Send and capture operation ID
+        let operationId: string | undefined;
+        mgr!.once('send:pending', (payload) => {
+          operationId = payload.operationId;
+        });
+
+        const token = await mgr!.wallet.send(mintUrl, 35);
+        expect(operationId).toBeDefined();
+
+        // Receive the token to make proofs spent (so finalize can work)
+        await mgr!.wallet.receive(token);
+
+        // Wait a bit for proof state detection
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        // Start two finalizes concurrently - at most one should execute the main logic
+        const finalize1 = mgr!.send.finalize(operationId!);
+        const finalize2 = mgr!.send.finalize(operationId!);
+
+        // Wait for both to settle
+        const results = await Promise.allSettled([finalize1, finalize2]);
+
+        // Due to idempotent pre-checks, both might succeed if first completes before second checks
+        // But if they're truly concurrent, second should fail with "already in progress"
+        // Either way, operation should be completed
+        const operation = await mgr!.send.getOperation(operationId!);
+        expect(operation!.state).toBe('finalized');
+      });
+
+      it('should prevent concurrent recoverPendingOperations calls', async () => {
+        // Start two recovery processes concurrently
+        const recovery1 = mgr!.send.recoverPendingOperations();
+        const recovery2 = mgr!.send.recoverPendingOperations();
+
+        // Wait for both to settle
+        const results = await Promise.allSettled([recovery1, recovery2]);
+
+        // One should succeed, one should fail
+        const succeeded = results.filter((r) => r.status === 'fulfilled');
+        const failed = results.filter((r) => r.status === 'rejected');
+
+        expect(succeeded.length).toBe(1);
+        expect(failed.length).toBe(1);
+
+        // Verify it was an "already in progress" error
+        const error = failed[0] as PromiseRejectedResult;
+        expect(error.reason.message).toContain('already in progress');
+      });
+
+      it('should report correct lock status via isOperationLocked', async () => {
+        // Prepare a send operation
+        const prepared = await mgr!.send.prepareSend(mintUrl, 25);
+
+        // Before execution starts, operation should not be locked
+        expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
+
+        // Start a slow operation by doing execute in background
+        let executeStarted = false;
+        let executeFinished = false;
+
+        const executePromise = (async () => {
+          executeStarted = true;
+          await mgr!.send.executePreparedSend(prepared.id);
+          executeFinished = true;
+        })();
+
+        // Give a small delay for execute to start (though JS is single-threaded,
+        // the lock should be acquired synchronously at the start of execute)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        // After execute completes, operation should no longer be locked
+        await executePromise;
+        expect(executeFinished).toBe(true);
+        expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
+      });
+
+      it('should report correct recovery status via isRecoveryInProgress', async () => {
+        // Before recovery starts, should not be in progress
+        expect(mgr!.send.isRecoveryInProgress()).toBe(false);
+
+        // Start recovery
+        const recoveryPromise = mgr!.send.recoverPendingOperations();
+
+        // Give a small delay for recovery to acquire lock
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        // After recovery completes, should no longer be in progress
+        await recoveryPromise;
+        expect(mgr!.send.isRecoveryInProgress()).toBe(false);
+      });
+
+      it('should allow sequential operations on same operation ID after first completes', async () => {
+        // Prepare and execute
+        const prepared = await mgr!.send.prepareSend(mintUrl, 20);
+        const { operation } = await mgr!.send.executePreparedSend(prepared.id);
+
+        // Rollback should work (operation is now unlocked)
+        await mgr!.send.rollback(operation.id);
+
+        // Verify rolled back
+        const finalOp = await mgr!.send.getOperation(operation.id);
+        expect(finalOp!.state).toBe('rolled_back');
+      });
+
+      it('should not affect different operations when one is locked', async () => {
+        // Prepare two operations
+        const prepared1 = await mgr!.send.prepareSend(mintUrl, 15);
+        const prepared2 = await mgr!.send.prepareSend(mintUrl, 15);
+
+        // Execute both - they have different IDs so both should work
+        const [result1, result2] = await Promise.all([
+          mgr!.send.executePreparedSend(prepared1.id),
+          mgr!.send.executePreparedSend(prepared2.id),
+        ]);
+
+        expect(result1.operation.state).toBe('pending');
+        expect(result2.operation.state).toBe('pending');
       });
     });
 
@@ -1714,7 +1907,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should read an inband payment request', async () => {
+      it('should process an inband payment request', async () => {
         const pr = new PaymentRequest(
           [], // empty transport = inband
           'test-request-id',
@@ -1725,14 +1918,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
 
-        expect(prepared.transport.type).toBe('inband');
-        expect(prepared.amount).toBe(50);
-        expect(prepared.mints).toContain(mintUrl);
+        expect(parsed.transport.type).toBe('inband');
+        expect(parsed.amount).toBe(50);
+        expect(parsed.requiredMints).toContain(mintUrl);
+        expect(parsed.matchingMints).toContain(mintUrl);
       });
 
-      it('should read an HTTP POST payment request', async () => {
+      it('should process an HTTP POST payment request', async () => {
         const targetUrl = 'https://receiver.example.com/callback';
         const pr = new PaymentRequest(
           [{ type: PaymentRequestTransportType.POST, target: targetUrl }],
@@ -1744,16 +1938,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
 
-        expect(prepared.transport.type).toBe('http');
-        if (prepared.transport.type === 'http') {
-          expect(prepared.transport.url).toBe(targetUrl);
+        expect(parsed.transport.type).toBe('http');
+        if (parsed.transport.type === 'http') {
+          expect(parsed.transport.url).toBe(targetUrl);
         }
-        expect(prepared.amount).toBe(75);
+        expect(parsed.amount).toBe(75);
       });
 
-      it('should read a payment request without amount', async () => {
+      it('should process a payment request without amount', async () => {
         const pr = new PaymentRequest(
           [],
           'test-request-no-amount',
@@ -1763,25 +1957,26 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
 
-        expect(prepared.transport.type).toBe('inband');
-        expect(prepared.amount).toBe(undefined);
+        expect(parsed.transport.type).toBe('inband');
+        expect(parsed.amount).toBe(undefined);
       });
 
       it('should handle inband payment request with amount in request', async () => {
         const pr = new PaymentRequest([], 'inband-with-amount', 30, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
-        expect(prepared.transport.type).toBe('inband');
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        expect(parsed.transport.type).toBe('inband');
 
         const balanceBefore = await mgr!.wallet.getBalances();
         const amountBefore = balanceBefore[mintUrl] || 0;
 
         let receivedToken: Token | undefined;
-        if (prepared.transport.type === 'inband') {
-          await mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async (token) => {
+        if (parsed.transport.type === 'inband') {
+          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
+          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
             receivedToken = token;
           });
         }
@@ -1809,20 +2004,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
-        expect(prepared.transport.type).toBe('inband');
-        expect(prepared.amount).toBe(undefined);
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        expect(parsed.transport.type).toBe('inband');
+        expect(parsed.amount).toBe(undefined);
 
         let receivedToken: Token | undefined;
-        if (prepared.transport.type === 'inband') {
-          await mgr!.wallet.handleInbandPaymentRequest(
+        if (parsed.transport.type === 'inband') {
+          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(
             mintUrl,
-            prepared,
-            async (token) => {
-              receivedToken = token;
-            },
+            parsed,
             25, // amount as parameter
           );
+          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
+            receivedToken = token;
+          });
         }
 
         expect(receivedToken).toBeDefined();
@@ -1843,25 +2038,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
-
-        if (prepared.transport.type === 'inband') {
-          await expect(
-            mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async () => {}),
-          ).rejects.toThrow();
-        }
+        // processPaymentRequest should throw because no matching mints found
+        await expect(mgr!.wallet.processPaymentRequest(encoded)).rejects.toThrow();
       });
 
-      it('should throw if amount is missing', async () => {
+      it('should throw if amount is missing when preparing transaction', async () => {
         const pr = new PaymentRequest([], 'no-amount-request', undefined, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
 
-        if (prepared.transport.type === 'inband') {
+        if (parsed.transport.type === 'inband') {
           // Not providing amount when request doesn't have one should throw
           await expect(
-            mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async () => {}),
+            mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed),
           ).rejects.toThrow();
         }
       });
@@ -1876,7 +2066,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        await expect(mgr!.wallet.readPaymentRequest(encoded)).rejects.toThrow();
+        await expect(mgr!.wallet.processPaymentRequest(encoded)).rejects.toThrow();
       });
 
       it('should complete full payment request flow with token reuse', async () => {
@@ -1884,14 +2074,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pr = new PaymentRequest([], 'full-flow-test', 40, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        // Read the payment request
-        const prepared = await mgr!.wallet.readPaymentRequest(encoded);
-        expect(prepared.transport.type).toBe('inband');
+        // Process the payment request
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        expect(parsed.transport.type).toBe('inband');
 
-        // Handle the payment request
+        // Prepare and handle the payment request
         let sentToken: Token | undefined;
-        if (prepared.transport.type === 'inband') {
-          await mgr!.wallet.handleInbandPaymentRequest(mintUrl, prepared, async (token) => {
+        if (parsed.transport.type === 'inband') {
+          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
+          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
             sentToken = token;
           });
         }

@@ -6,7 +6,7 @@ import type {
   PreparedSendOperation,
   ExecutingSendOperation,
   PendingSendOperation,
-  CompletedSendOperation,
+  FinalizedSendOperation,
   RollingBackSendOperation,
   RolledBackSendOperation,
   PreparedOrLaterOperation,
@@ -48,6 +48,11 @@ export class SendOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
+  /** In-memory locks to prevent concurrent operations on the same operation ID */
+  private readonly operationLocks: Map<string, Promise<void>> = new Map();
+  /** Lock for the global recovery process */
+  private recoveryLock: Promise<void> | null = null;
+
   constructor(
     sendOperationRepository: SendOperationRepository,
     proofRepository: ProofRepository,
@@ -64,6 +69,44 @@ export class SendOperationService {
     this.walletService = walletService;
     this.eventBus = eventBus;
     this.logger = logger;
+  }
+
+  /**
+   * Acquire a lock for an operation.
+   * Returns a release function that must be called when the operation completes.
+   * Throws if the operation is already locked.
+   */
+  private async acquireOperationLock(operationId: string): Promise<() => void> {
+    const existingLock = this.operationLocks.get(operationId);
+    if (existingLock) {
+      throw new Error(`Operation ${operationId} is already in progress`);
+    }
+
+    let releaseLock: () => void;
+    const lockPromise = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    this.operationLocks.set(operationId, lockPromise);
+
+    return () => {
+      this.operationLocks.delete(operationId);
+      releaseLock!();
+    };
+  }
+
+  /**
+   * Check if an operation is currently locked.
+   */
+  isOperationLocked(operationId: string): boolean {
+    return this.operationLocks.has(operationId);
+  }
+
+  /**
+   * Check if recovery is currently in progress.
+   */
+  isRecoveryInProgress(): boolean {
+    return this.recoveryLock !== null;
   }
 
   /**
@@ -94,14 +137,18 @@ export class SendOperationService {
    * After this step, the operation can be executed or rolled back.
    *
    * If preparation fails, automatically attempts to recover the init operation.
+   * Throws if the operation is already in progress.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+    const releaseLock = await this.acquireOperationLock(operation.id);
     try {
       return await this.prepareInternal(operation);
     } catch (e) {
       // Attempt to clean up the init operation before re-throwing
       await this.tryRecoverInitOperation(operation);
       throw e;
+    } finally {
+      releaseLock();
     }
   }
 
@@ -216,26 +263,30 @@ export class SendOperationService {
    *
    * If execution fails after transitioning to 'executing' state,
    * automatically attempts to recover the operation.
+   * Throws if the operation is already in progress.
    */
   async execute(
     operation: PreparedSendOperation,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
-    const { mintUrl } = operation;
-
-    // Mark as executing FIRST - this must happen before any mint interaction
-    const executing: ExecutingSendOperation = {
-      ...operation,
-      state: 'executing',
-      updatedAt: Date.now(),
-    };
-    await this.sendOperationRepository.update(executing);
-
+    const releaseLock = await this.acquireOperationLock(operation.id);
     try {
-      return await this.executeInternal(executing);
-    } catch (e) {
-      // Attempt to recover the executing operation before re-throwing
-      await this.tryRecoverExecutingOperation(executing);
-      throw e;
+      // Mark as executing FIRST - this must happen before any mint interaction
+      const executing: ExecutingSendOperation = {
+        ...operation,
+        state: 'executing',
+        updatedAt: Date.now(),
+      };
+      await this.sendOperationRepository.update(executing);
+
+      try {
+        return await this.executeInternal(executing);
+      } catch (e) {
+        // Attempt to recover the executing operation before re-throwing
+        await this.tryRecoverExecutingOperation(executing);
+        throw e;
+      }
+    } finally {
+      releaseLock();
     }
   }
 
@@ -347,271 +398,299 @@ export class SendOperationService {
 
   /**
    * Finalize a pending operation after its proofs have been spent.
-   * This method is idempotent - calling it on an already completed operation is a no-op.
+   * This method is idempotent - calling it on an already finalized operation is a no-op.
    * If the operation was rolled back, finalization is skipped (rollback takes precedence).
+   * Throws if the operation is already in progress.
    */
   async finalize(operationId: string): Promise<void> {
-    const operation = await this.sendOperationRepository.getById(operationId);
-    if (!operation) {
+    // Check terminal states before acquiring lock to allow idempotent calls
+    const preCheck = await this.sendOperationRepository.getById(operationId);
+    if (!preCheck) {
       throw new Error(`Operation ${operationId} not found`);
     }
-
-    // Handle terminal states gracefully to avoid race conditions with rollback
-    if (operation.state === 'completed') {
+    if (preCheck.state === 'finalized') {
       this.logger?.debug('Operation already finalized', { operationId });
       return;
     }
-
-    if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
+    if (preCheck.state === 'rolled_back' || preCheck.state === 'rolling_back') {
       this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
         operationId,
       });
       return;
     }
 
-    if (operation.state !== 'pending') {
-      throw new Error(`Cannot finalize operation in state ${operation.state}`);
+    const releaseLock = await this.acquireOperationLock(operationId);
+    try {
+      // Re-fetch after acquiring lock to ensure state hasn't changed
+      const operation = await this.sendOperationRepository.getById(operationId);
+      if (!operation) {
+        throw new Error(`Operation ${operationId} not found`);
+      }
+
+      // Handle terminal states gracefully to avoid race conditions with rollback
+      if (operation.state === 'finalized') {
+        this.logger?.debug('Operation already finalized', { operationId });
+        return;
+      }
+
+      if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
+        this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
+          operationId,
+        });
+        return;
+      }
+
+      if (operation.state !== 'pending') {
+        throw new Error(`Cannot finalize operation in state ${operation.state}`);
+      }
+
+      // TypeScript knows operation is PendingSendOperation
+      const pendingOp = operation as PendingSendOperation;
+
+      const finalized: FinalizedSendOperation = {
+        ...pendingOp,
+        state: 'finalized',
+        updatedAt: Date.now(),
+      };
+      await this.sendOperationRepository.update(finalized);
+
+      // Release proof reservations (they're already spent)
+      // Derive secrets from operation data
+      const sendSecrets = getSendProofSecrets(pendingOp);
+      const keepSecrets = getKeepProofSecrets(pendingOp);
+
+      await this.proofRepository.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
+      if (sendSecrets.length > 0) {
+        await this.proofRepository.releaseProofs(pendingOp.mintUrl, sendSecrets);
+      }
+      if (keepSecrets.length > 0) {
+        await this.proofRepository.releaseProofs(pendingOp.mintUrl, keepSecrets);
+      }
+
+      await this.eventBus.emit('send:finalized', {
+        mintUrl: pendingOp.mintUrl,
+        operationId,
+        operation: finalized,
+      });
+
+      this.logger?.info('Send operation finalized', { operationId });
+    } finally {
+      releaseLock();
     }
-
-    // TypeScript knows operation is PendingSendOperation
-    const pendingOp = operation as PendingSendOperation;
-
-    const completed: CompletedSendOperation = {
-      ...pendingOp,
-      state: 'completed',
-      updatedAt: Date.now(),
-    };
-    await this.sendOperationRepository.update(completed);
-
-    // Release proof reservations (they're already spent)
-    // Derive secrets from operation data
-    const sendSecrets = getSendProofSecrets(pendingOp);
-    const keepSecrets = getKeepProofSecrets(pendingOp);
-
-    await this.proofRepository.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
-    if (sendSecrets.length > 0) {
-      await this.proofRepository.releaseProofs(pendingOp.mintUrl, sendSecrets);
-    }
-    if (keepSecrets.length > 0) {
-      await this.proofRepository.releaseProofs(pendingOp.mintUrl, keepSecrets);
-    }
-
-    await this.eventBus.emit('send:finalized', {
-      mintUrl: pendingOp.mintUrl,
-      operationId,
-      operation: completed,
-    });
-
-    this.logger?.info('Send operation finalized', { operationId });
   }
 
   /**
    * Rollback an operation by reclaiming the proofs.
    * Only works for operations in 'prepared', 'executing', or 'pending' state.
+   * Throws if the operation is already in progress.
    */
   async rollback(operationId: string): Promise<void> {
-    const operation = await this.sendOperationRepository.getById(operationId);
-    if (!operation) {
-      throw new Error(`Operation ${operationId} not found`);
-    }
+    const releaseLock = await this.acquireOperationLock(operationId);
+    try {
+      const operation = await this.sendOperationRepository.getById(operationId);
+      if (!operation) {
+        throw new Error(`Operation ${operationId} not found`);
+      }
 
-    if (
-      operation.state === 'completed' ||
-      operation.state === 'rolled_back' ||
-      operation.state === 'rolling_back' ||
-      operation.state === 'init'
-    ) {
-      throw new Error(`Cannot rollback operation in state ${operation.state}`);
-    }
+      if (
+        operation.state === 'finalized' ||
+        operation.state === 'rolled_back' ||
+        operation.state === 'rolling_back' ||
+        operation.state === 'executing' ||
+        operation.state === 'init'
+      ) {
+        throw new Error(`Cannot rollback operation in state ${operation.state}`);
+      }
 
-    // At this point, operation has PreparedData
-    if (!hasPreparedData(operation)) {
-      throw new Error(`Operation ${operationId} is not in a rollbackable state`);
-    }
+      // At this point, operation has PreparedData
+      if (!hasPreparedData(operation)) {
+        throw new Error(`Operation ${operationId} is not in a rollbackable state`);
+      }
 
-    const { mintUrl, inputProofSecrets } = operation;
+      const { mintUrl, inputProofSecrets } = operation;
 
-    if (operation.state === 'prepared' || operation.state === 'executing') {
-      // Simple case: just release the reserved proofs - no swap was done yet
-      await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
-      this.logger?.info('Rolling back prepared/executing operation - released reserved proofs', {
-        operationId,
-      });
-    } else if (operation.state === 'pending') {
-      // Complex case: need to reclaim the send proofs by swapping them back.
-      // Mark as 'rolling_back' BEFORE doing the swap to prevent race condition with ProofStateWatcher.
-      // When we reclaim proofs via swap, the mint sends a SPENT notification which triggers
-      // the watcher to try to finalize. By updating state first, the watcher will see
-      // 'rolling_back' and skip finalization.
-      const rollingBack: RollingBackSendOperation = {
-        ...operation,
-        state: 'rolling_back',
-        updatedAt: Date.now(),
-      };
-      await this.sendOperationRepository.update(rollingBack);
+      if (operation.state === 'prepared') {
+        // Simple case: just release the reserved proofs - no swap was done yet
+        await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+        this.logger?.info('Rolling back prepared/executing operation - released reserved proofs', {
+          operationId,
+        });
+      } else if (operation.state === 'pending') {
+        // Complex case: need to reclaim the send proofs by swapping them back.
+        // Mark as 'rolling_back' BEFORE doing the swap to prevent race condition with ProofStateWatcher.
+        // When we reclaim proofs via swap, the mint sends a SPENT notification which triggers
+        // the watcher to try to finalize. By updating state first, the watcher will see
+        // 'rolling_back' and skip finalization.
+        const rollingBack: RollingBackSendOperation = {
+          ...operation,
+          state: 'rolling_back',
+          updatedAt: Date.now(),
+        };
+        await this.sendOperationRepository.update(rollingBack);
 
-      const sendSecrets = getSendProofSecrets(operation);
+        const sendSecrets = getSendProofSecrets(operation);
 
-      if (sendSecrets.length > 0) {
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+        if (sendSecrets.length > 0) {
+          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
-        // Get the send proofs
-        const allProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
-        const sendProofs = allProofs.filter(
-          (p) => sendSecrets.includes(p.secret) && p.state === 'inflight',
-        );
+          // Get the send proofs
+          const allProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
+          const sendProofs = allProofs.filter(
+            (p) => sendSecrets.includes(p.secret) && p.state === 'inflight',
+          );
 
-        if (sendProofs.length > 0) {
-          const totalAmount = sendProofs.reduce((acc, p) => acc + p.amount, 0);
-          const fee = wallet.getFeesForProofs(sendProofs);
-          const reclaimAmount = totalAmount - fee;
+          if (sendProofs.length > 0) {
+            const totalAmount = sendProofs.reduce((acc, p) => acc + p.amount, 0);
+            const fee = wallet.getFeesForProofs(sendProofs);
+            const reclaimAmount = totalAmount - fee;
 
-          if (reclaimAmount > 0) {
-            // Use ProofService to create outputs for reclaim
-            const outputResult = await this.proofService.createOutputsAndIncrementCounters(
-              mintUrl,
-              { keep: reclaimAmount, send: 0 },
-            );
+            if (reclaimAmount > 0) {
+              // Use ProofService to create outputs for reclaim
+              const outputResult = await this.proofService.createOutputsAndIncrementCounters(
+                mintUrl,
+                { keep: reclaimAmount, send: 0 },
+              );
 
-            // Swap to reclaim
-            const { keep } = await wallet.send(reclaimAmount, sendProofs, {
-              outputData: { keep: outputResult.keep, send: [] },
-            });
+              // Swap to reclaim
+              const { keep } = await wallet.send(reclaimAmount, sendProofs, {
+                outputData: { keep: outputResult.keep, send: [] },
+              });
 
-            // Save reclaimed proofs
-            await this.proofService.saveProofs(
-              mintUrl,
-              mapProofToCoreProof(mintUrl, 'ready', keep),
-            );
+              // Save reclaimed proofs
+              await this.proofService.saveProofs(
+                mintUrl,
+                mapProofToCoreProof(mintUrl, 'ready', keep),
+              );
 
-            // Mark send proofs as spent
-            await this.proofService.setProofState(
-              mintUrl,
-              sendProofs.map((p) => p.secret),
-              'spent',
-            );
+              // Mark send proofs as spent
+              await this.proofService.setProofState(
+                mintUrl,
+                sendProofs.map((p) => p.secret),
+                'spent',
+              );
 
-            this.logger?.info('Reclaimed proofs from pending operation', {
-              operationId,
-              reclaimedAmount: reclaimAmount,
-              proofCount: keep.length,
-            });
+              this.logger?.info('Reclaimed proofs from pending operation', {
+                operationId,
+                reclaimedAmount: reclaimAmount,
+                proofCount: keep.length,
+              });
+            }
           }
+        }
+
+        // Release any remaining reservations
+        await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+        const keepSecrets = getKeepProofSecrets(operation);
+        if (keepSecrets.length > 0) {
+          await this.proofRepository.releaseProofs(mintUrl, keepSecrets);
         }
       }
 
-      // Release any remaining reservations
-      await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
-      const keepSecrets = getKeepProofSecrets(operation);
-      if (keepSecrets.length > 0) {
-        await this.proofRepository.releaseProofs(mintUrl, keepSecrets);
-      }
+      await this.markAsRolledBack(operation, 'Rolled back by user action');
+    } finally {
+      releaseLock();
     }
-
-    // Mark as rolled back
-    const rolledBack: RolledBackSendOperation = {
-      ...operation,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-    };
-    await this.sendOperationRepository.update(rolledBack);
-
-    await this.eventBus.emit('send:rolled-back', {
-      mintUrl: operation.mintUrl,
-      operationId,
-      operation: rolledBack,
-    });
-
-    this.logger?.info('Send operation rolled back', {
-      operationId,
-      previousState: operation.state,
-    });
   }
 
   /**
    * Recover pending operations on startup.
    * This should be called during initialization.
+   * Throws if recovery is already in progress.
    */
   async recoverPendingOperations(): Promise<void> {
-    let initCount = 0;
-    let executingCount = 0;
-    let pendingCount = 0;
-    let rollingBackCount = 0;
-    let orphanCount = 0;
-
-    // 1. Clean up failed init operations
-    const initOps = await this.sendOperationRepository.getByState('init');
-    for (const op of initOps) {
-      await this.recoverInitOperation(op as InitSendOperation);
-      initCount++;
+    if (this.recoveryLock) {
+      throw new Error('Recovery is already in progress');
     }
 
-    // 2. Log warnings for prepared operations (leave for user to decide)
-    const preparedOps = await this.sendOperationRepository.getByState('prepared');
-    for (const op of preparedOps) {
-      this.logger?.warn('Found stale prepared operation, user can rollback manually', {
-        operationId: op.id,
-      });
-    }
-
-    // 3. Recover executing operations
-    const executingOps = await this.sendOperationRepository.getByState('executing');
-    for (const op of executingOps) {
-      try {
-        await this.recoverExecutingOperation(op as ExecutingSendOperation);
-        executingCount++;
-      } catch (e) {
-        this.logger?.error('Error recovering executing operation', {
-          operationId: op.id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-
-    // 4. Check pending operations
-    const pendingOps = await this.sendOperationRepository.getByState('pending');
-    for (const op of pendingOps) {
-      try {
-        await this.checkPendingOperation(op as PendingSendOperation);
-        pendingCount++;
-      } catch (e) {
-        this.logger?.error('Error checking pending operation', {
-          operationId: op.id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-
-    // 5. Warn about rolling_back operations (need manual intervention)
-    // TODO: Implement automatic recovery for rolling_back operations.
-    // This requires storing the reclaim OutputData before the swap so we can
-    // recover proofs via the mint's restore endpoint if the swap succeeded
-    // but we crashed before saving the reclaimed proofs.
-    // For now, users need to manually recover via seed restore if this happens.
-    const rollingBackOps = await this.sendOperationRepository.getByState('rolling_back');
-    for (const op of rollingBackOps) {
-      this.logger?.warn(
-        'Found operation stuck in rolling_back state. ' +
-          'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
-        {
-          operationId: op.id,
-          mintUrl: op.mintUrl,
-          amount: op.amount,
-        },
-      );
-      rollingBackCount++;
-    }
-
-    // 7. Clean up orphaned proof reservations
-    orphanCount = await this.cleanupOrphanedReservations();
-
-    this.logger?.info('Recovery completed', {
-      initOperations: initCount,
-      executingOperations: executingCount,
-      pendingOperations: pendingCount,
-      rollingBackOperations: rollingBackCount,
-      orphanedReservations: orphanCount,
+    let releaseRecoveryLock: () => void;
+    this.recoveryLock = new Promise<void>((resolve) => {
+      releaseRecoveryLock = resolve;
     });
+
+    try {
+      let initCount = 0;
+      let executingCount = 0;
+      let pendingCount = 0;
+      let rollingBackCount = 0;
+      let orphanCount = 0;
+
+      // 1. Clean up failed init operations
+      const initOps = await this.sendOperationRepository.getByState('init');
+      for (const op of initOps) {
+        await this.recoverInitOperation(op as InitSendOperation);
+        initCount++;
+      }
+
+      // 2. Log warnings for prepared operations (leave for user to decide)
+      const preparedOps = await this.sendOperationRepository.getByState('prepared');
+      for (const op of preparedOps) {
+        this.logger?.warn('Found stale prepared operation, user can rollback manually', {
+          operationId: op.id,
+        });
+      }
+
+      // 3. Recover executing operations
+      const executingOps = await this.sendOperationRepository.getByState('executing');
+      for (const op of executingOps) {
+        try {
+          await this.recoverExecutingOperation(op as ExecutingSendOperation);
+          executingCount++;
+        } catch (e) {
+          this.logger?.error('Error recovering executing operation', {
+            operationId: op.id,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
+      // 4. Check pending operations
+      const pendingOps = await this.sendOperationRepository.getByState('pending');
+      for (const op of pendingOps) {
+        try {
+          await this.checkPendingOperation(op as PendingSendOperation);
+          pendingCount++;
+        } catch (e) {
+          this.logger?.error('Error checking pending operation', {
+            operationId: op.id,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
+      // 5. Warn about rolling_back operations (need manual intervention)
+      // TODO: Implement automatic recovery for rolling_back operations.
+      // This requires storing the reclaim OutputData before the swap so we can
+      // recover proofs via the mint's restore endpoint if the swap succeeded
+      // but we crashed before saving the reclaimed proofs.
+      // For now, users need to manually recover via seed restore if this happens.
+      const rollingBackOps = await this.sendOperationRepository.getByState('rolling_back');
+      for (const op of rollingBackOps) {
+        this.logger?.warn(
+          'Found operation stuck in rolling_back state. ' +
+            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+          {
+            operationId: op.id,
+            mintUrl: op.mintUrl,
+            amount: op.amount,
+          },
+        );
+        rollingBackCount++;
+      }
+
+      // 7. Clean up orphaned proof reservations
+      orphanCount = await this.cleanupOrphanedReservations();
+
+      this.logger?.info('Recovery completed', {
+        initOperations: initCount,
+        executingOperations: executingCount,
+        pendingOperations: pendingCount,
+        rollingBackOperations: rollingBackCount,
+        orphanedReservations: orphanCount,
+      });
+    } finally {
+      this.recoveryLock = null;
+      releaseRecoveryLock!();
+    }
   }
 
   /**
@@ -658,7 +737,7 @@ export class SendOperationService {
     // Case: Exact match - no mint interaction, always safe to rollback
     if (!op.needsSwap) {
       await this.proofRepository.releaseProofs(op.mintUrl, op.inputProofSecrets);
-      await this.markAsRolledBack(op, 'Recovered: no swap needed, operation never completed');
+      await this.markAsRolledBack(op, 'Recovered: no swap needed, operation never finalized');
       return;
     }
 
@@ -698,7 +777,7 @@ export class SendOperationService {
 
       // Mark input proofs as spent (they were consumed by the swap)
       await this.proofService.setProofState(op.mintUrl, op.inputProofSecrets, 'spent');
-      await this.markAsRolledBack(op, 'Recovered: swap completed but token never returned');
+      await this.markAsRolledBack(op, 'Recovered: swap succeeded but token never returned');
     }
   }
 

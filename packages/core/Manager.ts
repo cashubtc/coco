@@ -474,6 +474,7 @@ export class Manager {
       counterService,
       repositories.proofRepository,
       walletService,
+      mintService,
       keyRingService,
       seedService,
       proofLogger,
@@ -521,12 +522,6 @@ export class Manager {
       transactionLogger,
     );
 
-    const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
-    const paymentRequestService = new PaymentRequestService(
-      transactionService,
-      paymentRequestLogger,
-    );
-
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendOperationService = new SendOperationService(
       repositories.sendOperationRepository,
@@ -538,6 +533,13 @@ export class Manager {
       sendOperationLogger,
     );
     const sendOperationRepository = repositories.sendOperationRepository;
+
+    const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
+    const paymentRequestService = new PaymentRequestService(
+      sendOperationService,
+      proofService,
+      paymentRequestLogger,
+    );
 
     return {
       mintService,
