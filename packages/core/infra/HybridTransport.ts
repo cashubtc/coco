@@ -38,6 +38,9 @@ export class HybridTransport implements RealTimeTransport {
   // Track 'open' events to dedupe (PollingTransport emits synthetic open immediately)
   private readonly hasEmittedOpenByMint = new Set<string>();
 
+  // Track paused state to avoid marking WS as failed during intentional pause
+  private paused = false;
+
   constructor(wsFactory: WebSocketFactory, options?: HybridTransportOptions, logger?: Logger) {
     this.logger = logger;
     this.options = {
@@ -106,12 +109,26 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   pause(): void {
+    // Set paused BEFORE closing transports so handleWsFailure() knows to skip
+    this.paused = true;
+
     this.wsTransport.pause();
     this.pollingTransport.pause();
+
+    // Clear transient state so it resets properly on resume
+    // WS close events fired during pause are ignored (checked paused flag in handleWsFailure)
+    this.wsFailedByMint.clear();
+    this.wsConnectedByMint.clear();
+    this.hasEmittedOpenByMint.clear();
+    // Keep hasInternalHandlersByMint - handlers are still registered
+    // Keep lastStateByKey - we want to dedupe across pause/resume
+
     this.logger?.info('HybridTransport paused');
   }
 
   resume(): void {
+    this.paused = false;
+
     this.wsTransport.resume();
     this.pollingTransport.resume();
     this.logger?.info('HybridTransport resumed');
@@ -141,6 +158,8 @@ export class HybridTransport implements RealTimeTransport {
    * Handle WS failure - mark as failed and speed up polling.
    */
   private handleWsFailure(mintUrl: string): void {
+    // Don't mark as failed during intentional pause - WS will reconnect on resume
+    if (this.paused) return;
     if (this.wsFailedByMint.has(mintUrl)) return; // Already failed
     this.wsFailedByMint.add(mintUrl);
     this.updatePollingInterval(mintUrl);

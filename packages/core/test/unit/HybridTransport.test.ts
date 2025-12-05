@@ -391,6 +391,95 @@ describe('HybridTransport', () => {
       transport.resume();
       expect(true).toBe(true);
     });
+
+    it('should not mark WS as failed when pausing', async () => {
+      transport.on(mintUrl, 'open', () => {});
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // WS connects
+      mockSocket.triggerOpen();
+
+      // Pause - this will close WS, but should NOT mark as failed
+      transport.pause();
+
+      const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
+      expect(wsFailedByMint.has(mintUrl)).toBe(false);
+    });
+
+    it('should not speed up polling when pausing', async () => {
+      transport.on(mintUrl, 'open', () => {});
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      mockSocket.triggerOpen();
+      transport.pause();
+
+      // Check polling interval was NOT changed to fast
+      const pollingTransport = (transport as any).pollingTransport;
+      const intervalByMint = (pollingTransport as any).intervalByMint as Map<string, number>;
+
+      // Should NOT have a fast interval set
+      expect(intervalByMint.has(mintUrl)).toBe(false);
+    });
+
+    it('should clear open event tracking on pause so resume emits open', async () => {
+      const openHandler = mock(() => {});
+      transport.on(mintUrl, 'open', openHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // First open
+      mockSocket.triggerOpen();
+      expect(openHandler.mock.calls.length).toBe(1);
+
+      // Pause clears hasEmittedOpenByMint
+      transport.pause();
+
+      const hasEmittedOpenByMint = (transport as any).hasEmittedOpenByMint as Set<string>;
+      expect(hasEmittedOpenByMint.has(mintUrl)).toBe(false);
+    });
+
+    it('should allow WS to reconnect and emit open after resume', async () => {
+      let socket1: MockWebSocket;
+      let socket2: MockWebSocket;
+      let socketCount = 0;
+
+      const wsFactory = (_url: string) => {
+        socketCount++;
+        if (socketCount === 1) {
+          socket1 = new MockWebSocket();
+          return socket1;
+        }
+        socket2 = new MockWebSocket();
+        return socket2;
+      };
+
+      const t = new HybridTransport(
+        wsFactory,
+        { slowPollingIntervalMs: 20000, fastPollingIntervalMs: 5000 },
+        new NullLogger(),
+      );
+
+      const openHandler = mock(() => {});
+      t.on(mintUrl, 'open', openHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // First open
+      socket1!.triggerOpen();
+      expect(openHandler.mock.calls.length).toBe(1);
+
+      // Pause and resume
+      t.pause();
+      t.resume();
+
+      // New socket connects after resume - should emit open again
+      socket2!.triggerOpen();
+      expect(openHandler.mock.calls.length).toBe(2);
+
+      t.closeAll();
+    });
   });
 
   describe('close/error event passthrough', () => {
