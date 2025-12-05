@@ -1,4 +1,8 @@
-import { WsConnectionManager, type WebSocketFactory } from './WsConnectionManager.ts';
+import {
+  WsConnectionManager,
+  type WebSocketFactory,
+  type WsConnectionManagerOptions,
+} from './WsConnectionManager.ts';
 import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
@@ -6,10 +10,14 @@ import type { Logger } from '../logging/Logger.ts';
 export class WsTransport implements RealTimeTransport {
   private readonly ws: WsConnectionManager;
 
-  constructor(wsFactoryOrManager: WebSocketFactory | WsConnectionManager, logger?: Logger) {
+  constructor(
+    wsFactoryOrManager: WebSocketFactory | WsConnectionManager,
+    logger?: Logger,
+    options?: WsConnectionManagerOptions,
+  ) {
     this.ws =
       typeof wsFactoryOrManager === 'function'
-        ? new WsConnectionManager(wsFactoryOrManager, logger)
+        ? new WsConnectionManager(wsFactoryOrManager, logger, options)
         : wsFactoryOrManager;
   }
 
