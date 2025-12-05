@@ -1,8 +1,8 @@
 import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { RealTimeTransport } from './RealTimeTransport.ts';
-import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
+import { HybridTransport } from './HybridTransport.ts';
 import { generateSubId } from '../utils.ts';
 import type { MintInfo } from '../types.ts';
 
@@ -20,6 +20,13 @@ export type { UnsubscribeHandler };
 // WebSocket types now live in WsConnectionManager
 
 export type SubscriptionCallback<TPayload = unknown> = (payload: TPayload) => void | Promise<void>;
+
+export interface SubscriptionManagerOptions {
+  /** Slow polling interval while WS is connected (default: 20000ms) */
+  slowPollingIntervalMs?: number;
+  /** Fast polling interval after WS fails (default: 5000ms) */
+  fastPollingIntervalMs?: number;
+}
 
 interface ActiveSubscription<TPayload = unknown> {
   subId: string;
@@ -43,15 +50,21 @@ export class SubscriptionManager {
   private readonly hasOpenedByMint = new Map<string, boolean>();
   private readonly wsFactory?: WebSocketFactory | undefined;
   private readonly capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> };
+  private readonly options: Required<SubscriptionManagerOptions>;
   private paused = false;
 
   constructor(
     wsFactoryOrManager: WebSocketFactory | RealTimeTransport,
     logger?: Logger,
     capabilitiesProvider?: { getMintInfo: (mintUrl: string) => Promise<MintInfo> },
+    options?: SubscriptionManagerOptions,
   ) {
     this.logger = logger;
     this.capabilitiesProvider = capabilitiesProvider;
+    this.options = {
+      slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
+      fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
+    };
     if (typeof wsFactoryOrManager === 'function') {
       this.wsFactory = wsFactoryOrManager;
     } else {
@@ -67,14 +80,21 @@ export class SubscriptionManager {
     let t = this.transportByMint.get(mintUrl);
     if (t) return t;
 
-    // Decide per mint: prefer WS if available & supported; else polling
+    // Decide per mint: prefer HybridTransport (WS + polling) if WS available; else polling only
     const preferWs = this.isWebSocketAvailable();
     if (preferWs && this.wsFactory) {
-      // Optional: check MintInfo for WS support
-      // If capabilitiesProvider exists and indicates no WS, fallback immediately
-      t = new WsTransport(this.wsFactory, this.logger);
+      // Use HybridTransport: runs both WS (no reconnect) and polling in parallel
+      t = new HybridTransport(
+        this.wsFactory,
+        {
+          slowPollingIntervalMs: this.options.slowPollingIntervalMs,
+          fastPollingIntervalMs: this.options.fastPollingIntervalMs,
+        },
+        this.logger,
+      );
     } else {
-      t = new PollingTransport({ intervalMs: 5000 }, this.logger);
+      // No WS available, use polling only at fast interval
+      t = new PollingTransport({ intervalMs: this.options.fastPollingIntervalMs }, this.logger);
     }
     this.transportByMint.set(mintUrl, t);
     return t;
@@ -295,17 +315,18 @@ export class SubscriptionManager {
 
     const t = this.getTransport(mintUrl);
     // If ws is not supported by the mint, choose polling now
+    // Note: With HybridTransport this is less critical since polling is always running,
+    // but we still check to potentially save resources by not maintaining WS connections
     if (this.capabilitiesProvider) {
       void this.capabilitiesProvider
         .getMintInfo(mintUrl)
         .then((info) => {
           // If info indicates no WS, force polling transport
-          // Heuristic: if we already created a WS transport but mint has no WS, swap to polling for future actions
-          // We keep pendingMap/OK handling via synthetic response in PollingTransport
+          // This replaces HybridTransport with pure polling if mint doesn't support WS
           if (!this.isMintWsSupported(info)) {
             this.transportByMint.set(
               mintUrl,
-              new PollingTransport({ intervalMs: 5000 }, this.logger),
+              new PollingTransport({ intervalMs: this.options.fastPollingIntervalMs }, this.logger),
             );
           }
         })
