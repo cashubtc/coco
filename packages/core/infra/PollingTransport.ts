@@ -39,6 +39,7 @@ export class PollingTransport implements RealTimeTransport {
   private readonly proofSetByMint = new Map<string, Set<string>>();
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
+  private readonly intervalByMint = new Map<string, number>();
   private paused = false;
 
   constructor(options?: PollingOptions, logger?: Logger) {
@@ -205,6 +206,7 @@ export class PollingTransport implements RealTimeTransport {
     this.proofSetByMint.clear();
     this.yToSubsByMint.clear();
     this.subToYsByMint.clear();
+    this.intervalByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -214,6 +216,7 @@ export class PollingTransport implements RealTimeTransport {
     this.proofSetByMint.delete(mintUrl);
     this.yToSubsByMint.delete(mintUrl);
     this.subToYsByMint.delete(mintUrl);
+    this.intervalByMint.delete(mintUrl);
     this.logger?.info('PollingTransport closed mint', { mintUrl });
   }
 
@@ -229,6 +232,22 @@ export class PollingTransport implements RealTimeTransport {
       void this.maybeRun(mintUrl);
     }
     this.logger?.info('PollingTransport resumed');
+  }
+
+  /**
+   * Set a custom polling interval for a specific mint.
+   * If not set, the default interval from constructor options is used.
+   */
+  setIntervalForMint(mintUrl: string, intervalMs: number): void {
+    this.intervalByMint.set(mintUrl, intervalMs);
+    this.logger?.debug('Polling interval changed for mint', { mintUrl, intervalMs });
+  }
+
+  /**
+   * Get the polling interval for a mint (per-mint or default).
+   */
+  private getIntervalForMint(mintUrl: string): number {
+    return this.intervalByMint.get(mintUrl) ?? this.options.intervalMs;
   }
 
   private ensureScheduler(mintUrl: string): MintScheduler {
@@ -262,7 +281,7 @@ export class PollingTransport implements RealTimeTransport {
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
     } finally {
-      s.nextAllowedAt = Date.now() + this.options.intervalMs;
+      s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
       // Schedule next attempt when allowed
       const delay = Math.max(0, s.nextAllowedAt - Date.now());
