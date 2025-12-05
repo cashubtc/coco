@@ -172,7 +172,7 @@ export interface SendOperationRow {
   id: string;
   mintUrl: string;
   amount: number;
-  state: 'init' | 'prepared' | 'executing' | 'pending' | 'completed' | 'rolling_back' | 'rolled_back';
+  state: 'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
   createdAt: number;
   updatedAt: number;
   error?: string | null;

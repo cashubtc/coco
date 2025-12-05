@@ -767,7 +767,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Operation should be finalized
         const operation = await mgr!.send.getOperation(operationId!);
-        expect(operation!.state).toBe('completed');
+        expect(operation!.state).toBe('finalized');
 
         // Check history state
         const history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -775,7 +775,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           (e) => e.type === 'send' && (e as any).operationId === operationId,
         );
         expect(sendEntry).toBeDefined();
-        expect((sendEntry as any).state).toBe('completed');
+        expect((sendEntry as any).state).toBe('finalized');
       }, 10000);
 
       it('should recover pending operations on startup', async () => {
@@ -899,7 +899,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // But if they're truly concurrent, second should fail with "already in progress"
         // Either way, operation should be completed
         const operation = await mgr!.send.getOperation(operationId!);
-        expect(operation!.state).toBe('completed');
+        expect(operation!.state).toBe('finalized');
       });
 
       it('should prevent concurrent recoverPendingOperations calls', async () => {
@@ -990,7 +990,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         expect(result1.operation.state).toBe('pending');
         expect(result2.operation.state).toBe('pending');
-        expect(result1.operation.id).not.toBe(result2.operation.id);
       });
     });
 

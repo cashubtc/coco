@@ -39,7 +39,7 @@ export type MeltHistoryEntry = BaseHistoryEntry & {
   amount: number;
 };
 
-export type SendHistoryState = 'prepared' | 'pending' | 'completed' | 'rolledBack';
+export type SendHistoryState = 'prepared' | 'pending' | 'finalized' | 'rolledBack';
 
 export type SendHistoryEntry = BaseHistoryEntry & {
   type: 'send';

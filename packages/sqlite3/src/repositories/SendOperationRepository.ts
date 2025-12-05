@@ -50,8 +50,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
       return { ...base, state: 'executing', ...preparedData };
     case 'pending':
       return { ...base, state: 'pending', ...preparedData };
-    case 'completed':
-      return { ...base, state: 'completed', ...preparedData };
+    case 'finalized':
+      return { ...base, state: 'finalized', ...preparedData };
     case 'rolled_back':
       return { ...base, state: 'rolled_back', ...preparedData };
     default:

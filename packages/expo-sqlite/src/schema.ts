@@ -230,6 +230,47 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE type = 'send' AND operationId IS NOT NULL;
     `,
   },
+  {
+    id: '010_rename_completed_to_finalized',
+    run: async (db: ExpoSqliteDb) => {
+      // Update send operations from 'completed' to 'finalized'
+      await db.run(
+        `UPDATE coco_cashu_send_operations SET state = 'finalized' WHERE state = 'completed'`,
+      );
+
+      // Update history entries from 'completed' to 'finalized' for send type
+      await db.run(
+        `UPDATE coco_cashu_history SET state = 'finalized' WHERE type = 'send' AND state = 'completed'`,
+      );
+
+      // Recreate send_operations table with updated CHECK constraint
+      await db.exec(`
+        CREATE TABLE coco_cashu_send_operations_new (
+          id         TEXT PRIMARY KEY NOT NULL,
+          mintUrl    TEXT NOT NULL,
+          amount     INTEGER NOT NULL,
+          state      TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')),
+          createdAt  INTEGER NOT NULL,
+          updatedAt  INTEGER NOT NULL,
+          error      TEXT,
+          needsSwap  INTEGER,
+          fee        INTEGER,
+          inputAmount INTEGER,
+          inputProofSecretsJson TEXT,
+          outputDataJson TEXT
+        );
+
+        INSERT INTO coco_cashu_send_operations_new SELECT * FROM coco_cashu_send_operations;
+
+        DROP TABLE coco_cashu_send_operations;
+
+        ALTER TABLE coco_cashu_send_operations_new RENAME TO coco_cashu_send_operations;
+
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_state ON coco_cashu_send_operations(state);
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_mint ON coco_cashu_send_operations(mintUrl);
+      `);
+    },
+  },
 ];
 
 export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {
