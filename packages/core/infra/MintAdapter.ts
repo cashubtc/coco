@@ -1,23 +1,33 @@
-import { CashuMint, type MintAllKeysets } from '@cashu/cashu-ts';
+import { CashuMint, type MintAllKeysets, type CheckStatePayload } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
+import type { MintRequestProvider } from './MintRequestProvider.ts';
 
-//TODO: This adapter is currently not rate limited. As long as it's only used to fetch mint info and keysets, this is fine.
-
+/**
+ * Adapter for making HTTP requests to Cashu mints.
+ *
+ * All requests are rate-limited through the MintRequestProvider,
+ * sharing the same rate limits with other components (e.g., WalletService).
+ */
 export class MintAdapter {
   private cashuMints: Record<string, CashuMint> = {};
+  private readonly requestProvider: MintRequestProvider;
+
+  constructor(requestProvider: MintRequestProvider) {
+    this.requestProvider = requestProvider;
+  }
 
   async fetchMintInfo(mintUrl: string): Promise<MintInfo> {
-    const cashuMint = await this.getCashuMint(mintUrl);
+    const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.getInfo();
   }
 
   async fetchKeysets(mintUrl: string): Promise<MintAllKeysets> {
-    const cashuMint = await this.getCashuMint(mintUrl);
+    const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.getKeySets();
   }
 
   async fetchKeysForId(mintUrl: string, id: string): Promise<Record<number, string>> {
-    const cashuMint = await this.getCashuMint(mintUrl);
+    const cashuMint = this.getCashuMint(mintUrl);
     const { keysets } = await cashuMint.getKeys(id);
     if (keysets.length !== 1 || !keysets[0]) {
       throw new Error(`Expected 1 keyset for ${id}, got ${keysets.length}`);
@@ -25,29 +35,31 @@ export class MintAdapter {
     return keysets[0].keys;
   }
 
-  private async getCashuMint(mintUrl: string): Promise<CashuMint> {
+  private getCashuMint(mintUrl: string): CashuMint {
     if (!this.cashuMints[mintUrl]) {
-      this.cashuMints[mintUrl] = new CashuMint(mintUrl);
+      const requestFn = this.requestProvider.getRequestFn(mintUrl);
+      this.cashuMints[mintUrl] = new CashuMint(mintUrl, requestFn);
     }
     return this.cashuMints[mintUrl];
   }
 
-  // Polling helpers - stubbed for now
   // Check current state of a bolt11 mint quote
-  async checkMintQuoteState(_mintUrl: string, _quoteId: string): Promise<unknown> {
-    // TODO: implement HTTP call
-    return {} as any;
+  async checkMintQuoteState(mintUrl: string, quoteId: string): Promise<unknown> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMintQuote(quoteId);
   }
 
   // Check current state of a bolt11 melt quote
-  async checkMeltQuoteState(_mintUrl: string, _quoteId: string): Promise<unknown> {
-    // TODO: implement HTTP call
-    return {} as any;
+  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<unknown> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMeltQuote(quoteId);
   }
 
-  // Batch check of proof states by secrets (up to 100 per request)
-  async checkProofStates(_mintUrl: string, _proofSecrets: string[]): Promise<unknown[]> {
-    // TODO: implement HTTP call (batch)
-    return [] as any[];
+  // Batch check of proof states by Y values (up to 100 per request)
+  async checkProofStates(mintUrl: string, Ys: string[]): Promise<unknown[]> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    const payload: CheckStatePayload = { Ys };
+    const response = await cashuMint.check(payload);
+    return response.states;
   }
 }

@@ -6,7 +6,7 @@ import type {
   SubscribeParams,
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
-import { MintAdapter } from './MintAdapter.ts';
+import type { MintAdapter } from './MintAdapter.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -39,11 +39,14 @@ export class PollingTransport implements RealTimeTransport {
   private readonly proofSetByMint = new Map<string, Set<string>>();
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
+  private readonly intervalByMint = new Map<string, number>();
+  // Track unsubscribed subIds to prevent re-enqueuing tasks that are currently being processed
+  private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
 
-  constructor(options?: PollingOptions, logger?: Logger) {
+  constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
     this.logger = logger;
-    this.mintAdapter = new MintAdapter();
+    this.mintAdapter = mintAdapter;
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };
@@ -164,6 +167,15 @@ export class PollingTransport implements RealTimeTransport {
       const subId = (req.params as any).subId as string;
       const scheduler = this.ensureScheduler(mintUrl);
       scheduler.queue = scheduler.queue.filter((t) => t.subId !== subId);
+
+      // Track unsubscribed subId to prevent re-enqueuing if task is currently being processed
+      let unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      if (!unsubscribed) {
+        unsubscribed = new Set();
+        this.unsubscribedByMint.set(mintUrl, unsubscribed);
+      }
+      unsubscribed.add(subId);
+
       // Clean proof mappings
       const subToYs = this.subToYsByMint.get(mintUrl);
       const yToSubs = this.yToSubsByMint.get(mintUrl);
@@ -205,6 +217,8 @@ export class PollingTransport implements RealTimeTransport {
     this.proofSetByMint.clear();
     this.yToSubsByMint.clear();
     this.subToYsByMint.clear();
+    this.intervalByMint.clear();
+    this.unsubscribedByMint.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -214,12 +228,12 @@ export class PollingTransport implements RealTimeTransport {
     this.proofSetByMint.delete(mintUrl);
     this.yToSubsByMint.delete(mintUrl);
     this.subToYsByMint.delete(mintUrl);
-    this.logger?.info('PollingTransport closed mint', { mintUrl });
+    this.intervalByMint.delete(mintUrl);
+    this.unsubscribedByMint.delete(mintUrl);
   }
 
   pause(): void {
     this.paused = true;
-    this.logger?.info('PollingTransport paused');
   }
 
   resume(): void {
@@ -228,7 +242,21 @@ export class PollingTransport implements RealTimeTransport {
     for (const mintUrl of this.schedByMint.keys()) {
       void this.maybeRun(mintUrl);
     }
-    this.logger?.info('PollingTransport resumed');
+  }
+
+  /**
+   * Set a custom polling interval for a specific mint.
+   * If not set, the default interval from constructor options is used.
+   */
+  setIntervalForMint(mintUrl: string, intervalMs: number): void {
+    this.intervalByMint.set(mintUrl, intervalMs);
+  }
+
+  /**
+   * Get the polling interval for a mint (per-mint or default).
+   */
+  private getIntervalForMint(mintUrl: string): number {
+    return this.intervalByMint.get(mintUrl) ?? this.options.intervalMs;
   }
 
   private ensureScheduler(mintUrl: string): MintScheduler {
@@ -254,15 +282,25 @@ export class PollingTransport implements RealTimeTransport {
     if (s.queue.length === 0) return;
 
     s.running = true;
+    const task = s.queue.shift()!;
+
     try {
-      const task = s.queue.shift()!;
       await this.performTask(mintUrl, task);
-      // re-enqueue for fairness
-      s.queue.push(task);
+
+      // Re-enqueue for fairness, but only if not unsubscribed during processing
+      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      const wasUnsubscribed = task.subId && unsubscribed?.has(task.subId);
+
+      if (wasUnsubscribed) {
+        // Task was unsubscribed during processing, don't re-enqueue
+        unsubscribed!.delete(task.subId!);
+      } else {
+        s.queue.push(task);
+      }
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
     } finally {
-      s.nextAllowedAt = Date.now() + this.options.intervalMs;
+      s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
       // Schedule next attempt when allowed
       const delay = Math.max(0, s.nextAllowedAt - Date.now());

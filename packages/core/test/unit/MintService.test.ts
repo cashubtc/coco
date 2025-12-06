@@ -6,6 +6,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
 import type { MintInfo } from '../../types';
+import type { MintAdapter } from '../../infra/MintAdapter';
 
 describe('MintService', () => {
   const testMintUrl = 'https://mint.test';
@@ -15,6 +16,7 @@ describe('MintService', () => {
   let keysetRepo: MemoryKeysetRepository;
   let eventBus: EventBus<CoreEvents>;
   let service: MintService;
+  let mockAdapter: MintAdapter;
 
   const mockMintInfo: MintInfo = {
     name: 'Test Mint',
@@ -50,13 +52,18 @@ describe('MintService', () => {
     mintRepo = new MemoryMintRepository();
     keysetRepo = new MemoryKeysetRepository();
     eventBus = new EventBus<CoreEvents>();
-    service = new MintService(mintRepo, keysetRepo, undefined, eventBus);
 
-    // Mock the MintAdapter methods
-    const mockAdapter = (service as any).mintAdapter;
-    mockAdapter.fetchMintInfo = mock(() => Promise.resolve(mockMintInfo));
-    mockAdapter.fetchKeysets = mock(() => Promise.resolve({ keysets: mockKeysets }));
-    mockAdapter.fetchKeysForId = mock(() => Promise.resolve(mockKeys));
+    // Create mock MintAdapter
+    mockAdapter = {
+      fetchMintInfo: mock(() => Promise.resolve(mockMintInfo)),
+      fetchKeysets: mock(() => Promise.resolve({ keysets: mockKeysets })),
+      fetchKeysForId: mock(() => Promise.resolve(mockKeys)),
+      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkProofStates: mock(() => Promise.resolve([])),
+    } as unknown as MintAdapter;
+
+    service = new MintService(mintRepo, keysetRepo, mockAdapter, undefined, eventBus);
   });
 
   describe('trust management', () => {

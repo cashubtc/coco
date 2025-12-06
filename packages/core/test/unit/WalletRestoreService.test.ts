@@ -3,6 +3,7 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import type { ProofService } from '../../services/ProofService';
 import type { CounterService } from '../../services/CounterService';
 import type { WalletService } from '../../services/WalletService';
+import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
 import { CashuMint, CashuWallet, type Proof, type ProofState } from '@cashu/cashu-ts';
 
@@ -14,6 +15,7 @@ describe('WalletRestoreService', () => {
   let proofService: ProofService;
   let counterService: CounterService;
   let walletService: WalletService;
+  let requestProvider: MintRequestProvider;
   let logger: Logger;
   let service: WalletRestoreService;
 
@@ -67,7 +69,18 @@ describe('WalletRestoreService', () => {
       error: mock(() => {}),
     } as Logger;
 
-    service = new WalletRestoreService(proofService, counterService, walletService, logger);
+    // Mock MintRequestProvider
+    requestProvider = {
+      getRequestFn: mock(() => undefined),
+    } as unknown as MintRequestProvider;
+
+    service = new WalletRestoreService(
+      proofService,
+      counterService,
+      walletService,
+      requestProvider,
+      logger,
+    );
   });
 
   describe('sweepKeyset', () => {

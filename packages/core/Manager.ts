@@ -17,7 +17,13 @@ import {
   PaymentRequestService,
 } from './services';
 import { SendOperationService } from './operations/send/SendOperationService';
-import { SubscriptionManager, type WebSocketFactory, PollingTransport } from './infra';
+import {
+  SubscriptionManager,
+  type WebSocketFactory,
+  PollingTransport,
+  MintAdapter,
+  MintRequestProvider,
+} from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
 import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi } from './api';
@@ -72,6 +78,24 @@ export interface CocoConfig {
       initialEnqueueDelayMs?: number;
     };
   };
+  /**
+   * Subscription transport configuration
+   * Controls the hybrid WebSocket + polling behavior
+   */
+  subscriptions?: {
+    /**
+     * Polling interval (ms) while WebSocket is connected.
+     * Only used as backup to catch silent WS failures.
+     * Default: 20000 (20 seconds)
+     */
+    slowPollingIntervalMs?: number;
+    /**
+     * Polling interval (ms) after WebSocket fails.
+     * Used as primary transport when WS is unavailable.
+     * Default: 5000 (5 seconds)
+     */
+    fastPollingIntervalMs?: number;
+  };
 }
 
 /**
@@ -89,6 +113,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.plugins,
     config.watchers,
     config.processors,
+    config.subscriptions,
   );
 
   // Enable watchers (default: all enabled unless explicitly disabled)
@@ -149,6 +174,8 @@ export class Manager {
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
   private originalProcessorConfig: CocoConfig['processors'];
+  private readonly mintRequestProvider: MintRequestProvider;
+  private readonly mintAdapter: MintAdapter;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -157,10 +184,21 @@ export class Manager {
     plugins?: Plugin[],
     watchers?: CocoConfig['watchers'],
     processors?: CocoConfig['processors'],
+    subscriptions?: CocoConfig['subscriptions'],
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
-    this.subscriptions = this.createSubscriptionManager(webSocketFactory);
+
+    // Create shared request provider and mint adapter first
+    // These are shared across WalletService and SubscriptionManager (polling)
+    this.mintRequestProvider = new MintRequestProvider({
+      capacity: 20,
+      refillPerMinute: 20,
+      logger: this.getChildLogger('RequestRateLimiter'),
+    });
+    this.mintAdapter = new MintAdapter(this.mintRequestProvider);
+
+    this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
@@ -399,7 +437,10 @@ export class Manager {
     });
   }
 
-  private createSubscriptionManager(webSocketFactory?: WebSocketFactory): SubscriptionManager {
+  private createSubscriptionManager(
+    webSocketFactory?: WebSocketFactory,
+    subscriptionOptions?: CocoConfig['subscriptions'],
+  ): SubscriptionManager {
     const wsLogger = this.getChildLogger('SubscriptionManager');
     // Detect global WebSocket if available, otherwise require injected factory
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -409,18 +450,20 @@ export class Manager {
         (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
-    const capabilitiesProvider = {
-      getMintInfo: async (mintUrl: string) => {
-        if (!this.mintService) throw new Error('MintService not initialized yet');
-        return this.mintService.getMintInfo(mintUrl);
-      },
+    const options = {
+      slowPollingIntervalMs: subscriptionOptions?.slowPollingIntervalMs ?? 20000,
+      fastPollingIntervalMs: subscriptionOptions?.fastPollingIntervalMs ?? 5000,
     };
     if (!wsFactoryToUse) {
       // Fallback to polling transport when WS is unavailable
-      const polling = new PollingTransport({ intervalMs: 5000 }, wsLogger);
-      return new SubscriptionManager(polling, wsLogger, capabilitiesProvider);
+      const polling = new PollingTransport(
+        this.mintAdapter,
+        { intervalMs: options.fastPollingIntervalMs },
+        wsLogger,
+      );
+      return new SubscriptionManager(polling, this.mintAdapter, wsLogger, options);
     }
-    return new SubscriptionManager(wsFactoryToUse, wsLogger, capabilitiesProvider);
+    return new SubscriptionManager(wsFactoryToUse, this.mintAdapter, wsLogger, options);
   }
 
   private buildCoreServices(
@@ -455,6 +498,7 @@ export class Manager {
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
+      this.mintAdapter,
       mintLogger,
       this.eventBus,
     );
@@ -464,7 +508,12 @@ export class Manager {
       seedService,
       keyRingLogger,
     );
-    const walletService = new WalletService(mintService, seedService, walletLogger);
+    const walletService = new WalletService(
+      mintService,
+      seedService,
+      this.mintRequestProvider,
+      walletLogger,
+    );
     const counterService = new CounterService(
       repositories.counterRepository,
       counterLogger,
@@ -484,6 +533,7 @@ export class Manager {
       proofService,
       counterService,
       walletService,
+      this.mintRequestProvider,
       walletRestoreLogger,
     );
 

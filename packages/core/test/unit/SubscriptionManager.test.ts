@@ -1,8 +1,17 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { SubscriptionManager } from '../../infra/SubscriptionManager';
 import type { RealTimeTransport } from '../../infra/RealTimeTransport';
+import type { MintAdapter } from '../../infra/MintAdapter';
 import type { WsRequest } from '../../infra/SubscriptionProtocol';
 import { NullLogger } from '../../logging';
+
+// Mock MintAdapter for testing
+const createMockMintAdapter = (): MintAdapter =>
+  ({
+    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMeltQuoteState: mock(() => Promise.resolve({})),
+    checkProofStates: mock(() => Promise.resolve([])),
+  } as unknown as MintAdapter);
 
 class MockTransport implements RealTimeTransport {
   public paused = false;
@@ -94,7 +103,7 @@ describe('SubscriptionManager pause/resume', () => {
 
   beforeEach(() => {
     mockTransport = new MockTransport();
-    subManager = new SubscriptionManager(mockTransport, new NullLogger());
+    subManager = new SubscriptionManager(mockTransport, createMockMintAdapter(), new NullLogger());
   });
 
   it('should call pause on all transports when paused', () => {

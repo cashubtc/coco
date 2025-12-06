@@ -15,6 +15,15 @@ export interface WebSocketLike {
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
+export interface WsConnectionManagerOptions {
+  /**
+   * If true, don't attempt to reconnect after close/error.
+   * Useful when another mechanism (e.g., polling) handles recovery.
+   * Default: false
+   */
+  disableReconnect?: boolean;
+}
+
 export class WsConnectionManager {
   private readonly sockets = new Map<string, WebSocketLike>();
   private readonly isOpenByMint = new Map<string, boolean>();
@@ -26,10 +35,18 @@ export class WsConnectionManager {
   >();
   private readonly reconnectAttemptsByMint = new Map<string, number>();
   private readonly reconnectTimeoutByMint = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly options: Required<WsConnectionManagerOptions>;
   private paused = false;
 
-  constructor(private readonly wsFactory: WebSocketFactory, logger?: Logger) {
+  constructor(
+    private readonly wsFactory: WebSocketFactory,
+    logger?: Logger,
+    options?: WsConnectionManagerOptions,
+  ) {
     this.logger = logger;
+    this.options = {
+      disableReconnect: options?.disableReconnect ?? false,
+    };
   }
 
   private buildWsUrl(baseMintUrl: string): string {
@@ -82,8 +99,8 @@ export class WsConnectionManager {
       this.sockets.delete(mintUrl);
       this.isOpenByMint.set(mintUrl, false);
       this.sendQueueByMint.delete(mintUrl);
-      // Schedule reconnect if there are listeners interested and not paused
-      if (!this.paused) {
+      // Schedule reconnect if there are listeners interested, not paused, and reconnect is enabled
+      if (!this.paused && !this.options.disableReconnect) {
         const hasListeners = this.listenersByMint.get(mintUrl);
         if (hasListeners && Array.from(hasListeners.values()).some((s) => s.size > 0)) {
           this.scheduleReconnect(mintUrl);
@@ -121,7 +138,7 @@ export class WsConnectionManager {
         this.ensureSocket(mintUrl);
       } catch (err) {
         this.logger?.error('WS reconnect attempt failed to create socket', { mintUrl, err });
-        this.scheduleReconnect(mintUrl);
+        // Don't recursively retry - let the next close event trigger reconnect if needed
       }
     }, delayMs);
     this.reconnectTimeoutByMint.set(mintUrl, timeoutId);
