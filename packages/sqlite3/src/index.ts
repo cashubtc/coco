@@ -11,7 +11,7 @@ import type {
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
-import { ensureSchema } from './schema.ts';
+import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
@@ -75,6 +75,8 @@ export class SqliteRepositories implements Repositories {
 export {
   SqliteDb,
   ensureSchema,
+  ensureSchemaUpTo,
+  MIGRATIONS,
   SqliteMintRepository,
   SqliteKeyRingRepository,
   SqliteKeysetRepository,
@@ -85,3 +87,5 @@ export {
   SqliteHistoryRepository,
   SqliteSendOperationRepository,
 };
+
+export type { Migration };

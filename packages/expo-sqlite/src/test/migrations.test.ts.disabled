@@ -1,0 +1,153 @@
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { runMigrationTests } from 'coco-cashu-adapter-tests';
+import {
+  ExpoSqliteRepositories,
+  ExpoSqliteDb,
+  ensureSchemaUpTo,
+  type ExpoSqliteRepositoriesOptions,
+} from '../index.ts';
+
+type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
+
+/**
+ * Shim that adapts bun:sqlite to expo-sqlite's async API.
+ */
+class BunExpoSqliteDatabaseShim {
+  private readonly db: Database;
+
+  constructor(filename = ':memory:') {
+    this.db = new Database(filename);
+  }
+
+  async execAsync(sql: string): Promise<void> {
+    const statements = sql
+      .split(';')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+
+    for (const statementSql of statements) {
+      const statement = this.db.prepare(statementSql);
+      statement.run();
+    }
+  }
+
+  async runAsync(sql: string, ...params: unknown[]): Promise<RunResult> {
+    const statement = this.db.prepare(sql);
+    const result = statement.run(...params) as unknown as {
+      changes?: number;
+      lastInsertRowid?: number;
+    };
+    const changes = Number(result?.changes ?? 0);
+    const lastInsertRowId = Number(result?.lastInsertRowid ?? 0);
+    return { changes, lastInsertRowId, lastInsertRowid: lastInsertRowId };
+  }
+
+  async getFirstAsync<T = unknown>(sql: string, ...params: unknown[]): Promise<T | null> {
+    const statement = this.db.prepare(sql);
+    const row = statement.get(...params) as T | undefined;
+    return row ?? null;
+  }
+
+  async getAllAsync<T = unknown>(sql: string, ...params: unknown[]): Promise<T[]> {
+    const statement = this.db.prepare(sql);
+    const rows = statement.all(...params) as T[] | undefined;
+    return rows ?? [];
+  }
+
+  async closeAsync(): Promise<void> {
+    this.db.close();
+  }
+
+  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
+    this.db.exec('BEGIN');
+    try {
+      await fn();
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+}
+
+async function createRepositories() {
+  const database = new BunExpoSqliteDatabaseShim();
+  const repositories = new ExpoSqliteRepositories({
+    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+  });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => {
+      await database.closeAsync();
+    },
+  };
+}
+
+async function createRepositoriesAtMigration(stopBeforeId: string) {
+  const database = new BunExpoSqliteDatabaseShim();
+  const db = new ExpoSqliteDb({
+    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+  });
+
+  await ensureSchemaUpTo(db, stopBeforeId);
+
+  const repositories = new ExpoSqliteRepositories({
+    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+  });
+
+  return {
+    repositories,
+    dispose: async () => {
+      await database.closeAsync();
+    },
+    runRemainingMigrations: async () => {
+      await ensureSchemaUpTo(db);
+    },
+    rawInsert: async (table: string, data: Record<string, unknown>) => {
+      const keys = Object.keys(data);
+      const values = Object.values(data);
+      const placeholders = keys.map(() => '?').join(', ');
+      const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
+      await db.run(sql, values);
+    },
+    rawQuery: async <T>(table: string, filter?: Record<string, unknown>): Promise<T[]> => {
+      if (filter && Object.keys(filter).length > 0) {
+        const conditions = Object.keys(filter)
+          .map((key) => `${key} = ?`)
+          .join(' AND ');
+        const values = Object.values(filter);
+        return db.all<T>(`SELECT * FROM ${table} WHERE ${conditions}`, values);
+      }
+      return db.all<T>(`SELECT * FROM ${table}`);
+    },
+    rawUpdate: async (
+      table: string,
+      filter: Record<string, unknown>,
+      updates: Record<string, unknown>,
+    ) => {
+      const setClause = Object.keys(updates)
+        .map((key) => `${key} = ?`)
+        .join(', ');
+      const whereClause = Object.keys(filter)
+        .map((key) => `${key} = ?`)
+        .join(' AND ');
+      const values = [...Object.values(updates), ...Object.values(filter)];
+      await db.run(`UPDATE ${table} SET ${setClause} WHERE ${whereClause}`, values);
+    },
+  };
+}
+
+runMigrationTests(
+  {
+    createRepositories,
+    createRepositoriesAtMigration,
+    completedToFinalizedMigration: '010_rename_completed_to_finalized',
+    logger: {
+      info: (message, data) => console.log(`[INFO] ${message}`, data ?? ''),
+      error: (message, data) => console.error(`[ERROR] ${message}`, data ?? ''),
+    },
+  },
+  { describe, it, expect, beforeEach, afterEach },
+);

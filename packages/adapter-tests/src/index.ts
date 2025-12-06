@@ -122,5 +122,8 @@ export function createDummyProof(): CoreProof {
 
 export { runIntegrationTests } from './integration.ts';
 export type { IntegrationTestRunner, IntegrationTestOptions } from './integration.ts';
+// Migration tests temporarily disabled - architecture being reconsidered
+// export { runMigrationTests } from './migrations.ts';
+// export type { MigrationTestRunner, MigrationTestOptions } from './migrations.ts';
 export { createFakeInvoice } from 'fake-bolt11';
 export type { FakeInvoiceOptions } from 'fake-bolt11';

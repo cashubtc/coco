@@ -1,0 +1,81 @@
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import sqlite3 from 'sqlite3';
+import { runMigrationTests } from 'coco-cashu-adapter-tests';
+import { SqliteRepositories, SqliteDb, ensureSchemaUpTo } from '../index.ts';
+
+async function createRepositories() {
+  const database = new sqlite3.Database(':memory:');
+  const repositories = new SqliteRepositories({ database });
+  await repositories.init();
+  return {
+    repositories,
+    dispose: async () => {
+      await repositories.db.close();
+    },
+  };
+}
+
+async function createRepositoriesAtMigration(stopBeforeId: string) {
+  const database = new sqlite3.Database(':memory:');
+  const db = new SqliteDb({ database });
+
+  await ensureSchemaUpTo(db, stopBeforeId);
+
+  const repositories = new SqliteRepositories({ database });
+
+  return {
+    repositories,
+    dispose: async () => {
+      await db.close();
+    },
+    runRemainingMigrations: async () => {
+      await ensureSchemaUpTo(db);
+    },
+    rawInsert: async (table: string, data: Record<string, unknown>) => {
+      const keys = Object.keys(data);
+      const values = Object.values(data);
+      const placeholders = keys.map(() => '?').join(', ');
+      const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
+      await db.run(sql, values);
+    },
+    rawQuery: async <T>(table: string, filter?: Record<string, unknown>): Promise<T[]> => {
+      if (filter && Object.keys(filter).length > 0) {
+        const conditions = Object.keys(filter)
+          .map((key) => `${key} = ?`)
+          .join(' AND ');
+        const values = Object.values(filter);
+        return db.all<T>(`SELECT * FROM ${table} WHERE ${conditions}`, values);
+      }
+      return db.all<T>(`SELECT * FROM ${table}`);
+    },
+    rawUpdate: async (
+      table: string,
+      filter: Record<string, unknown>,
+      updates: Record<string, unknown>,
+    ) => {
+      const setClause = Object.keys(updates)
+        .map((key) => `${key} = ?`)
+        .join(', ');
+      const whereClause = Object.keys(filter)
+        .map((key) => `${key} = ?`)
+        .join(' AND ');
+      const values = [...Object.values(updates), ...Object.values(filter)];
+      await db.run(`UPDATE ${table} SET ${setClause} WHERE ${whereClause}`, values);
+    },
+  };
+}
+
+runMigrationTests(
+  {
+    createRepositories,
+    createRepositoriesAtMigration,
+    completedToFinalizedMigration: '010_rename_completed_to_finalized',
+    logger: {
+      info: (message, data) => console.log(`[INFO] ${message}`, data ?? ''),
+      error: (message, data) => console.error(`[ERROR] ${message}`, data ?? ''),
+    },
+  },
+  { describe, it, expect, beforeEach, afterEach },
+);
+
+

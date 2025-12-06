@@ -233,17 +233,15 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '010_rename_completed_to_finalized',
     run: async (db: SqliteDb) => {
-      // Update send operations from 'completed' to 'finalized'
-      await db.run(
-        `UPDATE coco_cashu_send_operations SET state = 'finalized' WHERE state = 'completed'`,
-      );
-
       // Update history entries from 'completed' to 'finalized' for send type
+      // (history table has no CHECK constraint on state, so this is safe)
       await db.run(
         `UPDATE coco_cashu_history SET state = 'finalized' WHERE type = 'send' AND state = 'completed'`,
       );
 
-      // Recreate send_operations table with updated CHECK constraint
+      // Recreate send_operations table with updated CHECK constraint.
+      // Transform 'completed' -> 'finalized' during INSERT to avoid CHECK constraint violation.
+      // (Cannot UPDATE old table because old CHECK constraint doesn't allow 'finalized')
       await db.exec(`
         CREATE TABLE coco_cashu_send_operations_new (
           id         TEXT PRIMARY KEY,
@@ -260,7 +258,13 @@ const MIGRATIONS: readonly Migration[] = [
           outputDataJson TEXT
         );
 
-        INSERT INTO coco_cashu_send_operations_new SELECT * FROM coco_cashu_send_operations;
+        INSERT INTO coco_cashu_send_operations_new 
+        SELECT 
+          id, mintUrl, amount,
+          CASE WHEN state = 'completed' THEN 'finalized' ELSE state END,
+          createdAt, updatedAt, error, needsSwap, fee, inputAmount,
+          inputProofSecretsJson, outputDataJson
+        FROM coco_cashu_send_operations;
 
         DROP TABLE coco_cashu_send_operations;
 
@@ -273,7 +277,23 @@ const MIGRATIONS: readonly Migration[] = [
   },
 ];
 
+// Export for testing
+export { MIGRATIONS };
+export type { Migration };
+
+/**
+ * Ensures the database schema is up to date by running all pending migrations.
+ */
 export async function ensureSchema(db: SqliteDb): Promise<void> {
+  await ensureSchemaUpTo(db);
+}
+
+/**
+ * Run migrations up to (but not including) a specific migration ID.
+ * If stopBeforeId is not provided, runs all migrations.
+ * Used for testing migration behavior.
+ */
+export async function ensureSchemaUpTo(db: SqliteDb, stopBeforeId?: string): Promise<void> {
   // Ensure pragmas for current connection and create migrations tracking table
   await db.exec(`
     PRAGMA foreign_keys = ON;
@@ -294,6 +314,9 @@ export async function ensureSchema(db: SqliteDb): Promise<void> {
   const applied = new Set(appliedRows.map((r) => r.id));
 
   for (const migration of MIGRATIONS) {
+    // Stop before the specified migration (for testing partial migrations)
+    if (stopBeforeId && migration.id === stopBeforeId) break;
+
     if (applied.has(migration.id)) continue;
     await db.transaction(async (tx) => {
       if (migration.sql) {
