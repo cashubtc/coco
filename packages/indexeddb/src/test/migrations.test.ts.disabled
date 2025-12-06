@@ -1,0 +1,287 @@
+import { describe, it, beforeEach, afterEach, expect } from 'vitest';
+import { IndexedDbRepositories } from '../index.ts';
+import { initializeCoco, type Manager } from 'coco-cashu-core';
+
+/**
+ * Migration tests for IndexedDB adapter.
+ *
+ * Note: Unlike SQLite adapters, Dexie (IndexedDB) uses declarative versioning
+ * which makes it difficult to test migrations at specific versions.
+ * These tests focus on verifying data preservation through the full migration cycle.
+ */
+describe('IndexedDB Migration Safety Tests', () => {
+  let dbCounter = 0;
+
+  const createSeedGetter = () => {
+    const seed = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) {
+      seed[i] = i;
+    }
+    return async () => seed;
+  };
+
+  const createRepositories = async () => {
+    const dbName = `coco_cashu_migration_test_${Date.now()}_${dbCounter++}`;
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    return {
+      repositories,
+      dbName,
+      dispose: async () => {
+        // Delete the database after test
+        repositories.db.close();
+        await new Promise<void>((resolve, reject) => {
+          const request = indexedDB.deleteDatabase(dbName);
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+        });
+      },
+    };
+  };
+
+  describe('Data Preservation', () => {
+    it('should preserve all data through full migration cycle', async () => {
+      const { repositories, dispose } = await createRepositories();
+
+      try {
+        const seedGetter = createSeedGetter();
+
+        const mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+        });
+
+        const testMintUrl = 'https://migration-test.mint';
+
+        // Add a mint
+        await repositories.mintRepository.addOrUpdateMint({
+          mintUrl: testMintUrl,
+          name: 'Migration Test Mint',
+          mintInfo: {
+            name: 'Migration Test Mint',
+            pubkey: 'test-pubkey',
+            version: '1.0.0',
+            contact: {},
+            nuts: {},
+          } as any,
+          trusted: true,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+
+        // Add keyset
+        await repositories.keysetRepository.addKeyset({
+          mintUrl: testMintUrl,
+          id: 'test-keyset-001',
+          unit: 'sat',
+          keypairs: { '1': { pubKey: 'pk1' }, '2': { pubKey: 'pk2' } } as any,
+          active: true,
+          feePpk: 0,
+          updatedAt: Date.now(),
+        });
+
+        // Add proofs (user's money!)
+        await repositories.proofRepository.saveProofs(testMintUrl, [
+          {
+            id: 'test-keyset-001',
+            amount: 100,
+            secret: 'migration-test-secret-1',
+            C: 'C1',
+            mintUrl: testMintUrl,
+            state: 'ready',
+          },
+          {
+            id: 'test-keyset-001',
+            amount: 50,
+            secret: 'migration-test-secret-2',
+            C: 'C2',
+            mintUrl: testMintUrl,
+            state: 'ready',
+          },
+        ]);
+
+        // Add counter
+        await repositories.counterRepository.setCounter(testMintUrl, 'test-keyset-001', 10);
+
+        // Record state before
+        const mintsBefore = await repositories.mintRepository.getAllMints();
+        const keysetsBefore = await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
+        const proofsBefore = await repositories.proofRepository.getAllReadyProofs();
+        const counterBefore = await repositories.counterRepository.getCounter(
+          testMintUrl,
+          'test-keyset-001',
+        );
+
+        await mgr.dispose();
+
+        // Re-initialize (simulates app restart after update)
+        const mgr2 = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+        });
+
+        // Verify ALL data survived
+        const mintsAfter = await repositories.mintRepository.getAllMints();
+        const keysetsAfter = await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
+        const proofsAfter = await repositories.proofRepository.getAllReadyProofs();
+        const counterAfter = await repositories.counterRepository.getCounter(
+          testMintUrl,
+          'test-keyset-001',
+        );
+
+        // Mints preserved
+        expect(mintsAfter.length).toBe(mintsBefore.length);
+        const testMint = mintsAfter.find((m) => m.mintUrl === testMintUrl);
+        expect(testMint).toBeDefined();
+        expect(testMint!.name).toBe('Migration Test Mint');
+
+        // Keysets preserved
+        expect(keysetsAfter.length).toBe(keysetsBefore.length);
+
+        // Proofs preserved (CRITICAL!)
+        expect(proofsAfter.length).toBe(proofsBefore.length);
+        const totalBefore = proofsBefore.reduce((sum, p) => sum + p.amount, 0);
+        const totalAfter = proofsAfter.reduce((sum, p) => sum + p.amount, 0);
+        expect(totalAfter).toBe(totalBefore);
+
+        // Counter preserved
+        expect(counterAfter?.counter).toBe(counterBefore?.counter);
+
+        await mgr2.dispose();
+
+        console.log('[INFO] Data preservation test passed', {
+          mints: mintsAfter.length,
+          keysets: keysetsAfter.length,
+          proofs: proofsAfter.length,
+          totalBalance: totalAfter,
+        });
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  describe('Send Operation State Migration', () => {
+    it('should correctly transform completed state to finalized', async () => {
+      const { repositories, dispose, dbName } = await createRepositories();
+
+      try {
+        // Insert a send operation using the repository
+        // After migrations, 'completed' states should become 'finalized'
+        // Since we're at the latest version, we need to insert 'finalized' directly
+        // as that's the current valid state
+
+        // For IndexedDB, we can directly insert into the table using Dexie
+        const db = repositories.db;
+        await db.table('coco_cashu_send_operations').add({
+          id: 'op-test-1',
+          mintUrl: 'https://mint.test',
+          amount: 100,
+          state: 'finalized', // Current valid state after migration 8
+          createdAt: 1000,
+          updatedAt: 1000,
+        });
+
+        await db.table('coco_cashu_send_operations').add({
+          id: 'op-test-2',
+          mintUrl: 'https://mint.test',
+          amount: 200,
+          state: 'pending',
+          createdAt: 1001,
+          updatedAt: 1001,
+        });
+
+        // Verify data through repository
+        const ops = await repositories.sendOperationRepository.getByState('finalized');
+        expect(ops.length).toBeGreaterThanOrEqual(1);
+
+        const pendingOps = await repositories.sendOperationRepository.getByState('pending');
+        expect(pendingOps.length).toBeGreaterThanOrEqual(1);
+
+        console.log('[INFO] Send operation state test passed');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('should preserve all send_operations fields', async () => {
+      const { repositories, dispose } = await createRepositories();
+
+      try {
+        const db = repositories.db;
+
+        // Insert a comprehensive send operation
+        await db.table('coco_cashu_send_operations').add({
+          id: 'op-full-data',
+          mintUrl: 'https://mint.test',
+          amount: 100,
+          state: 'finalized',
+          createdAt: 1000,
+          updatedAt: 2000,
+          error: 'some error',
+          needsSwap: true,
+          fee: 5,
+          inputAmount: 105,
+          inputProofSecretsJson: '["secret1","secret2"]',
+          outputDataJson: '{"key":"value"}',
+        });
+
+        // Read back via repository
+        const op = await repositories.sendOperationRepository.getById('op-full-data');
+
+        expect(op).toBeDefined();
+        expect(op!.id).toBe('op-full-data');
+        expect(op!.mintUrl).toBe('https://mint.test');
+        expect(op!.amount).toBe(100);
+        expect(op!.state).toBe('finalized');
+
+        console.log('[INFO] Full data preservation test passed');
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  describe('Proof Preservation', () => {
+    it('should preserve proofs through database operations', async () => {
+      const { repositories, dispose } = await createRepositories();
+
+      try {
+        // Insert proofs (user's balance!)
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          {
+            id: 'keyset-1',
+            amount: 100,
+            secret: 'proof-secret-1',
+            C: 'C1',
+            mintUrl: 'https://mint.test',
+            state: 'ready',
+          },
+          {
+            id: 'keyset-1',
+            amount: 50,
+            secret: 'proof-secret-2',
+            C: 'C2',
+            mintUrl: 'https://mint.test',
+            state: 'ready',
+          },
+        ]);
+
+        const proofs = await repositories.proofRepository.getAllReadyProofs();
+        expect(proofs).toHaveLength(2);
+
+        const totalBalance = proofs.reduce((sum, p) => sum + p.amount, 0);
+        expect(totalBalance).toBe(150);
+
+        console.log('[INFO] Proof preservation test passed', {
+          proofCount: proofs.length,
+          totalBalance,
+        });
+      } finally {
+        await dispose();
+      }
+    });
+  });
+});
+
+

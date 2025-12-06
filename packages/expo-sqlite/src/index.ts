@@ -11,7 +11,7 @@ import type {
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
-import { ensureSchema } from './schema.ts';
+import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
 import { ExpoMintRepository } from './repositories/MintRepository.ts';
 import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
 import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
@@ -75,6 +75,8 @@ export class ExpoSqliteRepositories implements Repositories {
 export {
   ExpoSqliteDb,
   ensureSchema,
+  ensureSchemaUpTo,
+  MIGRATIONS,
   ExpoMintRepository,
   ExpoKeyRingRepository,
   ExpoKeysetRepository,
@@ -85,3 +87,5 @@ export {
   ExpoHistoryRepository,
   ExpoSendOperationRepository,
 };
+
+export type { Migration };
