@@ -1,7 +1,7 @@
 import { KeysetSyncError, MintFetchError, UnknownMintError } from '../models/Error';
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
-import type { MintAdapter } from '../infra/MintAdapter';
+import { MintAdapter } from '../infra/MintAdapter';
 import type { KeysetRepository, MintRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
@@ -21,13 +21,12 @@ export class MintService {
   constructor(
     mintRepo: MintRepository,
     keysetRepo: KeysetRepository,
-    mintAdapter: MintAdapter,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
   ) {
     this.mintRepo = mintRepo;
     this.keysetRepo = keysetRepo;
-    this.mintAdapter = mintAdapter;
+    this.mintAdapter = new MintAdapter();
     this.logger = logger;
     this.eventBus = eventBus;
   }

@@ -2,7 +2,7 @@ import { CashuMint, CashuWallet, type Keys, type MintKeys, type MintKeyset } fro
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
-import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
+import { RequestRateLimiter } from '../infra/RequestRateLimiter.ts';
 
 interface CachedWallet {
   wallet: CashuWallet;
@@ -19,18 +19,23 @@ export class WalletService {
   private readonly seedService: SeedService;
   private inFlight: Map<string, Promise<CashuWallet>> = new Map();
   private readonly logger?: Logger;
-  private readonly requestProvider: MintRequestProvider;
+  private readonly requestLimiters: Map<string, RequestRateLimiter> = new Map();
+  private readonly requestLimiterOptionsForMint?: (
+    mintUrl: string,
+  ) => Partial<ConstructorParameters<typeof RequestRateLimiter>[0]>;
 
   constructor(
     mintService: MintService,
     seedService: SeedService,
-    requestProvider: MintRequestProvider,
     logger?: Logger,
+    requestLimiterOptionsForMint?: (
+      mintUrl: string,
+    ) => Partial<ConstructorParameters<typeof RequestRateLimiter>[0]>,
   ) {
     this.mintService = mintService;
     this.seedService = seedService;
-    this.requestProvider = requestProvider;
     this.logger = logger;
+    this.requestLimiterOptionsForMint = requestLimiterOptionsForMint;
   }
 
   async getWallet(mintUrl: string): Promise<CashuWallet> {
@@ -94,7 +99,6 @@ export class WalletService {
     await this.mintService.updateMintData(mintUrl);
     return this.getWallet(mintUrl);
   }
-
   private async buildWallet(mintUrl: string): Promise<CashuWallet> {
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
@@ -122,8 +126,8 @@ export class WalletService {
 
     const seed = await this.seedService.getSeed();
 
-    const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const wallet = new CashuWallet(new CashuMint(mintUrl, requestFn), {
+    const requestLimiter = this.getOrCreateRequestLimiter(mintUrl);
+    const wallet = new CashuWallet(new CashuMint(mintUrl, requestLimiter.request), {
       mintInfo: mint.mintInfo,
       unit: DEFAULT_UNIT,
       keys,
@@ -141,5 +145,22 @@ export class WalletService {
 
     this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
     return wallet;
+  }
+
+  private getOrCreateRequestLimiter(mintUrl: string): RequestRateLimiter {
+    const existing = this.requestLimiters.get(mintUrl);
+    if (existing) return existing;
+    const defaults = this.requestLimiterOptionsForMint?.(mintUrl) ?? {};
+    const limiter = new RequestRateLimiter({
+      capacity: 20,
+      refillPerMinute: 20,
+      bypassPathPrefixes: [],
+      ...defaults,
+      logger: this.logger?.child
+        ? this.logger.child({ module: 'RequestRateLimiter' })
+        : this.logger,
+    });
+    this.requestLimiters.set(mintUrl, limiter);
+    return limiter;
   }
 }
