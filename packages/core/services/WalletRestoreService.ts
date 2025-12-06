@@ -4,12 +4,13 @@ import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
 import type { Logger } from '../logging/Logger.ts';
 import type { WalletService } from './WalletService.ts';
-import type { RequestRateLimiter } from '@core/infra/RequestRateLimiter.ts';
+import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 
 export class WalletRestoreService {
   private readonly proofService: ProofService;
   private readonly counterService: CounterService;
   private readonly walletService: WalletService;
+  private readonly requestProvider: MintRequestProvider;
   private readonly logger?: Logger;
 
   // Defaults for batch restore behavior
@@ -21,18 +22,21 @@ export class WalletRestoreService {
     proofService: ProofService,
     counterService: CounterService,
     walletService: WalletService,
+    requestProvider: MintRequestProvider,
     logger?: Logger,
   ) {
     this.proofService = proofService;
     this.counterService = counterService;
     this.walletService = walletService;
+    this.requestProvider = requestProvider;
     this.logger = logger;
   }
 
   async sweepKeyset(mintUrl: string, keysetId: string, bip39seed: Uint8Array): Promise<void> {
     this.logger?.debug('Sweeping keyset', { mintUrl, keysetId });
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-    const sweepWallet = new CashuWallet(new CashuMint(mintUrl), {
+    const requestFn = this.requestProvider.getRequestFn(mintUrl);
+    const sweepWallet = new CashuWallet(new CashuMint(mintUrl, requestFn), {
       bip39seed,
     });
 
