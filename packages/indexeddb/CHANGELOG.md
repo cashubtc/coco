@@ -1,5 +1,16 @@
 # coco-cashu-indexeddb
 
+## 1.1.2-rc.33
+
+### Patch Changes
+
+- 05ce81d: Adjusted the PaymentRequest API for ergonomics. Also change SendAPI state naming (BREAKING)
+- Updated dependencies [c444053]
+- Updated dependencies [0c191e6]
+- Updated dependencies [d985f02]
+- Updated dependencies [05ce81d]
+  - coco-cashu-core@1.1.2-rc.33
+
 ## 1.1.2-rc.32
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # coco-cashu-core
 
+## 1.1.2-rc.33
+
+### Patch Changes
+
+- c444053: Fixed an issue where rolling back a SendOperation would not emit proofs:saved events
+- 0c191e6: Moved from Ws-focussed transport to HybridTransport
+- d985f02: Added checkPendingOperaiton to SendAPI
+- 05ce81d: Adjusted the PaymentRequest API for ergonomics. Also change SendAPI state naming (BREAKING)
+
 ## 1.1.2-rc.32
 
 ### Patch Changes
