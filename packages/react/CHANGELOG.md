@@ -1,5 +1,11 @@
 # coco-cashu-react
 
+## 1.1.2-rc.34
+
+### Patch Changes
+
+- coco-cashu-core@1.1.2-rc.34
+
 ## 1.1.2-rc.33
 
 ### Patch Changes

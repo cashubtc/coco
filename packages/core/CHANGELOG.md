@@ -1,5 +1,7 @@
 # coco-cashu-core
 
+## 1.1.2-rc.34
+
 ## 1.1.2-rc.33
 
 ### Patch Changes
