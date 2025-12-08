@@ -79,6 +79,12 @@ export interface RollbackContext<M extends MeltMethod = MeltMethod> extends Base
   wallet: CashuWallet;
 }
 
+export interface RecoverExecutingContext<M extends MeltMethod = MeltMethod>
+  extends BaseHandlerDeps {
+  operation: ExecutingMeltOperation & MeltMethodMeta<M>;
+  wallet: CashuWallet;
+}
+
 export type ExecutionResult<M extends MeltMethod = MeltMethod> =
   | {
       status: 'PAID';
@@ -101,6 +107,11 @@ export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   finalize?(ctx: FinalizeContext<M>): Promise<void>;
   rollback?(ctx: RollbackContext<M>): Promise<void>;
   checkPending?(ctx: PendingContext<M>): Promise<PendingCheckResult>;
+  /**
+   * Recover an executing operation that failed mid-execution.
+   * Handlers must implement this method to handle recovery logic.
+   */
+  recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<void>;
 }
 
 export type MeltMethodHandlerRegistry = Record<MeltMethod, MeltMethodHandler<any>>;
