@@ -1,4 +1,13 @@
-import { CashuMint, type MintAllKeysets, type CheckStatePayload } from '@cashu/cashu-ts';
+import {
+  CashuMint,
+  type MintAllKeysets,
+  type CheckStatePayload,
+  OutputData,
+  type Proof,
+  type MeltQuoteResponse,
+  type PartialMeltQuoteResponse,
+  type Bolt12MeltQuoteResponse,
+} from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 
@@ -61,5 +70,27 @@ export class MintAdapter {
     const payload: CheckStatePayload = { Ys };
     const response = await cashuMint.check(payload);
     return response.states;
+  }
+
+  async customMeltBolt11(
+    mintUrl: string,
+    proofsToSend: Proof[],
+    changeOutputs: OutputData[],
+    quoteId: string,
+  ): Promise<PartialMeltQuoteResponse> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
+    return cashuMint.melt({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+  }
+
+  async customMeltBolt12(
+    mintUrl: string,
+    proofsToSend: Proof[],
+    changeOutputs: OutputData[],
+    quoteId: string,
+  ): Promise<Bolt12MeltQuoteResponse> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
+    return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
   }
 }
