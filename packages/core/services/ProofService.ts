@@ -412,6 +412,33 @@ export class ProofService {
 
     return preparedProofs;
   }
+
+  async createBlankOutputs(amount: number, mintUrl: string): Promise<OutputData[]> {
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new ProofValidationError('amount must be a non-negative number');
+    }
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    if (amount === 0) {
+      return [];
+    }
+    const outputNumber = Math.max(Math.ceil(Math.log2(amount)), 1);
+    const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
+    const seed = await this.seedService.getSeed();
+    const outputData = Array(outputNumber)
+      .fill(0)
+      .map((_, index) => {
+        return OutputData.createSingleDeterministicData(
+          0,
+          seed,
+          currentCounter.counter + index,
+          keys.id,
+        );
+      });
+    if (outputData.length > 0) {
+      await this.counterService.incrementCounter(mintUrl, keys.id, outputData.length);
+    }
+    return outputData;
+  }
 }
 
 /**
