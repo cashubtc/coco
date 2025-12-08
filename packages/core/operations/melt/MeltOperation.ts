@@ -2,6 +2,8 @@
  * State machine for melt operations:
  *
  * init ──► prepared ──► executing ──► pending ──► finalized
+ *   │         │            │            │            │
+ *   │         │            └────────────┴────────────┘ (if PAID)
  *   │         │            │            │
  *   │         │            │            └──► rolling_back ──► rolled_back
  *   │         │            │                      │
@@ -10,8 +12,8 @@
  * - init: Operation created, nothing reserved yet
  * - prepared: Proofs reserved, fees calculated, change outputs created, ready to execute
  * - executing: Swap/melt in progress
- * - pending: Melt started, payment inflight
- * - finalized: melt successful, change claimed, operation finalized
+ * - pending: Melt started, payment inflight (only if PENDING response)
+ * - finalized: melt successful, change claimed, operation finalized (can be reached directly from executing if PAID)
  * - failed: melt failed, proofs reclaimed
  * - rolling_back: Rollback in progress (reclaim swap being executed)
  * - rolled_back: Operation cancelled, proofs reclaimed
@@ -25,24 +27,23 @@ export type MeltOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
+import type { MeltQuoteResponse } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import type { MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 
 // ============================================================================
 // Base and Data Interfaces
 // ============================================================================
 
 /**
- * Base fields present in all send operations
+ * Base fields present in all melt operations
  */
-interface MeltOperationBase {
+interface MeltOperationBase extends MeltMethodMeta {
   /** Unique identifier for this operation */
   id: string;
 
   /** The mint URL for this operation */
   mintUrl: string;
-
-  /** The amount requested to melt (before fees) */
-  amount: number;
 
   /** Timestamp when the operation was created */
   createdAt: number;
@@ -61,9 +62,16 @@ interface PreparedData {
   /** Whether the operation requires a swap (false = exact match melt) */
   needsSwap: boolean;
 
+  /** The amount requested to melt (before fees) */
+  amount: number;
+
   /** Calculated fee for the swap (0 if exact match) */
   fee_reserve: number;
 
+  /** The ID of the quote used for the melt operation */
+  quoteId: string;
+
+  /** The fee for the swap (0 if exact match) */
   swap_fee: number;
 
   /** Total amount of input proofs selected */
@@ -79,7 +87,7 @@ interface PreparedData {
    * - Blinding factors
    * - Secrets (for deriving proof secrets)
    */
-  outputData?: SerializedOutputData;
+  outputData: SerializedOutputData;
 }
 
 // ============================================================================
@@ -241,17 +249,17 @@ export function isTerminalOperation(op: MeltOperation): op is TerminalMeltOperat
 /**
  * Creates a new SendOperation in init state
  */
-export function createSendOperation(
+export function createMeltOperation(
   id: string,
   mintUrl: string,
-  amount: number,
+  meta: MeltMethodMeta,
 ): InitMeltOperation {
   const now = Date.now();
   return {
+    ...meta,
     id,
     state: 'init',
     mintUrl,
-    amount,
     createdAt: now,
     updatedAt: now,
   };
