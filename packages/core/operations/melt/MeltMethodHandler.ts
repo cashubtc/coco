@@ -8,6 +8,7 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import type {
   ExecutingMeltOperation,
+  FailedMeltOperation,
   FinalizedMeltOperation,
   InitMeltOperation,
   PendingMeltOperation,
@@ -97,6 +98,12 @@ export type ExecutionResult<M extends MeltMethod = MeltMethod> =
       pending: PendingMeltOperation & MeltMethodMeta<M>;
       sendProofs?: Proof[];
       keepProofs?: Proof[];
+    }
+  | {
+      status: 'FAILED';
+      failed: FailedMeltOperation & MeltMethodMeta<M>;
+      sendProofs?: Proof[];
+      keepProofs?: Proof[];
     };
 
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
@@ -111,7 +118,7 @@ export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
    * Recover an executing operation that failed mid-execution.
    * Handlers must implement this method to handle recovery logic.
    */
-  recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<void>;
+  recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<ExecutionResult<M>>;
 }
 
 export type MeltMethodHandlerRegistry = Record<MeltMethod, MeltMethodHandler<any>>;
