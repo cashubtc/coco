@@ -1,0 +1,54 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for npm provenance
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build packages in dependency order
+        run: |
+          # Build core first (base dependency)
+          cd packages/core && bun run build && cd ../..
+          
+          # Build adapter-tests (depends on core)
+          cd packages/adapter-tests && bun run build && cd ../..
+          
+          # Build storage adapters (depend on core and adapter-tests)
+          cd packages/indexeddb && bun run build && cd ../..
+          cd packages/expo-sqlite && bun run build && cd ../..
+          cd packages/sqlite3 && bun run build && cd ../..
+          
+          # Build react (depends on core)
+          cd packages/react && bun run build && cd ../..
+
+      - name: Create .npmrc
+        run: |
+          cat << EOF > "$HOME/.npmrc"
+          //registry.npmjs.org/:_authToken=$NPM_TOKEN
+          EOF
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm
+        run: bunx changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
