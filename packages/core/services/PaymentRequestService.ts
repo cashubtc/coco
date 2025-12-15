@@ -156,11 +156,11 @@ export class PaymentRequestService {
   }
 
   private getPaymentRequestTransport(pr: PaymentRequest): Transport {
-    if (!pr.transport || !Array.isArray(pr.transport)) {
-      throw new PaymentRequestError('Malformed payment request: No transport');
-    }
-    if (pr.transport.length === 0) {
+    if (!pr.transport || (Array.isArray(pr.transport) && pr.transport.length === 0)) {
       return { type: 'inband' };
+    }
+    if (!Array.isArray(pr.transport)) {
+      throw new PaymentRequestError('Malformed payment request: Invalid transport');
     }
     const httpTransport = pr.transport.find((t) => t.type === PaymentRequestTransportType.POST);
     if (httpTransport) {
