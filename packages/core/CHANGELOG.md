@@ -1,5 +1,12 @@
 # coco-cashu-core
 
+## 1.1.2-rc.35
+
+### Patch Changes
+
+- 406c470: patch: make sure parsing secret does not throw on missing tags key
+- 59693b5: Make sure missing transport keys on PRs are treated as inband
+
 ## 1.1.2-rc.34
 
 ## 1.1.2-rc.33
