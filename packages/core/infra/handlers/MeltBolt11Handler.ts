@@ -16,155 +16,182 @@ import {
   computeYHexForSecrets,
 } from '@core/utils';
 
+/** If selected proofs exceed required amount by more than this ratio, a swap is needed */
+const SWAP_THRESHOLD_RATIO = 1.1;
+
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   async prepare(
     ctx: BasePrepareContext<'bolt11'>,
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
+    const { mintUrl } = ctx.operation;
     const quote = await ctx.wallet.createMeltQuote(ctx.operation.methodData.invoice);
-    const amount = quote.amount;
-    const fee_reserve = quote.fee_reserve;
+    const { amount, fee_reserve } = quote;
     const totalAmount = amount + fee_reserve;
 
-    const availableProofs = await ctx.proofRepository.getAvailableProofs(ctx.operation.mintUrl);
-    const totalAvailable = availableProofs.reduce((acc, p) => acc + p.amount, 0);
-    if (totalAvailable < totalAmount) {
-      throw new Error('Insufficient balance');
+    await this.ensureSufficientBalance(ctx, totalAmount);
+
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
+    const selectedAmount = this.sumProofs(selectedProofs);
+    const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
+
+    if (!needsSwap) {
+      return this.prepareDirectMelt(ctx, quote, selectedProofs);
     }
-    // check for an exact match
-    let selectedProofs = await ctx.proofService.selectProofsToSend(
-      ctx.operation.mintUrl,
-      totalAmount,
-      false,
-    );
-    let selectedAmount = selectedProofs.reduce((acc, p) => acc + p.amount, 0);
-    if (selectedAmount < Math.floor(totalAmount * 1.1)) {
-      // The selected amount is either exact or less than 10% over the total amount, so we can use it directly
-      const inputSecrets = selectedProofs.map((p) => p.secret);
-      await ctx.proofRepository.reserveProofs(
-        ctx.operation.mintUrl,
-        inputSecrets,
-        ctx.operation.id,
-      );
-      const delta = selectedAmount - amount;
-      const blankOutputs = await ctx.proofService.createBlankOutputs(delta, ctx.operation.mintUrl);
-      return {
-        ...ctx.operation,
-        ...ctx.operation.methodData,
-        quoteId: quote.quote,
-        changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
-        needsSwap: false,
-        amount,
-        fee_reserve,
-        inputAmount: selectedAmount,
-        inputProofSecrets: inputSecrets,
-        swap_fee: 0,
-        state: 'prepared',
-      };
-    } else {
-      // The selected amount exceeds the total amount by more than 10%, so we need to swap proofs
-      selectedProofs = await ctx.proofService.selectProofsToSend(
-        ctx.operation.mintUrl,
-        totalAmount,
-        true,
-      );
-      selectedAmount = selectedProofs.reduce((acc, p) => acc + p.amount, 0);
-      const swapFees = ctx.wallet.getFeesForProofs(selectedProofs);
-      const totalSendAmount = totalAmount + swapFees;
-      const keepAmount = selectedAmount - totalSendAmount;
-      const changeDelta = selectedAmount - totalAmount;
-      const blankOutputs = await ctx.proofService.createBlankOutputs(
-        changeDelta,
-        ctx.operation.mintUrl,
-      );
-      await ctx.proofRepository.reserveProofs(
-        ctx.operation.mintUrl,
-        selectedProofs.map((p) => p.secret),
-        ctx.operation.id,
-      );
-      const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-        ctx.operation.mintUrl,
-        { keep: keepAmount, send: totalSendAmount },
-      );
-      return {
-        ...ctx.operation,
-        ...ctx.operation.methodData,
-        quoteId: quote.quote,
-        swapOutputData: serializeOutputData({ keep: outputData.keep, send: outputData.send }),
-        changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
-        needsSwap: true,
-        swap_fee: swapFees,
-        amount,
-        fee_reserve,
-        inputAmount: selectedAmount,
-        inputProofSecrets: selectedProofs.map((p) => p.secret),
-        state: 'prepared',
-      };
+    return this.prepareSwapThenMelt(ctx, quote, totalAmount);
+  }
+
+  private async ensureSufficientBalance(
+    ctx: BasePrepareContext<'bolt11'>,
+    requiredAmount: number,
+  ): Promise<void> {
+    const availableProofs = await ctx.proofRepository.getAvailableProofs(ctx.operation.mintUrl);
+    const totalAvailable = this.sumProofs(availableProofs);
+    if (totalAvailable < requiredAmount) {
+      throw new Error('Insufficient balance');
     }
   }
 
-  async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
-    const {
-      quoteId,
-      id: operationId,
-      mintUrl,
-      changeOutputData: serializedChangeOutputData,
-      swapOutputData,
-      inputProofSecrets,
-    } = ctx.operation;
-    const proofsToSend = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
-    if (proofsToSend.length !== ctx.operation.inputProofSecrets.length) {
-      throw new Error('Could not find all input proofs');
-    }
-    let proofsToMelt: Proof[] = [];
-    if (!ctx.operation.needsSwap) {
-      proofsToMelt = proofsToSend;
-    } else {
-      if (!swapOutputData) {
-        throw new Error('Swap is required, but swap output data is missing');
-      }
-      const swapData = deserializeOutputData(swapOutputData);
-      const sendAmount = swapData.send.reduce((a, c) => a + c.blindedMessage.amount, 0);
-      const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
-      await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'inflight');
-      const swap = await wallet.swap(sendAmount, proofsToSend, { outputData: swapData });
-      await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
-      const newProofs = [
-        ...mapProofToCoreProof(mintUrl, 'ready', swap.keep, { createdByOperationId: operationId }),
-        ...mapProofToCoreProof(mintUrl, 'inflight', swap.send, {
-          createdByOperationId: operationId,
-        }),
-      ];
-      await ctx.proofService.saveProofs(mintUrl, newProofs);
-      proofsToMelt = swap.send;
-    }
-    const changeOutputData = deserializeOutputData(serializedChangeOutputData);
+  private async prepareDirectMelt(
+    ctx: BasePrepareContext<'bolt11'>,
+    quote: { quote: string; amount: number; fee_reserve: number },
+    selectedProofs: Proof[],
+  ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
+    const { mintUrl, id: operationId } = ctx.operation;
+    const { amount, fee_reserve } = quote;
+    const inputSecrets = selectedProofs.map((p) => p.secret);
+    const selectedAmount = this.sumProofs(selectedProofs);
 
+    await ctx.proofRepository.reserveProofs(mintUrl, inputSecrets, operationId);
+
+    const changeDelta = selectedAmount - amount;
+    const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
+
+    return {
+      ...ctx.operation,
+      ...ctx.operation.methodData,
+      quoteId: quote.quote,
+      changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
+      needsSwap: false,
+      amount,
+      fee_reserve,
+      inputAmount: selectedAmount,
+      inputProofSecrets: inputSecrets,
+      swap_fee: 0,
+      state: 'prepared',
+    };
+  }
+
+  private async prepareSwapThenMelt(
+    ctx: BasePrepareContext<'bolt11'>,
+    quote: { quote: string; amount: number; fee_reserve: number },
+    totalAmount: number,
+  ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
+    const { mintUrl, id: operationId } = ctx.operation;
+    const { amount, fee_reserve } = quote;
+
+    // Re-select proofs allowing inclusion of smaller denominations for better fit
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
+    const selectedAmount = this.sumProofs(selectedProofs);
+    const inputSecrets = selectedProofs.map((p) => p.secret);
+
+    const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
+    const sendAmount = totalAmount + swapFee;
+    const keepAmount = selectedAmount - sendAmount;
+    const changeDelta = selectedAmount - totalAmount;
+
+    await ctx.proofRepository.reserveProofs(mintUrl, inputSecrets, operationId);
+
+    const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
+    const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(mintUrl, {
+      keep: keepAmount,
+      send: sendAmount,
+    });
+
+    return {
+      ...ctx.operation,
+      ...ctx.operation.methodData,
+      quoteId: quote.quote,
+      swapOutputData: serializeOutputData(swapOutputData),
+      changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
+      needsSwap: true,
+      swap_fee: swapFee,
+      amount,
+      fee_reserve,
+      inputAmount: selectedAmount,
+      inputProofSecrets: inputSecrets,
+      state: 'prepared',
+    };
+  }
+
+  async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
+    const { quoteId, mintUrl, changeOutputData: serializedChangeOutputData } = ctx.operation;
+
+    const inputProofs = await this.getInputProofs(ctx);
+    const proofsToMelt = ctx.operation.needsSwap
+      ? await this.executeSwap(ctx, inputProofs)
+      : inputProofs;
+
+    const changeOutputData = deserializeOutputData(serializedChangeOutputData);
     const res = await ctx.mintAdapter.customMeltBolt11(
       mintUrl,
       proofsToMelt,
       changeOutputData.keep,
       quoteId,
     );
-    if (res.state === 'PAID') {
+
+    return this.buildExecutionResult(ctx.operation, res.state);
+  }
+
+  private async getInputProofs(ctx: ExecuteContext<'bolt11'>): Promise<Proof[]> {
+    const { mintUrl, id: operationId } = ctx.operation;
+    const proofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
+    if (proofs.length !== ctx.operation.inputProofSecrets.length) {
+      throw new Error('Could not find all input proofs');
+    }
+    return proofs;
+  }
+
+  private async executeSwap(ctx: ExecuteContext<'bolt11'>, inputProofs: Proof[]): Promise<Proof[]> {
+    const { swapOutputData, inputProofSecrets, id: operationId, mintUrl } = ctx.operation;
+
+    if (!swapOutputData) {
+      throw new Error('Swap is required, but swap output data is missing');
+    }
+
+    const swapData = deserializeOutputData(swapOutputData);
+    const sendAmount = swapData.send.reduce((a, c) => a + c.blindedMessage.amount, 0);
+    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
+
+    await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'inflight');
+    const swap = await wallet.swap(sendAmount, inputProofs, { outputData: swapData });
+    await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
+
+    const newProofs = [
+      ...mapProofToCoreProof(mintUrl, 'ready', swap.keep, { createdByOperationId: operationId }),
+      ...mapProofToCoreProof(mintUrl, 'inflight', swap.send, { createdByOperationId: operationId }),
+    ];
+    await ctx.proofService.saveProofs(mintUrl, newProofs);
+
+    return swap.send;
+  }
+
+  private buildExecutionResult(
+    operation: ExecuteContext<'bolt11'>['operation'],
+    state: string,
+  ): ExecutionResult<'bolt11'> {
+    if (state === 'PAID') {
       return {
         status: 'PAID',
-        finalized: {
-          ...ctx.operation,
-          state: 'finalized',
-          updatedAt: Date.now(),
-        },
-      };
-    } else if (res.state === 'PENDING') {
-      return {
-        status: 'PENDING',
-        pending: {
-          ...ctx.operation,
-          state: 'pending',
-          updatedAt: Date.now(),
-        },
+        finalized: { ...operation, state: 'finalized', updatedAt: Date.now() },
       };
     }
-    throw new Error(`Unexpected melt response state: ${res.state} for quote ${quoteId}`);
+    if (state === 'PENDING') {
+      return {
+        status: 'PENDING',
+        pending: { ...operation, state: 'pending', updatedAt: Date.now() },
+      };
+    }
+    throw new Error(`Unexpected melt response state: ${state} for quote ${operation.quoteId}`);
   }
 
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
@@ -206,7 +233,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         // Swap was required. We need to check whether it happened
         // First we check with the mint whether the input proofs are spent (swap happened)
 
-        const swapHappened = await this.swapHappened(inputProofSecrets, mintUrl, ctx);
+        const swapHappened = await this.checkSwapHappened(ctx, inputProofSecrets, mintUrl);
         if (swapHappened) {
           // We check whether we have the swap proofs in our DB
           const operationProofs = await ctx.proofRepository.getProofsByOperationId(
@@ -231,7 +258,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
           }
         }
       } else {
-        // Swap was either not required or did not happen. We can reclaim savely
+        // Swap was not required, we can reclaim safely
         const reclaimOutputs = await ctx.proofService.createOutputsAndIncrementCounters(
           operation.mintUrl,
           { keep: operation.amount, send: 0 },
@@ -272,14 +299,17 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     }
   }
 
-  private async swapHappened(
-    input: string[] | Proof[],
-    mintUrl: string,
+  private async checkSwapHappened(
     ctx: RecoverExecutingContext<'bolt11'>,
-  ) {
-    const secrets = input.map((i) => (typeof i === 'string' ? i : i.secret));
+    secrets: string[],
+    mintUrl: string,
+  ): Promise<boolean> {
     const Ys = computeYHexForSecrets(secrets);
     const proofStates = await ctx.mintAdapter.checkProofStates(mintUrl, Ys);
     return proofStates.some((proofState) => proofState.state === 'SPENT');
+  }
+
+  private sumProofs(proofs: Proof[]): number {
+    return proofs.reduce((sum, p) => sum + p.amount, 0);
   }
 }
