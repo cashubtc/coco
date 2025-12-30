@@ -82,12 +82,13 @@ interface PreparedData {
 
   /**
    * Serialized OutputData (change) for the melt operation.
-   * Contains all information needed for recovery:
-   * - Blinded messages (with keyset ID)
-   * - Blinding factors
-   * - Secrets (for deriving proof secrets)
    */
-  outputData: SerializedOutputData;
+  changeOutputData: SerializedOutputData;
+
+  /**
+   * Serialized OutputData (swap) for the melt operation.
+   */
+  swapOutputData?: SerializedOutputData;
 }
 
 // ============================================================================

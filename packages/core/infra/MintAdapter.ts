@@ -65,7 +65,7 @@ export class MintAdapter {
   }
 
   // Batch check of proof states by Y values (up to 100 per request)
-  async checkProofStates(mintUrl: string, Ys: string[]): Promise<unknown[]> {
+  async checkProofStates(mintUrl: string, Ys: string[]) {
     const cashuMint = this.getCashuMint(mintUrl);
     const payload: CheckStatePayload = { Ys };
     const response = await cashuMint.check(payload);
