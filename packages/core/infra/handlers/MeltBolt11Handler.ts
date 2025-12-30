@@ -15,6 +15,7 @@ import {
   mapProofToCoreProof,
   computeYHexForSecrets,
 } from '@core/utils';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 /** If selected proofs exceed required amount by more than this ratio, a swap is needed */
 const SWAP_THRESHOLD_RATIO = 1.1;
@@ -236,14 +237,18 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         const swapHappened = await this.checkSwapHappened(ctx, inputProofSecrets, mintUrl);
         if (swapHappened) {
           // We check whether we have the swap proofs in our DB
+
+          if (!swapOutputData) {
+            throw new Error('Swap was required, but no output data was found');
+          }
+          const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
           const operationProofs = await ctx.proofRepository.getProofsByOperationId(
             mintUrl,
             operationId,
           );
-          if (!swapOutputData || swapOutputData.send.length < 1) {
-            throw new Error('Swap was required, but no output data was found');
-          }
-          const swapSendProofSecrets = swapOutputData.send.map((o) => o.secret);
+          const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) =>
+            bytesToHex(o.secret),
+          );
           const swapSendProofs = operationProofs.filter((operationProof) =>
             swapSendProofSecrets.includes(operationProof.secret),
           );
@@ -252,10 +257,40 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
             // Swap happened but melt either failed or was not initiated
             // -> Unreserve proofs
             await ctx.proofService.setProofState(mintUrl, swappedSecrets, 'ready');
+            return {
+              status: 'FAILED',
+              failed: {
+                ...operation,
+                state: 'failed',
+                updatedAt: Date.now(),
+                error: 'Recovered: Swap happened but melt failed / never executed',
+              },
+            };
           } else {
             // Swap happened, but resulting proofs were not saved. We need to recover
-            // TODO: Implement recovery
+            await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
+            return {
+              status: 'FAILED',
+              failed: {
+                ...operation,
+                state: 'failed',
+                updatedAt: Date.now(),
+                error: 'Recovered: Swap happened, proofs restored from mint',
+              },
+            };
           }
+        } else {
+          // Swap was required but didn't happen - original proofs are still spendable
+          await ctx.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+          return {
+            status: 'FAILED',
+            failed: {
+              ...operation,
+              state: 'failed',
+              updatedAt: Date.now(),
+              error: 'Recovered: Swap never executed, released original proofs',
+            },
+          };
         }
       } else {
         // Swap was not required, we can reclaim safely

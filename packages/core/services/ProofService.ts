@@ -10,6 +10,7 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
+import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -438,6 +439,94 @@ export class ProofService {
       await this.counterService.incrementCounter(mintUrl, keys.id, outputData.length);
     }
     return outputData;
+  }
+
+  /**
+   * Recover proofs from a completed swap using the mint's restore endpoint.
+   * This is used when a swap succeeded but proofs were not saved (e.g., crash recovery).
+   *
+   * First checks if the proofs are still unspent before attempting recovery.
+   * Only unspent proofs will be recovered and saved.
+   *
+   * @param mintUrl - The mint URL
+   * @param serializedOutputData - The serialized output data containing secrets and blinding factors
+   * @returns The recovered proofs (only unspent ones)
+   */
+  async recoverProofsFromOutputData(
+    mintUrl: string,
+    serializedOutputData: SerializedOutputData,
+  ): Promise<Proof[]> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!serializedOutputData) {
+      throw new ProofValidationError('serializedOutputData is required');
+    }
+
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+
+    // Deserialize OutputData
+    const outputData = deserializeOutputData(serializedOutputData);
+    const allOutputs = [...outputData.keep, ...outputData.send];
+
+    if (allOutputs.length === 0) {
+      return [];
+    }
+
+    // Build blinded messages for restore request
+    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
+
+    // Call mint restore endpoint
+    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
+
+    // Match signatures back to outputs and construct proofs
+    const restoredProofs: Proof[] = [];
+    for (let i = 0; i < restoreResult.outputs.length; i++) {
+      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
+      const signature = restoreResult.signatures[i];
+      if (output && signature) {
+        // Construct proof from output data and signature
+        const proof: Proof = {
+          id: signature.id,
+          amount: signature.amount,
+          secret: new TextDecoder().decode(output.secret),
+          C: signature.C_,
+        };
+        restoredProofs.push(proof);
+      }
+    }
+
+    if (restoredProofs.length === 0) {
+      this.logger?.debug('No proofs found to restore', { mintUrl });
+      return [];
+    }
+
+    // Check which proofs are still unspent
+    const proofStates = await wallet.checkProofsStates(restoredProofs);
+    const unspentProofs = restoredProofs.filter((_, index) => {
+      const state = proofStates[index];
+      return state && state.state === 'UNSPENT';
+    });
+
+    if (unspentProofs.length === 0) {
+      this.logger?.debug('All restored proofs are already spent', {
+        mintUrl,
+        totalRestored: restoredProofs.length,
+      });
+      return [];
+    }
+
+    // Save only unspent proofs
+    await this.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', unspentProofs));
+
+    this.logger?.info('Recovered proofs from output data', {
+      mintUrl,
+      totalRestored: restoredProofs.length,
+      unspentCount: unspentProofs.length,
+      spentCount: restoredProofs.length - unspentProofs.length,
+    });
+
+    return unspentProofs;
   }
 }
 
