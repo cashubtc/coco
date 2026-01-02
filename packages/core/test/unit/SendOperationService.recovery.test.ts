@@ -152,6 +152,40 @@ describe('SendOperationService - recoverPendingOperations', () => {
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
       ),
+      recoverProofsFromOutputData: mock(async (mintUrl: string, serializedOutputData: any) => {
+        // Deserialize output data and call wallet restore
+        const allOutputs = [...serializedOutputData.keep, ...serializedOutputData.send];
+        if (allOutputs.length === 0) return [];
+
+        const blindedMessages = allOutputs.map((o: any) => o.blindedMessage);
+        const restoreResult = await mockMintRestore({ outputs: blindedMessages });
+
+        // Construct proofs from restore result
+        const recoveredProofs: any[] = [];
+        for (let i = 0; i < restoreResult.outputs.length; i++) {
+          const output = allOutputs.find(
+            (o: any) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_,
+          );
+          const signature = restoreResult.signatures[i];
+          if (output && signature) {
+            recoveredProofs.push({
+              id: signature.id,
+              amount: signature.amount,
+              secret: Buffer.from(output.secret, 'hex').toString(),
+              C: signature.C_,
+              mintUrl,
+              state: 'ready',
+            });
+          }
+        }
+
+        // Save recovered proofs (already mocked)
+        if (recoveredProofs.length > 0) {
+          await proofService.saveProofs(mintUrl, recoveredProofs);
+        }
+
+        return recoveredProofs;
+      }),
     } as unknown as ProofService;
 
     // Mock MintService
