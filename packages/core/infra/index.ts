@@ -8,3 +8,4 @@ export * from './WsTransport';
 export * from './PollingTransport';
 export * from './HybridTransport';
 export * from './SubscriptionProtocol';
+export * from './handlers';

@@ -14,6 +14,7 @@ import type {
 import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
+import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
@@ -145,6 +146,29 @@ export interface SendOperationRepository {
 
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<SendOperation[]>;
+
+  /** Delete a send operation */
+  delete(id: string): Promise<void>;
+}
+
+export interface MeltOperationRepository {
+  /** Create a new send operation */
+  create(operation: MeltOperation): Promise<void>;
+
+  /** Update an existing melt operation */
+  update(operation: MeltOperation): Promise<void>;
+
+  /** Get a send operation by ID */
+  getById(id: string): Promise<MeltOperation | null>;
+
+  /** Get all send operations in a specific state */
+  getByState(state: MeltOperationState): Promise<MeltOperation[]>;
+
+  /** Get all pending operations (state in ['executing', 'pending']) */
+  getPending(): Promise<MeltOperation[]>;
+
+  /** Get all operations for a specific mint */
+  getByMintUrl(mintUrl: string): Promise<MeltOperation[]>;
 
   /** Delete a send operation */
   delete(id: string): Promise<void>;

@@ -806,42 +806,12 @@ export class SendOperationService {
       throw new Error('Cannot recover proofs without outputData');
     }
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
-
-    // Deserialize OutputData
-    const outputData = deserializeOutputData(op.outputData);
-    const allOutputs = [...outputData.keep, ...outputData.send];
-
-    // Build blinded messages for restore request
-    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
-
-    // Call mint restore endpoint
-    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
-
-    // Match signatures back to outputs and construct proofs
-    const recoveredProofs: Proof[] = [];
-    for (let i = 0; i < restoreResult.outputs.length; i++) {
-      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
-      const signature = restoreResult.signatures[i];
-      if (output && signature) {
-        // Construct proof from output data and signature
-        const proof: Proof = {
-          id: signature.id,
-          amount: signature.amount,
-          secret: new TextDecoder().decode(output.secret),
-          C: signature.C_,
-        };
-        recoveredProofs.push(proof);
-      }
-    }
+    const recoveredProofs = await this.proofService.recoverProofsFromOutputData(
+      op.mintUrl,
+      op.outputData,
+    );
 
     if (recoveredProofs.length > 0) {
-      // Save recovered proofs
-      await this.proofService.saveProofs(
-        op.mintUrl,
-        mapProofToCoreProof(op.mintUrl, 'ready', recoveredProofs),
-      );
-
       this.logger?.info('Recovered proofs from swap', {
         operationId: op.id,
         proofCount: recoveredProofs.length,
