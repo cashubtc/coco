@@ -227,54 +227,61 @@ export class MeltOperationService {
           reservedProofs,
         });
 
-        if (result.status === 'PAID') {
-          // Melt was immediately paid, finalize right away
-          const finalizedOp: FinalizedMeltOperation = {
-            ...result.finalized,
-            state: 'finalized',
-            updatedAt: Date.now(),
-          };
+        switch (result.status) {
+          case 'PAID': {
+            // Melt was immediately paid, finalize right away
+            const finalizedOp: FinalizedMeltOperation = {
+              ...result.finalized,
+              state: 'finalized',
+              updatedAt: Date.now(),
+            };
 
-          await this.meltOperationRepository.update(finalizedOp);
-          await this.eventBus.emit(
-            'melt:finalized' as any,
-            {
-              mintUrl: finalizedOp.mintUrl,
+            await this.meltOperationRepository.update(finalizedOp);
+            await this.eventBus.emit(
+              'melt:finalized' as any,
+              {
+                mintUrl: finalizedOp.mintUrl,
+                operationId: finalizedOp.id,
+                operation: finalizedOp,
+              } as any,
+            );
+
+            this.logger?.info('Melt operation executing -> finalized (immediate)', {
               operationId: finalizedOp.id,
-              operation: finalizedOp,
-            } as any,
-          );
+              method: finalizedOp.method,
+            });
 
-          this.logger?.info('Melt operation executing -> finalized (immediate)', {
-            operationId: finalizedOp.id,
-            method: finalizedOp.method,
-          });
+            return finalizedOp;
+          }
+          case 'PENDING': {
+            // Melt is pending, move to pending state
+            const pendingOp: PendingMeltOperation = {
+              ...result.pending,
+              state: 'pending',
+              updatedAt: Date.now(),
+            };
 
-          return finalizedOp;
-        } else {
-          // Melt is pending, move to pending state
-          const pendingOp: PendingMeltOperation = {
-            ...result.pending,
-            state: 'pending',
-            updatedAt: Date.now(),
-          };
+            await this.meltOperationRepository.update(pendingOp);
+            await this.eventBus.emit(
+              'melt:pending' as any,
+              {
+                mintUrl: pendingOp.mintUrl,
+                operationId: pendingOp.id,
+                operation: pendingOp,
+              } as any,
+            );
 
-          await this.meltOperationRepository.update(pendingOp);
-          await this.eventBus.emit(
-            'melt:pending' as any,
-            {
-              mintUrl: pendingOp.mintUrl,
+            this.logger?.info('Melt operation executing -> pending', {
               operationId: pendingOp.id,
-              operation: pendingOp,
-            } as any,
-          );
+              method: pendingOp.method,
+            });
 
-          this.logger?.info('Melt operation executing -> pending', {
-            operationId: pendingOp.id,
-            method: pendingOp.method,
-          });
-
-          return pendingOp;
+            return pendingOp;
+          }
+          case 'FAILED': {
+            // Execution reported failure, trigger recovery
+            throw new Error(result.failed.error ?? 'Melt execution failed');
+          }
         }
       } catch (e) {
         // Attempt to recover the executing operation before re-throwing
@@ -353,7 +360,8 @@ export class MeltOperationService {
         operation.state === 'finalized' ||
         operation.state === 'rolled_back' ||
         operation.state === 'rolling_back' ||
-        operation.state === 'init'
+        operation.state === 'init' ||
+        operation.state === 'executing'
       ) {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
@@ -596,21 +604,65 @@ export class MeltOperationService {
 
   /**
    * Recover an executing operation.
-   * Delegates to handler for proof cleanup, then marks operation as rolled back.
+   * Delegates to handler for proof cleanup and state determination.
+   * Updates operation state based on handler result (finalized, pending, or failed).
    */
   private async recoverExecutingOperation(op: ExecutingMeltOperation): Promise<void> {
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
 
-    // Handler cleans up proofs (releases reservations, recovers change outputs, marks proofs as spent)
-    await handler.recoverExecuting({
+    const result = await handler.recoverExecuting({
       ...this.buildDeps(),
       operation: op,
       wallet,
     });
 
-    // Service marks operation as rolled back after handler completes cleanup
-    await this.markAsRolledBack(op, 'Recovered: operation failed during execution');
+    switch (result.status) {
+      case 'PAID': {
+        const finalizedOp: FinalizedMeltOperation = {
+          ...result.finalized,
+          state: 'finalized',
+          updatedAt: Date.now(),
+        };
+        await this.meltOperationRepository.update(finalizedOp);
+        await this.eventBus.emit(
+          'melt:finalized' as any,
+          {
+            mintUrl: finalizedOp.mintUrl,
+            operationId: finalizedOp.id,
+            operation: finalizedOp,
+          } as any,
+        );
+        this.logger?.info('Recovered executing operation as finalized', {
+          operationId: op.id,
+        });
+        break;
+      }
+      case 'PENDING': {
+        const pendingOp: PendingMeltOperation = {
+          ...result.pending,
+          state: 'pending',
+          updatedAt: Date.now(),
+        };
+        await this.meltOperationRepository.update(pendingOp);
+        await this.eventBus.emit(
+          'melt:pending' as any,
+          {
+            mintUrl: pendingOp.mintUrl,
+            operationId: pendingOp.id,
+            operation: pendingOp,
+          } as any,
+        );
+        this.logger?.info('Recovered executing operation as pending', {
+          operationId: op.id,
+        });
+        break;
+      }
+      case 'FAILED': {
+        await this.markAsRolledBack(op, result.failed.error ?? 'Recovered: operation failed');
+        break;
+      }
+    }
   }
 
   /**
