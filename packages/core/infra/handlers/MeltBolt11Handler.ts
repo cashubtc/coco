@@ -1,4 +1,5 @@
 import type { Proof } from '@cashu/cashu-ts';
+import { ProofOperationError } from '@core/models';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -17,7 +18,6 @@ import {
 } from '@core/utils';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
-/** If selected proofs exceed required amount by more than this ratio, a swap is needed */
 const SWAP_THRESHOLD_RATIO = 1.1;
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
@@ -48,7 +48,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const availableProofs = await ctx.proofRepository.getAvailableProofs(ctx.operation.mintUrl);
     const totalAvailable = this.sumProofs(availableProofs);
     if (totalAvailable < requiredAmount) {
-      throw new Error('Insufficient balance');
+      throw new ProofOperationError(ctx.operation.mintUrl, 'Insufficient balance');
     }
   }
 
@@ -178,7 +178,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
   private buildExecutionResult(
     operation: ExecuteContext<'bolt11'>['operation'],
-    state: string,
+    state: 'PAID' | 'PENDING' | 'UNPAID',
   ): ExecutionResult<'bolt11'> {
     if (state === 'PAID') {
       return {
@@ -208,139 +208,124 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
-    const { mintUrl, quoteId, inputProofSecrets, swapOutputData, id: operationId } = operation;
+    const { mintUrl, quoteId, needsSwap } = operation;
     const state = await ctx.mintAdapter.checkMeltQuoteState(mintUrl, quoteId);
-    if (state === 'PAID') {
-      // Melt was started, is done, we can finalize the operation
-      return {
-        status: 'PAID',
-        finalized: {
-          ...operation,
-          state: 'finalized',
-        },
-      };
-    } else if (state === 'PENDING') {
-      // Melt was started, is not done, we can wait for it to be done
-      return {
-        status: 'PENDING',
-        pending: {
-          ...operation,
-          state: 'pending',
-        },
-      };
-    } else if (state === 'UNPAID') {
-      // Melt was prepared, but not started, we need to check if the swap happened and reclaim
-      if (ctx.operation.needsSwap) {
-        // Swap was required. We need to check whether it happened
-        // First we check with the mint whether the input proofs are spent (swap happened)
 
-        const swapHappened = await this.checkSwapHappened(ctx, inputProofSecrets, mintUrl);
+    switch (state) {
+      case 'PAID':
+        return this.recoverExecutingPaidOperation(ctx);
+      case 'PENDING':
+        return this.recoverExecutingPendingOperation(ctx);
+      case 'UNPAID': {
+        const swapHappened = needsSwap && (await this.checkSwapHappened(ctx));
         if (swapHappened) {
-          // We check whether we have the swap proofs in our DB
-
-          if (!swapOutputData) {
-            throw new Error('Swap was required, but no output data was found');
-          }
-          const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
-          const operationProofs = await ctx.proofRepository.getProofsByOperationId(
-            mintUrl,
-            operationId,
-          );
-          const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) =>
-            bytesToHex(o.secret),
-          );
-          const swapSendProofs = operationProofs.filter((operationProof) =>
-            swapSendProofSecrets.includes(operationProof.secret),
-          );
-          if (swapSendProofs.length > 0) {
-            const swappedSecrets = swapSendProofs.map((p) => p.secret);
-            // Swap happened but melt either failed or was not initiated
-            // -> Unreserve proofs
-            await ctx.proofService.setProofState(mintUrl, swappedSecrets, 'ready');
-            return {
-              status: 'FAILED',
-              failed: {
-                ...operation,
-                state: 'failed',
-                updatedAt: Date.now(),
-                error: 'Recovered: Swap happened but melt failed / never executed',
-              },
-            };
-          } else {
-            // Swap happened, but resulting proofs were not saved. We need to recover
-            await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
-            return {
-              status: 'FAILED',
-              failed: {
-                ...operation,
-                state: 'failed',
-                updatedAt: Date.now(),
-                error: 'Recovered: Swap happened, proofs restored from mint',
-              },
-            };
-          }
+          return this.recoverSwapProofsAndFail(ctx);
         } else {
-          // Swap was required but didn't happen - original proofs are still spendable
-          await ctx.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
-          return {
-            status: 'FAILED',
-            failed: {
-              ...operation,
-              state: 'failed',
-              updatedAt: Date.now(),
-              error: 'Recovered: Swap never executed, released original proofs',
-            },
-          };
+          return this.releaseProofsAndFail(ctx);
         }
-      } else {
-        // Swap was not required, we can reclaim safely
-        const reclaimOutputs = await ctx.proofService.createOutputsAndIncrementCounters(
-          operation.mintUrl,
-          { keep: operation.amount, send: 0 },
-        );
-        const inputProofs = await ctx.proofRepository.getProofsByOperationId(
-          operation.mintUrl,
-          operation.id,
-        );
-        if (inputProofs.length !== operation.inputProofSecrets.length) {
-          ctx.logger?.warn('Could not find all input proofs for recovery!', {
-            operationId: operation.id,
-            mintUrl: operation.mintUrl,
-            inputProofSecrets: operation.inputProofSecrets,
-            inputProofs: inputProofs.length,
-          });
-        }
-        const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
-        const newProofs = await wallet.receive(
-          { mint: operation.mintUrl, proofs: inputProofs },
-          { outputData: reclaimOutputs.keep },
-        );
-        await ctx.proofService.saveProofs(
-          operation.mintUrl,
-          mapProofToCoreProof(operation.mintUrl, 'ready', newProofs),
-        );
-        return {
-          status: 'FAILED',
-          failed: {
-            ...operation,
-            state: 'failed',
-            updatedAt: Date.now(),
-            error: 'Recovered: no mint interaction, operation never executed',
-          },
-        };
       }
-    } else {
-      throw new Error(`Unexpected melt response state: ${state} for quote ${operation.quoteId}`);
+      default:
+        throw new Error(`Unexpected melt response state: ${state} for quote ${quoteId}`);
     }
   }
 
-  private async checkSwapHappened(
+  private async recoverExecutingPaidOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
-    secrets: string[],
-    mintUrl: string,
-  ): Promise<boolean> {
-    const Ys = computeYHexForSecrets(secrets);
-    const proofStates = await ctx.mintAdapter.checkProofStates(mintUrl, Ys);
+  ): Promise<ExecutionResult<'bolt11'>> {
+    return {
+      status: 'PAID',
+      finalized: {
+        ...ctx.operation,
+        state: 'finalized',
+        updatedAt: Date.now(),
+      },
+    };
+  }
+
+  private async recoverExecutingPendingOperation(
+    ctx: RecoverExecutingContext<'bolt11'>,
+  ): Promise<ExecutionResult<'bolt11'>> {
+    return {
+      status: 'PENDING',
+      pending: {
+        ...ctx.operation,
+        state: 'pending',
+        updatedAt: Date.now(),
+      },
+    };
+  }
+
+  private async recoverSwapProofsAndFail(
+    ctx: RecoverExecutingContext<'bolt11'>,
+  ): Promise<ExecutionResult<'bolt11'>> {
+    const { operation } = ctx;
+    const { swapOutputData, id: operationId, mintUrl } = operation;
+    if (!swapOutputData) {
+      throw new Error('Swap was required, but no output data was found');
+    }
+    const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
+    const operationProofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
+    const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) => bytesToHex(o.secret));
+    const swapSendProofs = operationProofs.filter((operationProof) =>
+      swapSendProofSecrets.includes(operationProof.secret),
+    );
+    if (swapSendProofs.length > 0) {
+      const swappedSecrets = swapSendProofs.map((p) => p.secret);
+      // Swap happened but melt either failed or was not initiated
+      // -> Unreserve proofs
+      await ctx.proofService.setProofState(mintUrl, swappedSecrets, 'ready');
+      return {
+        status: 'FAILED',
+        failed: {
+          ...operation,
+          state: 'failed',
+          updatedAt: Date.now(),
+          error: 'Recovered: Swap happened but melt failed / never executed',
+        },
+      };
+    } else {
+      // Swap happened, but resulting proofs were not saved. We need to recover
+      await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
+      try {
+        await ctx.proofService.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
+      } catch {
+        ctx.logger?.warn('Failed to mark input proofs as spent');
+      }
+      return {
+        status: 'FAILED',
+        failed: {
+          ...operation,
+          state: 'failed',
+          updatedAt: Date.now(),
+          error: 'Recovered: Swap happened, proofs restored from mint',
+        },
+      };
+    }
+  }
+
+  private async releaseProofsAndFail(
+    ctx: RecoverExecutingContext<'bolt11'>,
+  ): Promise<ExecutionResult<'bolt11'>> {
+    const { operation } = ctx;
+    const { mintUrl, inputProofSecrets } = operation;
+    await ctx.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+    return {
+      status: 'FAILED',
+      failed: {
+        ...operation,
+        state: 'failed',
+        updatedAt: Date.now(),
+        error: 'Recovered: Swap never executed, released original proofs',
+      },
+    };
+  }
+
+  private async checkSwapHappened(ctx: RecoverExecutingContext<'bolt11'>): Promise<boolean> {
+    const { operation, mintAdapter } = ctx;
+    const { inputProofSecrets, mintUrl } = operation;
+    const Ys = computeYHexForSecrets(inputProofSecrets);
+    const proofStates = await mintAdapter.checkProofStates(mintUrl, Ys);
+    // We use some, because generally we assume that proofs are spent together
     return proofStates.some((proofState) => proofState.state === 'SPENT');
   }
 
