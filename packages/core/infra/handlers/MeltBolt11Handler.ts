@@ -50,8 +50,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
-    const changeDelta = selectedAmount - amount;
-    const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
+    const blankOutputs = await this.getChangeOutputs(amount, selectedAmount, ctx);
 
     return {
       ...ctx.operation,
@@ -76,23 +75,28 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
 
-    // Re-select proofs allowing inclusion of smaller denominations for better fit
+    // Re-select proofs including the swap fee
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = this.sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
-    const sendAmount = totalAmount + swapFee;
-    const keepAmount = selectedAmount - sendAmount;
-    const changeDelta = selectedAmount - totalAmount;
+    const sendAmount = totalAmount;
+    const keepAmount = selectedAmount - sendAmount - swapFee;
 
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
-    const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
-    const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(mintUrl, {
-      keep: keepAmount,
-      send: sendAmount,
-    });
+    const blankOutputs = await this.getChangeOutputs(amount, sendAmount, ctx);
+
+    // Add additional fee calculation to the resulting outputs to cover the melts input fee
+    const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
+      mintUrl,
+      {
+        keep: keepAmount,
+        send: sendAmount,
+      },
+      { includeFees: true },
+    );
 
     return {
       ...ctx.operation,
@@ -108,6 +112,15 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       inputProofSecrets: inputSecrets,
       state: 'prepared',
     };
+  }
+
+  private async getChangeOutputs(
+    quoteAmount: number,
+    sendAmount: number,
+    ctx: BasePrepareContext<'bolt11'>,
+  ) {
+    const changeDelta = sendAmount - quoteAmount;
+    return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl);
   }
 
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
@@ -183,10 +196,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
     if (ctx.operation.state === 'prepared') {
-      await ctx.proofService.releaseProofs(
-        ctx.operation.mintUrl,
-        ctx.operation.inputProofSecrets,
-      );
+      await ctx.proofService.releaseProofs(ctx.operation.mintUrl, ctx.operation.inputProofSecrets);
     }
   }
 
