@@ -331,6 +331,25 @@ export class ProofService {
     this.logger?.debug('Proofs released', { mintUrl, count: secrets.length });
   }
 
+  /**
+   * Restore proofs to ready state and clear their operation reservation.
+   * Used during rollback when inflight proofs need to be made available again.
+   * This sets state to 'ready' and clears usedByOperationId.
+   */
+  async restoreProofsToReady(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!secrets || secrets.length === 0) return;
+
+    await this.proofRepository.setProofState(mintUrl, secrets, 'ready');
+    await this.proofRepository.releaseProofs(mintUrl, secrets);
+
+    await this.eventBus?.emit('proofs:state-changed', { mintUrl, secrets, state: 'ready' });
+    await this.eventBus?.emit('proofs:released', { mintUrl, secrets });
+    this.logger?.debug('Proofs restored to ready', { mintUrl, count: secrets.length });
+  }
+
   async deleteProofs(mintUrl: string, secrets: string[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
