@@ -149,6 +149,12 @@ describe('SendOperationService - recoverPendingOperations', () => {
     proofService = {
       saveProofs: mock(() => Promise.resolve()),
       setProofState: mock(() => Promise.resolve()),
+      reserveProofs: mock((mintUrl: string, secrets: string[], operationId: string) =>
+        proofRepo.reserveProofs(mintUrl, secrets, operationId).then(() => ({ amount: 0 })),
+      ),
+      releaseProofs: mock((mintUrl: string, secrets: string[]) =>
+        proofRepo.releaseProofs(mintUrl, secrets),
+      ),
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
       ),

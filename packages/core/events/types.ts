@@ -26,6 +26,8 @@ export interface CoreEvents {
   };
   'proofs:deleted': { mintUrl: string; secrets: string[] };
   'proofs:wiped': { mintUrl: string; keysetId: string };
+  'proofs:reserved': { mintUrl: string; operationId: string; secrets: string[]; amount: number };
+  'proofs:released': { mintUrl: string; secrets: string[] };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };
   'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'mint-quote:added': {

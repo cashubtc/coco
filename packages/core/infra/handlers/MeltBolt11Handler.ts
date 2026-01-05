@@ -1,5 +1,4 @@
 import type { Proof } from '@cashu/cashu-ts';
-import { ProofOperationError } from '@core/models';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -29,8 +28,6 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { amount, fee_reserve } = quote;
     const totalAmount = amount + fee_reserve;
 
-    await this.ensureSufficientBalance(ctx, totalAmount);
-
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
     const selectedAmount = this.sumProofs(selectedProofs);
     const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
@@ -39,17 +36,6 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       return this.prepareDirectMelt(ctx, quote, selectedProofs);
     }
     return this.prepareSwapThenMelt(ctx, quote, totalAmount);
-  }
-
-  private async ensureSufficientBalance(
-    ctx: BasePrepareContext<'bolt11'>,
-    requiredAmount: number,
-  ): Promise<void> {
-    const availableProofs = await ctx.proofRepository.getAvailableProofs(ctx.operation.mintUrl);
-    const totalAvailable = this.sumProofs(availableProofs);
-    if (totalAvailable < requiredAmount) {
-      throw new ProofOperationError(ctx.operation.mintUrl, 'Insufficient balance');
-    }
   }
 
   private async prepareDirectMelt(
@@ -62,7 +48,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const inputSecrets = selectedProofs.map((p) => p.secret);
     const selectedAmount = this.sumProofs(selectedProofs);
 
-    await ctx.proofRepository.reserveProofs(mintUrl, inputSecrets, operationId);
+    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
     const changeDelta = selectedAmount - amount;
     const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
@@ -100,7 +86,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const keepAmount = selectedAmount - sendAmount;
     const changeDelta = selectedAmount - totalAmount;
 
-    await ctx.proofRepository.reserveProofs(mintUrl, inputSecrets, operationId);
+    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
     const blankOutputs = await ctx.proofService.createBlankOutputs(changeDelta, mintUrl);
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(mintUrl, {
@@ -197,7 +183,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
     if (ctx.operation.state === 'prepared') {
-      await ctx.proofRepository.releaseProofs(
+      await ctx.proofService.releaseProofs(
         ctx.operation.mintUrl,
         ctx.operation.inputProofSecrets,
       );
@@ -308,7 +294,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
     const { mintUrl, inputProofSecrets } = operation;
-    await ctx.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+    await ctx.proofService.releaseProofs(mintUrl, inputProofSecrets);
     return {
       status: 'FAILED',
       failed: {

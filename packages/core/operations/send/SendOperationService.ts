@@ -220,7 +220,7 @@ export class SendOperationService {
 
     // Reserve the selected proofs
     const inputSecrets = selectedProofs.map((p) => p.secret);
-    await this.proofRepository.reserveProofs(mintUrl, inputSecrets, operation.id);
+    await this.proofService.reserveProofs(mintUrl, inputSecrets, operation.id);
 
     // Build prepared operation
     const prepared: PreparedSendOperation = {
@@ -459,12 +459,12 @@ export class SendOperationService {
       const sendSecrets = getSendProofSecrets(pendingOp);
       const keepSecrets = getKeepProofSecrets(pendingOp);
 
-      await this.proofRepository.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
+      await this.proofService.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
       if (sendSecrets.length > 0) {
-        await this.proofRepository.releaseProofs(pendingOp.mintUrl, sendSecrets);
+        await this.proofService.releaseProofs(pendingOp.mintUrl, sendSecrets);
       }
       if (keepSecrets.length > 0) {
-        await this.proofRepository.releaseProofs(pendingOp.mintUrl, keepSecrets);
+        await this.proofService.releaseProofs(pendingOp.mintUrl, keepSecrets);
       }
 
       await this.eventBus.emit('send:finalized', {
@@ -511,7 +511,7 @@ export class SendOperationService {
 
       if (operation.state === 'prepared') {
         // Simple case: just release the reserved proofs - no swap was done yet
-        await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+        await this.proofService.releaseProofs(mintUrl, inputProofSecrets);
         this.logger?.info('Rolling back prepared/executing operation - released reserved proofs', {
           operationId,
         });
@@ -579,10 +579,10 @@ export class SendOperationService {
         }
 
         // Release any remaining reservations
-        await this.proofRepository.releaseProofs(mintUrl, inputProofSecrets);
+        await this.proofService.releaseProofs(mintUrl, inputProofSecrets);
         const keepSecrets = getKeepProofSecrets(operation);
         if (keepSecrets.length > 0) {
-          await this.proofRepository.releaseProofs(mintUrl, keepSecrets);
+          await this.proofService.releaseProofs(mintUrl, keepSecrets);
         }
       }
 
@@ -703,7 +703,7 @@ export class SendOperationService {
     const orphanedForOp = reservedProofs.filter((p) => p.usedByOperationId === op.id);
 
     if (orphanedForOp.length > 0) {
-      await this.proofRepository.releaseProofs(
+      await this.proofService.releaseProofs(
         op.mintUrl,
         orphanedForOp.map((p) => p.secret),
       );
@@ -736,7 +736,7 @@ export class SendOperationService {
   private async recoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
     // Case: Exact match - no mint interaction, always safe to rollback
     if (!op.needsSwap) {
-      await this.proofRepository.releaseProofs(op.mintUrl, op.inputProofSecrets);
+      await this.proofService.releaseProofs(op.mintUrl, op.inputProofSecrets);
       await this.markAsRolledBack(op, 'Recovered: no swap needed, operation never finalized');
       return;
     }
@@ -757,7 +757,7 @@ export class SendOperationService {
 
     if (!allSpent) {
       // Swap never happened - simple rollback
-      await this.proofRepository.releaseProofs(op.mintUrl, op.inputProofSecrets);
+      await this.proofService.releaseProofs(op.mintUrl, op.inputProofSecrets);
       await this.markAsRolledBack(op, 'Recovered: swap never executed');
     } else {
       // Swap happened - check if proofs already saved, otherwise recover from OutputData
@@ -919,7 +919,7 @@ export class SendOperationService {
     }
 
     for (const [mintUrl, secrets] of byMint) {
-      await this.proofRepository.releaseProofs(mintUrl, secrets);
+      await this.proofService.releaseProofs(mintUrl, secrets);
     }
 
     if (orphanedProofs.length > 0) {

@@ -262,6 +262,68 @@ export class ProofService {
     this.logger?.debug('Proof state updated', { mintUrl, count: secrets.length, state });
   }
 
+  /**
+   * Reserve proofs for an operation.
+   * Validates that proofs are available (ready and not already reserved) before reserving.
+   * Emits 'proofs:reserved' event on success.
+   *
+   * @throws ProofOperationError if any proof is not available for reservation
+   */
+  async reserveProofs(
+    mintUrl: string,
+    secrets: string[],
+    operationId: string,
+  ): Promise<{ amount: number }> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!operationId || operationId.trim().length === 0) {
+      throw new ProofValidationError('operationId is required');
+    }
+    if (!secrets || secrets.length === 0) {
+      return { amount: 0 };
+    }
+
+    // Repository will validate proofs are ready and not already reserved
+    await this.proofRepository.reserveProofs(mintUrl, secrets, operationId);
+
+    // Calculate the reserved amount for the event
+    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
+    const amount = reservedProofs.reduce((acc, p) => acc + p.amount, 0);
+
+    await this.eventBus?.emit('proofs:reserved', {
+      mintUrl,
+      operationId,
+      secrets,
+      amount,
+    });
+    this.logger?.debug('Proofs reserved', {
+      mintUrl,
+      operationId,
+      count: secrets.length,
+      amount,
+    });
+
+    return { amount };
+  }
+
+  /**
+   * Release proofs from an operation.
+   * Clears the reservation so proofs become available again.
+   * Emits 'proofs:released' event on success.
+   */
+  async releaseProofs(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!secrets || secrets.length === 0) return;
+
+    await this.proofRepository.releaseProofs(mintUrl, secrets);
+
+    await this.eventBus?.emit('proofs:released', { mintUrl, secrets });
+    this.logger?.debug('Proofs released', { mintUrl, count: secrets.length });
+  }
+
   async deleteProofs(mintUrl: string, secrets: string[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -284,6 +346,16 @@ export class ProofService {
     this.logger?.info('Proofs wiped by keyset', { mintUrl, keysetId });
   }
 
+  /**
+   * Select proofs to send for a given amount.
+   * Uses the wallet's proof selection algorithm to choose optimal denominations.
+   *
+   * @param mintUrl - The mint URL to select proofs from
+   * @param amount - The amount to send
+   * @param includeFees - Whether to include fees in the selection (default: true)
+   * @returns The selected proofs
+   * @throws ProofValidationError if insufficient balance to cover the amount
+   */
   async selectProofsToSend(
     mintUrl: string,
     amount: number,

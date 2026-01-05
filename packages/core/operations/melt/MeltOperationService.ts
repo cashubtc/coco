@@ -560,7 +560,7 @@ export class MeltOperationService {
     }
 
     for (const [mintUrl, secrets] of byMint) {
-      await this.proofRepository.releaseProofs(mintUrl, secrets);
+      await this.proofService.releaseProofs(mintUrl, secrets);
     }
 
     return orphanedProofs.length;
@@ -576,7 +576,7 @@ export class MeltOperationService {
     const orphanedForOp = reservedProofs.filter((p) => p.usedByOperationId === op.id);
 
     if (orphanedForOp.length > 0) {
-      await this.proofRepository.releaseProofs(
+      await this.proofService.releaseProofs(
         op.mintUrl,
         orphanedForOp.map((p) => p.secret),
       );
