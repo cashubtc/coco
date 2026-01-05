@@ -23,14 +23,31 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   async prepare(
     ctx: BasePrepareContext<'bolt11'>,
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
-    const { mintUrl } = ctx.operation;
+    const { mintUrl, id: operationId } = ctx.operation;
+    ctx.logger?.debug('Preparing bolt11 melt operation', { operationId, mintUrl });
+
     const quote = await ctx.wallet.createMeltQuote(ctx.operation.methodData.invoice);
     const { amount, fee_reserve } = quote;
     const totalAmount = amount + fee_reserve;
 
+    ctx.logger?.debug('Melt quote created', {
+      operationId,
+      quoteId: quote.quote,
+      amount,
+      fee_reserve,
+      totalAmount,
+    });
+
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
     const selectedAmount = this.sumProofs(selectedProofs);
     const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
+
+    ctx.logger?.debug('Proofs selected for melt', {
+      operationId,
+      selectedAmount,
+      proofCount: selectedProofs.length,
+      needsSwap,
+    });
 
     if (!needsSwap) {
       return this.prepareDirectMelt(ctx, quote, selectedProofs);
@@ -48,9 +65,19 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const inputSecrets = selectedProofs.map((p) => p.secret);
     const selectedAmount = this.sumProofs(selectedProofs);
 
+    ctx.logger?.debug('Preparing direct melt (no swap)', { operationId, selectedAmount });
+
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
     const blankOutputs = await this.getChangeOutputs(amount, selectedAmount, ctx);
+
+    ctx.logger?.info('Direct melt prepared', {
+      operationId,
+      quoteId: quote.quote,
+      amount,
+      fee_reserve,
+      inputAmount: selectedAmount,
+    });
 
     return {
       ...ctx.operation,
@@ -75,6 +102,8 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
 
+    ctx.logger?.debug('Preparing swap-then-melt', { operationId, totalAmount });
+
     // Re-select proofs including the swap fee
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = this.sumProofs(selectedProofs);
@@ -83,6 +112,14 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
     const sendAmount = totalAmount;
     const keepAmount = selectedAmount - sendAmount - swapFee;
+
+    ctx.logger?.debug('Swap amounts calculated', {
+      operationId,
+      selectedAmount,
+      sendAmount,
+      keepAmount,
+      swapFee,
+    });
 
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
@@ -97,6 +134,15 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       },
       { includeFees: true },
     );
+
+    ctx.logger?.info('Swap-then-melt prepared', {
+      operationId,
+      quoteId: quote.quote,
+      amount,
+      fee_reserve,
+      inputAmount: selectedAmount,
+      swapFee,
+    });
 
     return {
       ...ctx.operation,
@@ -124,12 +170,25 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   }
 
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
-    const { quoteId, mintUrl, changeOutputData: serializedChangeOutputData } = ctx.operation;
+    const { quoteId, mintUrl, changeOutputData: serializedChangeOutputData, id: operationId } =
+      ctx.operation;
+
+    ctx.logger?.debug('Executing bolt11 melt', {
+      operationId,
+      quoteId,
+      needsSwap: ctx.operation.needsSwap,
+    });
 
     const inputProofs = await this.getInputProofs(ctx);
     const proofsToMelt = ctx.operation.needsSwap
       ? await this.executeSwap(ctx, inputProofs)
       : inputProofs;
+
+    ctx.logger?.debug('Sending melt request to mint', {
+      operationId,
+      quoteId,
+      proofCount: proofsToMelt.length,
+    });
 
     const changeOutputData = deserializeOutputData(serializedChangeOutputData);
     const res = await ctx.mintAdapter.customMeltBolt11(
@@ -138,6 +197,8 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       changeOutputData.keep,
       quoteId,
     );
+
+    ctx.logger?.info('Melt execution completed', { operationId, quoteId, state: res.state });
 
     return this.buildExecutionResult(ctx.operation, res.state);
   }
@@ -162,6 +223,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const sendAmount = swapData.send.reduce((a, c) => a + c.blindedMessage.amount, 0);
     const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
 
+    ctx.logger?.debug('Executing pre-melt swap', {
+      operationId,
+      sendAmount,
+      inputProofCount: inputProofs.length,
+    });
+
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'inflight');
     const swap = await wallet.swap(sendAmount, inputProofs, { outputData: swapData });
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
@@ -171,6 +238,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       ...mapProofToCoreProof(mintUrl, 'inflight', swap.send, { createdByOperationId: operationId }),
     ];
     await ctx.proofService.saveProofs(mintUrl, newProofs);
+
+    ctx.logger?.debug('Pre-melt swap completed', {
+      operationId,
+      keepCount: swap.keep.length,
+      sendCount: swap.send.length,
+    });
 
     return swap.send;
   }
@@ -195,8 +268,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   }
 
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
-    if (ctx.operation.state === 'prepared') {
-      await ctx.proofService.releaseProofs(ctx.operation.mintUrl, ctx.operation.inputProofSecrets);
+    const { id: operationId, state, mintUrl } = ctx.operation;
+    ctx.logger?.debug('Rolling back bolt11 melt operation', { operationId, state });
+
+    if (state === 'prepared') {
+      await ctx.proofService.releaseProofs(mintUrl, ctx.operation.inputProofSecrets);
+      ctx.logger?.info('Melt operation rolled back, proofs released', { operationId });
     }
   }
 
@@ -204,8 +281,17 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
-    const { mintUrl, quoteId, needsSwap } = operation;
+    const { mintUrl, quoteId, needsSwap, id: operationId } = operation;
+
+    ctx.logger?.debug('Recovering executing bolt11 melt operation', {
+      operationId,
+      quoteId,
+      needsSwap,
+    });
+
     const state = await ctx.mintAdapter.checkMeltQuoteState(mintUrl, quoteId);
+
+    ctx.logger?.debug('Melt quote state checked during recovery', { operationId, quoteId, state });
 
     switch (state) {
       case 'PAID':
@@ -214,6 +300,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         return this.recoverExecutingPendingOperation(ctx);
       case 'UNPAID': {
         const swapHappened = needsSwap && (await this.checkSwapHappened(ctx));
+        ctx.logger?.debug('Unpaid quote recovery path', { operationId, swapHappened });
         if (swapHappened) {
           return this.recoverSwapProofsAndFail(ctx);
         } else {
@@ -228,6 +315,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   private async recoverExecutingPaidOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
+    ctx.logger?.info('Recovered executing operation as paid', {
+      operationId: ctx.operation.id,
+      quoteId: ctx.operation.quoteId,
+    });
     return {
       status: 'PAID',
       finalized: {
@@ -241,6 +332,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   private async recoverExecutingPendingOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
+    ctx.logger?.info('Recovered executing operation as pending', {
+      operationId: ctx.operation.id,
+      quoteId: ctx.operation.quoteId,
+    });
     return {
       status: 'PENDING',
       pending: {
@@ -259,6 +354,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     if (!swapOutputData) {
       throw new Error('Swap was required, but no output data was found');
     }
+
+    ctx.logger?.debug('Recovering swap proofs after failed melt', { operationId });
+
     const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
     const operationProofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
     const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) => bytesToHex(o.secret));
@@ -270,6 +368,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       // Swap happened but melt either failed or was not initiated
       // -> Unreserve proofs
       await ctx.proofService.setProofState(mintUrl, swappedSecrets, 'ready');
+      ctx.logger?.info('Recovered swap proofs, melt failed', {
+        operationId,
+        recoveredProofCount: swapSendProofs.length,
+      });
       return {
         status: 'FAILED',
         failed: {
@@ -281,12 +383,14 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       };
     } else {
       // Swap happened, but resulting proofs were not saved. We need to recover
+      ctx.logger?.debug('Swap proofs not found locally, recovering from mint', { operationId });
       await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
       try {
         await ctx.proofService.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
       } catch {
-        ctx.logger?.warn('Failed to mark input proofs as spent');
+        ctx.logger?.warn('Failed to mark input proofs as spent', { operationId });
       }
+      ctx.logger?.info('Recovered proofs from mint after swap', { operationId });
       return {
         status: 'FAILED',
         failed: {
@@ -303,8 +407,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
-    const { mintUrl, inputProofSecrets } = operation;
+    const { mintUrl, inputProofSecrets, id: operationId } = operation;
     await ctx.proofService.releaseProofs(mintUrl, inputProofSecrets);
+    ctx.logger?.info('Released proofs after failed melt (no swap occurred)', {
+      operationId,
+      proofCount: inputProofSecrets.length,
+    });
     return {
       status: 'FAILED',
       failed: {
