@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import type { PartialMeltQuoteResponse, Proof } from '@cashu/cashu-ts';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -170,8 +170,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   }
 
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
-    const { quoteId, mintUrl, changeOutputData: serializedChangeOutputData, id: operationId } =
-      ctx.operation;
+    const {
+      quoteId,
+      mintUrl,
+      changeOutputData: serializedChangeOutputData,
+      id: operationId,
+    } = ctx.operation;
 
     ctx.logger?.debug('Executing bolt11 melt', {
       operationId,
@@ -199,6 +203,16 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     );
 
     ctx.logger?.info('Melt execution completed', { operationId, quoteId, state: res.state });
+
+    // Handle change proofs if melt succeeded
+    if (res.state === 'PAID' && res.change && res.change.length > 0) {
+      await ctx.proofService.unblindAndSaveChangeProofs(
+        mintUrl,
+        changeOutputData.keep,
+        res.change,
+        { createdByOperationId: operationId },
+      );
+    }
 
     return this.buildExecutionResult(ctx.operation, res.state);
   }
@@ -250,7 +264,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
   private buildExecutionResult(
     operation: ExecuteContext<'bolt11'>['operation'],
-    state: 'PAID' | 'PENDING' | 'UNPAID',
+    state: 'PAID' | 'UNPAID' | 'PENDING',
   ): ExecutionResult<'bolt11'> {
     if (state === 'PAID') {
       return {
