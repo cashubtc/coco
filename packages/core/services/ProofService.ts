@@ -1,4 +1,10 @@
-import { OutputData, type Keys, type Proof } from '@cashu/cashu-ts';
+import {
+  OutputData,
+  type Keys,
+  type MintKeys,
+  type Proof,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import type { CoreProof } from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
@@ -11,6 +17,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import type { Keyset } from '@core/models/Keyset.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -511,6 +518,75 @@ export class ProofService {
       await this.counterService.incrementCounter(mintUrl, keys.id, outputData.length);
     }
     return outputData;
+  }
+
+  /**
+   * Unblind change signatures and save the resulting proofs.
+   * Used after melt operations to process change returned by the mint.
+   *
+   * @param mintUrl - The mint URL
+   * @param outputData - The output data used to create blank outputs for change
+   * @param changeSignatures - The blinded signatures returned by the mint
+   * @param keys - The mint keys for unblinding
+   * @param options - Optional settings including createdByOperationId
+   * @returns The saved change proofs
+   */
+  async unblindAndSaveChangeProofs(
+    mintUrl: string,
+    outputData: OutputData[],
+    changeSignatures: SerializedBlindedSignature[],
+    options?: { createdByOperationId?: string },
+  ): Promise<CoreProof[]> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (
+      !outputData ||
+      outputData.length === 0 ||
+      !changeSignatures ||
+      changeSignatures.length === 0
+    ) {
+      return [];
+    }
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    const keysetMap: { [id: string]: Keyset } = {};
+    keysets.forEach((ks) => {
+      keysetMap[ks.id] = ks;
+    });
+
+    // Slice output data to match signature count
+    const matchedOutputs = outputData.slice(0, changeSignatures.length);
+
+    // Unblind each signature to create proofs
+    const proofs: Proof[] = matchedOutputs.flatMap((output, i) => {
+      const sig = changeSignatures[i];
+      const keyset = keysetMap[output.blindedMessage.id];
+      if (!sig || !keyset) {
+        const reason = !sig ? 'missing signature' : 'missing keyset';
+        this.logger?.warn('Failed to create change proof', { reason, index: i });
+        return [];
+      }
+      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs, unit: keyset.unit })];
+    });
+
+    if (proofs.length === 0) {
+      return [];
+    }
+
+    // Map to CoreProof and save
+    const coreProofs = mapProofToCoreProof(mintUrl, 'ready', proofs, {
+      createdByOperationId: options?.createdByOperationId,
+    });
+
+    await this.saveProofs(mintUrl, coreProofs);
+
+    this.logger?.info('Change proofs unblinded and saved', {
+      mintUrl,
+      count: coreProofs.length,
+      operationId: options?.createdByOperationId,
+    });
+
+    return coreProofs;
   }
 
   /**
