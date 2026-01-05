@@ -1,10 +1,13 @@
-import type { PartialMeltQuoteResponse, Proof } from '@cashu/cashu-ts';
+import type { Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
 import type {
   BasePrepareContext,
   ExecuteContext,
   ExecutionResult,
+  FinalizeContext,
   MeltMethodHandler,
   MeltMethodMeta,
+  PendingCheckResult,
+  PendingContext,
   PreparedMeltOperation,
   RecoverExecutingContext,
   RollbackContext,
@@ -14,8 +17,8 @@ import {
   serializeOutputData,
   mapProofToCoreProof,
   computeYHexForSecrets,
+  type SerializedOutputData,
 } from '@core/utils';
-import { bytesToHex } from '@noble/hashes/utils.js';
 
 const SWAP_THRESHOLD_RATIO = 1.1;
 
@@ -188,6 +191,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       ? await this.executeSwap(ctx, inputProofs)
       : inputProofs;
 
+    // For direct melt, set proofs to inflight before sending to mint
+    // (For swap path, swap send proofs are already saved as inflight in executeSwap)
+    if (!ctx.operation.needsSwap) {
+      await ctx.proofService.setProofState(mintUrl, ctx.operation.inputProofSecrets, 'inflight');
+    }
+
     ctx.logger?.debug('Sending melt request to mint', {
       operationId,
       quoteId,
@@ -204,15 +213,17 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     ctx.logger?.info('Melt execution completed', { operationId, quoteId, state: res.state });
 
-    // Handle change proofs if melt succeeded
-    if (res.state === 'PAID' && res.change && res.change.length > 0) {
-      await ctx.proofService.unblindAndSaveChangeProofs(
+    // If melt succeeded immediately, finalize the operation
+    if (res.state === 'PAID') {
+      await this.finalizeOperation(ctx, res.change);
+    } else if (res.state === 'UNPAID') {
+      // Melt failed so we release proofs
+      await ctx.proofService.restoreProofsToReady(
         mintUrl,
-        changeOutputData.keep,
-        res.change,
-        { createdByOperationId: operationId },
+        proofsToMelt.map((p) => p.secret),
       );
     }
+    // PENDING: proofs stay inflight, finalize will be called later via checkPending -> finalize
 
     return this.buildExecutionResult(ctx.operation, res.state);
   }
@@ -278,17 +289,106 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         pending: { ...operation, state: 'pending', updatedAt: Date.now() },
       };
     }
+    if (state === 'UNPAID') {
+      return {
+        status: 'FAILED',
+        failed: { ...operation, state: 'failed', updatedAt: Date.now() },
+      };
+    }
     throw new Error(`Unexpected melt response state: ${state} for quote ${operation.quoteId}`);
   }
 
-  async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
-    const { id: operationId, state, mintUrl } = ctx.operation;
-    ctx.logger?.debug('Rolling back bolt11 melt operation', { operationId, state });
+  /**
+   * Finalize a melt operation by marking input proofs as spent and saving change proofs.
+   * Called immediately when melt returns PAID, or later when a pending melt succeeds.
+   */
+  private async finalizeOperation(
+    ctx: ExecuteContext<'bolt11'> | FinalizeContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
+    change?: SerializedBlindedSignature[],
+  ): Promise<void> {
+    const {
+      mintUrl,
+      id: operationId,
+      changeOutputData: serializedChangeOutputData,
+    } = ctx.operation;
+    const meltInputSecrets = this.getMeltInputSecrets(ctx.operation);
 
-    if (state === 'prepared') {
-      await ctx.proofService.releaseProofs(mintUrl, ctx.operation.inputProofSecrets);
-      ctx.logger?.info('Melt operation rolled back, proofs released', { operationId });
+    // Mark melt input proofs as spent
+    await ctx.proofService.setProofState(mintUrl, meltInputSecrets, 'spent');
+
+    // Handle change proofs if any
+    if (change && change.length > 0) {
+      const changeOutputData = deserializeOutputData(serializedChangeOutputData).keep;
+      await ctx.proofService.unblindAndSaveChangeProofs(mintUrl, changeOutputData, change, {
+        createdByOperationId: operationId,
+      });
     }
+
+    ctx.logger?.info('Melt operation finalized', {
+      operationId,
+      spentProofCount: meltInputSecrets.length,
+      changeProofCount: change?.length ?? 0,
+    });
+  }
+
+  /**
+   * Finalize a pending melt operation that has succeeded.
+   * Called by MeltOperationService when checkPending returns 'finalize'.
+   */
+  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<void> {
+    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+
+    ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
+
+    // Fetch current melt quote state from mint to get change signatures
+    const res = await ctx.mintAdapter.checkMeltQuote(mintUrl, quoteId);
+
+    if (res.state !== 'PAID') {
+      throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
+    }
+
+    await this.finalizeOperation(ctx, res.change);
+  }
+
+  /**
+   * Check the state of a pending melt operation.
+   * Returns 'finalize' if paid, 'stay_pending' if still pending, 'rollback' if unpaid/failed.
+   */
+  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingCheckResult> {
+    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+
+    ctx.logger?.debug('Checking pending melt operation', { operationId, quoteId });
+
+    const state = await ctx.mintAdapter.checkMeltQuoteState(mintUrl, quoteId);
+
+    ctx.logger?.debug('Pending melt quote state', { operationId, quoteId, state });
+
+    switch (state) {
+      case 'PAID':
+        return 'finalize';
+      case 'PENDING':
+        return 'stay_pending';
+      case 'UNPAID':
+        return 'rollback';
+      default:
+        throw new Error(`Unexpected melt quote state: ${state} for quote ${quoteId}`);
+    }
+  }
+
+  async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
+    const { id: operationId, mintUrl, needsSwap } = ctx.operation;
+    ctx.logger?.debug('Rolling back bolt11 melt operation', { operationId, needsSwap });
+    const secretsToRestore = this.getMeltInputSecrets(ctx.operation);
+
+    // restoreProofsToReady sets state to 'ready' and clears usedByOperationId
+    // This handles both 'ready' proofs (just clears reservation) and 'inflight' proofs
+    await ctx.proofService.restoreProofsToReady(mintUrl, secretsToRestore);
+
+    ctx.logger?.info('Melt operation rolled back, proofs restored', {
+      operationId,
+      needsSwap,
+      proofCount: secretsToRestore.length,
+    });
   }
 
   async recoverExecuting(
@@ -329,10 +429,24 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   private async recoverExecutingPaidOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
-    ctx.logger?.info('Recovered executing operation as paid', {
-      operationId: ctx.operation.id,
-      quoteId: ctx.operation.quoteId,
+    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+
+    ctx.logger?.debug('Recovering executing operation as paid, fetching change', {
+      operationId,
+      quoteId,
     });
+
+    // Fetch melt quote to get any change signatures
+    const res = await ctx.mintAdapter.checkMeltQuote(mintUrl, quoteId);
+
+    // Finalize the operation (mark proofs spent, save change)
+    await this.finalizeOperation(ctx, res.change);
+
+    ctx.logger?.info('Recovered and finalized paid melt operation', {
+      operationId,
+      quoteId,
+    });
+
     return {
       status: 'PAID',
       finalized: {
@@ -373,15 +487,17 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
     const operationProofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
-    const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) => bytesToHex(o.secret));
+    const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) =>
+      new TextDecoder().decode(o.secret),
+    );
     const swapSendProofs = operationProofs.filter((operationProof) =>
       swapSendProofSecrets.includes(operationProof.secret),
     );
     if (swapSendProofs.length > 0) {
       const swappedSecrets = swapSendProofs.map((p) => p.secret);
       // Swap happened but melt either failed or was not initiated
-      // -> Unreserve proofs
-      await ctx.proofService.setProofState(mintUrl, swappedSecrets, 'ready');
+      // -> Restore proofs to ready and clear reservation
+      await ctx.proofService.restoreProofsToReady(mintUrl, swappedSecrets);
       ctx.logger?.info('Recovered swap proofs, melt failed', {
         operationId,
         recoveredProofCount: swapSendProofs.length,
@@ -449,5 +565,25 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
   private sumProofs(proofs: Proof[]): number {
     return proofs.reduce((sum, p) => sum + p.amount, 0);
+  }
+
+  /**
+   * Get the secrets of proofs that were sent to the melt operation.
+   * For direct melt: these are the original input proofs.
+   * For swap-then-melt: these are the swap send proofs (derived from swapOutputData).
+   */
+  private getMeltInputSecrets(operation: {
+    needsSwap: boolean;
+    inputProofSecrets: string[];
+    swapOutputData?: SerializedOutputData;
+  }): string[] {
+    if (!operation.needsSwap) {
+      return operation.inputProofSecrets;
+    }
+    if (!operation.swapOutputData) {
+      throw new Error('Swap was required but swapOutputData is missing');
+    }
+    const swapOutputData = deserializeOutputData(operation.swapOutputData);
+    return swapOutputData.send.map((o) => new TextDecoder().decode(o.secret));
   }
 }

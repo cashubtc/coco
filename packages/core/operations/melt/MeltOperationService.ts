@@ -373,6 +373,22 @@ export class MeltOperationService {
       const handler = this.handlerProvider.get(operation.method);
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
 
+      // For pending operations, verify the quote is actually UNPAID before rolling back.
+      // This prevents releasing proofs that are still inflight with the Lightning network.
+      if (operation.state === 'pending') {
+        const pendingOp = operation as PendingMeltOperation;
+        const decision = await handler.checkPending?.({
+          ...this.buildDeps(),
+          operation: pendingOp,
+          wallet,
+        });
+        if (decision !== 'rollback') {
+          throw new Error(
+            `Cannot rollback pending operation: quote state is not UNPAID (decision: ${decision})`,
+          );
+        }
+      }
+
       let opForRollback: PreparedOrLaterOperation = operation;
       const rolling: RollingBackMeltOperation = {
         ...operation,

@@ -58,10 +58,16 @@ export class MintAdapter {
     return await cashuMint.checkMintQuote(quoteId);
   }
 
-  // Check current state of a bolt11 melt quote
-  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<unknown> {
+  // Check current state of a bolt11 melt quote (returns full response including change)
+  async checkMeltQuote(mintUrl: string, quoteId: string): Promise<PartialMeltQuoteResponse> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.checkMeltQuote(quoteId);
+  }
+
+  // Check current state of a bolt11 melt quote (returns only state)
+  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<PartialMeltQuoteResponse['state']> {
+    const res = await this.checkMeltQuote(mintUrl, quoteId);
+    return res.state;
   }
 
   // Batch check of proof states by Y values (up to 100 per request)
