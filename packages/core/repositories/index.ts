@@ -152,16 +152,16 @@ export interface SendOperationRepository {
 }
 
 export interface MeltOperationRepository {
-  /** Create a new send operation */
+  /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
   /** Update an existing melt operation */
   update(operation: MeltOperation): Promise<void>;
 
-  /** Get a send operation by ID */
+  /** Get a melt operation by ID */
   getById(id: string): Promise<MeltOperation | null>;
 
-  /** Get all send operations in a specific state */
+  /** Get all melt operations in a specific state */
   getByState(state: MeltOperationState): Promise<MeltOperation[]>;
 
   /** Get all pending operations (state in ['executing', 'pending']) */
@@ -170,7 +170,7 @@ export interface MeltOperationRepository {
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<MeltOperation[]>;
 
-  /** Delete a send operation */
+  /** Delete a melt operation */
   delete(id: string): Promise<void>;
 }
 

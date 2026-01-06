@@ -167,14 +167,11 @@ export class MeltOperationService {
       };
 
       await this.meltOperationRepository.update(preparedOp);
-      await this.eventBus.emit(
-        'melt:prepared' as any,
-        {
-          mintUrl: preparedOp.mintUrl,
-          operationId: preparedOp.id,
-          operation: preparedOp,
-        } as any,
-      );
+      await this.eventBus.emit('melt:prepared', {
+        mintUrl: preparedOp.mintUrl,
+        operationId: preparedOp.id,
+        operation: preparedOp,
+      });
 
       this.logger?.info('Melt operation prepared', {
         operationId: preparedOp.id,
@@ -237,14 +234,11 @@ export class MeltOperationService {
             };
 
             await this.meltOperationRepository.update(finalizedOp);
-            await this.eventBus.emit(
-              'melt:finalized' as any,
-              {
-                mintUrl: finalizedOp.mintUrl,
-                operationId: finalizedOp.id,
-                operation: finalizedOp,
-              } as any,
-            );
+            await this.eventBus.emit('melt:finalized', {
+              mintUrl: finalizedOp.mintUrl,
+              operationId: finalizedOp.id,
+              operation: finalizedOp,
+            });
 
             this.logger?.info('Melt operation executing -> finalized (immediate)', {
               operationId: finalizedOp.id,
@@ -262,14 +256,11 @@ export class MeltOperationService {
             };
 
             await this.meltOperationRepository.update(pendingOp);
-            await this.eventBus.emit(
-              'melt:pending' as any,
-              {
-                mintUrl: pendingOp.mintUrl,
-                operationId: pendingOp.id,
-                operation: pendingOp,
-              } as any,
-            );
+            await this.eventBus.emit('melt:pending', {
+              mintUrl: pendingOp.mintUrl,
+              operationId: pendingOp.id,
+              operation: pendingOp,
+            });
 
             this.logger?.info('Melt operation executing -> pending', {
               operationId: pendingOp.id,
@@ -333,14 +324,11 @@ export class MeltOperationService {
       };
 
       await this.meltOperationRepository.update(finalized);
-      await this.eventBus.emit(
-        'melt:finalized' as any,
-        {
-          mintUrl: pendingOp.mintUrl,
-          operationId,
-          operation: finalized,
-        } as any,
-      );
+      await this.eventBus.emit('melt:finalized', {
+        mintUrl: pendingOp.mintUrl,
+        operationId,
+        operation: finalized,
+      });
 
       this.logger?.info('Melt operation finalized', { operationId });
     } finally {
@@ -537,14 +525,11 @@ export class MeltOperationService {
     };
     await this.meltOperationRepository.update(rolledBack);
 
-    await this.eventBus.emit(
-      'melt:rolled-back' as any,
-      {
-        mintUrl: op.mintUrl,
-        operationId: op.id,
-        operation: rolledBack,
-      } as any,
-    );
+    await this.eventBus.emit('melt:rolled-back', {
+      mintUrl: op.mintUrl,
+      operationId: op.id,
+      operation: rolledBack,
+    });
 
     this.logger?.info('Melt operation rolled back', {
       operationId: op.id,
@@ -641,14 +626,11 @@ export class MeltOperationService {
           updatedAt: Date.now(),
         };
         await this.meltOperationRepository.update(finalizedOp);
-        await this.eventBus.emit(
-          'melt:finalized' as any,
-          {
-            mintUrl: finalizedOp.mintUrl,
-            operationId: finalizedOp.id,
-            operation: finalizedOp,
-          } as any,
-        );
+        await this.eventBus.emit('melt:finalized', {
+          mintUrl: finalizedOp.mintUrl,
+          operationId: finalizedOp.id,
+          operation: finalizedOp,
+        });
         this.logger?.info('Recovered executing operation as finalized', {
           operationId: op.id,
         });
@@ -661,14 +643,11 @@ export class MeltOperationService {
           updatedAt: Date.now(),
         };
         await this.meltOperationRepository.update(pendingOp);
-        await this.eventBus.emit(
-          'melt:pending' as any,
-          {
-            mintUrl: pendingOp.mintUrl,
-            operationId: pendingOp.id,
-            operation: pendingOp,
-          } as any,
-        );
+        await this.eventBus.emit('melt:pending', {
+          mintUrl: pendingOp.mintUrl,
+          operationId: pendingOp.id,
+          operation: pendingOp,
+        });
         this.logger?.info('Recovered executing operation as pending', {
           operationId: op.id,
         });

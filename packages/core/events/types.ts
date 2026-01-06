@@ -11,6 +11,7 @@ import type {
 import type { CoreProof, ProofState } from '../types';
 import type { HistoryEntry } from '../models/History';
 import type { SendOperation } from '../operations/send/SendOperation';
+import type { MeltOperation } from '@core/operations/melt';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -50,4 +51,8 @@ export interface CoreEvents {
   'send:rolled-back': { mintUrl: string; operationId: string; operation: SendOperation };
   'receive:created': { mintUrl: string; token: Token };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
+  'melt:prepared': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt:pending': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt:finalized': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt:rolled-back': { mintUrl: string; operationId: string; operation: MeltOperation };
 }

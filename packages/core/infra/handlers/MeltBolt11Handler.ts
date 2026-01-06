@@ -19,10 +19,33 @@ import {
   computeYHexForSecrets,
   type SerializedOutputData,
 } from '@core/utils';
-
-const SWAP_THRESHOLD_RATIO = 1.1;
+import {
+  type MeltQuoteData,
+  SWAP_THRESHOLD_RATIO,
+  sumProofs,
+  getSwapSendSecrets,
+  buildPaidResult,
+  buildPendingResult,
+  buildFailedResult,
+} from './MeltBolt11Handler.utils.ts';
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
+  // ============================================================================
+  // Prepare Phase
+  // ============================================================================
+
+  /**
+   * Prepare a bolt11 melt operation.
+   *
+   * This method:
+   * 1. Creates a melt quote from the mint for the lightning invoice
+   * 2. Selects proofs to cover the quote amount + fee reserve
+   * 3. Determines if a pre-swap is needed (when selected amount >> required)
+   * 4. Reserves the input proofs for this operation
+   * 5. Creates blank outputs for receiving change
+   *
+   * @returns Prepared operation ready for execution
+   */
   async prepare(
     ctx: BasePrepareContext<'bolt11'>,
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
@@ -42,7 +65,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     });
 
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
-    const selectedAmount = this.sumProofs(selectedProofs);
+    const selectedAmount = sumProofs(selectedProofs);
     const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
 
     ctx.logger?.debug('Proofs selected for melt', {
@@ -58,21 +81,25 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return this.prepareSwapThenMelt(ctx, quote, totalAmount);
   }
 
+  /**
+   * Prepare a direct melt (no swap needed).
+   * Used when selected proofs are close to the required amount.
+   */
   private async prepareDirectMelt(
     ctx: BasePrepareContext<'bolt11'>,
-    quote: { quote: string; amount: number; fee_reserve: number },
+    quote: MeltQuoteData,
     selectedProofs: Proof[],
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
     const inputSecrets = selectedProofs.map((p) => p.secret);
-    const selectedAmount = this.sumProofs(selectedProofs);
+    const selectedAmount = sumProofs(selectedProofs);
 
     ctx.logger?.debug('Preparing direct melt (no swap)', { operationId, selectedAmount });
 
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
-    const blankOutputs = await this.getChangeOutputs(amount, selectedAmount, ctx);
+    const blankOutputs = await this.createChangeOutputs(amount, selectedAmount, ctx);
 
     ctx.logger?.info('Direct melt prepared', {
       operationId,
@@ -97,9 +124,13 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     };
   }
 
+  /**
+   * Prepare a swap-then-melt operation.
+   * Used when selected proofs significantly exceed the required amount.
+   */
   private async prepareSwapThenMelt(
     ctx: BasePrepareContext<'bolt11'>,
-    quote: { quote: string; amount: number; fee_reserve: number },
+    quote: MeltQuoteData,
     totalAmount: number,
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
     const { mintUrl, id: operationId } = ctx.operation;
@@ -109,7 +140,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     // Re-select proofs including the swap fee
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
-    const selectedAmount = this.sumProofs(selectedProofs);
+    const selectedAmount = sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
@@ -126,7 +157,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
 
-    const blankOutputs = await this.getChangeOutputs(amount, sendAmount, ctx);
+    const blankOutputs = await this.createChangeOutputs(amount, sendAmount, ctx);
 
     // Add additional fee calculation to the resulting outputs to cover the melts input fee
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
@@ -163,7 +194,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     };
   }
 
-  private async getChangeOutputs(
+  /**
+   * Create blank outputs to receive change from the melt operation.
+   * The change is the difference between what we send and the quote amount.
+   */
+  private async createChangeOutputs(
     quoteAmount: number,
     sendAmount: number,
     ctx: BasePrepareContext<'bolt11'>,
@@ -172,6 +207,19 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl);
   }
 
+  // ============================================================================
+  // Execute Phase
+  // ============================================================================
+
+  /**
+   * Execute the bolt11 melt operation.
+   *
+   * This method:
+   * 1. Retrieves the reserved input proofs
+   * 2. If swap is needed, performs the swap first to get exact-amount proofs
+   * 3. Sends the melt request to the mint
+   * 4. Handles the response (PAID → finalize, PENDING → wait, UNPAID → restore proofs)
+   */
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<ExecutionResult<'bolt11'>> {
     const {
       quoteId,
@@ -213,21 +261,47 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     ctx.logger?.info('Melt execution completed', { operationId, quoteId, state: res.state });
 
-    // If melt succeeded immediately, finalize the operation
-    if (res.state === 'PAID') {
-      await this.finalizeOperation(ctx, res.change);
-    } else if (res.state === 'UNPAID') {
-      // Melt failed so we release proofs
-      await ctx.proofService.restoreProofsToReady(
-        mintUrl,
-        proofsToMelt.map((p) => p.secret),
-      );
-    }
-    // PENDING: proofs stay inflight, finalize will be called later via checkPending -> finalize
-
-    return this.buildExecutionResult(ctx.operation, res.state);
+    return this.handleMeltResponse(ctx, res.state, proofsToMelt, res.change);
   }
 
+  /**
+   * Handle the melt response and return the appropriate execution result.
+   */
+  private async handleMeltResponse(
+    ctx: ExecuteContext<'bolt11'>,
+    state: 'PAID' | 'UNPAID' | 'PENDING',
+    proofsToMelt: Proof[],
+    change?: SerializedBlindedSignature[],
+  ): Promise<ExecutionResult<'bolt11'>> {
+    const { mintUrl } = ctx.operation;
+
+    switch (state) {
+      case 'PAID':
+        await this.finalizeOperation(ctx, change);
+        return buildPaidResult(ctx.operation);
+
+      case 'PENDING':
+        // Proofs stay inflight, finalize will be called later via checkPending -> finalize
+        return buildPendingResult(ctx.operation);
+
+      case 'UNPAID':
+        // Melt failed so we release proofs
+        await ctx.proofService.restoreProofsToReady(
+          mintUrl,
+          proofsToMelt.map((p) => p.secret),
+        );
+        return buildFailedResult(ctx.operation);
+
+      default:
+        throw new Error(
+          `Unexpected melt response state: ${state} for quote ${ctx.operation.quoteId}`,
+        );
+    }
+  }
+
+  /**
+   * Retrieve the input proofs reserved for this operation.
+   */
   private async getInputProofs(ctx: ExecuteContext<'bolt11'>): Promise<Proof[]> {
     const { mintUrl, id: operationId } = ctx.operation;
     const proofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
@@ -237,6 +311,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return proofs;
   }
 
+  /**
+   * Execute the pre-melt swap to get exact-amount proofs.
+   * Returns the "send" proofs from the swap which will be used for the melt.
+   */
   private async executeSwap(ctx: ExecuteContext<'bolt11'>, inputProofs: Proof[]): Promise<Proof[]> {
     const { swapOutputData, inputProofSecrets, id: operationId, mintUrl } = ctx.operation;
 
@@ -273,29 +351,27 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return swap.send;
   }
 
-  private buildExecutionResult(
-    operation: ExecuteContext<'bolt11'>['operation'],
-    state: 'PAID' | 'UNPAID' | 'PENDING',
-  ): ExecutionResult<'bolt11'> {
-    if (state === 'PAID') {
-      return {
-        status: 'PAID',
-        finalized: { ...operation, state: 'finalized', updatedAt: Date.now() },
-      };
+  // ============================================================================
+  // Finalize Phase
+  // ============================================================================
+
+  /**
+   * Finalize a pending melt operation that has succeeded.
+   * Called by MeltOperationService when checkPending returns 'finalize'.
+   */
+  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<void> {
+    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+
+    ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
+
+    // Fetch current melt quote state from mint to get change signatures
+    const res = await ctx.mintAdapter.checkMeltQuote(mintUrl, quoteId);
+
+    if (res.state !== 'PAID') {
+      throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
     }
-    if (state === 'PENDING') {
-      return {
-        status: 'PENDING',
-        pending: { ...operation, state: 'pending', updatedAt: Date.now() },
-      };
-    }
-    if (state === 'UNPAID') {
-      return {
-        status: 'FAILED',
-        failed: { ...operation, state: 'failed', updatedAt: Date.now() },
-      };
-    }
-    throw new Error(`Unexpected melt response state: ${state} for quote ${operation.quoteId}`);
+
+    await this.finalizeOperation(ctx, res.change);
   }
 
   /**
@@ -331,24 +407,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     });
   }
 
-  /**
-   * Finalize a pending melt operation that has succeeded.
-   * Called by MeltOperationService when checkPending returns 'finalize'.
-   */
-  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<void> {
-    const { mintUrl, quoteId, id: operationId } = ctx.operation;
-
-    ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
-
-    // Fetch current melt quote state from mint to get change signatures
-    const res = await ctx.mintAdapter.checkMeltQuote(mintUrl, quoteId);
-
-    if (res.state !== 'PAID') {
-      throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
-    }
-
-    await this.finalizeOperation(ctx, res.change);
-  }
+  // ============================================================================
+  // Pending & Rollback
+  // ============================================================================
 
   /**
    * Check the state of a pending melt operation.
@@ -375,6 +436,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     }
   }
 
+  /**
+   * Rollback a melt operation by restoring input proofs to ready state.
+   */
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
     const { id: operationId, mintUrl, needsSwap } = ctx.operation;
     ctx.logger?.debug('Rolling back bolt11 melt operation', { operationId, needsSwap });
@@ -391,6 +455,21 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     });
   }
 
+  // ============================================================================
+  // Recovery
+  // ============================================================================
+
+  /**
+   * Recover an executing operation after a crash/restart.
+   *
+   * Recovery logic:
+   * - PAID: Finalize the operation (mark proofs spent, save change)
+   * - PENDING: Transition to pending state for continued monitoring
+   * - UNPAID: Determine what happened and restore/recover proofs appropriately
+   *   - If no swap was needed or swap never happened: release original proofs
+   *   - If swap happened and proofs exist locally: restore them to ready
+   *   - If swap happened but proofs missing: recover from mint
+   */
   async recoverExecuting(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
@@ -410,22 +489,22 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     switch (state) {
       case 'PAID':
         return this.recoverExecutingPaidOperation(ctx);
+
       case 'PENDING':
         return this.recoverExecutingPendingOperation(ctx);
-      case 'UNPAID': {
-        const swapHappened = needsSwap && (await this.checkSwapHappened(ctx));
-        ctx.logger?.debug('Unpaid quote recovery path', { operationId, swapHappened });
-        if (swapHappened) {
-          return this.recoverSwapProofsAndFail(ctx);
-        } else {
-          return this.releaseProofsAndFail(ctx);
-        }
-      }
+
+      case 'UNPAID':
+        return this.recoverExecutingUnpaidOperation(ctx);
+
       default:
         throw new Error(`Unexpected melt response state: ${state} for quote ${quoteId}`);
     }
   }
 
+  /**
+   * Recover an executing operation that was actually paid.
+   * Fetches change signatures and finalizes the operation.
+   */
   private async recoverExecutingPaidOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
@@ -447,16 +526,13 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       quoteId,
     });
 
-    return {
-      status: 'PAID',
-      finalized: {
-        ...ctx.operation,
-        state: 'finalized',
-        updatedAt: Date.now(),
-      },
-    };
+    return buildPaidResult(ctx.operation);
   }
 
+  /**
+   * Recover an executing operation that is now pending.
+   * Transitions to pending state for continued monitoring.
+   */
   private async recoverExecutingPendingOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
@@ -464,96 +540,119 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       operationId: ctx.operation.id,
       quoteId: ctx.operation.quoteId,
     });
-    return {
-      status: 'PENDING',
-      pending: {
-        ...ctx.operation,
-        state: 'pending',
-        updatedAt: Date.now(),
-      },
-    };
+    return buildPendingResult(ctx.operation);
   }
 
-  private async recoverSwapProofsAndFail(
+  /**
+   * Recover an executing operation that is unpaid.
+   * Determines the appropriate recovery path based on whether a swap occurred.
+   */
+  private async recoverExecutingUnpaidOperation(
+    ctx: RecoverExecutingContext<'bolt11'>,
+  ): Promise<ExecutionResult<'bolt11'>> {
+    const { needsSwap, id: operationId } = ctx.operation;
+
+    // If no swap was needed, or swap never happened, release original proofs
+    if (!needsSwap || !(await this.checkSwapHappened(ctx))) {
+      ctx.logger?.debug('Unpaid quote recovery: no swap occurred', { operationId });
+      return this.recoverExecutingWithoutSwap(ctx);
+    }
+
+    // Swap happened - check if proofs exist locally
+    ctx.logger?.debug('Unpaid quote recovery: swap occurred, checking local proofs', {
+      operationId,
+    });
+    const localSwapProofs = await this.findLocalSwapSendProofs(ctx);
+
+    if (localSwapProofs.length > 0) {
+      return this.recoverExecutingWithLocalSwapProofs(ctx, localSwapProofs);
+    }
+    return this.recoverExecutingSwapProofsFromMint(ctx);
+  }
+
+  /**
+   * Recover when swap happened and proofs exist locally.
+   * Restores the swap send proofs to ready state.
+   */
+  private async recoverExecutingWithLocalSwapProofs(
+    ctx: RecoverExecutingContext<'bolt11'>,
+    swapSendProofs: Proof[],
+  ): Promise<ExecutionResult<'bolt11'>> {
+    const { operation } = ctx;
+    const { mintUrl, id: operationId } = operation;
+
+    const swappedSecrets = swapSendProofs.map((p) => p.secret);
+    // Swap happened but melt either failed or was not initiated
+    // -> Restore proofs to ready and clear reservation
+    await ctx.proofService.restoreProofsToReady(mintUrl, swappedSecrets);
+
+    ctx.logger?.info('Recovered swap proofs, melt failed', {
+      operationId,
+      recoveredProofCount: swapSendProofs.length,
+    });
+
+    return buildFailedResult(
+      operation,
+      'Recovered: Swap happened but melt failed / never executed',
+    );
+  }
+
+  /**
+   * Recover when swap happened but proofs weren't saved locally.
+   * This can happen if the app crashed after the swap but before saving proofs.
+   * Recovers proofs from the mint using the swap output data.
+   */
+  private async recoverExecutingSwapProofsFromMint(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
     const { swapOutputData, id: operationId, mintUrl } = operation;
+
     if (!swapOutputData) {
-      throw new Error('Swap was required, but no output data was found');
+      throw new Error('Swap was required but swapOutputData is missing');
     }
 
-    ctx.logger?.debug('Recovering swap proofs after failed melt', { operationId });
+    ctx.logger?.debug('Swap proofs not found locally, recovering from mint', { operationId });
 
-    const deserializedSwapOutputData = deserializeOutputData(swapOutputData);
-    const operationProofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
-    const swapSendProofSecrets = deserializedSwapOutputData.send.map((o) =>
-      new TextDecoder().decode(o.secret),
-    );
-    const swapSendProofs = operationProofs.filter((operationProof) =>
-      swapSendProofSecrets.includes(operationProof.secret),
-    );
-    if (swapSendProofs.length > 0) {
-      const swappedSecrets = swapSendProofs.map((p) => p.secret);
-      // Swap happened but melt either failed or was not initiated
-      // -> Restore proofs to ready and clear reservation
-      await ctx.proofService.restoreProofsToReady(mintUrl, swappedSecrets);
-      ctx.logger?.info('Recovered swap proofs, melt failed', {
-        operationId,
-        recoveredProofCount: swapSendProofs.length,
-      });
-      return {
-        status: 'FAILED',
-        failed: {
-          ...operation,
-          state: 'failed',
-          updatedAt: Date.now(),
-          error: 'Recovered: Swap happened but melt failed / never executed',
-        },
-      };
-    } else {
-      // Swap happened, but resulting proofs were not saved. We need to recover
-      ctx.logger?.debug('Swap proofs not found locally, recovering from mint', { operationId });
-      await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
-      try {
-        await ctx.proofService.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
-      } catch {
-        ctx.logger?.warn('Failed to mark input proofs as spent', { operationId });
-      }
-      ctx.logger?.info('Recovered proofs from mint after swap', { operationId });
-      return {
-        status: 'FAILED',
-        failed: {
-          ...operation,
-          state: 'failed',
-          updatedAt: Date.now(),
-          error: 'Recovered: Swap happened, proofs restored from mint',
-        },
-      };
+    await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
+
+    try {
+      await ctx.proofService.setProofState(mintUrl, operation.inputProofSecrets, 'spent');
+    } catch {
+      ctx.logger?.warn('Failed to mark input proofs as spent', { operationId });
     }
+
+    ctx.logger?.info('Recovered proofs from mint after swap', { operationId });
+
+    return buildFailedResult(operation, 'Recovered: Swap happened, proofs restored from mint');
   }
 
-  private async releaseProofsAndFail(
+  /**
+   * Recover when no swap occurred - release original proofs.
+   */
+  private async recoverExecutingWithoutSwap(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
     const { operation } = ctx;
     const { mintUrl, inputProofSecrets, id: operationId } = operation;
+
     await ctx.proofService.releaseProofs(mintUrl, inputProofSecrets);
+
     ctx.logger?.info('Released proofs after failed melt (no swap occurred)', {
       operationId,
       proofCount: inputProofSecrets.length,
     });
-    return {
-      status: 'FAILED',
-      failed: {
-        ...operation,
-        state: 'failed',
-        updatedAt: Date.now(),
-        error: 'Recovered: Swap never executed, released original proofs',
-      },
-    };
+
+    return buildFailedResult(operation, 'Recovered: Swap never executed, released original proofs');
   }
 
+  // ============================================================================
+  // Helpers
+  // ============================================================================
+
+  /**
+   * Check if the swap was executed by verifying if input proofs are spent.
+   */
   private async checkSwapHappened(ctx: RecoverExecutingContext<'bolt11'>): Promise<boolean> {
     const { operation, mintAdapter } = ctx;
     const { inputProofSecrets, mintUrl } = operation;
@@ -563,8 +662,18 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return proofStates.some((proofState) => proofState.state === 'SPENT');
   }
 
-  private sumProofs(proofs: Proof[]): number {
-    return proofs.reduce((sum, p) => sum + p.amount, 0);
+  /**
+   * Find swap send proofs that were saved locally during the swap.
+   * Returns empty array if proofs don't exist (crash before save).
+   */
+  private async findLocalSwapSendProofs(ctx: RecoverExecutingContext<'bolt11'>): Promise<Proof[]> {
+    const { swapOutputData, id: operationId, mintUrl } = ctx.operation;
+    if (!swapOutputData) return [];
+
+    const swapSendSecrets = getSwapSendSecrets(swapOutputData);
+    const operationProofs = await ctx.proofRepository.getProofsByOperationId(mintUrl, operationId);
+
+    return operationProofs.filter((p) => swapSendSecrets.includes(p.secret));
   }
 
   /**
@@ -583,7 +692,6 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     if (!operation.swapOutputData) {
       throw new Error('Swap was required but swapOutputData is missing');
     }
-    const swapOutputData = deserializeOutputData(operation.swapOutputData);
-    return swapOutputData.send.map((o) => new TextDecoder().decode(o.secret));
+    return getSwapSendSecrets(operation.swapOutputData);
   }
 }
