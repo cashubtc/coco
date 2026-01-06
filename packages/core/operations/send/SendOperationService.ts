@@ -31,7 +31,7 @@ import {
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
 } from '../../utils';
-import { UnknownMintError, ProofValidationError } from '../../models/Error';
+import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
 
 /**
  * Service that manages send operations as sagas.
@@ -79,7 +79,7 @@ export class SendOperationService {
   private async acquireOperationLock(operationId: string): Promise<() => void> {
     const existingLock = this.operationLocks.get(operationId);
     if (existingLock) {
-      throw new Error(`Operation ${operationId} is already in progress`);
+      throw new OperationInProgressError(operationId);
     }
 
     let releaseLock: () => void;

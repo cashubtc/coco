@@ -30,7 +30,7 @@ import {
   deserializeOutputData,
   mapProofToCoreProof,
 } from '../../utils';
-import { UnknownMintError, ProofValidationError } from '../../models/Error';
+import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers';
 
@@ -89,7 +89,7 @@ export class MeltOperationService {
   private async acquireOperationLock(operationId: string): Promise<() => void> {
     const existingLock = this.operationLocks.get(operationId);
     if (existingLock) {
-      throw new Error(`Operation ${operationId} is already in progress`);
+      throw new OperationInProgressError(operationId);
     }
 
     let releaseLock: () => void;
