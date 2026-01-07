@@ -148,7 +148,9 @@ export class MeltOperationService {
       const operation = await this.meltOperationRepository.getById(operationId);
       if (!operation || operation.state !== 'init') {
         throw new Error(
-          `Cannot prepare operation ${operationId}: expected state 'init' but found '${operation?.state ?? 'not found'}'`,
+          `Cannot prepare operation ${operationId}: expected state 'init' but found '${
+            operation?.state ?? 'not found'
+          }'`,
         );
       }
 
@@ -206,7 +208,9 @@ export class MeltOperationService {
       const operation = await this.meltOperationRepository.getById(operationId);
       if (!operation || operation.state !== 'prepared') {
         throw new Error(
-          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${operation?.state ?? 'not found'}'`,
+          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${
+            operation?.state ?? 'not found'
+          }'`,
         );
       }
 
@@ -465,7 +469,7 @@ export class MeltOperationService {
       const pendingOps = await this.meltOperationRepository.getByState('pending');
       for (const op of pendingOps) {
         try {
-          await this.checkPendingOperation(op as PendingMeltOperation);
+          await this.checkPendingOperation(op.id);
           pendingCount++;
         } catch (e) {
           this.logger?.error('Error checking pending melt operation', {
@@ -503,7 +507,15 @@ export class MeltOperationService {
     }
   }
 
-  private async checkPendingOperation(op: PendingMeltOperation): Promise<void> {
+  async checkPendingOperation(operationId: string): Promise<PendingCheckResult> {
+    const op = await this.getOperation(operationId);
+    if (!op || op.state !== 'pending') {
+      throw new Error(
+        `Cannot check operation ${operationId}: expected state 'pending' but found '${
+          op?.state ?? 'not found'
+        }'`,
+      );
+    }
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
     const decision: PendingCheckResult =
@@ -515,10 +527,13 @@ export class MeltOperationService {
 
     if (decision === 'finalize') {
       await this.finalize(op.id);
+      return 'finalize';
     } else if (decision === 'rollback') {
       await this.rollback(op.id, 'Rollback requested by handler');
+      return 'rollback';
     } else {
       this.logger?.debug('Pending melt remains pending', { operationId: op.id });
+      return 'stay_pending';
     }
   }
 
