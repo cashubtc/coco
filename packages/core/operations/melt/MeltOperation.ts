@@ -240,7 +240,7 @@ export function hasPreparedData(op: MeltOperation): op is PreparedOrLaterOperati
  * Check if operation is in a terminal state
  */
 export function isTerminalOperation(op: MeltOperation): op is TerminalMeltOperation {
-  return op.state === 'finalized' || op.state === 'rolled_back';
+  return op.state === 'finalized' || op.state === 'rolled_back' || op.state === 'failed';
 }
 
 // ============================================================================

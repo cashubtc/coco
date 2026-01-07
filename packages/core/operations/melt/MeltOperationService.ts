@@ -1,4 +1,3 @@
-import { type Proof, type ProofState as CashuProofState } from '@cashu/cashu-ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
@@ -11,26 +10,20 @@ import type {
   RolledBackMeltOperation,
   PreparedOrLaterOperation,
 } from './MeltOperation';
-import { createMeltOperation, hasPreparedData, isTerminalOperation } from './MeltOperation';
-import type {
-  MeltMethod,
-  MeltMethodData,
-  MeltMethodHandler,
-  PendingCheckResult,
-} from './MeltMethodHandler';
+import { createMeltOperation, hasPreparedData } from './MeltOperation';
+import type { MeltMethod, MeltMethodData, PendingCheckResult } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
+import { generateSubId } from '../../utils';
 import {
-  generateSubId,
-  getSecretsFromSerializedOutputData,
-  deserializeOutputData,
-  mapProofToCoreProof,
-} from '../../utils';
-import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
+  UnknownMintError,
+  ProofValidationError,
+  OperationInProgressError,
+} from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers';
 
@@ -149,40 +142,51 @@ export class MeltOperationService {
    * If preparation fails, automatically attempts to recover the init operation.
    * Throws if the operation is already in progress.
    */
-  async prepare(operation: InitMeltOperation): Promise<PreparedMeltOperation> {
-    const releaseLock = await this.acquireOperationLock(operation.id);
+  async prepare(operationId: string): Promise<PreparedMeltOperation> {
+    const releaseLock = await this.acquireOperationLock(operationId);
     try {
-      const handler = this.handlerProvider.get(operation.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
-      const prepared = await handler.prepare({
-        ...this.buildDeps(),
-        operation,
-        wallet,
-      });
+      const operation = await this.meltOperationRepository.getById(operationId);
+      if (!operation || operation.state !== 'init') {
+        throw new Error(
+          `Cannot prepare operation ${operationId}: expected state 'init' but found '${operation?.state ?? 'not found'}'`,
+        );
+      }
 
-      const preparedOp: PreparedMeltOperation = {
-        ...prepared,
-        state: 'prepared',
-        updatedAt: Date.now(),
-      };
+      const initOp = operation as InitMeltOperation;
 
-      await this.meltOperationRepository.update(preparedOp);
-      await this.eventBus.emit('melt:prepared', {
-        mintUrl: preparedOp.mintUrl,
-        operationId: preparedOp.id,
-        operation: preparedOp,
-      });
+      try {
+        const handler = this.handlerProvider.get(initOp.method);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(initOp.mintUrl);
+        const prepared = await handler.prepare({
+          ...this.buildDeps(),
+          operation: initOp,
+          wallet,
+        });
 
-      this.logger?.info('Melt operation prepared', {
-        operationId: preparedOp.id,
-        method: preparedOp.method,
-      });
+        const preparedOp: PreparedMeltOperation = {
+          ...prepared,
+          state: 'prepared',
+          updatedAt: Date.now(),
+        };
 
-      return preparedOp;
-    } catch (e) {
-      // Attempt to clean up the init operation before re-throwing
-      await this.tryRecoverInitOperation(operation);
-      throw e;
+        await this.meltOperationRepository.update(preparedOp);
+        await this.eventBus.emit('melt-op:prepared', {
+          mintUrl: preparedOp.mintUrl,
+          operationId: preparedOp.id,
+          operation: preparedOp,
+        });
+
+        this.logger?.info('Melt operation prepared', {
+          operationId: preparedOp.id,
+          method: preparedOp.method,
+        });
+
+        return preparedOp;
+      } catch (e) {
+        // Attempt to clean up the init operation before re-throwing
+        await this.tryRecoverInitOperation(initOp);
+        throw e;
+      }
     } finally {
       releaseLock();
     }
@@ -196,14 +200,21 @@ export class MeltOperationService {
    * automatically attempts to recover the operation.
    * Throws if the operation is already in progress.
    */
-  async execute(
-    operation: PreparedMeltOperation,
-  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    const releaseLock = await this.acquireOperationLock(operation.id);
+  async execute(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+    const releaseLock = await this.acquireOperationLock(operationId);
     try {
+      const operation = await this.meltOperationRepository.getById(operationId);
+      if (!operation || operation.state !== 'prepared') {
+        throw new Error(
+          `Cannot execute operation ${operationId}: expected state 'prepared' but found '${operation?.state ?? 'not found'}'`,
+        );
+      }
+
+      const preparedOp = operation as PreparedMeltOperation;
+
       // Mark as executing FIRST - this must happen before any mint interaction
       const executing: ExecutingMeltOperation = {
-        ...operation,
+        ...preparedOp,
         state: 'executing',
         updatedAt: Date.now(),
       };
@@ -212,10 +223,11 @@ export class MeltOperationService {
       try {
         const handler = this.handlerProvider.get(executing.method);
         const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
-        const reservedProofs = await this.proofRepository.getProofsByOperationId(
+        const operationProofs = await this.proofRepository.getProofsByOperationId(
           executing.mintUrl,
           executing.id,
         );
+        const reservedProofs = operationProofs.filter((p) => p.usedByOperationId === operationId);
 
         const result = await handler.execute({
           ...this.buildDeps(),
@@ -234,7 +246,7 @@ export class MeltOperationService {
             };
 
             await this.meltOperationRepository.update(finalizedOp);
-            await this.eventBus.emit('melt:finalized', {
+            await this.eventBus.emit('melt-op:finalized', {
               mintUrl: finalizedOp.mintUrl,
               operationId: finalizedOp.id,
               operation: finalizedOp,
@@ -256,7 +268,7 @@ export class MeltOperationService {
             };
 
             await this.meltOperationRepository.update(pendingOp);
-            await this.eventBus.emit('melt:pending', {
+            await this.eventBus.emit('melt-op:pending', {
               mintUrl: pendingOp.mintUrl,
               operationId: pendingOp.id,
               operation: pendingOp,
@@ -324,7 +336,7 @@ export class MeltOperationService {
       };
 
       await this.meltOperationRepository.update(finalized);
-      await this.eventBus.emit('melt:finalized', {
+      await this.eventBus.emit('melt-op:finalized', {
         mintUrl: pendingOp.mintUrl,
         operationId,
         operation: finalized,
@@ -478,9 +490,6 @@ export class MeltOperationService {
         rollingBackCount++;
       }
 
-      // 6. Clean up orphaned proof reservations
-      orphanCount = await this.cleanupOrphanedReservations();
-
       this.logger?.info('Recovery completed', {
         initOperations: initCount,
         executingOperations: executingCount,
@@ -525,7 +534,7 @@ export class MeltOperationService {
     };
     await this.meltOperationRepository.update(rolledBack);
 
-    await this.eventBus.emit('melt:rolled-back', {
+    await this.eventBus.emit('melt-op:rolled-back', {
       mintUrl: op.mintUrl,
       operationId: op.id,
       operation: rolledBack,
@@ -537,34 +546,6 @@ export class MeltOperationService {
     });
 
     return rolledBack;
-  }
-
-  private async cleanupOrphanedReservations(): Promise<number> {
-    const reservedProofs = await this.proofRepository.getReservedProofs();
-    const orphanedProofs: typeof reservedProofs = [];
-
-    for (const proof of reservedProofs) {
-      if (!proof.usedByOperationId) continue;
-
-      const operation = await this.meltOperationRepository.getById(proof.usedByOperationId);
-
-      if (!operation || isTerminalOperation(operation)) {
-        orphanedProofs.push(proof);
-      }
-    }
-
-    const byMint = new Map<string, string[]>();
-    for (const proof of orphanedProofs) {
-      const secrets = byMint.get(proof.mintUrl) || [];
-      secrets.push(proof.secret);
-      byMint.set(proof.mintUrl, secrets);
-    }
-
-    for (const [mintUrl, secrets] of byMint) {
-      await this.proofService.releaseProofs(mintUrl, secrets);
-    }
-
-    return orphanedProofs.length;
   }
 
   /**
@@ -626,7 +607,7 @@ export class MeltOperationService {
           updatedAt: Date.now(),
         };
         await this.meltOperationRepository.update(finalizedOp);
-        await this.eventBus.emit('melt:finalized', {
+        await this.eventBus.emit('melt-op:finalized', {
           mintUrl: finalizedOp.mintUrl,
           operationId: finalizedOp.id,
           operation: finalizedOp,
@@ -643,7 +624,7 @@ export class MeltOperationService {
           updatedAt: Date.now(),
         };
         await this.meltOperationRepository.update(pendingOp);
-        await this.eventBus.emit('melt:pending', {
+        await this.eventBus.emit('melt-op:pending', {
           mintUrl: pendingOp.mintUrl,
           operationId: pendingOp.id,
           operation: pendingOp,
