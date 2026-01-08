@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.36
+
+### Patch Changes
+
+- 027449f: Added PluginExtension system for coco-plugins to register their own API on the manager instance
+
 ## 1.1.2-rc.35
 
 ### Patch Changes
