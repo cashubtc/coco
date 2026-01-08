@@ -204,4 +204,78 @@ describe('PluginHost', () => {
     expect(joined.includes('Plugin ready error')).toBe(true);
     expect(joined.includes('Plugin dispose error')).toBe(true);
   });
+
+  it('registerExtension stores extension and is retrievable', async () => {
+    const api = { foo: 'bar' };
+    const plugin: Plugin<['logger']> = {
+      name: 'ext-test',
+      required: ['logger'],
+      onInit: (ctx) => {
+        ctx.registerExtension('myExt', api);
+      },
+    };
+    host.use(plugin);
+    await host.init(services);
+    expect(host.getExtensions()).toEqual({ myExt: api });
+  });
+
+  it('registerExtension throws when key already exists', async () => {
+    const pluginA: Plugin<['logger']> = {
+      name: 'A',
+      required: ['logger'],
+      onInit: (ctx) => {
+        ctx.registerExtension('conflict', { from: 'A' });
+      },
+    };
+    const pluginB: Plugin<['logger']> = {
+      name: 'B',
+      required: ['logger'],
+      onInit: (ctx) => {
+        ctx.registerExtension('conflict', { from: 'B' });
+      },
+    };
+    host.use(pluginA);
+    host.use(pluginB);
+    await expect(host.init(services)).rejects.toThrow(
+      'Plugin "B" attempted to register extension "conflict", but it is already registered',
+    );
+  });
+
+  it('multiple plugins can register different extensions', async () => {
+    const pluginA: Plugin<['logger']> = {
+      name: 'A',
+      required: ['logger'],
+      onInit: (ctx) => {
+        ctx.registerExtension('extA', { a: 1 });
+      },
+    };
+    const pluginB: Plugin<['logger']> = {
+      name: 'B',
+      required: ['logger'],
+      onInit: (ctx) => {
+        ctx.registerExtension('extB', { b: 2 });
+      },
+    };
+    host.use(pluginA);
+    host.use(pluginB);
+    await host.init(services);
+    expect(host.getExtensions()).toEqual({
+      extA: { a: 1 },
+      extB: { b: 2 },
+    });
+  });
+
+  it('extension registered in onReady is available', async () => {
+    const plugin: Plugin<['logger']> = {
+      name: 'ready-ext',
+      required: ['logger'],
+      onReady: (ctx) => {
+        ctx.registerExtension('readyExt', { ready: true });
+      },
+    };
+    host.use(plugin);
+    await host.init(services);
+    await host.ready();
+    expect(host.getExtensions()).toEqual({ readyExt: { ready: true } });
+  });
 });
