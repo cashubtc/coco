@@ -29,7 +29,7 @@ import { type Logger, NullLogger } from './logging';
 import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
-import type { Plugin, ServiceMap } from './plugins/types.ts';
+import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -116,6 +116,9 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.subscriptions,
   );
 
+  // Initialize plugin system (must complete before watchers for extensions to be available)
+  await coco.initPlugins();
+
   // Enable watchers (default: all enabled unless explicitly disabled)
   const mintQuoteWatcherConfig = config.watchers?.mintQuoteWatcher;
   if (!mintQuoteWatcherConfig?.disabled) {
@@ -148,6 +151,7 @@ export class Manager {
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
   readonly send: SendApi;
+  readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
   private proofService: ProofService;
@@ -230,36 +234,15 @@ export class Manager {
     this.history = apis.history;
     this.send = apis.send;
 
+    // Point ext to pluginHost's extensions storage
+    this.ext = this.pluginHost.getExtensions() as PluginExtensions;
+
     // Close subscriptions for untrusted mints
     this.eventBus.on('mint:untrusted', ({ mintUrl }) => {
       this.logger.info('Mint untrusted, closing subscriptions', { mintUrl });
       this.subscriptions.closeMint(mintUrl);
     });
 
-    // Initialize plugins asynchronously to keep constructor sync
-    const services: ServiceMap = {
-      mintService: this.mintService,
-      walletService: this.walletService,
-      proofService: this.proofService,
-      keyRingService: this.keyRingService,
-      seedService: this.seedService,
-      walletRestoreService: this.walletRestoreService,
-      counterService: this.counterService,
-      mintQuoteService: this.mintQuoteService,
-      meltQuoteService: this.meltQuoteService,
-      historyService: this.historyService,
-      transactionService: this.transactionService,
-      sendOperationService: this.sendOperationService,
-      subscriptions: this.subscriptions,
-      eventBus: this.eventBus,
-      logger: this.logger,
-    };
-    void this.pluginHost
-      .init(services)
-      .then(() => this.pluginHost.ready())
-      .catch((err) => {
-        this.logger.error('Plugin system initialization failed', err);
-      });
   }
 
   on<E extends keyof CoreEvents>(
@@ -278,6 +261,33 @@ export class Manager {
 
   use(plugin: Plugin): void {
     this.pluginHost.use(plugin);
+  }
+
+  /**
+   * Initialize the plugin system.
+   * This is called automatically by `initializeCoco()`.
+   * Only call this directly if you instantiate Manager without using the factory.
+   */
+  async initPlugins(): Promise<void> {
+    const services: ServiceMap = {
+      mintService: this.mintService,
+      walletService: this.walletService,
+      proofService: this.proofService,
+      keyRingService: this.keyRingService,
+      seedService: this.seedService,
+      walletRestoreService: this.walletRestoreService,
+      counterService: this.counterService,
+      mintQuoteService: this.mintQuoteService,
+      meltQuoteService: this.meltQuoteService,
+      historyService: this.historyService,
+      transactionService: this.transactionService,
+      sendOperationService: this.sendOperationService,
+      subscriptions: this.subscriptions,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    };
+    await this.pluginHost.init(services);
+    await this.pluginHost.ready();
   }
 
   async dispose(): Promise<void> {
