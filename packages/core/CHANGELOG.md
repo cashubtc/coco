@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.38
+
+### Patch Changes
+
+- aa97572: fixed an issue where paymentRequestService was still missing from the ServiceKeys list and made that list a keyof ServiceMap
+
 ## 1.1.2-rc.37
 
 ### Patch Changes
