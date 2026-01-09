@@ -1,5 +1,12 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.37
+
+### Patch Changes
+
+- Updated dependencies [f32a8a7]
+  - coco-cashu-core@1.1.2-rc.37
+
 ## 1.1.2-rc.36
 
 ### Patch Changes

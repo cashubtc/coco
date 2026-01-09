@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.37
+
+### Patch Changes
+
+- f32a8a7: Added paymentRequestService to servicemap for plugins
+
 ## 1.1.2-rc.36
 
 ### Patch Changes
