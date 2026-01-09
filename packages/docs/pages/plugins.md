@@ -7,7 +7,7 @@ Coco's plugin system allows you to extend the wallet's functionality by hooking 
 A plugin is an object that implements the `Plugin` interface:
 
 ```ts
-import type { Plugin } from '@coco/core';
+import type { Plugin } from 'coco-cashu-core';
 
 const myPlugin: Plugin<['eventBus', 'logger']> = {
   name: 'my-plugin',
@@ -39,7 +39,7 @@ const myPlugin: Plugin<['eventBus', 'logger']> = {
 Pass plugins to `initializeCoco()` via the `plugins` config option:
 
 ```ts
-import { initializeCoco } from '@coco/core';
+import { initializeCoco } from 'coco-cashu-core';
 
 const manager = await initializeCoco({
   repo,
@@ -130,7 +130,7 @@ For full TypeScript autocomplete and type safety, plugin authors should augment 
 
 ```ts
 // my-plugin/index.ts
-import type { Plugin, PluginExtensions } from '@coco/core';
+import type { Plugin, PluginExtensions } from 'coco-cashu-core';
 
 // Define your API class
 export class MyPluginApi {
@@ -140,7 +140,7 @@ export class MyPluginApi {
 }
 
 // Augment PluginExtensions for type safety
-declare module '@coco/core' {
+declare module 'coco-cashu-core' {
   interface PluginExtensions {
     myPlugin: MyPluginApi;
   }
@@ -159,7 +159,7 @@ export const myPlugin: Plugin<['eventBus']> = {
 When consumers import your plugin, they automatically get full type support:
 
 ```ts
-import { initializeCoco } from '@coco/core';
+import { initializeCoco } from 'coco-cashu-core';
 import { myPlugin } from 'my-plugin'; // Type augmentation is included
 
 const manager = await initializeCoco({
