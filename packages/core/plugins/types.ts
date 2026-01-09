@@ -18,22 +18,7 @@ import type {
 } from '../services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 
-export type ServiceKey =
-  | 'mintService'
-  | 'walletService'
-  | 'proofService'
-  | 'keyRingService'
-  | 'seedService'
-  | 'walletRestoreService'
-  | 'counterService'
-  | 'mintQuoteService'
-  | 'meltQuoteService'
-  | 'historyService'
-  | 'transactionService'
-  | 'sendOperationService'
-  | 'subscriptions'
-  | 'eventBus'
-  | 'logger';
+export type ServiceKey = keyof ServiceMap;
 
 export interface ServiceMap {
   mintService: MintService;
