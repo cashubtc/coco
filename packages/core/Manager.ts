@@ -242,7 +242,6 @@ export class Manager {
       this.logger.info('Mint untrusted, closing subscriptions', { mintUrl });
       this.subscriptions.closeMint(mintUrl);
     });
-
   }
 
   on<E extends keyof CoreEvents>(
@@ -276,6 +275,7 @@ export class Manager {
       keyRingService: this.keyRingService,
       seedService: this.seedService,
       walletRestoreService: this.walletRestoreService,
+      paymentRequestService: this.paymentRequestService,
       counterService: this.counterService,
       mintQuoteService: this.mintQuoteService,
       meltQuoteService: this.meltQuoteService,

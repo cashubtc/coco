@@ -9,6 +9,7 @@ import type {
   MeltQuoteService,
   MintQuoteService,
   MintService,
+  PaymentRequestService,
   ProofService,
   SeedService,
   TransactionService,
@@ -47,6 +48,7 @@ export interface ServiceMap {
   historyService: HistoryService;
   transactionService: TransactionService;
   sendOperationService: SendOperationService;
+  paymentRequestService: PaymentRequestService;
   subscriptions: SubscriptionManager;
   eventBus: EventBus<CoreEvents>;
   logger: Logger;
