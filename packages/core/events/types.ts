@@ -11,6 +11,7 @@ import type {
 import type { CoreProof, ProofState } from '../types';
 import type { HistoryEntry } from '../models/History';
 import type { SendOperation } from '../operations/send/SendOperation';
+import type { MeltOperation } from '@core/operations/melt';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -26,6 +27,8 @@ export interface CoreEvents {
   };
   'proofs:deleted': { mintUrl: string; secrets: string[] };
   'proofs:wiped': { mintUrl: string; keysetId: string };
+  'proofs:reserved': { mintUrl: string; operationId: string; secrets: string[]; amount: number };
+  'proofs:released': { mintUrl: string; secrets: string[] };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };
   'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
   'mint-quote:added': {
@@ -48,4 +51,8 @@ export interface CoreEvents {
   'send:rolled-back': { mintUrl: string; operationId: string; operation: SendOperation };
   'receive:created': { mintUrl: string; token: Token };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
+  'melt-op:prepared': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt-op:pending': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt-op:finalized': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'melt-op:rolled-back': { mintUrl: string; operationId: string; operation: MeltOperation };
 }
