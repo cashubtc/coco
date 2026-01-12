@@ -1,12 +1,25 @@
 import type { MeltQuoteResponse, MintQuoteResponse } from '@cashu/cashu-ts';
+import type {
+  FinalizedMeltOperation,
+  MeltOperationService,
+  PendingMeltOperation,
+  PendingCheckResult,
+  PreparedMeltOperation,
+} from '@core/operations/melt';
 import type { MintQuoteService, MeltQuoteService } from '@core/services';
 
 export class QuotesApi {
   private mintQuoteService: MintQuoteService;
   private meltQuoteService: MeltQuoteService;
-  constructor(mintQuoteService: MintQuoteService, meltQuoteService: MeltQuoteService) {
+  private meltOperationService: MeltOperationService;
+  constructor(
+    mintQuoteService: MintQuoteService,
+    meltQuoteService: MeltQuoteService,
+    meltOperationService: MeltOperationService,
+  ) {
     this.mintQuoteService = mintQuoteService;
     this.meltQuoteService = meltQuoteService;
+    this.meltOperationService = meltOperationService;
   }
 
   async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
@@ -17,12 +30,36 @@ export class QuotesApi {
     return this.mintQuoteService.redeemMintQuote(mintUrl, quoteId);
   }
 
+  /**
+   * Create a bolt11 melt quote
+   * @deprecated Use {@link prepareMeltBolt11} instead
+   */
   async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse> {
     return this.meltQuoteService.createMeltQuote(mintUrl, invoice);
   }
 
+  /**
+   * Pay a bolt11 melt quote
+   * @deprecated Use {@link executeMeltBolt11} instead
+   */
   async payMeltQuote(mintUrl: string, quoteId: string): Promise<void> {
     return this.meltQuoteService.payMeltQuote(mintUrl, quoteId);
+  }
+
+  async prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation> {
+    const initOperation = await this.meltOperationService.init(mintUrl, 'bolt11', { invoice });
+    const preparedOperation = await this.meltOperationService.prepare(initOperation.id);
+    return preparedOperation;
+  }
+
+  async executeMelt(
+    operationId: string,
+  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+    return this.meltOperationService.execute(operationId);
+  }
+
+  async checkPendingMelt(operationId: string): Promise<PendingCheckResult> {
+    return this.meltOperationService.checkPendingOperation(operationId);
   }
 
   async addMintQuote(
