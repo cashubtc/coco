@@ -8,6 +8,7 @@ import type {
   MintQuoteRepository,
   MeltQuoteRepository,
   SendOperationRepository,
+  MeltOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
@@ -21,6 +22,7 @@ import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { ExpoMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { ExpoHistoryRepository } from './repositories/HistoryRepository.ts';
 import { ExpoSendOperationRepository } from './repositories/SendOperationRepository.ts';
+import { ExpoMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 
 export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
@@ -34,6 +36,7 @@ export class ExpoSqliteRepositories implements Repositories {
   readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: ExpoHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
+  readonly meltOperationRepository: MeltOperationRepository;
   readonly db: ExpoSqliteDb;
 
   constructor(options: ExpoSqliteRepositoriesOptions) {
@@ -47,6 +50,7 @@ export class ExpoSqliteRepositories implements Repositories {
     this.meltQuoteRepository = new ExpoMeltQuoteRepository(this.db);
     this.historyRepository = new ExpoHistoryRepository(this.db);
     this.sendOperationRepository = new ExpoSendOperationRepository(this.db);
+    this.meltOperationRepository = new ExpoMeltOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -65,6 +69,7 @@ export class ExpoSqliteRepositories implements Repositories {
         meltQuoteRepository: new ExpoMeltQuoteRepository(txDb),
         historyRepository: new ExpoHistoryRepository(txDb),
         sendOperationRepository: new ExpoSendOperationRepository(txDb),
+        meltOperationRepository: new ExpoMeltOperationRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -86,6 +91,7 @@ export {
   ExpoMeltQuoteRepository,
   ExpoHistoryRepository,
   ExpoSendOperationRepository,
+  ExpoMeltOperationRepository,
 };
 
 export type { Migration };
