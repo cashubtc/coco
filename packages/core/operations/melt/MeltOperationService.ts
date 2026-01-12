@@ -301,27 +301,23 @@ export class MeltOperationService {
   }
 
   async finalize(operationId: string): Promise<void> {
-    const preCheck = await this.meltOperationRepository.getById(operationId);
-    if (!preCheck) {
-      throw new Error(`Operation ${operationId} not found`);
-    }
-    if (preCheck.state === 'finalized') {
-      this.logger?.debug('Operation already finalized', { operationId });
-      return;
-    }
-    if (preCheck.state === 'rolled_back' || preCheck.state === 'rolling_back') {
-      this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
-        operationId,
-      });
-      return;
-    }
-
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
+      if (operation.state === 'finalized') {
+        this.logger?.debug('Operation already finalized', { operationId });
+        return;
+      }
+      if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
+        this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
+          operationId,
+        });
+        return;
+      }
+
       if (operation.state !== 'pending') {
         throw new Error(`Cannot finalize operation in state ${operation.state}`);
       }
