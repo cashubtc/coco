@@ -187,6 +187,7 @@ interface RepositoriesBase {
   meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
+  meltOperationRepository: MeltOperationRepository;
 }
 
 export interface Repositories extends RepositoriesBase {

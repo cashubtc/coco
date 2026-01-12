@@ -1,4 +1,9 @@
-import type { Repositories, MintQuoteRepository, SendOperationRepository } from './repositories';
+import type {
+  Repositories,
+  MintQuoteRepository,
+  SendOperationRepository,
+  MeltOperationRepository,
+} from './repositories';
 import {
   CounterService,
   MintService,
@@ -17,12 +22,15 @@ import {
   PaymentRequestService,
 } from './services';
 import { SendOperationService } from './operations/send/SendOperationService';
+import { MeltOperationService } from './operations/melt/MeltOperationService';
 import {
   SubscriptionManager,
   type WebSocketFactory,
   PollingTransport,
   MintAdapter,
   MintRequestProvider,
+  MeltBolt11Handler,
+  MeltHandlerProvider,
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
@@ -169,6 +177,8 @@ export class Manager {
   private paymentRequestService: PaymentRequestService;
   private sendOperationService: SendOperationService;
   private sendOperationRepository: SendOperationRepository;
+  private meltOperationService: MeltOperationService;
+  private meltOperationRepository: MeltOperationRepository;
   private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
@@ -220,6 +230,8 @@ export class Manager {
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
     this.sendOperationRepository = core.sendOperationRepository;
+    this.meltOperationService = core.meltOperationService;
+    this.meltOperationRepository = core.meltOperationRepository;
     this.proofRepository = repositories.proofRepository;
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -250,6 +262,7 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      meltOperationService: this.meltOperationService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -485,6 +498,8 @@ export class Manager {
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
     sendOperationRepository: SendOperationRepository;
+    meltOperationService: MeltOperationService;
+    meltOperationRepository: MeltOperationRepository;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -584,6 +599,23 @@ export class Manager {
     );
     const sendOperationRepository = repositories.sendOperationRepository;
 
+    const meltOperationLogger = this.getChildLogger('MeltOperationService');
+    const meltHandlerProvider = new MeltHandlerProvider({
+      bolt11: new MeltBolt11Handler(),
+    });
+    const meltOperationService = new MeltOperationService(
+      meltHandlerProvider,
+      repositories.meltOperationRepository,
+      repositories.proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      this.mintAdapter,
+      this.eventBus,
+      meltOperationLogger,
+    );
+    const meltOperationRepository = repositories.meltOperationRepository;
+
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
       sendOperationService,
@@ -607,6 +639,8 @@ export class Manager {
       paymentRequestService,
       sendOperationService,
       sendOperationRepository,
+      meltOperationService,
+      meltOperationRepository,
     };
   }
 
@@ -632,7 +666,11 @@ export class Manager {
       this.sendOperationService,
       walletApiLogger,
     );
-    const quotes = new QuotesApi(this.mintQuoteService, this.meltQuoteService);
+    const quotes = new QuotesApi(
+      this.mintQuoteService,
+      this.meltQuoteService,
+      this.meltOperationService,
+    );
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);

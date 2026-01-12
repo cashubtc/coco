@@ -443,12 +443,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     describe('Melt Quote Workflow', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
+      let repositories: Repositories | undefined;
 
       beforeEach(async () => {
-        const { repositories, dispose } = await createRepositories();
-        repositoriesDispose = dispose;
+        const created = await createRepositories();
+        repositories = created.repositories;
+        repositoriesDispose = created.dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          repo: created.repositories,
           seedGetter,
           logger,
         });
@@ -464,6 +466,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await repositoriesDispose();
           repositoriesDispose = undefined;
         }
+        repositories = undefined;
       });
 
       it('should create a melt quote', async () => {
@@ -479,7 +482,37 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(meltQuote.quote).toBeDefined();
         expect(meltQuote.amount).toBeGreaterThan(0);
 
+        const stored = await repositories!.meltQuoteRepository.getMeltQuote(mintUrl, meltQuote.quote);
+        expect(stored).toBeDefined();
+        expect(stored?.quote).toBe(meltQuote.quote);
+        expect(stored?.mintUrl).toBe(mintUrl);
+
         await eventPromise;
+      });
+
+      it('should reject invalid melt quote parameters', async () => {
+        const invoice = createFakeInvoice(10);
+        await expect(mgr!.quotes.createMeltQuote('', invoice)).rejects.toThrow();
+        await expect(mgr!.quotes.createMeltQuote(mintUrl, '')).rejects.toThrow();
+        await expect(mgr!.quotes.payMeltQuote('', 'quote-id')).rejects.toThrow();
+        await expect(mgr!.quotes.payMeltQuote(mintUrl, '')).rejects.toThrow();
+      });
+
+      it('should reject melt quote creation for untrusted mint', async () => {
+        await mgr!.mint.untrustMint(mintUrl);
+        const invoice = createFakeInvoice(15);
+        await expect(mgr!.quotes.createMeltQuote(mintUrl, invoice)).rejects.toThrow();
+      });
+
+      it('should reject paying a missing melt quote', async () => {
+        await expect(mgr!.quotes.payMeltQuote(mintUrl, 'missing-quote')).rejects.toThrow();
+      });
+
+      it('should reject paying melt quote for untrusted mint', async () => {
+        const invoice = createFakeInvoice(30);
+        const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
+        await mgr!.mint.untrustMint(mintUrl);
+        await expect(mgr!.quotes.payMeltQuote(mintUrl, meltQuote.quote)).rejects.toThrow();
       });
 
       it('should pay a melt quote (may skip swap if exact amount)', async () => {
@@ -514,12 +547,79 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         await Promise.all([paidEventPromise, stateChangedEventPromise]);
 
+        const storedQuote = await repositories!.meltQuoteRepository.getMeltQuote(
+          mintUrl,
+          meltQuote.quote,
+        );
+        expect(storedQuote?.state).toBe('PAID');
+
         const balanceAfter = await mgr!.wallet.getBalances();
         const balanceAfterAmount = balanceAfter[mintUrl] || 0;
         const amountWithFee = meltQuote.amount + meltQuote.fee_reserve;
 
         // Balance should decrease by at least the amount + fee
         expect(balanceAfterAmount).toBeLessThanOrEqual(balanceBeforeAmount - amountWithFee);
+      });
+
+      it('should execute a melt operation by quote params', async () => {
+        const invoice = createFakeInvoice(25);
+        const prepared = await mgr!.quotes.prepareMeltBolt11(mintUrl, invoice);
+
+        expect(prepared.quoteId).toBeDefined();
+
+        const stored = await repositories!.meltOperationRepository.getByQuoteId(
+          mintUrl,
+          prepared.quoteId,
+        );
+        expect(stored).toHaveLength(1);
+        expect(stored[0]!.state).toBe('prepared');
+
+        const executed = await mgr!.quotes.executeMeltByQuote(mintUrl, prepared.quoteId);
+
+        expect(executed).toBeDefined();
+        expect(executed?.mintUrl).toBe(mintUrl);
+        expect(executed?.quoteId).toBe(prepared.quoteId);
+
+        const operationAfterExecute = await repositories!.meltOperationRepository.getById(
+          executed!.id,
+        );
+        expect(operationAfterExecute).toBeDefined();
+        expect(operationAfterExecute!.state).toBe(executed!.state);
+
+        if (executed?.state === 'pending') {
+          let pendingResult = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, prepared.quoteId);
+          expect(pendingResult).toBeDefined();
+
+          const operationAfterCheck = await repositories!.meltOperationRepository.getById(
+            executed!.id,
+          );
+          expect(operationAfterCheck).toBeDefined();
+
+          if (pendingResult === 'stay_pending') {
+            pendingResult = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, prepared.quoteId);
+          }
+
+          const operationAfterRetry = await repositories!.meltOperationRepository.getById(
+            executed!.id,
+          );
+          expect(operationAfterRetry).toBeDefined();
+
+          if (pendingResult === 'finalize') {
+            expect(operationAfterRetry!.state).toBe('finalized');
+          } else if (pendingResult === 'rollback') {
+            expect(operationAfterRetry!.state).toBe('rolled_back');
+          } else {
+            expect(operationAfterRetry!.state).toBe('pending');
+          }
+        }
+      });
+
+      it('should return null when executing or checking missing quote', async () => {
+        const missingExecute = await mgr!.quotes.executeMeltByQuote(mintUrl, 'missing-quote');
+        expect(missingExecute).toBe(null);
+
+        const missingCheck = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, 'missing-quote');
+        expect(missingCheck).toBe(null);
       });
     });
 

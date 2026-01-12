@@ -1,4 +1,4 @@
-import type { Mint, Keyset, CoreProof, Repositories } from 'coco-cashu-core';
+import type { Mint, Keyset, CoreProof, Repositories, MeltOperation } from 'coco-cashu-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;
@@ -24,12 +24,15 @@ export async function runRepositoryTransactionContract(
           await tx.mintRepository.addOrUpdateMint(createDummyMint());
           await tx.keysetRepository.addKeyset(createDummyKeyset());
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
+          await tx.meltOperationRepository.create(createDummyMeltOperation());
           committed = true;
         });
 
         expect(committed).toBe(true);
         const stored = await repositories.proofRepository.getAllReadyProofs();
         expect(stored.length).toBeGreaterThan(0);
+        const operation = await repositories.meltOperationRepository.getById('melt-op');
+        expect(operation).toBeDefined();
       } finally {
         await dispose();
       }
@@ -68,6 +71,7 @@ type ExpectApi = {
   toBe(value: unknown): void;
   toHaveLength(len: number): void;
   toBeGreaterThan(value: number): void;
+  toBeDefined(): void;
 };
 
 async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
@@ -118,6 +122,18 @@ export function createDummyProof(): CoreProof {
     mintUrl: 'https://mint.test',
     state: 'ready',
   } satisfies CoreProof;
+}
+
+export function createDummyMeltOperation(): MeltOperation {
+  return {
+    id: 'melt-op',
+    state: 'init',
+    mintUrl: 'https://mint.test',
+    method: 'bolt11',
+    methodData: { invoice: 'lnbc1test' },
+    createdAt: 0,
+    updatedAt: 0,
+  } satisfies MeltOperation;
 }
 
 export { runIntegrationTests } from './integration.ts';
