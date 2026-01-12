@@ -170,6 +170,9 @@ export interface MeltOperationRepository {
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<MeltOperation[]>;
 
+  /** Get all operations for a mint/quote pair */
+  getByQuoteId(mintUrl: string, quoteId: string): Promise<MeltOperation[]>;
+
   /** Delete a melt operation */
   delete(id: string): Promise<void>;
 }

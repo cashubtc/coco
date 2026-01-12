@@ -52,14 +52,36 @@ export class QuotesApi {
     return preparedOperation;
   }
 
-  async executeMelt(
-    operationId: string,
-  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
+  async executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation> {
     return this.meltOperationService.execute(operationId);
+  }
+
+  async executeMeltByQuote(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<PendingMeltOperation | FinalizedMeltOperation | null> {
+    const operation = await this.meltOperationService.getOperationByQuote(mintUrl, quoteId);
+    if (!operation) {
+      return null;
+    }
+
+    return this.meltOperationService.execute(operation.id);
   }
 
   async checkPendingMelt(operationId: string): Promise<PendingCheckResult> {
     return this.meltOperationService.checkPendingOperation(operationId);
+  }
+
+  async checkPendingMeltByQuote(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<PendingCheckResult | null> {
+    const operation = await this.meltOperationService.getOperationByQuote(mintUrl, quoteId);
+    if (!operation) {
+      return null;
+    }
+
+    return this.meltOperationService.checkPendingOperation(operation.id);
   }
 
   async addMintQuote(

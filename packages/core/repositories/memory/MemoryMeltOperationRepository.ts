@@ -53,6 +53,16 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     return results;
   }
 
+  async getByQuoteId(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
+    const results: MeltOperation[] = [];
+    for (const operation of this.operations.values()) {
+      if (operation.mintUrl === mintUrl && 'quoteId' in operation && operation.quoteId === quoteId) {
+        results.push({ ...operation });
+      }
+    }
+    return results;
+  }
+
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
   }

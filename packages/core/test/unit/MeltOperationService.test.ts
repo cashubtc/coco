@@ -403,5 +403,31 @@ describe('MeltOperationService', () => {
 
       expect(pending.map((op) => op.id).sort()).toEqual(['pending-1', 'pending-2']);
     });
+
+    it('returns operation by quote id when present', async () => {
+      const prepared = makePreparedOp('op-quote', { quoteId: 'quote-123' });
+      await meltOperationRepository.create(prepared);
+
+      const operation = await service.getOperationByQuote(mintUrl, 'quote-123');
+
+      expect(operation?.id).toBe('op-quote');
+    });
+
+    it('returns null when quote id is not found', async () => {
+      await meltOperationRepository.create(makePreparedOp('op-quote', { quoteId: 'quote-456' }));
+
+      const operation = await service.getOperationByQuote(mintUrl, 'missing-quote');
+
+      expect(operation).toBeNull();
+    });
+
+    it('throws when multiple operations share a quote id', async () => {
+      await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
+      await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
+
+      expect(service.getOperationByQuote(mintUrl, 'quote-dupe')).rejects.toThrow(
+        'melt operations',
+      );
+    });
   });
 });
