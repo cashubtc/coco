@@ -7,7 +7,7 @@
   "devDependencies": {},
   "peerDependencies": {},
   "dependencies": {
-    "@changesets/cli": "^2.29.6"
+    "@changesets/cli": "^2.29.8"
   },
   "scripts": {
     "build": "bun run --filter='*' build",

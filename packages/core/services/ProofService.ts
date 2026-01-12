@@ -479,7 +479,7 @@ export class ProofService {
       }
 
       // Validate multisig is not used
-      const additionalKeysTag = parsedSecret[1].tags.find((tag) => tag[0] === 'pubkeys');
+      const additionalKeysTag = parsedSecret[1].tags?.find((tag) => tag[0] === 'pubkeys');
       if (additionalKeysTag && additionalKeysTag[1] && additionalKeysTag[1].length > 0) {
         this.logger?.error('Multisig P2PK proof detected', { proofIndex: i });
         throw new ProofValidationError('Multisig is not supported');

@@ -1,5 +1,34 @@
 # coco-cashu-expo-sqlite
 
+## 1.1.2-rc.38
+
+### Patch Changes
+
+- Updated dependencies [aa97572]
+  - coco-cashu-core@1.1.2-rc.38
+
+## 1.1.2-rc.37
+
+### Patch Changes
+
+- Updated dependencies [f32a8a7]
+  - coco-cashu-core@1.1.2-rc.37
+
+## 1.1.2-rc.36
+
+### Patch Changes
+
+- Updated dependencies [027449f]
+  - coco-cashu-core@1.1.2-rc.36
+
+## 1.1.2-rc.35
+
+### Patch Changes
+
+- Updated dependencies [406c470]
+- Updated dependencies [59693b5]
+  - coco-cashu-core@1.1.2-rc.35
+
 ## 1.1.2-rc.34
 
 ### Patch Changes

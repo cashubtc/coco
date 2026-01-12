@@ -1,5 +1,30 @@
 # coco-cashu-core
 
+## 1.1.2-rc.38
+
+### Patch Changes
+
+- aa97572: fixed an issue where paymentRequestService was still missing from the ServiceKeys list and made that list a keyof ServiceMap
+
+## 1.1.2-rc.37
+
+### Patch Changes
+
+- f32a8a7: Added paymentRequestService to servicemap for plugins
+
+## 1.1.2-rc.36
+
+### Patch Changes
+
+- 027449f: Added PluginExtension system for coco-plugins to register their own API on the manager instance
+
+## 1.1.2-rc.35
+
+### Patch Changes
+
+- 406c470: patch: make sure parsing secret does not throw on missing tags key
+- 59693b5: Make sure missing transport keys on PRs are treated as inband
+
 ## 1.1.2-rc.34
 
 ## 1.1.2-rc.33

@@ -11,6 +11,7 @@
     "coco-cashu-adapter-tests": "1.0.0-rc.16"
   },
   "changesets": [
+    "common-humans-relate",
     "cool-clubs-switch",
     "cuddly-hounds-worry",
     "cute-pets-train",
@@ -29,9 +30,12 @@
     "khaki-mangos-greet",
     "loose-mugs-raise",
     "modern-cups-look",
+    "nasty-candies-say",
+    "olive-numbers-sort",
     "plain-moose-fry",
     "plenty-clowns-divide",
     "polite-buses-open",
+    "poor-snakes-lead",
     "pretty-corners-tease",
     "puny-carrots-jam",
     "rude-papers-join",
@@ -40,6 +44,7 @@
     "some-spiders-wink",
     "swift-comics-clean",
     "thin-bats-end",
+    "tiny-rocks-invite",
     "two-bushes-watch",
     "two-pugs-create",
     "vast-sheep-arrive"
