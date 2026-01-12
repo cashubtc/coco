@@ -275,6 +275,38 @@ const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: '011_melt_operations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_melt_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        quoteId TEXT,
+        amount INTEGER,
+        fee_reserve INTEGER,
+        swap_fee INTEGER,
+        needsSwap INTEGER,
+        inputAmount INTEGER,
+        inputProofSecretsJson TEXT,
+        changeOutputDataJson TEXT,
+        swapOutputDataJson TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_state
+        ON coco_cashu_melt_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_mint
+        ON coco_cashu_melt_operations(mintUrl);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_operations_mint_quote
+        ON coco_cashu_melt_operations(mintUrl, quoteId)
+        WHERE quoteId IS NOT NULL;
+    `,
+  },
 ];
 
 // Export for testing
