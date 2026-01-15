@@ -11,6 +11,7 @@
     "coco-cashu-adapter-tests": "1.0.0-rc.16"
   },
   "changesets": [
+    "bumpy-hats-poke",
     "common-humans-relate",
     "cool-clubs-switch",
     "cuddly-hounds-worry",
