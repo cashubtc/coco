@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.39
+
+### Patch Changes
+
+- 9d9e798: Bumped the main Cashu dependency Cashu-ts
+
 ## 1.1.2-rc.38
 
 ### Patch Changes

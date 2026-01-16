@@ -1,11 +1,11 @@
 {
   "name": "coco-cashu-core",
-  "version": "1.1.2-rc.38",
+  "version": "1.1.2-rc.39",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "devDependencies": {
     "@types/bun": "latest",
-    "coco-cashu-adapter-tests": "1.1.2-rc.38",
+    "coco-cashu-adapter-tests": "1.1.2-rc.39",
     "esbuild": "latest",
     "tsdown": "^0.14.1",
     "typescript": "^5.9.2",
@@ -36,7 +36,7 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@cashu/cashu-ts": "2.8.1",
+    "@cashu/cashu-ts": "2.9.0",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip32": "^2.0.1"
