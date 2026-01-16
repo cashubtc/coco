@@ -90,6 +90,16 @@ await coco.send.finalize(operationId);
 
 > **Note:** With [ProofStateWatcher](../pages/watchers-processors.md) enabled, finalization happens automatically when the mint reports proofs as spent.
 
+## Paying Lightning Invoices (Melt)
+
+Use melt operations to pay BOLT11 invoices via the Quotes API:
+
+- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>`
+- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>`
+- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>`
+- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>`
+- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>`
+
 ## Events
 
 Listen for send lifecycle events:
