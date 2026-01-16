@@ -47,14 +47,19 @@ bun install
 ## Quick start
 
 ```ts
-import { Manager, MemoryRepositories, ConsoleLogger } from 'coco-cashu-core';
+import { initializeCoco, MemoryRepositories, ConsoleLogger } from 'coco-cashu-core';
 
 // Provide a deterministic 64-byte seed for wallet key derivation
 const seedGetter = async () => seed;
 
 const repos = new MemoryRepositories();
 const logger = new ConsoleLogger('example', { level: 'info' });
-const manager = new Manager(repos, seedGetter, logger);
+
+const manager = await initializeCoco({
+  repo: repos,
+  seedGetter,
+  logger,
+});
 
 // Subscribe to events (typed)
 const unsubscribe = manager.on('counter:updated', (c) => {
@@ -81,21 +86,40 @@ const balances = await manager.wallet.getBalances();
 console.log('balances', balances);
 ```
 
-### Watchers (optional)
+### Watchers & processors (optional)
 
-Start background watchers to automatically react to changes:
+Start background watchers or processors to automatically react to changes:
 
 ```ts
 // Watch mint quote updates and auto-redeem previously pending ones on start (default true)
 await manager.enableMintQuoteWatcher({ watchExistingPendingOnStart: true });
+
+// Process queued mint quotes (auto-enabled by initializeCoco)
+await manager.enableMintQuoteProcessor({ processIntervalMs: 3000 });
 
 // Watch proof state updates (e.g., to move inflight proofs to spent)
 await manager.enableProofStateWatcher();
 
 // Later, you can stop them
 await manager.disableMintQuoteWatcher();
+await manager.disableMintQuoteProcessor();
 await manager.disableProofStateWatcher();
 ```
+
+### initializeCoco options
+
+`initializeCoco` sets up repositories, plugins, watchers, and processors for you. You can configure it via `CocoConfig`:
+
+- `repo`: `Repositories` implementation (required)
+- `seedGetter`: async seed provider (required)
+- `logger`: optional logger (defaults to `NullLogger`)
+- `webSocketFactory`: optional WebSocket factory
+- `plugins`: optional plugin list
+- `watchers`: enable/disable watcher services (`mintQuoteWatcher`, `proofStateWatcher`)
+- `processors`: enable/disable processors (`mintQuoteProcessor`) and tune intervals
+- `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
+
+If you prefer manual wiring, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
 
 ## Architecture
 
@@ -118,6 +142,10 @@ Interfaces in `packages/core/repositories/index.ts`:
 - `ProofRepository`
 - `MintQuoteRepository`
 - `MeltQuoteRepository`
+- `HistoryRepository`
+- `KeyRingRepository`
+- `SendOperationRepository`
+- `MeltOperationRepository`
 
 In-memory reference implementations are provided under `repositories/memory/` for testing.
 
@@ -130,12 +158,22 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `quotes: QuotesApi`
 - `subscription: SubscriptionApi`
 - `history: HistoryApi`
+- `keyring: KeyRingApi`
+- `send: SendApi`
+- `ext: PluginExtensions`
 - `on/once/off` for `CoreEvents`
 - `enableMintQuoteWatcher(options?: { watchExistingPendingOnStart?: boolean }): Promise<void>`
 - `disableMintQuoteWatcher(): Promise<void>`
+- `enableMintQuoteProcessor(options?: { processIntervalMs?: number; maxRetries?: number; baseRetryDelayMs?: number; initialEnqueueDelayMs?: number }): Promise<boolean>`
+- `disableMintQuoteProcessor(): Promise<void>`
+- `waitForMintQuoteProcessor(): Promise<void>`
 - `enableProofStateWatcher(): Promise<void>`
 - `disableProofStateWatcher(): Promise<void>`
+- `pauseSubscriptions(): Promise<void>`
+- `resumeSubscriptions(): Promise<void>`
+- `recoverPendingSendOperations(): Promise<void>`
 - `use(plugin: Plugin): void`
+- `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
 
 ### MintApi
@@ -151,17 +189,23 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`
-- `send(mintUrl: string, amount: number): Promise<Token>`
 - `getBalances(): Promise<{ [mintUrl: string]: number }>`
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
+- `processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest>`
+- `preparePaymentRequestTransaction(mintUrl: string, request: ParsedPaymentRequest, amount?: number): Promise<PaymentRequestTransaction>`
+- `handleInbandPaymentRequest(transaction: PaymentRequestTransaction, inbandHandler: (token: Token) => Promise<void>): Promise<void>`
+- `handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response>`
 
 ### QuotesApi
 
 - `createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse>`
 - `redeemMintQuote(mintUrl: string, quoteId: string): Promise<void>`
-- `createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse>`
-- `payMeltQuote(mintUrl: string, quoteId: string): Promise<void>`
+- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>`
+- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>`
+- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>`
+- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>`
+- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>`
 - `addMintQuote(mintUrl: string, quotes: MintQuoteResponse[]): Promise<{ added: string[]; skipped: string[] }>`
 - `requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }>`
 
@@ -173,6 +217,29 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### HistoryApi
 
 - `getPaginatedHistory(offset?: number, limit?: number): Promise<HistoryEntry[]>`
+- `getHistoryEntryById(id: string): Promise<HistoryEntry | null>`
+
+### KeyRingApi
+
+- `generateKeyPair(dumpSecretKey?: boolean): Promise<{ publicKeyHex: string } | Keypair>`
+- `addKeyPair(secretKey: Uint8Array): Promise<Keypair>`
+- `removeKeyPair(publicKey: string): Promise<void>`
+- `getKeyPair(publicKey: string): Promise<Keypair | null>`
+- `getLatestKeyPair(): Promise<Keypair | null>`
+- `getAllKeyPairs(): Promise<Keypair[]>`
+
+### SendApi
+
+- `prepareSend(mintUrl: string, amount: number): Promise<PreparedSendOperation>`
+- `executePreparedSend(operationId: string): Promise<{ operation: PendingSendOperation; token: Token }>`
+- `getOperation(operationId: string): Promise<SendOperation | null>`
+- `getPendingOperations(): Promise<SendOperation[]>`
+- `finalize(operationId: string): Promise<void>`
+- `rollback(operationId: string): Promise<void>`
+- `recoverPendingOperations(): Promise<void>`
+- `checkPendingOperation(operationId: string): Promise<void>`
+- `isOperationLocked(operationId: string): boolean`
+- `isRecoveryInProgress(): boolean`
 
 ### Subscriptions in Node vs browser
 
@@ -182,18 +249,33 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 - `mint:added` → `{ mint, keysets }`
 - `mint:updated` → `{ mint, keysets }`
+- `mint:trusted` → `{ mintUrl }`
+- `mint:untrusted` → `{ mintUrl }`
 - `counter:updated` → `Counter`
 - `proofs:saved` → `{ mintUrl, keysetId, proofs }`
 - `proofs:state-changed` → `{ mintUrl, secrets, state }`
 - `proofs:deleted` → `{ mintUrl, secrets }`
 - `proofs:wiped` → `{ mintUrl, keysetId }`
+- `proofs:reserved` → `{ mintUrl, operationId, secrets, amount }`
+- `proofs:released` → `{ mintUrl, secrets }`
 - `mint-quote:state-changed` → `{ mintUrl, quoteId, state }`
 - `mint-quote:created` → `{ mintUrl, quoteId, quote }`
+- `mint-quote:added` → `{ mintUrl, quoteId, quote }`
+- `mint-quote:requeue` → `{ mintUrl, quoteId }`
 - `mint-quote:redeemed` → `{ mintUrl, quoteId, quote }`
 - `melt-quote:created` → `{ mintUrl, quoteId, quote }`
+- `melt-quote:state-changed` → `{ mintUrl, quoteId, state }`
 - `melt-quote:paid` → `{ mintUrl, quoteId, quote }`
-- `send:created` → `{ mintUrl, token }`
+- `send:prepared` → `{ mintUrl, operationId, operation }`
+- `send:pending` → `{ mintUrl, operationId, operation, token }`
+- `send:finalized` → `{ mintUrl, operationId, operation }`
+- `send:rolled-back` → `{ mintUrl, operationId, operation }`
 - `receive:created` → `{ mintUrl, token }`
+- `history:updated` → `{ mintUrl, entry }`
+- `melt-op:prepared` → `{ mintUrl, operationId, operation }`
+- `melt-op:pending` → `{ mintUrl, operationId, operation }`
+- `melt-op:finalized` → `{ mintUrl, operationId, operation }`
+- `melt-op:rolled-back` → `{ mintUrl, operationId, operation }`
 
 ## Plugins
 
@@ -250,11 +332,11 @@ await manager.dispose();
 
 From the package root:
 
-- `Manager`
+- `Manager`, `initializeCoco`, `CocoConfig`
 - Repository interfaces and memory implementations under `repositories/memory`
 - Models under `models`
 - Types: `CoreProof`, `ProofState`
 - Logging: `ConsoleLogger`, `Logger`
-- Helpers: `getEncodedToken`, `getDecodedToken`
+- Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
 - Subscription infra: `SubscriptionManager`, `WsConnectionManager`, `WebSocketLike`, `WebSocketFactory`, `SubscriptionCallback`, `SubscriptionKind`
 - Plugins: `Plugin`, `PluginContext`, `ServiceKey`, `PluginHost`
