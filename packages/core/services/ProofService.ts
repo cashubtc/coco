@@ -1,4 +1,10 @@
-import { OutputData, type Keys, type Proof } from '@cashu/cashu-ts';
+import {
+  OutputData,
+  type Keys,
+  type MintKeys,
+  type Proof,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import type { CoreProof } from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
@@ -10,6 +16,8 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
+import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import type { Keyset } from '@core/models/Keyset.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -261,6 +269,87 @@ export class ProofService {
     this.logger?.debug('Proof state updated', { mintUrl, count: secrets.length, state });
   }
 
+  /**
+   * Reserve proofs for an operation.
+   * Validates that proofs are available (ready and not already reserved) before reserving.
+   * Emits 'proofs:reserved' event on success.
+   *
+   * @throws ProofOperationError if any proof is not available for reservation
+   */
+  async reserveProofs(
+    mintUrl: string,
+    secrets: string[],
+    operationId: string,
+  ): Promise<{ amount: number }> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!operationId || operationId.trim().length === 0) {
+      throw new ProofValidationError('operationId is required');
+    }
+    if (!secrets || secrets.length === 0) {
+      return { amount: 0 };
+    }
+
+    // Repository will validate proofs are ready and not already reserved
+    await this.proofRepository.reserveProofs(mintUrl, secrets, operationId);
+
+    // Calculate the reserved amount for the event
+    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
+    const amount = reservedProofs.reduce((acc, p) => acc + p.amount, 0);
+
+    await this.eventBus?.emit('proofs:reserved', {
+      mintUrl,
+      operationId,
+      secrets,
+      amount,
+    });
+    this.logger?.debug('Proofs reserved', {
+      mintUrl,
+      operationId,
+      count: secrets.length,
+      amount,
+    });
+
+    return { amount };
+  }
+
+  /**
+   * Release proofs from an operation.
+   * Clears the reservation so proofs become available again.
+   * Emits 'proofs:released' event on success.
+   */
+  async releaseProofs(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!secrets || secrets.length === 0) return;
+
+    await this.proofRepository.releaseProofs(mintUrl, secrets);
+
+    await this.eventBus?.emit('proofs:released', { mintUrl, secrets });
+    this.logger?.debug('Proofs released', { mintUrl, count: secrets.length });
+  }
+
+  /**
+   * Restore proofs to ready state and clear their operation reservation.
+   * Used during rollback when inflight proofs need to be made available again.
+   * This sets state to 'ready' and clears usedByOperationId.
+   */
+  async restoreProofsToReady(mintUrl: string, secrets: string[]): Promise<void> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!secrets || secrets.length === 0) return;
+
+    await this.proofRepository.setProofState(mintUrl, secrets, 'ready');
+    await this.proofRepository.releaseProofs(mintUrl, secrets);
+
+    await this.eventBus?.emit('proofs:state-changed', { mintUrl, secrets, state: 'ready' });
+    await this.eventBus?.emit('proofs:released', { mintUrl, secrets });
+    this.logger?.debug('Proofs restored to ready', { mintUrl, count: secrets.length });
+  }
+
   async deleteProofs(mintUrl: string, secrets: string[]): Promise<void> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -283,6 +372,16 @@ export class ProofService {
     this.logger?.info('Proofs wiped by keyset', { mintUrl, keysetId });
   }
 
+  /**
+   * Select proofs to send for a given amount.
+   * Uses the wallet's proof selection algorithm to choose optimal denominations.
+   *
+   * @param mintUrl - The mint URL to select proofs from
+   * @param amount - The amount to send
+   * @param includeFees - Whether to include fees in the selection (default: true)
+   * @returns The selected proofs
+   * @throws ProofValidationError if insufficient balance to cover the amount
+   */
   async selectProofsToSend(
     mintUrl: string,
     amount: number,
@@ -411,6 +510,190 @@ export class ProofService {
     });
 
     return preparedProofs;
+  }
+
+  async createBlankOutputs(amount: number, mintUrl: string): Promise<OutputData[]> {
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new ProofValidationError('amount must be a non-negative number');
+    }
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    if (amount === 0) {
+      return [];
+    }
+    const outputNumber = Math.max(Math.ceil(Math.log2(amount)), 1);
+    const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
+    const seed = await this.seedService.getSeed();
+    const outputData = Array(outputNumber)
+      .fill(0)
+      .map((_, index) => {
+        return OutputData.createSingleDeterministicData(
+          0,
+          seed,
+          currentCounter.counter + index,
+          keys.id,
+        );
+      });
+    if (outputData.length > 0) {
+      await this.counterService.incrementCounter(mintUrl, keys.id, outputData.length);
+    }
+    return outputData;
+  }
+
+  /**
+   * Unblind change signatures and save the resulting proofs.
+   * Used after melt operations to process change returned by the mint.
+   *
+   * @param mintUrl - The mint URL
+   * @param outputData - The output data used to create blank outputs for change
+   * @param changeSignatures - The blinded signatures returned by the mint
+   * @param keys - The mint keys for unblinding
+   * @param options - Optional settings including createdByOperationId
+   * @returns The saved change proofs
+   */
+  async unblindAndSaveChangeProofs(
+    mintUrl: string,
+    outputData: OutputData[],
+    changeSignatures: SerializedBlindedSignature[],
+    options?: { createdByOperationId?: string },
+  ): Promise<CoreProof[]> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (
+      !outputData ||
+      outputData.length === 0 ||
+      !changeSignatures ||
+      changeSignatures.length === 0
+    ) {
+      return [];
+    }
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    const keysetMap: { [id: string]: Keyset } = {};
+    keysets.forEach((ks) => {
+      keysetMap[ks.id] = ks;
+    });
+
+    // Slice output data to match signature count
+    const matchedOutputs = outputData.slice(0, changeSignatures.length);
+
+    // Unblind each signature to create proofs
+    const proofs: Proof[] = matchedOutputs.flatMap((output, i) => {
+      const sig = changeSignatures[i];
+      const keyset = keysetMap[output.blindedMessage.id];
+      if (!sig || !keyset) {
+        const reason = !sig ? 'missing signature' : 'missing keyset';
+        this.logger?.warn('Failed to create change proof', { reason, index: i });
+        return [];
+      }
+      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs, unit: keyset.unit })];
+    });
+
+    if (proofs.length === 0) {
+      return [];
+    }
+
+    // Map to CoreProof and save
+    const coreProofs = mapProofToCoreProof(mintUrl, 'ready', proofs, {
+      createdByOperationId: options?.createdByOperationId,
+    });
+
+    await this.saveProofs(mintUrl, coreProofs);
+
+    this.logger?.info('Change proofs unblinded and saved', {
+      mintUrl,
+      count: coreProofs.length,
+      operationId: options?.createdByOperationId,
+    });
+
+    return coreProofs;
+  }
+
+  /**
+   * Recover proofs from a completed swap using the mint's restore endpoint.
+   * This is used when a swap succeeded but proofs were not saved (e.g., crash recovery).
+   *
+   * First checks if the proofs are still unspent before attempting recovery.
+   * Only unspent proofs will be recovered and saved.
+   *
+   * @param mintUrl - The mint URL
+   * @param serializedOutputData - The serialized output data containing secrets and blinding factors
+   * @returns The recovered proofs (only unspent ones)
+   */
+  async recoverProofsFromOutputData(
+    mintUrl: string,
+    serializedOutputData: SerializedOutputData,
+  ): Promise<Proof[]> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!serializedOutputData) {
+      throw new ProofValidationError('serializedOutputData is required');
+    }
+
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+
+    // Deserialize OutputData
+    const outputData = deserializeOutputData(serializedOutputData);
+    const allOutputs = [...outputData.keep, ...outputData.send];
+
+    if (allOutputs.length === 0) {
+      return [];
+    }
+
+    // Build blinded messages for restore request
+    const blindedMessages = allOutputs.map((o) => o.blindedMessage);
+
+    // Call mint restore endpoint
+    const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
+
+    // Match signatures back to outputs and construct proofs
+    const restoredProofs: Proof[] = [];
+    for (let i = 0; i < restoreResult.outputs.length; i++) {
+      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
+      const signature = restoreResult.signatures[i];
+      if (output && signature) {
+        // Construct proof from output data and signature
+        const proof: Proof = {
+          id: signature.id,
+          amount: signature.amount,
+          secret: new TextDecoder().decode(output.secret),
+          C: signature.C_,
+        };
+        restoredProofs.push(proof);
+      }
+    }
+
+    if (restoredProofs.length === 0) {
+      this.logger?.debug('No proofs found to restore', { mintUrl });
+      return [];
+    }
+
+    // Check which proofs are still unspent
+    const proofStates = await wallet.checkProofsStates(restoredProofs);
+    const unspentProofs = restoredProofs.filter((_, index) => {
+      const state = proofStates[index];
+      return state && state.state === 'UNSPENT';
+    });
+
+    if (unspentProofs.length === 0) {
+      this.logger?.debug('All restored proofs are already spent', {
+        mintUrl,
+        totalRestored: restoredProofs.length,
+      });
+      return [];
+    }
+
+    // Save only unspent proofs
+    await this.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', unspentProofs));
+
+    this.logger?.info('Recovered proofs from output data', {
+      mintUrl,
+      totalRestored: restoredProofs.length,
+      unspentCount: unspentProofs.length,
+      spentCount: restoredProofs.length - unspentProofs.length,
+    });
+
+    return unspentProofs;
   }
 }
 

@@ -182,3 +182,23 @@ export interface SendOperationRow {
   inputProofSecretsJson?: string | null;
   outputDataJson?: string | null;
 }
+
+export interface MeltOperationRow {
+  id: string;
+  mintUrl: string;
+  state: 'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  method: string;
+  methodDataJson: string;
+  quoteId?: string | null;
+  amount?: number | null;
+  fee_reserve?: number | null;
+  swap_fee?: number | null;
+  needsSwap?: number | null;
+  inputAmount?: number | null;
+  inputProofSecretsJson?: string | null;
+  changeOutputDataJson?: string | null;
+  swapOutputDataJson?: string | null;
+}

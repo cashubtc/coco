@@ -8,6 +8,7 @@ import type {
   MintQuoteRepository,
   MeltQuoteRepository,
   SendOperationRepository,
+  MeltOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
@@ -21,6 +22,7 @@ import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
+import { IdbMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -34,6 +36,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: IdbHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
+  readonly meltOperationRepository: MeltOperationRepository;
   readonly db: IdbDb;
 
   constructor(options: IndexedDbRepositoriesOptions) {
@@ -47,6 +50,7 @@ export class IndexedDbRepositories implements Repositories {
     this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
     this.historyRepository = new IdbHistoryRepository(this.db);
     this.sendOperationRepository = new IdbSendOperationRepository(this.db);
+    this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -67,6 +71,7 @@ export class IndexedDbRepositories implements Repositories {
         meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
         historyRepository: new IdbHistoryRepository(scopedDb),
         sendOperationRepository: new IdbSendOperationRepository(scopedDb),
+        meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -85,4 +90,5 @@ export {
   IdbMeltQuoteRepository,
   IdbHistoryRepository,
   IdbSendOperationRepository,
+  IdbMeltOperationRepository,
 };

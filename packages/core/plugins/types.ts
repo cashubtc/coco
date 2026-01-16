@@ -17,6 +17,7 @@ import type {
   WalletService,
 } from '../services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
+import type { MeltOperationService } from '../operations/melt/MeltOperationService';
 
 export type ServiceKey = keyof ServiceMap;
 
@@ -33,6 +34,7 @@ export interface ServiceMap {
   historyService: HistoryService;
   transactionService: TransactionService;
   sendOperationService: SendOperationService;
+  meltOperationService: MeltOperationService;
   paymentRequestService: PaymentRequestService;
   subscriptions: SubscriptionManager;
   eventBus: EventBus<CoreEvents>;
