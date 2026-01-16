@@ -190,8 +190,8 @@ export class ProofService {
       const message =
         failedKeysets.length > 0
           ? `Failed to persist proofs for ${failed.length} keyset group(s) [${failedKeysets.join(
-              ', ',
-            )}]`
+            ', ',
+          )}]`
           : `Failed to persist proofs for ${failed.length} keyset group(s)`;
       throw new ProofOperationError(mintUrl, message, undefined, aggregate);
     }
@@ -392,8 +392,8 @@ export class ProofService {
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');
     }
-    const cashuWallet = await this.walletService.getWallet(mintUrl);
-    const selectedProofs = cashuWallet.selectProofsToSend(proofs, amount, includeFees);
+    const wallet = await this.walletService.getWallet(mintUrl);
+    const selectedProofs = wallet.selectProofsToSend(proofs, amount, includeFees);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
       amount,

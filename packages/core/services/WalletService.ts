@@ -1,11 +1,11 @@
-import { CashuMint, CashuWallet, type Keys, type MintKeys, type MintKeyset } from '@cashu/cashu-ts';
+import { Mint, Wallet, type MintKeys, type MintKeyset } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 
 interface CachedWallet {
-  wallet: CashuWallet;
+  wallet: Wallet;
   lastCheck: number;
 }
 
@@ -17,7 +17,7 @@ export class WalletService {
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly mintService: MintService;
   private readonly seedService: SeedService;
-  private inFlight: Map<string, Promise<CashuWallet>> = new Map();
+  private inFlight: Map<string, Promise<Wallet>> = new Map();
   private readonly logger?: Logger;
   private readonly requestProvider: MintRequestProvider;
 
@@ -33,7 +33,7 @@ export class WalletService {
     this.logger = logger;
   }
 
-  async getWallet(mintUrl: string): Promise<CashuWallet> {
+  async getWallet(mintUrl: string): Promise<Wallet> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new Error('mintUrl is required');
     }
@@ -58,15 +58,25 @@ export class WalletService {
   }
 
   async getWalletWithActiveKeysetId(mintUrl: string): Promise<{
-    wallet: CashuWallet;
+    wallet: Wallet;
     keysetId: string;
     keyset: MintKeyset;
     keys: MintKeys;
   }> {
     const wallet = await this.getWallet(mintUrl);
-    const keyset = wallet.getActiveKeyset(wallet.keysets);
-    const keys = await wallet.getKeys(keyset.id);
-    return { wallet, keysetId: keyset.id, keyset, keys };
+    const keyset = wallet.keyChain.getCheapestKeyset();
+    const mintKeys = keyset.toMintKeys();
+
+    if (mintKeys === null) {
+      throw new Error('MintKeys is null. Cannot return a valid response.');
+    }
+
+    return {
+      wallet,
+      keysetId: keyset.id,
+      keyset: keyset.toMintKeyset(),
+      keys: mintKeys,
+    };
   }
 
   /**
@@ -88,14 +98,14 @@ export class WalletService {
   /**
    * Force refresh mint data and get fresh wallet
    */
-  async refreshWallet(mintUrl: string): Promise<CashuWallet> {
+  async refreshWallet(mintUrl: string): Promise<Wallet> {
     this.clearCache(mintUrl);
     this.inFlight.delete(mintUrl);
     await this.mintService.updateMintData(mintUrl);
     return this.getWallet(mintUrl);
   }
 
-  private async buildWallet(mintUrl: string): Promise<CashuWallet> {
+  private async buildWallet(mintUrl: string): Promise<Wallet> {
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
     const validKeysets = keysets.filter(
@@ -123,7 +133,7 @@ export class WalletService {
     const seed = await this.seedService.getSeed();
 
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const wallet = new CashuWallet(new CashuMint(mintUrl, requestFn), {
+    const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       mintInfo: mint.mintInfo,
       unit: DEFAULT_UNIT,
       keys,
@@ -133,6 +143,7 @@ export class WalletService {
         this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
       bip39seed: seed,
     });
+    await wallet.loadMint();
 
     this.walletCache.set(mintUrl, {
       wallet,

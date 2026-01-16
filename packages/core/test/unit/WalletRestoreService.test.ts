@@ -5,7 +5,7 @@ import type { CounterService } from '../../services/CounterService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
-import { CashuMint, CashuWallet, type Proof, type ProofState } from '@cashu/cashu-ts';
+import { Wallet, type Proof, type ProofState } from '@cashu/cashu-ts';
 
 describe('WalletRestoreService', () => {
   const mintUrl = 'https://mint.test';
@@ -20,12 +20,12 @@ describe('WalletRestoreService', () => {
   let service: WalletRestoreService;
 
   const makeProof = (amount: number, secret: string): Proof =>
-    ({
-      amount,
-      C: `C_${secret}`,
-      id: keysetId,
-      secret,
-    } as unknown as Proof);
+  ({
+    amount,
+    C: `C_${secret}`,
+    id: keysetId,
+    secret,
+  } as unknown as Proof);
 
   beforeEach(() => {
     // Mock ProofService
@@ -63,10 +63,10 @@ describe('WalletRestoreService', () => {
 
     // Mock Logger
     logger = {
-      debug: mock(() => {}),
-      info: mock(() => {}),
-      warn: mock(() => {}),
-      error: mock(() => {}),
+      debug: mock(() => { }),
+      info: mock(() => { }),
+      warn: mock(() => { }),
+      error: mock(() => { }),
     } as Logger;
 
     // Mock MintRequestProvider
@@ -87,16 +87,16 @@ describe('WalletRestoreService', () => {
     it('should successfully sweep a keyset with ready proofs', async () => {
       const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
 
-      // Mock CashuWallet methods
+      // Mock Wallet methods
       const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
       const mockCheckProofsStates = mock(() =>
         Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
       );
       const mockGetFeesForProofs = mock(() => 1);
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
-      CashuWallet.prototype.getFeesForProofs = mockGetFeesForProofs;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -119,7 +119,7 @@ describe('WalletRestoreService', () => {
 
     it('should return early when no proofs are found', async () => {
       const mockBatchRestore = mock(() => Promise.resolve({ proofs: [] }));
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.batchRestore = mockBatchRestore;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -136,8 +136,8 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'SPENT' } as ProofState, { state: 'SPENT' } as ProofState]),
       );
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -162,9 +162,9 @@ describe('WalletRestoreService', () => {
       );
       const mockGetFeesForProofs = mock(() => 1);
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
-      CashuWallet.prototype.getFeesForProofs = mockGetFeesForProofs;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -196,10 +196,10 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
       ); // Wrong length
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
-      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
         'Malformed state check',
       );
       expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
@@ -216,10 +216,10 @@ describe('WalletRestoreService', () => {
       const mockBatchRestore = mock(() => Promise.resolve({ proofs }));
       const mockCheckProofsStates = mock(() => Promise.resolve(null as unknown as ProofState[]));
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
-      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
         'Malformed state check',
       );
     });
@@ -234,9 +234,9 @@ describe('WalletRestoreService', () => {
       // Mock a negative fee to create a negative total (edge case scenario)
       const mockGetFeesForProofs = mock(() => 10);
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
-      CashuWallet.prototype.getFeesForProofs = mockGetFeesForProofs;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -259,9 +259,9 @@ describe('WalletRestoreService', () => {
       );
       const mockGetFeesForProofs = mock(() => 1);
 
-      CashuWallet.prototype.batchRestore = mockBatchRestore;
-      CashuWallet.prototype.checkProofsStates = mockCheckProofsStates;
-      CashuWallet.prototype.getFeesForProofs = mockGetFeesForProofs;
+      Wallet.prototype.batchRestore = mockBatchRestore;
+      Wallet.prototype.checkProofsStates = mockCheckProofsStates;
+      Wallet.prototype.getFeesForProofs = mockGetFeesForProofs;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
@@ -337,7 +337,7 @@ describe('WalletRestoreService', () => {
         }),
       );
 
-      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Restored less proofs than expected.',
       );
       expect(logger.warn).toHaveBeenCalledWith('Restored fewer proofs than previously stored', {
@@ -353,7 +353,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }]),
       ); // Wrong length
 
-      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Malformed state check',
       );
       expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
@@ -367,7 +367,7 @@ describe('WalletRestoreService', () => {
     it('should handle non-array state check response', async () => {
       mockWallet.checkProofsStates = mock(() => Promise.resolve(null));
 
-      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Malformed state check',
       );
     });
@@ -395,7 +395,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }, { state: 'UNSPENT' }]),
       );
 
-      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Proof not found',
       );
       expect(logger.error).toHaveBeenCalledWith('Proof not found', { mintUrl, keysetId, index: 1 });
@@ -520,14 +520,14 @@ describe('WalletRestoreService', () => {
   describe('integration between sweepKeyset and restoreKeyset', () => {
     it('should use the same batch restore parameters', async () => {
       const mockBatchRestore1 = mock(() => Promise.resolve({ proofs: [] }));
-      CashuWallet.prototype.batchRestore = mockBatchRestore1;
+      Wallet.prototype.batchRestore = mockBatchRestore1;
 
       await service.sweepKeyset(mintUrl, keysetId, bip39seed);
 
       const mockWallet = {
         batchRestore: mock(() => Promise.resolve({ proofs: [], lastCounterWithSignature: 0 })),
         checkProofsStates: mock(() => Promise.resolve([])),
-      } as unknown as CashuWallet;
+      } as unknown as Wallet;
 
       await service.restoreKeyset(mintUrl, mockWallet, keysetId);
 

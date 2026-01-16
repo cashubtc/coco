@@ -1,4 +1,4 @@
-import { type Proof, CashuMint, CashuWallet } from '@cashu/cashu-ts';
+import { type Proof, Mint, Wallet } from '@cashu/cashu-ts';
 import { mapProofToCoreProof } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
@@ -36,9 +36,10 @@ export class WalletRestoreService {
     this.logger?.debug('Sweeping keyset', { mintUrl, keysetId });
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const sweepWallet = new CashuWallet(new CashuMint(mintUrl, requestFn), {
+    const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       bip39seed,
     });
+    await sweepWallet.loadMint()
 
     const { proofs } = await sweepWallet.batchRestore(
       this.restoreBatchSize,
@@ -120,13 +121,10 @@ export class WalletRestoreService {
       total: sweepTotalAmount,
     });
 
-    const { send: sendData } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-      keep: 0,
-      send: sweepTotalAmount,
-    });
-    const { send, keep } = await wallet.send(sweepTotalAmount, checkedProofs.ready, {
-      outputData: { keep: [], send: sendData },
-    });
+    const { send, keep } = await wallet.ops
+      .send(sweepTotalAmount, checkedProofs.ready)
+      .asDeterministic()
+      .run();
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
@@ -147,7 +145,7 @@ export class WalletRestoreService {
    * Enforces the invariant: restored proofs must be >= previously stored proofs.
    * Throws on any validation or persistence error. No transactions are used here.
    */
-  async restoreKeyset(mintUrl: string, wallet: CashuWallet, keysetId: string): Promise<void> {
+  async restoreKeyset(mintUrl: string, wallet: Wallet, keysetId: string): Promise<void> {
     this.logger?.debug('Restoring keyset', { mintUrl, keysetId });
     const oldProofs = await this.proofService.getProofsByKeysetId(mintUrl, keysetId);
     this.logger?.debug('Existing proofs before restore', {
