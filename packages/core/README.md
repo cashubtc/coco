@@ -130,7 +130,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 - `MintQuoteService`: Creates and redeems mint quotes.
 - `MeltQuoteService`: Creates and pays melt quotes (spend via Lightning).
 - `CounterService`: Simple per-(mint,keyset) numeric counter with events.
-- `EventBus<CoreEvents>`: Lightweight typed pub/sub used internally.
+- `EventBus<CoreEvents>`: Lightweight typed pub/sub used internally (includes `subscriptions:paused` and `subscriptions:resumed`).
 
 ### Repositories
 

@@ -55,4 +55,6 @@ export interface CoreEvents {
   'melt-op:pending': { mintUrl: string; operationId: string; operation: MeltOperation };
   'melt-op:finalized': { mintUrl: string; operationId: string; operation: MeltOperation };
   'melt-op:rolled-back': { mintUrl: string; operationId: string; operation: MeltOperation };
+  'subscriptions:paused': void;
+  'subscriptions:resumed': void;
 }

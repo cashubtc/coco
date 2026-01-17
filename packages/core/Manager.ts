@@ -439,11 +439,13 @@ export class Manager {
     await this.disableMintQuoteProcessor();
 
     this.logger.info('Subscriptions paused');
+    await this.eventBus.emit('subscriptions:paused', undefined);
   }
 
   async resumeSubscriptions(): Promise<void> {
     this.subscriptionsPaused = false;
     this.logger.info('Resuming subscriptions');
+    await this.eventBus.emit('subscriptions:resumed', undefined);
 
     // Resume transport layer
     this.subscriptions.resume();
