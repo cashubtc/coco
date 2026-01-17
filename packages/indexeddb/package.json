@@ -10,10 +10,10 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@vitest/browser": "^3.2.4",
+    "coco-cashu-adapter-tests": "1.1.2-rc.40",
     "playwright": "^1.52.0",
-    "tsdown": "^0.14.1",
-    "vitest": "^3.2.4",
-    "coco-cashu-adapter-tests": "1.1.2-rc.40"
+    "tsdown": "^0.20.0-beta.3",
+    "vitest": "^3.2.4"
   },
   "exports": {
     ".": {

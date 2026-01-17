@@ -7,7 +7,7 @@
     "@types/bun": "latest",
     "coco-cashu-adapter-tests": "1.1.2-rc.40",
     "esbuild": "latest",
-    "tsdown": "^0.14.1",
+    "tsdown": "^0.20.0-beta.3",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.40.0"
   },
