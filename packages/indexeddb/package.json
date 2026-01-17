@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-indexeddb",
-  "version": "1.1.2-rc.40",
+  "version": "1.1.2-rc.41",
   "module": "index.ts",
   "type": "module",
   "files": [
@@ -10,7 +10,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@vitest/browser": "^3.2.4",
-    "coco-cashu-adapter-tests": "1.1.2-rc.40",
+    "coco-cashu-adapter-tests": "1.1.2-rc.41",
     "playwright": "^1.52.0",
     "tsdown": "^0.20.0-beta.3",
     "vitest": "^3.2.4"
@@ -32,6 +32,6 @@
   },
   "peerDependencies": {
     "typescript": "^5",
-    "coco-cashu-core": "1.1.2-rc.40"
+    "coco-cashu-core": "1.1.2-rc.41"
   }
 }

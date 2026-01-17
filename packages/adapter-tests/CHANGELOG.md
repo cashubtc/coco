@@ -1,5 +1,13 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.41
+
+### Patch Changes
+
+- Upgraded build dependencies to resolve issue with type declaration files
+- Updated dependencies
+  - coco-cashu-core@1.1.2-rc.41
+
 ## 1.1.2-rc.40
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.41
+
+### Patch Changes
+
+- Upgraded build dependencies to resolve issue with type declaration files
+
 ## 1.1.2-rc.40
 
 ### Patch Changes
