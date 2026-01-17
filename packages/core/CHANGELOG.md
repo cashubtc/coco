@@ -1,5 +1,12 @@
 # coco-cashu-core
 
+## 1.1.2-rc.40
+
+### Patch Changes
+
+- 7394e3d: Added Melt Saga for safer melt operations through MeltOperationService. This Service is hooked up through the new prepare and execure methods of the quotes API. It supports generic handlers for future Bolt12 support
+- ce556d0: Added pause and resume events to the lifecycle methods of manager, mostly so that plugins can react to those events and manage their own lifecycle accordingly
+
 ## 1.1.2-rc.39
 
 ### Patch Changes
