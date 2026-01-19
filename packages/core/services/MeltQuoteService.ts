@@ -1,4 +1,4 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState } from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response, MeltQuoteState, OutputConfig } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
@@ -141,30 +141,50 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
-        
-        // TODO: do we still want to mark as inflight here if meltProofsBolt11 does the send internally?
-        await this.proofService.setProofState(
+        const outputData = await this.proofService.createOutputsAndIncrementCounters(
           mintUrl,
-          selectedProofs.map((p) => p.secret),
-          'inflight',
+          {
+            keep: selectedAmount - quote.amount - quote.fee_reserve - swapFees,
+            send: quote.amount + quote.fee_reserve,
+          },
+          { includeFees: true },
         );
+        const outputConfig: OutputConfig = {
+          send: { type: 'custom', data: outputData.send },
+          keep: { type: 'custom', data: outputData.keep },
+        };
 
-        const { change } = await wallet.ops
-          .meltBolt11(quote, selectedProofs)
-          .asDeterministic()
-          .run();
+        // Note: The custom OutputType does not support automatic fee inclusion, it shouldn't be added in the
+        // sendConfig.
+        const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, undefined, outputConfig);
+        this.logger?.debug('Swapped successfully', {
+          mintUrl,
+          quoteId,
+          send,
+          keep,
+        });
 
-        // now that cashu-ts does the swap and send in the melt call, we only
-        // know about the cange that is returned, mark all the selectedProofs
-        // as spent, and save the change proofs.
         await this.proofService.saveProofs(
           mintUrl,
-          mapProofToCoreProof(mintUrl, 'ready', change),
+          mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
         );
-
         await this.proofService.setProofState(
           mintUrl,
           selectedProofs.map((proof) => proof.secret),
+          'spent',
+        );
+        await this.proofService.setProofState(
+          mintUrl,
+          send.map((proof) => proof.secret),
+          'inflight',
+        );
+
+        const { change } = await wallet.meltProofsBolt11(quote, send);
+
+        await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
+        await this.proofService.setProofState(
+          mintUrl,
+          send.map((proof) => proof.secret),
           'spent',
         );
       }

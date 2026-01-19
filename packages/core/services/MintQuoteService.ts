@@ -71,12 +71,11 @@ export class MintQuoteService {
         throw new Error('Quote amount undefined');
       }
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-      // const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-      //   keep: quote.amount,
-      //   send: 0,
-      // });
-      //const proofs = await wallet.mintProofsBolt11(quote.amount, quote.quote, { outputData: keep });
-      const proofs = await wallet.ops.mintBolt11(quote.amount, quote.quote).asDeterministic().run();
+      const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+        keep: quote.amount,
+        send: 0,
+      });
+      const proofs = await wallet.mintProofsBolt11(quote.amount, quote.quote, undefined, { type: 'custom', data: keep });
       await this.eventBus.emit('mint-quote:redeemed', { mintUrl, quoteId, quote });
       this.logger?.info('Mint quote redeemed, proofs minted', {
         mintUrl,

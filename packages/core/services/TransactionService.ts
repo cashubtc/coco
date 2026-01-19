@@ -1,4 +1,4 @@
-import type { Token } from '@cashu/cashu-ts';
+import type { Token, OutputConfig } from '@cashu/cashu-ts';
 import { getDecodedToken, getTokenMetadata } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { WalletService } from './WalletService';
@@ -47,8 +47,9 @@ export class TransactionService {
     try {
       const { keysets } = await this.mintService.ensureUpdatedMint(mint);
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+      const keysetIds: string[] = keysets.map((keyset) => keyset.id);
       let proofs =
-        typeof token === 'string' ? getDecodedToken(token, keysets).proofs : token.proofs;
+        typeof token === 'string' ? getDecodedToken(token, keysetIds).proofs : token.proofs;
       proofs = await this.proofService.prepareProofsForReceiving(proofs);
       if (!Array.isArray(proofs) || proofs.length === 0) {
         this.logger?.warn('Token contains no proofs', { mint });
@@ -76,7 +77,7 @@ export class TransactionService {
         throw new Error('Failed to create outputs for receive');
       }
 
-      const newProofs = await wallet.receive({ mint, proofs }, { outputData });
+      const newProofs = await wallet.receive({ mint, proofs, unit: wallet.unit }, undefined, { type: 'custom', data: outputData });
       await this.proofService.saveProofs(mint, mapProofToCoreProof(mint, 'ready', newProofs));
       await this.eventBus.emit('receive:created', { mintUrl: mint, token: { mint, proofs } });
       this.logger?.debug('Token received and proofs saved', {
@@ -129,7 +130,11 @@ export class TransactionService {
       selectedAmount,
       proofCount: selectedProofs.length,
     });
-    const { send, keep } = await wallet.send(amount, selectedProofs, { outputData });
+    const outputConfig: OutputConfig = {
+      send: { type: 'custom', data: outputData.send },
+      keep: { type: 'custom', data: outputData.keep },
+    };
+    const { send, keep } = await wallet.send(amount, selectedProofs, undefined, outputConfig);
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),

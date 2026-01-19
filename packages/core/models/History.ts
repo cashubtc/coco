@@ -13,14 +13,14 @@ export type MintHistoryEntry = BaseHistoryEntry & {
   paymentRequest: string;
   quoteId: string;
   state: MintQuoteState;
-  amount: number;
+  amount: number | null;
 };
 
 export type MeltHistoryEntry = BaseHistoryEntry & {
   type: 'melt';
   quoteId: string;
   state: MeltQuoteState;
-  amount: number;
+  amount: number | null;
 };
 
 /**

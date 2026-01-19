@@ -59,6 +59,9 @@ describe('MeltQuoteService.payMeltQuote', () => {
         return [];
       },
       async setProofState() { },
+      createOutputsAndIncrementCounters: mock(() =>
+        Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
+      ),
       saveProofs: mock(() => Promise.resolve()),
     } as any;
 
@@ -112,8 +115,14 @@ describe('MeltQuoteService.payMeltQuote', () => {
       meltProofsBolt11: meltProofsBolt11Spy,
       getFeesForProofs: getFeesForProofsSpy,
     };
-    // TODO: come back to this. do we really need to add the keysetId, keyset, keys here?
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
@@ -128,10 +137,13 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(setProofStateSpy).toHaveBeenNthCalledWith(1, mintUrl, ['secret-1'], 'inflight');
     expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-1'], 'spent');
 
-    // Verify meltProofs was called with selected proofs (not swapped proofs)
+    // Verify meltProofsBolt11 was called with selected proofs (not swapped proofs)
     expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
 
-    // Verify saveProofs WAS called to save the change from meltProofs
+    // Verify createOutputsAndIncrementCounters was NOT called (no swap needed)
+    expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+
+    // Verify saveProofs WAS called to save the change from meltProofsBolt11
     expect(mockProofService.saveProofs).toHaveBeenCalled();
 
     // Verify events were emitted
@@ -164,53 +176,75 @@ describe('MeltQuoteService.payMeltQuote', () => {
     mockProofService.selectProofsToSend = mock(() => Promise.resolve(selectedProofs));
     const setProofStateSpy = mock(() => Promise.resolve());
     mockProofService.setProofState = setProofStateSpy;
+    const createOutputsSpy = mock(() =>
+      Promise.resolve({
+        keep: [],
+        send: [],
+        sendAmount: 112, // This includes receiver fees (110 + 2)
+        keepAmount: 38, // This is after fee adjustment (40 - 2)
+      }),
+    );
+    mockProofService.createOutputsAndIncrementCounters = createOutputsSpy;
+
     const saveProofsSpy = mock(() => Promise.resolve());
     mockProofService.saveProofs = saveProofsSpy;
-    const meltBolt11Run = mock(() => Promise.resolve({ change: [makeProof(10, 'secret-4')] }));
-    const sendRun = mock(() => Promise.resolve({ send: swappedProofs, keep: keepProofs }));
+    const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [makeProof(10, 'secret-4')] }));
+    const sendSpy = mock(() => Promise.resolve({ send: swappedProofs, keep: keepProofs }));
 
-    // Create a wallet object that will be returned consistently and that provides
-    // the ops.meltBolt11(...).asDeterministic().run() and ops.send(...).asDeterministic().run()
+    // Create a wallet object that will be returned consistently
     const wallet = {
-      ops: {
-        meltBolt11: mock(() => ({ asDeterministic: mock(() => ({ run: meltBolt11Run })) })),
-        send: mock(() => ({ asDeterministic: mock(() => ({ run: sendRun })) })),
-      },
+      meltProofsBolt11: meltProofsBolt11Spy,
+      send: sendSpy,
       getFeesForProofs: mock(() => 0), // Mock swap fees as 0
     };
-    // TODO: come back to this. do we really need to add the keysetId, keyset, keys here?
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called
     expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, amountWithFee);
 
-    // Verify wallet.ops.meltBolt11 and wallet.ops.send were called via their asDeterministic.run chains
-    expect(wallet.ops.meltBolt11).toHaveBeenCalledWith(quote, selectedProofs);
-
-    // Verify saveProofs was called for the change returned by melt
-    expect(saveProofsSpy).toHaveBeenCalledTimes(1);
-    const firstSave = (saveProofsSpy as any).mock.calls[0];
-    expect(firstSave[0]).toBe(mintUrl);
-    expect(Array.isArray(firstSave[1])).toBeTruthy();
-
-    // Verify setProofState was called: first inflight, then spent for selected proofs
-    expect(setProofStateSpy).toHaveBeenCalledTimes(2);
-    expect(setProofStateSpy).toHaveBeenNthCalledWith(
-      1,
+    // Verify createOutputsAndIncrementCounters was called with includeFees option
+    // selectedAmount = 150, quote.amount = 100, quote.fee_reserve = 10, swapFees = 0
+    // keep = 150 - 100 - 10 - 0 = 40
+    // send = 100 + 10 = 110
+    expect(createOutputsSpy).toHaveBeenCalledWith(
       mintUrl,
-      selectedProofs.map((p) => p.secret),
-      'inflight',
-    );
-    expect(setProofStateSpy).toHaveBeenNthCalledWith(
-      2,
-      mintUrl,
-      selectedProofs.map((p) => p.secret),
-      'spent',
+      {
+        keep: 40, // selectedAmount - quote.amount - quote.fee_reserve - swapFees
+        send: 110, // quote.amount + quote.fee_reserve
+      },
+      { includeFees: true },
     );
 
-    // Verify meltProofs was called via ops.meltBolt11 and returns change that was saved
+    // Verify wallet.send was called with sendAmount from outputData (includes receiver fees)
+    const expectedOutputConfig = {
+      send: { type: 'custom', data: [] },
+      keep: { type: 'custom', data: [] },
+    };
+    expect(sendSpy).toHaveBeenCalledWith(112, selectedProofs, undefined, expectedOutputConfig);
+
+    // Verify saveProofs was called with swapped proofs
+    expect(saveProofsSpy).toHaveBeenCalled();
+
+    // Verify setProofState was called correctly
+    // First: mark selected proofs as spent
+    // Second: mark swapped send proofs as inflight
+    // Third: mark swapped send proofs as spent after melting
+    expect(setProofStateSpy).toHaveBeenCalledTimes(3);
+    expect(setProofStateSpy).toHaveBeenNthCalledWith(1, mintUrl, ['secret-1'], 'spent');
+    expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-2'], 'inflight');
+    expect(setProofStateSpy).toHaveBeenNthCalledWith(3, mintUrl, ['secret-2'], 'spent');
+
+    // Verify meltProofsBolt11 was called with swapped proofs (not original selected proofs)
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, swappedProofs);
 
     // Verify events were emitted
     expect(emittedEvents.length).toBeGreaterThanOrEqual(2);
@@ -279,8 +313,14 @@ describe('MeltQuoteService.payMeltQuote', () => {
       meltProofsBolt11: meltProofsBolt11Spy,
       getFeesForProofs: mock(() => 0),
     };
-    // TODO: come back to this. do we really need to add the keysetId, keyset, keys here?
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
@@ -298,9 +338,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       'spent',
     );
 
-    // Verify meltProofs was called with all selected proofs
+    // Verify meltProofsBolt11 was called with all selected proofs
     expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
-
-    // TODO: what can we do to verify no swap was performed?
   });
 });

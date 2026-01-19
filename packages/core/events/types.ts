@@ -2,9 +2,9 @@ import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { Counter } from '../models/Counter';
 import type {
-  MeltQuoteResponse,
+  MeltQuoteBolt11Response,
   MeltQuoteState,
-  MintQuoteResponse,
+  MintQuoteBolt11Response,
   MintQuoteState,
   Token,
 } from '@cashu/cashu-ts';
@@ -30,21 +30,23 @@ export interface CoreEvents {
   'proofs:reserved': { mintUrl: string; operationId: string; secrets: string[]; amount: number };
   'proofs:released': { mintUrl: string; secrets: string[] };
   'mint-quote:state-changed': { mintUrl: string; quoteId: string; state: MintQuoteState };
-  'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
+  'mint-quote:created': { mintUrl: string; quoteId: string; quote: MintQuoteBolt11Response };
   'mint-quote:added': {
     mintUrl: string;
     quoteId: string;
-    quote: MintQuoteResponse;
+    quote: MintQuoteBolt11Response;
   };
   'mint-quote:requeue': { mintUrl: string; quoteId: string };
-  'mint-quote:redeemed': { mintUrl: string; quoteId: string; quote: MintQuoteResponse };
-  'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
+  'mint-quote:redeemed': { mintUrl: string; quoteId: string; quote: MintQuoteBolt11Response };
+  'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteBolt11Response };
   'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };
-  'melt-quote:paid': { mintUrl: string; quoteId: string; quote: MeltQuoteResponse };
+  'melt-quote:paid': { mintUrl: string; quoteId: string; quote: MeltQuoteBolt11Response };
   /** Emitted when send operation is prepared (proofs reserved) */
   'send:prepared': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is executed (token created) */
   'send:pending': { mintUrl: string; operationId: string; operation: SendOperation; token: Token };
+  /** Emitted when send operation is executed (token created) this one should be cleaned up in the future */
+  'send:created': { mintUrl: string; token: Token };
   /** Emitted when send operation is finalized (proofs confirmed spent) */
   'send:finalized': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is rolled back */

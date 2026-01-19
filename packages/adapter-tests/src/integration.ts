@@ -4,6 +4,7 @@ import {
   Mint,
   Wallet,
   OutputData,
+  type OutputConfig,
   PaymentRequest,
   PaymentRequestTransportType,
   type MintKeys,
@@ -11,7 +12,10 @@ import {
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
-export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
+export type OutputDataFactory = (
+  amount: number,
+  keys: MintKeys | { id: string; unit?: string },
+) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -1903,12 +1907,24 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
         const senderProofs = await senderWallet.mintProofsBolt11(200, senderQuote.quote);
 
+        const outputData = [
+          OutputData.createSingleP2PKData({ pubkey: keypair.publicKeyHex }, 32, keyset.id),
+          OutputData.createSingleP2PKData({ pubkey: keypair2.publicKeyHex }, 32, keyset.id),
+        ];
+
+        const keepFactory: OutputDataFactory = (a, k) => OutputData.createSingleRandomData(a, k.id);
+        const outputConfig: OutputConfig = {
+          send: { type: 'custom', data: outputData },
+          keep: { type: 'factory', factory: keepFactory },
+        };
         // Create P2PK token with multiple proofs
-        const { send: p2pkProofs } = await senderWallet.ops
-          .send(64, senderProofs)
-          .asP2PK({ pubkey: [keypair.publicKeyHex, keypair2.publicKeyHex] })
-          .keepAsRandom()
-          .run();
+        const { send: p2pkProofs } = await senderWallet.send(64, senderProofs, undefined, outputConfig);
+        // Create P2PK token with multiple proofs
+        // const { send: p2pkProofs } = await senderWallet.ops
+        //   .send(64, senderProofs)
+        //   .asP2PK({ pubkey: [keypair.publicKeyHex, keypair2.publicKeyHex] })
+        //   .keepAsRandom()
+        //   .run();
 
         // Should have multiple proofs for 100 sats
         expect(p2pkProofs.length).toBeGreaterThan(1);
