@@ -149,6 +149,15 @@ export function mapProofToCoreProof(
   }));
 }
 
+export function mapCoreProofsToProofs(coreProofs: CoreProof[]): Proof[] {
+  return coreProofs.map((p) => ({
+    id: p.id,
+    amount: p.amount,
+    secret: p.secret,
+    C: p.C,
+  }));
+}
+
 export function assertNonNegativeInteger(paramName: string, value: number, logger?: Logger): void {
   if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
     logger?.warn('Invalid numeric value', { [paramName]: value });

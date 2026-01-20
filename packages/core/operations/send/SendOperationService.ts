@@ -27,6 +27,7 @@ import type { Logger } from '../../logging/Logger';
 import {
   generateSubId,
   mapProofToCoreProof,
+  mapCoreProofsToProofs,
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
@@ -556,12 +557,9 @@ export class SendOperationService {
                 { keep: reclaimAmount, send: 0 },
               );
 
-              const outputConfig: OutputConfig = {
-                send: { type: 'custom', data: [] },
-                keep: { type: 'custom', data: outputResult.keep },
-              };
               // Swap to reclaim
-              const { keep } = await wallet.send(reclaimAmount, sendProofs, undefined, outputConfig);
+              const reclaimProofs = mapCoreProofsToProofs(sendProofs);
+              const keep = await wallet.receive({ mint: mintUrl, proofs: reclaimProofs, unit: wallet.unit }, undefined, { type: 'custom', data: outputResult.keep });
 
               // Save reclaimed proofs
               await this.proofService.saveProofs(
