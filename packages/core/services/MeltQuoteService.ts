@@ -141,11 +141,18 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
+        const sendAmount = quote.amount + quote.fee_reserve;
+        const keepAmount = selectedAmount - sendAmount - swapFees;
+
+        // Create deterministic blank outputs for receiving change and reserve counters
+        const changeDelta = sendAmount - quote.amount;
+        const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl);
+
         const outputData = await this.proofService.createOutputsAndIncrementCounters(
           mintUrl,
           {
-            keep: selectedAmount - quote.amount - quote.fee_reserve - swapFees,
-            send: quote.amount + quote.fee_reserve,
+            keep: keepAmount,
+            send: sendAmount,
           },
           { includeFees: true },
         );
@@ -154,8 +161,6 @@ export class MeltQuoteService {
           keep: { type: 'custom', data: outputData.keep },
         };
 
-        // Note: The custom OutputType does not support automatic fee inclusion, it shouldn't be added in the
-        // sendConfig.
         const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, undefined, outputConfig);
         this.logger?.debug('Swapped successfully', {
           mintUrl,
@@ -179,8 +184,7 @@ export class MeltQuoteService {
           'inflight',
         );
 
-        const { change } = await wallet.meltProofsBolt11(quote, send);
-
+        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, { type: 'custom', data: blankOutputs });
         await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
         await this.proofService.setProofState(
           mintUrl,

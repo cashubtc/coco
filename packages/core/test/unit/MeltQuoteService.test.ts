@@ -6,7 +6,7 @@ import type { MeltQuoteRepository } from '../../repositories';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import type { Proof } from '@cashu/cashu-ts';
+import { OutputData, type Proof } from '@cashu/cashu-ts';
 import type { MeltQuote } from '../../models/MeltQuote';
 
 describe('MeltQuoteService.payMeltQuote', () => {
@@ -185,6 +185,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       }),
     );
     mockProofService.createOutputsAndIncrementCounters = createOutputsSpy;
+    const createBlanksSpy = mock(() => Promise.resolve([]));
+    mockProofService.createBlankOutputs = createBlanksSpy;
 
     const saveProofsSpy = mock(() => Promise.resolve());
     mockProofService.saveProofs = saveProofsSpy;
@@ -211,6 +213,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
     // Verify selectProofsToSend was called
     expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, amountWithFee);
 
+    // Verify createBlankOutputs was called with the correct amount
+    // sendAmount ( quote.amount = 100 + quote.fee_reserve = 10) - quote.amount = 100
+    expect(createBlanksSpy).toHaveBeenCalledWith(
+      10, // 100 + 10 - 100
+      mintUrl,
+    );
     // Verify createOutputsAndIncrementCounters was called with includeFees option
     // selectedAmount = 150, quote.amount = 100, quote.fee_reserve = 10, swapFees = 0
     // keep = 150 - 100 - 10 - 0 = 40
@@ -243,8 +251,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-2'], 'inflight');
     expect(setProofStateSpy).toHaveBeenNthCalledWith(3, mintUrl, ['secret-2'], 'spent');
 
+    const expectedBlankOutputType = { type: 'custom', data: [] };
+
     // Verify meltProofsBolt11 was called with swapped proofs (not original selected proofs)
-    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, swappedProofs);
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, swappedProofs, undefined, expectedBlankOutputType);
 
     // Verify events were emitted
     expect(emittedEvents.length).toBeGreaterThanOrEqual(2);

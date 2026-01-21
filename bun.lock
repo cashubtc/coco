@@ -10,7 +10,7 @@
     },
     "packages/adapter-tests": {
       "name": "coco-cashu-adapter-tests",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "dependencies": {
         "fake-bolt11": "^0.1.0",
       },
@@ -19,23 +19,23 @@
         "tsdown": "^0.20.0-beta.3",
       },
       "peerDependencies": {
-        "coco-cashu-core": "^1.1.2-rc.40",
-        "@cashu/cashu-ts": "^3.2.2",
+        "@cashu/cashu-ts": "^3.3.0",
+        "coco-cashu-core": "^1.1.2-rc.41",
         "typescript": "^5",
       },
     },
     "packages/core": {
       "name": "coco-cashu-core",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "dependencies": {
-        "@cashu/cashu-ts": "3.2.2",
+        "@cashu/cashu-ts": "3.3.0",
         "@noble/curves": "^2.0.1",
         "@noble/hashes": "^2.0.1",
         "@scure/bip32": "^2.0.1",
       },
       "devDependencies": {
         "@types/bun": "latest",
-        "coco-cashu-adapter-tests": "1.1.2-rc.40",
+        "coco-cashu-adapter-tests": "1.1.2-rc.41",
         "esbuild": "latest",
         "tsdown": "^0.20.0-beta.3",
         "typescript": "^5.9.2",
@@ -57,7 +57,7 @@
     },
     "packages/expo-sqlite": {
       "name": "coco-cashu-expo-sqlite",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "devDependencies": {
         "coco-cashu-adapter-tests": "1.1.2-rc.40",
         "tsdown": "^0.20.0-beta.3",
@@ -70,7 +70,7 @@
     },
     "packages/indexeddb": {
       "name": "coco-cashu-indexeddb",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "dependencies": {
         "dexie": "^4.0.8",
       },
@@ -89,14 +89,14 @@
     },
     "packages/react": {
       "name": "coco-cashu-react",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "devDependencies": {
         "@eslint/js": "^9.33.0",
         "@types/react": "^19.1.10",
         "@types/react-dom": "^19.1.7",
         "@vitejs/plugin-react": "^5.0.0",
         "ajv": "^8.17.1",
-        "coco-cashu-core": "1.1.2-rc.40",
+        "coco-cashu-core": "1.1.2-rc.41",
         "eslint": "^9.33.0",
         "eslint-plugin-react-hooks": "^5.2.0",
         "eslint-plugin-react-refresh": "^0.4.20",
@@ -108,13 +108,13 @@
         "vite-plugin-dts": "^4.5.4",
       },
       "peerDependencies": {
-        "coco-cashu-core": "1.1.2-rc.40",
+        "coco-cashu-core": "1.1.2-rc.41",
         "react": "^19",
       },
     },
     "packages/sqlite3": {
       "name": "coco-cashu-sqlite3",
-      "version": "1.1.2-rc.40",
+      "version": "1.1.2-rc.41",
       "devDependencies": {
         "@types/sqlite3": "^3.1.8",
         "coco-cashu-adapter-tests": "1.1.2-rc.40",
@@ -358,7 +358,7 @@
 
     "@babel/types": ["@babel/types@7.28.6", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-0ZrskXVEHSWIqZM/sQZ4EV3jZJXRkio/WCxaqKZP1g//CEWEPSfeZFcms4XeKBCHU0ZKnIkdJeU/kF+eRp5lBg=="],
 
-    "@cashu/cashu-ts": ["@cashu/cashu-ts@3.2.2", "", { "dependencies": { "@noble/curves": "^2.0.1", "@noble/hashes": "^2.0.1", "@scure/bip32": "^2.0.1" } }, "sha512-FD3EBYQiDRhZFwCMXuhAGRAb279WpGEWePzRQk58GJSZy16OdcP3hrYmj7L9wWdETy2fQU0wn+bCuw2NAB6szQ=="],
+    "@cashu/cashu-ts": ["@cashu/cashu-ts@3.3.0", "", { "dependencies": { "@noble/curves": "^2.0.1", "@noble/hashes": "^2.0.1", "@scure/base": "^2.0.0", "@scure/bip32": "^2.0.1" } }, "sha512-hHUOhjPLK77axDdj/4qO5mJ14rkh+rZGe1Gz2RbkW2j+SIglNbc2NsKSvjvoQcshupm02FudKi9Y3s3M8ZSYzg=="],
 
     "@changesets/apply-release-plan": ["@changesets/apply-release-plan@7.0.14", "", { "dependencies": { "@changesets/config": "^3.1.2", "@changesets/get-version-range-type": "^0.4.0", "@changesets/git": "^3.0.4", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "detect-indent": "^6.0.0", "fs-extra": "^7.0.1", "lodash.startcase": "^4.4.0", "outdent": "^0.5.0", "prettier": "^2.7.1", "resolve-from": "^5.0.0", "semver": "^7.5.3" } }, "sha512-ddBvf9PHdy2YY0OUiEl3TV78mH9sckndJR14QAt87KLEbIov81XO0q0QAmvooBxXlqRRP8I9B7XOzZwQG7JkWA=="],
 
@@ -2224,10 +2224,6 @@
 
     "@babel/plugin-transform-runtime/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
-    "@cashu/cashu-ts/@scure/bip32": ["@scure/bip32@1.7.0", "", { "dependencies": { "@noble/curves": "~1.9.0", "@noble/hashes": "~1.8.0", "@scure/base": "~1.2.5" } }, "sha512-E4FFX/N3f4B80AKWp5dP6ow+flD1LQZo/w8UnLGYZO674jS6YnYeepycOOksv+vLPSpgN35wgKgy+ybfTb2SMw=="],
-
-    "@changesets/parse/js-yaml": ["js-yaml@4.1.1", "", { "dependencies": { "argparse": "^2.0.1" }, "bin": { "js-yaml": "bin/js-yaml.js" } }, "sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA=="],
-
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
     "@eslint/eslintrc/ajv": ["ajv@6.12.6", "", { "dependencies": { "fast-deep-equal": "^3.1.1", "fast-json-stable-stringify": "^2.0.0", "json-schema-traverse": "^0.4.1", "uri-js": "^4.2.2" } }, "sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g=="],
@@ -2355,8 +2351,6 @@
     "cacache/minipass": ["minipass@3.3.6", "", { "dependencies": { "yallist": "^4.0.0" } }, "sha512-DxiNidxSEK+tHG6zOIklvNOwm3hvCrbUrdtzY74U6HKTJxvIDfOUL5W5P2Ghd3DTkhhKPYGqeNUIh5qcM4YBfw=="],
 
     "cacache/p-map": ["p-map@4.0.0", "", { "dependencies": { "aggregate-error": "^3.0.0" } }, "sha512-/bjOqmgETBYB5BoEeGVea8dmvHb2m9GLy1E9W43yeyfP6QQCZGFNa+XRceJEuDB6zqr+gKpIAmlLebMpykw/MQ=="],
-
-    "caller-callsite/callsites": ["callsites@2.0.0", "", {}, "sha512-ksWePWBloaWPxJYQ8TL0JHvtci6G5QTKwQ95RcWAa/lzoAKuAOflGdAK92hpHXjkwb8zLxoLNUoNYZgVsaJzvQ=="],
 
     "coco-cashu-indexeddb/@types/bun": ["@types/bun@1.3.3", "", { "dependencies": { "bun-types": "1.3.3" } }, "sha512-ogrKbJ2X5N0kWLLFKeytG0eHDleBYtngtlbu9cyBKFtNL3cnpDZkNdQj8flVf6WTZUX5ulI9AY1oa7ljhSrp+g=="],
 
@@ -2503,7 +2497,6 @@
     "@babel/highlight/chalk/escape-string-regexp": ["escape-string-regexp@1.0.5", "", {}, "sha512-vbRorB5FUQWvla16U8R/qgaFIya2qGzwDrNmCZuYKrbdSUMG6I1ZCGQRefkRVhuOkIGVne7BQ35DSfo1qvJqFg=="],
 
     "@babel/highlight/chalk/supports-color": ["supports-color@5.5.0", "", { "dependencies": { "has-flag": "^3.0.0" } }, "sha512-QjVjwdXIt408MIiAqCX4oUKsgU2EqAGzs2Ppkm4aQYbjm+ZEWEcW4SfFNTr4uMNZma0ey4f5lgLrkB0aX0QMow=="],
-
 
     "@eslint/eslintrc/ajv/json-schema-traverse": ["json-schema-traverse@0.4.1", "", {}, "sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg=="],
 
