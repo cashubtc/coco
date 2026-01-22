@@ -3,7 +3,7 @@ import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
@@ -29,7 +29,7 @@ describe('KeyRingService', () => {
 
       expect(result.publicKeyHex).toBeDefined();
       expect(result.publicKeyHex.length).toBe(66); // 32 bytes * 2 for hex + '02' prefix
-      expect(result.publicKeyHex.startsWith('02')).toBe(true);
+      expect(result.publicKeyHex.startsWith('02') || result.publicKeyHex.startsWith('03')).toBe(true);
       expect('secretKey' in result).toBe(false);
 
       // Verify it was stored in the repository
@@ -162,8 +162,8 @@ describe('KeyRingService', () => {
       const secretKey = schnorr.utils.randomSecretKey();
       const result = await service.addKeyPair(secretKey);
 
-      // The public key should have '02' prefix for compressed format
-      const publicKeyHex = '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+      // The public key should be in compressed format (starts with 02 or 03)
+      const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey));
       const stored = await repo.getPersistedKeyPair(publicKeyHex);
 
       expect(stored).not.toBeNull();
@@ -482,6 +482,46 @@ describe('KeyRingService', () => {
       await expect(service.signProof(proof, kp.publicKeyHex)).rejects.toThrow(
         'Proof secret is required and must be a string',
       );
+    });
+  });
+
+  describe('P2PK Test Vectors', () => {
+    // Mnemonic: half depart obvious quality work element tank gorilla view sugar picture humble
+    // Seed (calculated via PBKDF2): dd44ee516b0647e80b488e8dcc56d736a148f15276bef588b37057476d4b2b25780d3688a32b37353d6995997842c0fd8b412475c891c16310471fbc86dcbda8
+    const TEST_VECTOR_SEED_HEX =
+      'dd44ee516b0647e80b488e8dcc56d736a148f15276bef588b37057476d4b2b25780d3688a32b37353d6995997842c0fd8b412475c891c16310471fbc86dcbda8';
+    
+    // Convert hex seed to Uint8Array
+    const seedBytes = new Uint8Array(
+      TEST_VECTOR_SEED_HEX.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
+    );
+
+    const EXPECTED_PUBKEYS = [
+      '03381fbf0996b81d49c35bae17a70d71db9a9e802b1af5c2516fc90381f4741e06', // index 0
+      '039bbb7a9cd234da13a113cdd8e037a25c66bbf3a77139d652786a1d7e9d73e600', // index 1
+      '02ffd52ed54761750d75b67342544cc8da8a0994f84c46d546e0ab574dd3651a29', // index 2
+      '02751ab780960ff177c2300e440fddc0850238a78782a1cab7b0ae03c41978d92d', // index 3
+      '0391a9ba1c3caf39ca0536d44419a6ceeda922ee61aa651a72a60171499c02b423', // index 4
+    ];
+
+    let vectorService: KeyRingService;
+    let vectorRepo: MemoryKeyRingRepository;
+
+    beforeEach(() => {
+      vectorRepo = new MemoryKeyRingRepository();
+      const vectorSeedService = new SeedService(async () => seedBytes);
+      vectorService = new KeyRingService(vectorRepo, vectorSeedService);
+    });
+
+    it('generates correct public keys for test vectors', async () => {
+      for (let i = 0; i < EXPECTED_PUBKEYS.length; i++) {
+        const keyPair = await vectorService.generateNewKeyPair();
+        expect(keyPair.publicKeyHex).toBe(EXPECTED_PUBKEYS[i]);
+        
+        // Also verify the derivation index is correct in storage
+        const stored = await vectorRepo.getPersistedKeyPair(keyPair.publicKeyHex);
+        expect(stored?.derivationIndex).toBe(i);
+      }
     });
   });
 });
