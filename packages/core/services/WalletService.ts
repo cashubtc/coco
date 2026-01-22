@@ -1,4 +1,4 @@
-import { Mint, Wallet, type MintKeys, type MintKeyset } from '@cashu/cashu-ts';
+import { Mint, Wallet, type MintKeys, type MintKeyset, type KeyChainCache } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
@@ -117,33 +117,31 @@ export class WalletService {
       throw new Error(`No valid keysets found for mint ${mintUrl}`);
     }
 
-    const keys = validKeysets.map((keyset) => ({
+    const keysetCache = validKeysets.map((keyset) => ({
       id: keyset.id,
       unit: keyset.unit,
+      active: keyset.active,
+      input_fee_ppk: keyset.feePpk,
       keys: keyset.keypairs,
     }));
 
-    const compatibleKeysets: MintKeyset[] = validKeysets.map((k) => ({
-      id: k.id,
-      unit: 'sat' as const,
-      active: k.active,
-      input_fee_ppk: k.feePpk,
-    }));
+    const cache: KeyChainCache = {
+      mintUrl: mint.mintUrl,
+      unit: DEFAULT_UNIT,
+      keysets: keysetCache,
+    };
 
     const seed = await this.seedService.getSeed();
 
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
     const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
-      mintInfo: mint.mintInfo,
       unit: DEFAULT_UNIT,
-      keys,
-      keysets: compatibleKeysets,
       // @ts-ignore
       logger:
         this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
       bip39seed: seed,
     });
-    await wallet.loadMint();
+    wallet.loadMintFromCache(mint.mintInfo, cache);
 
     this.walletCache.set(mintUrl, {
       wallet,
