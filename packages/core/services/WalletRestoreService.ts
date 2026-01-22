@@ -1,4 +1,4 @@
-import { type Proof, Mint, Wallet } from '@cashu/cashu-ts';
+import { type Proof, Mint, Wallet, type OutputConfig } from '@cashu/cashu-ts';
 import { mapProofToCoreProof } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
@@ -121,10 +121,15 @@ export class WalletRestoreService {
       total: sweepTotalAmount,
     });
 
-    const { send, keep } = await wallet.ops
-      .send(sweepTotalAmount, checkedProofs.ready)
-      .asDeterministic()
-      .run();
+    const outputResults = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+      keep: 0,
+      send: sweepTotalAmount,
+    })
+    const outputConfig: OutputConfig = {
+      send: { type: 'custom', data: outputResults.send },
+      keep: { type: 'custom', data: outputResults.keep },
+    };
+    const { send, keep } = await wallet.send(sweepTotalAmount, checkedProofs.ready, undefined, outputConfig)
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),

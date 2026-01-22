@@ -31,6 +31,12 @@ describe('WalletRestoreService', () => {
     // Mock ProofService
     proofService = {
       getProofsByKeysetId: mock(() => Promise.resolve([])),
+      createOutputsAndIncrementCounters: mock(() =>
+        Promise.resolve({
+          keep: [],
+          send: [{ amount: 100, counter: 1, id: keysetId }],
+        }),
+      ),
       saveProofs: mock(() => Promise.resolve()),
     } as unknown as ProofService;
 
@@ -42,18 +48,14 @@ describe('WalletRestoreService', () => {
     // Mock WalletService
     walletService = {
       getWalletWithActiveKeysetId: mock(() =>
-        // Provide a wallet object that has an ops.send(...).asDeterministic().run() chain
         Promise.resolve({
           wallet: {
-            ops: {
-              send: mock(() => ({
-                asDeterministic: mock(() => ({
-                  run: mock(() =>
-                    Promise.resolve({ send: [makeProof(100, 'send-proof')], keep: [] }),
-                  ),
-                })),
-              })),
-            },
+            send: mock(() =>
+              Promise.resolve({
+                send: [makeProof(100, 'send-proof')],
+                keep: [],
+              }),
+            ),
           },
         }),
       ),
@@ -104,13 +106,11 @@ describe('WalletRestoreService', () => {
 
       expect(mockBatchRestore).toHaveBeenCalledTimes(1);
       expect(mockCheckProofsStates).toHaveBeenCalledTimes(1);
-      // saveProofs should have been called with the mint url and the outputs returned by wallet.ops.send
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
+        keep: 0,
+        send: 99, // 50 + 50 - 1 fee
+      });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      const savedArgs = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedArgs[0]).toBe(mintUrl);
-      expect(Array.isArray(savedArgs[1])).toBeTruthy();
-      // wallet.ops.send mock returns a single send proof in these tests
-      expect(savedArgs[1].length).toBe(1);
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
         mintUrl,
         keysetId,
@@ -178,11 +178,11 @@ describe('WalletRestoreService', () => {
         ready: 2,
         spent: 1,
       });
-      // saveProofs should have been called with the results from wallet.ops.send
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
+        keep: 0,
+        send: 74, // 50 + 25 - 1 fee
+      });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      const savedArgsMixed = (proofService.saveProofs as any).mock.calls[0];
-      expect(savedArgsMixed[0]).toBe(mintUrl);
-      expect(Array.isArray(savedArgsMixed[1])).toBeTruthy();
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
         mintUrl,
         keysetId,

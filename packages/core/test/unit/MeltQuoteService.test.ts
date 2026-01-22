@@ -350,5 +350,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     // Verify meltProofsBolt11 was called with all selected proofs
     expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
+
+    // Verify no swap was performed
+    expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
   });
 });

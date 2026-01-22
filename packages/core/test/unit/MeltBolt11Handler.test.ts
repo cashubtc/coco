@@ -153,7 +153,7 @@ describe('MeltBolt11Handler', () => {
         }),
       ),
       getFeesForProofs: mock(() => 1),
-      swap: mock(() =>
+      send: mock(() =>
         Promise.resolve({
           keep: [makeProof('keep-1', 50)],
           send: [makeProof('send-1', 60)],
@@ -222,10 +222,10 @@ describe('MeltBolt11Handler', () => {
 
     // Mock Logger
     logger = {
-      debug: mock(() => {}),
-      info: mock(() => {}),
-      warn: mock(() => {}),
-      error: mock(() => {}),
+      debug: mock(() => { }),
+      info: mock(() => { }),
+      warn: mock(() => { }),
+      error: mock(() => { }),
     } as Logger;
   });
 
@@ -500,8 +500,8 @@ describe('MeltBolt11Handler', () => {
         const ctx = buildExecuteContext(operation, inputProofs);
         await handler.execute(ctx);
 
-        // Verify swap was called
-        expect(mockWallet.swap).toHaveBeenCalled();
+        // Verify send was called
+        expect(mockWallet.send).toHaveBeenCalled();
 
         // Verify input proofs were set to inflight before swap
         expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'inflight');
