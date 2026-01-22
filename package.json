@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "bun run --filter='*' build",
+    "typecheck": "bun run --filter='coco-cashu-core' typecheck && bun run --filter='coco-cashu-adapter-tests' typecheck && bun run --filter='coco-cashu-indexeddb' typecheck && bun run --filter='coco-cashu-expo-sqlite' typecheck && bun run --filter='coco-cashu-sqlite3' typecheck && bun run --filter='coco-cashu-react' typecheck",
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
     "docs:preview": "vitepress preview packages/docs"

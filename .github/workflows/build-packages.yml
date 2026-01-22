@@ -40,3 +40,6 @@ jobs:
 
           # Build react (depends on core)
           cd packages/react && bun run build && cd ../..
+
+      - name: Typecheck packages in dependency order
+        run: bun run typecheck

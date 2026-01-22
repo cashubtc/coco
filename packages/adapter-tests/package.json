@@ -19,7 +19,8 @@
     }
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "typescript": "^5",

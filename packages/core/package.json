@@ -27,6 +27,7 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration",
