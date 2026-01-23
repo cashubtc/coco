@@ -51,6 +51,21 @@ describe('HistoryService - mint-quote:added', () => {
       async updateHistoryEntryState(): Promise<void> {
         // Not used in these tests
       },
+      async getHistoryEntryById(): Promise<null> {
+        // Not used in these tests
+        return null
+      },
+      async updateHistoryEntry(): Promise<HistoryEntry> {
+        // Not used in these tests
+        return Array.from(historyEntries.values())[0] as MintHistoryEntry;
+      },
+      async updateSendHistoryState(): Promise<void> {
+        // Not used in these tests
+      },
+      async deleteHistoryEntry(): Promise<void> {
+        // Not used in these tests
+      },
+
     } as HistoryRepository;
 
     // Create event bus
@@ -111,7 +126,7 @@ describe('HistoryService - mint-quote:added', () => {
       unit: 'sat',
       paymentRequest: 'lnbc500...',
       createdAt: Date.now(),
-    });
+    } as Omit<MintHistoryEntry, 'id'>);
 
     const quote: MintQuoteResponse = {
       quote: 'existing-quote',

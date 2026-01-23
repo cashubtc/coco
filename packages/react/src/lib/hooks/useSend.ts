@@ -1,7 +1,13 @@
-import type { Token } from '@cashu/cashu-ts';
-import type { SendOperation, PreparedSendOperation, PendingSendOperation } from 'coco-cashu-core';
+import type {
+  SendOperation,
+  PreparedSendOperation,
+  PendingSendOperation,
+  Manager,
+} from 'coco-cashu-core';
 import { useManager } from '../contexts/ManagerContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+type Token = Awaited<ReturnType<Manager['wallet']['send']>>;
 
 type SendStatus = 'idle' | 'loading' | 'success' | 'error';
 

@@ -1,4 +1,4 @@
-import type { Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
+import type { Proof, SerializedBlindedSignature, OutputConfig } from '@cashu/cashu-ts';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -333,22 +333,26 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     });
 
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'inflight');
-    const swap = await wallet.swap(sendAmount, inputProofs, { outputData: swapData });
+    const outputConfig: OutputConfig = {
+      send: { type: 'custom', data: swapData.send },
+      keep: { type: 'custom', data: swapData.keep },
+    };
+    const { send, keep } = await wallet.send(sendAmount, inputProofs, undefined, outputConfig);
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
 
     const newProofs = [
-      ...mapProofToCoreProof(mintUrl, 'ready', swap.keep, { createdByOperationId: operationId }),
-      ...mapProofToCoreProof(mintUrl, 'inflight', swap.send, { createdByOperationId: operationId }),
+      ...mapProofToCoreProof(mintUrl, 'ready', keep, { createdByOperationId: operationId }),
+      ...mapProofToCoreProof(mintUrl, 'inflight', send, { createdByOperationId: operationId }),
     ];
     await ctx.proofService.saveProofs(mintUrl, newProofs);
 
     ctx.logger?.debug('Pre-melt swap completed', {
       operationId,
-      keepCount: swap.keep.length,
-      sendCount: swap.send.length,
+      keepCount: keep.length,
+      sendCount: send.length,
     });
 
-    return swap.send;
+    return send;
   }
 
   // ============================================================================

@@ -1,7 +1,7 @@
 import type {
-  MeltQuoteResponse,
+  MeltQuoteBolt11Response,
   MeltQuoteState,
-  MintQuoteResponse,
+  MintQuoteBolt11Response,
   MintQuoteState,
   Token,
 } from '@cashu/cashu-ts';
@@ -217,7 +217,7 @@ export class HistoryService {
     }
   }
 
-  async handleMeltQuoteCreated(mintUrl: string, quoteId: string, quote: MeltQuoteResponse) {
+  async handleMeltQuoteCreated(mintUrl: string, quoteId: string, quote: MeltQuoteBolt11Response) {
     const entry: Omit<MeltHistoryEntry, 'id'> = {
       type: 'melt',
       createdAt: Date.now(),
@@ -238,7 +238,7 @@ export class HistoryService {
     }
   }
 
-  async handleMintQuoteCreated(mintUrl: string, quoteId: string, quote: MintQuoteResponse) {
+  async handleMintQuoteCreated(mintUrl: string, quoteId: string, quote: MintQuoteBolt11Response) {
     const entry: Omit<MintHistoryEntry, 'id'> = {
       type: 'mint',
       mintUrl,
@@ -260,7 +260,7 @@ export class HistoryService {
     }
   }
 
-  async handleMintQuoteAdded(mintUrl: string, quoteId: string, quote: MintQuoteResponse) {
+  async handleMintQuoteAdded(mintUrl: string, quoteId: string, quote: MintQuoteBolt11Response) {
     // Check if history entry already exists for this quote
     const existing = await this.historyRepository.getMintHistoryEntry(mintUrl, quoteId);
     if (existing) {

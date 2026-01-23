@@ -1,4 +1,3 @@
-import type { MintQuoteState, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type { Table } from 'dexie';
 import type {
   HistoryEntry,
@@ -9,6 +8,10 @@ import type {
   SendHistoryState,
 } from 'coco-cashu-core';
 import type { IdbDb } from '../lib/db.ts';
+
+type MintQuoteState = MintHistoryEntry['state'];
+type MeltQuoteState = MeltHistoryEntry['state'];
+type SendToken = NonNullable<SendHistoryEntry['token']>;
 
 type NewHistoryEntry =
   | Omit<MintHistoryEntry, 'id'>
@@ -183,7 +186,7 @@ export class IdbHistoryRepository {
       base.quoteId = history.quoteId;
       base.state = history.state as MeltQuoteState;
     } else if (history.type === 'send') {
-      base.tokenJson = history.token ? JSON.stringify(history.token as Token) : null;
+      base.tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
       base.operationId = history.operationId;
       base.state = history.state;
     }
@@ -224,7 +227,7 @@ export class IdbHistoryRepository {
         amount: row.amount,
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as Token) : undefined,
+        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
       };
     }
     return { ...base, type: 'receive', amount: row.amount } as HistoryEntry;

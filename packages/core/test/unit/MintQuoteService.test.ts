@@ -4,7 +4,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintQuoteRepository } from '../../repositories';
 import type { MintQuote } from '../../models/MintQuote';
-import type { MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 describe('MintQuoteService.addExistingMintQuotes', () => {
   let service: MintQuoteService;
@@ -61,19 +61,19 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
   });
 
   it('adds new quotes and emits events', async () => {
-    const quotes: MintQuoteResponse[] = [
+    const quotes: MintQuoteBolt11Response[] = [
       {
         quote: 'quote1',
         amount: 100,
         state: 'PAID',
         request: 'lnbc100...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
       {
         quote: 'quote2',
         amount: 200,
         state: 'ISSUED',
         request: 'lnbc200...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
     ];
 
     const result = await service.addExistingMintQuotes('https://mint.test', quotes);
@@ -107,19 +107,19 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
       unit: 'sat',
     });
 
-    const quotes: MintQuoteResponse[] = [
+    const quotes: MintQuoteBolt11Response[] = [
       {
         quote: 'existing',
         amount: 50,
         state: 'PAID', // Different state, but still skipped
         request: 'lnbc50...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
       {
         quote: 'new',
         amount: 100,
         state: 'PAID',
         request: 'lnbc100...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
     ];
 
     const result = await service.addExistingMintQuotes('https://mint.test', quotes);
@@ -156,25 +156,25 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
       repoQuotes.set(key, quote);
     };
 
-    const quotes: MintQuoteResponse[] = [
+    const quotes: MintQuoteBolt11Response[] = [
       {
         quote: 'quote1',
         amount: 100,
         state: 'PAID',
         request: 'lnbc100...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
       {
         quote: 'quote2',
         amount: 200,
         state: 'PAID',
         request: 'lnbc200...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
       {
         quote: 'quote3',
         amount: 300,
         state: 'ISSUED',
         request: 'lnbc300...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
     ];
 
     const result = await service.addExistingMintQuotes('https://mint.test', quotes);
@@ -189,13 +189,13 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
   });
 
   it('correctly passes quote data in events', async () => {
-    const quote: MintQuoteResponse = {
+    const quote: MintQuoteBolt11Response = {
       quote: 'detailed-quote',
       amount: 1000,
       state: 'PAID',
       request: 'lnbc1000...',
       expiry: 3600,
-    } as MintQuoteResponse;
+    } as MintQuoteBolt11Response;
 
     await service.addExistingMintQuotes('https://mint.test', [quote]);
 
@@ -216,22 +216,22 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
   });
 
   it('processes multiple mints correctly', async () => {
-    const mint1Quotes: MintQuoteResponse[] = [
+    const mint1Quotes: MintQuoteBolt11Response[] = [
       {
         quote: 'mint1-quote',
         amount: 100,
         state: 'PAID',
         request: 'lnbc100...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
     ];
 
-    const mint2Quotes: MintQuoteResponse[] = [
+    const mint2Quotes: MintQuoteBolt11Response[] = [
       {
         quote: 'mint2-quote',
         amount: 200,
         state: 'ISSUED',
         request: 'lnbc200...',
-      } as MintQuoteResponse,
+      } as MintQuoteBolt11Response,
     ];
 
     const result1 = await service.addExistingMintQuotes('https://mint1.test', mint1Quotes);

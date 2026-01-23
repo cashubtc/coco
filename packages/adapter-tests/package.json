@@ -19,12 +19,13 @@
     }
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "typescript": "^5",
     "coco-cashu-core": "^1.1.2-rc.41",
-    "@cashu/cashu-ts": "^2.7.2"
+    "@cashu/cashu-ts": "^3.3.0"
   },
   "dependencies": {
     "fake-bolt11": "^0.1.0"

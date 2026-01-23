@@ -1,12 +1,11 @@
 import {
-  CashuMint,
-  type MintAllKeysets,
+  Mint,
   type CheckStatePayload,
   OutputData,
   type Proof,
-  type MeltQuoteResponse,
-  type PartialMeltQuoteResponse,
-  type Bolt12MeltQuoteResponse,
+  type MeltQuoteBolt11Response,
+  type MeltQuoteBolt12Response,
+  type GetKeysetsResponse,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
@@ -18,7 +17,7 @@ import type { MintRequestProvider } from './MintRequestProvider.ts';
  * sharing the same rate limits with other components (e.g., WalletService).
  */
 export class MintAdapter {
-  private cashuMints: Record<string, CashuMint> = {};
+  private cashuMints: Record<string, Mint> = {};
   private readonly requestProvider: MintRequestProvider;
 
   constructor(requestProvider: MintRequestProvider) {
@@ -30,7 +29,7 @@ export class MintAdapter {
     return await cashuMint.getInfo();
   }
 
-  async fetchKeysets(mintUrl: string): Promise<MintAllKeysets> {
+  async fetchKeysets(mintUrl: string): Promise<GetKeysetsResponse> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.getKeySets();
   }
@@ -44,10 +43,10 @@ export class MintAdapter {
     return keysets[0].keys;
   }
 
-  private getCashuMint(mintUrl: string): CashuMint {
+  private getCashuMint(mintUrl: string): Mint {
     if (!this.cashuMints[mintUrl]) {
       const requestFn = this.requestProvider.getRequestFn(mintUrl);
-      this.cashuMints[mintUrl] = new CashuMint(mintUrl, requestFn);
+      this.cashuMints[mintUrl] = new Mint(mintUrl, { customRequest: requestFn });
     }
     return this.cashuMints[mintUrl];
   }
@@ -55,17 +54,17 @@ export class MintAdapter {
   // Check current state of a bolt11 mint quote
   async checkMintQuoteState(mintUrl: string, quoteId: string): Promise<unknown> {
     const cashuMint = this.getCashuMint(mintUrl);
-    return await cashuMint.checkMintQuote(quoteId);
+    return await cashuMint.checkMintQuoteBolt11(quoteId);
   }
 
   // Check current state of a bolt11 melt quote (returns full response including change)
-  async checkMeltQuote(mintUrl: string, quoteId: string): Promise<PartialMeltQuoteResponse> {
+  async checkMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
-    return await cashuMint.checkMeltQuote(quoteId);
+    return await cashuMint.checkMeltQuoteBolt11(quoteId);
   }
 
   // Check current state of a bolt11 melt quote (returns only state)
-  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<PartialMeltQuoteResponse['state']> {
+  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt11Response['state']> {
     const res = await this.checkMeltQuote(mintUrl, quoteId);
     return res.state;
   }
@@ -83,10 +82,10 @@ export class MintAdapter {
     proofsToSend: Proof[],
     changeOutputs: OutputData[],
     quoteId: string,
-  ): Promise<PartialMeltQuoteResponse> {
+  ): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
-    return cashuMint.melt({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+    return cashuMint.meltBolt11({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
   }
 
   async customMeltBolt12(
@@ -94,7 +93,7 @@ export class MintAdapter {
     proofsToSend: Proof[],
     changeOutputs: OutputData[],
     quoteId: string,
-  ): Promise<Bolt12MeltQuoteResponse> {
+  ): Promise<MeltQuoteBolt12Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
     return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });

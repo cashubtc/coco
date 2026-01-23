@@ -27,7 +27,7 @@ export type MeltOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
-import type { MeltQuoteResponse } from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 

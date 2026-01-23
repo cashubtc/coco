@@ -1,17 +1,22 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
 import {
-  CashuMint,
-  CashuWallet,
+  Mint,
+  Wallet,
   OutputData,
+  type OutputConfig,
   PaymentRequest,
   PaymentRequestTransportType,
   type MintKeys,
   type Token,
+  type HasKeysetKeys,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
-export type OutputDataFactory = (amount: number, keys: MintKeys) => OutputData;
+export type OutputDataFactory = (
+  amount: number,
+  keys: MintKeys | HasKeysetKeys,
+) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -320,7 +325,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
         });
 
-        const token = await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
         await sendPendingPromise;
 
         expect(token.mint).toBe(mintUrl);
@@ -355,7 +361,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
         });
 
-        await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         await preparedPromise;
         await pendingPromise;
@@ -366,7 +373,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const initialAmount = initialBalance[mintUrl] || 0;
 
         const sendAmount = 30;
-        const token = await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
         const balanceAfterSend = await mgr!.wallet.getBalances();
         const amountAfterSend = balanceAfterSend[mintUrl] || 0;
@@ -389,7 +397,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should receive tokens from encoded string', async () => {
         const sendAmount = 25;
-        const token = await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
         const encodedToken = getEncodedToken(token);
 
@@ -411,7 +420,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const tokens: Token[] = [];
 
         for (const amount of amounts) {
-          const token = await mgr!.wallet.send(mintUrl, amount);
+          const preparedSend = await mgr!.send.prepareSend(mintUrl, amount);
+          const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
           tokens.push(token);
         }
 
@@ -655,7 +665,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should create send history entry with state when send operation is executed', async () => {
         const sendAmount = 20;
-        await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         // Wait for events to settle
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -683,7 +694,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         const sendAmount = 15;
-        await mgr!.wallet.send(mintUrl, sendAmount);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         // Wait for events to settle
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -746,7 +758,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(Array.isArray(pendingBefore)).toBe(true);
 
         // Send tokens to create a pending operation
-        await mgr!.wallet.send(mintUrl, 30);
+        const sendAmount = 30;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         const pendingAfter = await mgr!.send.getPendingOperations();
         expect(pendingAfter.length).toBeGreaterThan(0);
@@ -763,7 +777,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        await mgr!.wallet.send(mintUrl, 25);
+        const sendAmount = 25;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         expect(operationId).toBeDefined();
 
@@ -783,7 +799,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const balanceBefore = await mgr!.wallet.getBalances();
         const amountBefore = balanceBefore[mintUrl] || 0;
 
-        const token = await mgr!.wallet.send(mintUrl, 40);
+        const sendAmount = 40;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         const balanceAfterSend = await mgr!.wallet.getBalances();
         const amountAfterSend = balanceAfterSend[mintUrl] || 0;
@@ -821,7 +839,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        await mgr!.wallet.send(mintUrl, 35);
+        const sendAmount = 35;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         // Wait for history to be updated
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -856,8 +876,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        const token = await mgr!.wallet.send(mintUrl, 20);
-        console.log('token', token);
+        const sendAmount = 20;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
         // Receive the token (simulates recipient claiming)
         await mgr!.wallet.receive(token);
@@ -885,7 +906,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        await mgr!.wallet.send(mintUrl, 25);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, 25);
+        await mgr!.send.executePreparedSend(preparedSend.id);
 
         // Verify operation is pending
         const operationBefore = await mgr!.send.getOperation(operationId!);
@@ -950,7 +972,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        await mgr!.wallet.send(mintUrl, 40);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, 40);
+        await mgr!.send.executePreparedSend(preparedSend.id);
         expect(operationId).toBeDefined();
 
         // Start two rollbacks concurrently - second should fail
@@ -979,7 +1002,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        const token = await mgr!.wallet.send(mintUrl, 35);
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, 35);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
         expect(operationId).toBeDefined();
 
         // Receive the token to make proofs spent (so finalize can work)
@@ -1183,7 +1207,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             savedProofs.push(payload);
           });
 
-          await mgr.wallet.send(mintUrl, 50);
+          const preparedSend = await mgr!.send.prepareSend(mintUrl, 50);
+          await mgr!.send.executePreparedSend(preparedSend.id);
 
           await new Promise((resolve) => setTimeout(resolve, 500));
 
@@ -1317,7 +1342,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(balanceAfterMint[mintUrl] || 0).toBeGreaterThanOrEqual(500);
 
           const sendAmount = 100;
-          const token1 = await mgr.wallet.send(mintUrl, sendAmount);
+          const preparedSend1 = await mgr!.send.prepareSend(mintUrl, sendAmount);
+          const { token: token1 } = await mgr!.send.executePreparedSend(preparedSend1.id);
           expect(token1.proofs.length).toBeGreaterThan(0);
 
           const balanceAfterSend = await mgr.wallet.getBalances();
@@ -1330,7 +1356,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const amountAfterReceive = balanceAfterReceive[mintUrl] || 0;
           expect(amountAfterReceive).toBeGreaterThan(amountAfterSend);
 
-          const token2 = await mgr.wallet.send(mintUrl, 50);
+          const preparedSend2 = await mgr!.send.prepareSend(mintUrl, 50);
+          const { token: token2 } = await mgr!.send.executePreparedSend(preparedSend2.id);
           await mgr.wallet.receive(token2);
 
           const finalBalance = await mgr.wallet.getBalances();
@@ -1706,25 +1733,27 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(keypair.publicKeyHex).toBeDefined();
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+        const senderWallet = new Wallet(new Mint(mintUrl));
+        await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuote(100);
-        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
           await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
           attempts++;
         }
-        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote);
+        const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
         expect(senderProofs.length).toBeGreaterThan(0);
 
         // Create P2PK locked token using cashu-ts send method with pubkey
         const sendAmount = 50;
-        const { send: p2pkProofs } = await senderWallet.send(sendAmount, senderProofs, {
-          pubkey: keypair.publicKeyHex,
-        });
+        const { send: p2pkProofs } = await senderWallet.ops
+          .send(sendAmount, senderProofs)
+          .asP2PK({ pubkey: keypair.publicKeyHex })
+          .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
 
@@ -1767,25 +1796,27 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect('secretKey' in keypair).toBe(false);
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+        const senderWallet = new Wallet(new Mint(mintUrl));
+        await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuote(100);
-        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
           await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
           attempts++;
         }
-        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote);
+        const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
         expect(senderProofs.length).toBeGreaterThan(0);
 
         // Create P2PK locked token using cashu-ts send method with pubkey
         const sendAmount = 50;
-        const { send: p2pkProofs } = await senderWallet.send(sendAmount, senderProofs, {
-          pubkey: keypair.publicKeyHex,
-        });
+        const { send: p2pkProofs } = await senderWallet.ops
+          .send(sendAmount, senderProofs)
+          .asP2PK({ pubkey: keypair.publicKeyHex })
+          .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
 
@@ -1824,26 +1855,28 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should fail to receive P2PK token without the private key', async () => {
         // Create a sender wallet with cashu-ts
         const senderSeed = crypto.getRandomValues(new Uint8Array(64));
-        const senderWallet = new CashuWallet(new CashuMint(mintUrl), {
+        const senderWallet = new Wallet(new Mint(mintUrl), {
           bip39seed: senderSeed,
         });
+        await senderWallet.loadMint();
 
         // Fund the sender wallet
-        const senderQuote = await senderWallet.createMintQuote(100);
-        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
           await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
           attempts++;
         }
-        const senderProofs = await senderWallet.mintProofs(100, senderQuote.quote, { counter: 0 });
+        const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote, {}, { type: 'deterministic', counter: 0 });
 
         // Lock to a public key we don't have the private key for
         const fakePublicKey = '02' + '11'.repeat(31);
-        const { send: p2pkProofs } = await senderWallet.send(50, senderProofs, {
-          pubkey: fakePublicKey,
-        });
+        const { send: p2pkProofs } = await senderWallet.ops
+          .send(50, senderProofs)
+          .asP2PK({ pubkey: fakePublicKey })
+          .run();
 
         const p2pkToken: Token = {
           mint: mintUrl,
@@ -1860,30 +1893,39 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const keypair2 = await mgr!.keyring.generateKeyPair();
 
         // Create sender wallet
-        const senderWallet = new CashuWallet(new CashuMint(mintUrl));
+        const senderWallet = new Wallet(new Mint(mintUrl));
         await senderWallet.loadMint();
-        const keyset = await senderWallet.getActiveKeyset(senderWallet.keysets);
+        const keyset = senderWallet.keyChain.getCheapestKeyset();
 
         // Fund sender with more amount
-        const senderQuote = await senderWallet.createMintQuote(200);
-        let quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+        const senderQuote = await senderWallet.createMintQuoteBolt11(200);
+        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
         let attempts = 0;
         while (quoteState.state !== 'PAID' && attempts <= 3) {
           await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuote(senderQuote.quote);
+          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
           attempts++;
         }
-        const senderProofs = await senderWallet.mintProofs(200, senderQuote.quote);
+        const senderProofs = await senderWallet.mintProofsBolt11(200, senderQuote.quote);
+
         const outputData = [
           OutputData.createSingleP2PKData({ pubkey: keypair.publicKeyHex }, 32, keyset.id),
           OutputData.createSingleP2PKData({ pubkey: keypair2.publicKeyHex }, 32, keyset.id),
         ];
 
         const keepFactory: OutputDataFactory = (a, k) => OutputData.createSingleRandomData(a, k.id);
+        const outputConfig: OutputConfig = {
+          send: { type: 'custom', data: outputData },
+          keep: { type: 'factory', factory: keepFactory },
+        };
         // Create P2PK token with multiple proofs
-        const { send: p2pkProofs } = await senderWallet.send(64, senderProofs, {
-          outputData: { keep: keepFactory, send: outputData },
-        });
+        const { send: p2pkProofs } = await senderWallet.send(64, senderProofs, undefined, outputConfig);
+        // Create P2PK token with multiple proofs
+        // const { send: p2pkProofs } = await senderWallet.ops
+        //   .send(64, senderProofs)
+        //   .asP2PK({ pubkey: [keypair.publicKeyHex, keypair2.publicKeyHex] })
+        //   .keepAsRandom()
+        //   .run();
 
         // Should have multiple proofs for 100 sats
         expect(p2pkProofs.length).toBeGreaterThan(1);
@@ -1917,23 +1959,24 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           // Create a separate wallet with a different seed that has funds
           const toBeSweptSeed = crypto.getRandomValues(new Uint8Array(64));
-          const baseWallet = new CashuWallet(new CashuMint(mintUrl), {
+          const baseWallet = new Wallet(new Mint(mintUrl), {
             bip39seed: toBeSweptSeed,
           });
+          await baseWallet.loadMint();
 
           // Create and pay mint quote
-          const quote = await baseWallet.createMintQuote(100);
+          const quote = await baseWallet.createMintQuoteBolt11(100);
 
           // Wait for quote to be marked as paid
-          let quoteState = await baseWallet.checkMintQuote(quote.quote);
+          let quoteState = await baseWallet.checkMintQuoteBolt11(quote.quote);
           let attempts = 0;
           while (quoteState.state !== 'PAID' && attempts <= 3) {
             await new Promise((resolve) => setTimeout(resolve, 500));
-            quoteState = await baseWallet.checkMintQuote(quote.quote);
+            quoteState = await baseWallet.checkMintQuoteBolt11(quote.quote);
             attempts++;
           }
           // Mint proofs to the wallet being swept
-          const toBeSweptProofs = await baseWallet.mintProofs(100, quote.quote, { counter: 0 });
+          const toBeSweptProofs = await baseWallet.mintProofsBolt11(100, quote.quote, {}, { type: 'deterministic', counter: 0 });
           expect(toBeSweptProofs.length).toBeGreaterThan(0);
 
           // Verify balance before sweep

@@ -269,6 +269,7 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      paymentRequestService: this.paymentRequestService,
       meltOperationService: this.meltOperationService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
@@ -317,6 +318,7 @@ export class Manager {
       counterService: this.counterService,
       mintQuoteService: this.mintQuoteService,
       meltQuoteService: this.meltQuoteService,
+      meltOperationService: this.meltOperationService,
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
@@ -497,7 +499,7 @@ export class Manager {
     const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
     const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (url: string) => new (globalThis as any).WebSocket(url)
+      (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
     const options = {

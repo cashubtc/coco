@@ -1,4 +1,4 @@
-import type { MeltQuoteResponse, MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response, MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type {
   FinalizedMeltOperation,
   MeltOperationService,
@@ -22,7 +22,7 @@ export class QuotesApi {
     this.meltOperationService = meltOperationService;
   }
 
-  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
+  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteBolt11Response> {
     return this.mintQuoteService.createMintQuote(mintUrl, amount);
   }
 
@@ -34,7 +34,7 @@ export class QuotesApi {
    * Create a bolt11 melt quote
    * @deprecated Use {@link prepareMeltBolt11} instead
    */
-  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse> {
+  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteBolt11Response> {
     return this.meltQuoteService.createMeltQuote(mintUrl, invoice);
   }
 
@@ -86,7 +86,7 @@ export class QuotesApi {
 
   async addMintQuote(
     mintUrl: string,
-    quotes: MintQuoteResponse[],
+    quotes: MintQuoteBolt11Response[],
   ): Promise<{ added: string[]; skipped: string[] }> {
     return this.mintQuoteService.addExistingMintQuotes(mintUrl, quotes);
   }

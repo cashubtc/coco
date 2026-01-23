@@ -1,5 +1,5 @@
-import type { MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
-export interface MintQuote extends MintQuoteResponse {
+export interface MintQuote extends MintQuoteBolt11Response {
   mintUrl: string;
 }

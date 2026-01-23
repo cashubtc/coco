@@ -36,5 +36,6 @@ runIntegrationTests(
     logger: getTestLogger(),
     suiteName: 'Testnut Integration Tests',
   },
+  //@ts-expect-error stupid type error that no one cares about
   { describe, it, beforeEach, afterEach, expect },
 );

@@ -2,7 +2,7 @@ import type { MintQuoteRepository } from '../repositories';
 import type { MintService } from './MintService';
 import type { WalletService } from './WalletService';
 import type { ProofService } from './ProofService';
-import type { MintQuoteResponse, MintQuoteState } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
 import { mapProofToCoreProof } from '@core/utils.ts';
@@ -32,7 +32,7 @@ export class MintQuoteService {
     this.logger = logger;
   }
 
-  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse> {
+  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteBolt11Response> {
     this.logger?.info('Creating mint quote', { mintUrl, amount });
 
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -42,7 +42,7 @@ export class MintQuoteService {
 
     try {
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-      const quote = await wallet.createMintQuote(amount);
+      const quote = await wallet.createMintQuoteBolt11(amount);
       await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
       await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
       return quote;
@@ -66,12 +66,16 @@ export class MintQuoteService {
         this.logger?.warn('Mint quote not found', { mintUrl, quoteId });
         throw new Error('Quote not found');
       }
+      if (!quote.amount) {
+        this.logger?.warn('Mint quote had undefined amount', { mintUrl, quoteId });
+        throw new Error('Quote amount undefined');
+      }
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
       const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
         keep: quote.amount,
         send: 0,
       });
-      const proofs = await wallet.mintProofs(quote.amount, quote.quote, { outputData: keep });
+      const proofs = await wallet.mintProofsBolt11(quote.amount, quote.quote, undefined, { type: 'custom', data: keep });
       await this.eventBus.emit('mint-quote:redeemed', { mintUrl, quoteId, quote });
       this.logger?.info('Mint quote redeemed, proofs minted', {
         mintUrl,
@@ -90,7 +94,7 @@ export class MintQuoteService {
 
   async addExistingMintQuotes(
     mintUrl: string,
-    quotes: MintQuoteResponse[],
+    quotes: MintQuoteBolt11Response[],
   ): Promise<{ added: string[]; skipped: string[] }> {
     this.logger?.info('Adding existing mint quotes', { mintUrl, count: quotes.length });
 

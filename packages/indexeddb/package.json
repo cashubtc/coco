@@ -27,6 +27,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:browser": "vitest run"
   },

@@ -27,6 +27,7 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration",
@@ -36,7 +37,7 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@cashu/cashu-ts": "2.9.0",
+    "@cashu/cashu-ts": "3.3.0",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip32": "^2.0.1"

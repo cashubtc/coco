@@ -1,9 +1,8 @@
-import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function rowToProof(r: ProofRow): CoreProof {
-  const base: Proof = {
+  const base = {
     id: r.id,
     amount: r.amount,
     secret: r.secret,
@@ -179,9 +178,9 @@ export class IdbProofRepository implements ProofRepository {
   }
 
   async getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null> {
-    const row = (await (this.db as any)
-      .table('coco_cashu_proofs')
-      .get([mintUrl, secret])) as ProofRow | undefined;
+    const row = (await (this.db as any).table('coco_cashu_proofs').get([mintUrl, secret])) as
+      | ProofRow
+      | undefined;
     return row ? rowToProof(row) : null;
   }
 

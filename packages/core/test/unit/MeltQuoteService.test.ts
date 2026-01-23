@@ -6,7 +6,7 @@ import type { MeltQuoteRepository } from '../../repositories';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import type { Proof } from '@cashu/cashu-ts';
+import { OutputData, type Proof } from '@cashu/cashu-ts';
 import type { MeltQuote } from '../../models/MeltQuote';
 
 describe('MeltQuoteService.payMeltQuote', () => {
@@ -22,12 +22,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
   let emittedEvents: Array<{ event: string; payload: any }>;
 
   const makeProof = (amount: number, secret: string): Proof =>
-    ({
-      amount,
-      secret,
-      C: 'C_' as any,
-      id: 'keyset-1',
-    } as Proof);
+  ({
+    amount,
+    secret,
+    C: 'C_' as any,
+    id: 'keyset-1',
+  } as Proof);
 
   beforeEach(() => {
     emittedEvents = [];
@@ -47,8 +47,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       async getMeltQuote() {
         return null;
       },
-      async addMeltQuote() {},
-      async setMeltQuoteState() {},
+      async addMeltQuote() { },
+      async setMeltQuoteState() { },
       async getPendingMeltQuotes() {
         return [];
       },
@@ -58,7 +58,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       async selectProofsToSend() {
         return [];
       },
-      async setProofState() {},
+      async setProofState() { },
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
       ),
@@ -69,7 +69,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       async getWalletWithActiveKeysetId() {
         return {
           wallet: {
-            meltProofs: mock(() => Promise.resolve({ change: [], quote: {} as any })),
+            meltProofsBolt11: mock(() => Promise.resolve({ change: [], quote: {} as any })),
             send: mock(() => Promise.resolve({ send: [], keep: [] })),
             getFeesForProofs: mock(() => 0), // Default mock for getFeesForProofs
           },
@@ -107,15 +107,22 @@ describe('MeltQuoteService.payMeltQuote', () => {
     mockProofService.selectProofsToSend = mock(() => Promise.resolve(selectedProofs));
     const setProofStateSpy = mock(() => Promise.resolve());
     mockProofService.setProofState = setProofStateSpy;
-    const meltProofsSpy = mock(() => Promise.resolve({ change: [], quote: quote }));
+    const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [], quote: quote }));
     const getFeesForProofsSpy = mock(() => 0);
 
     // Create a wallet object that will be returned consistently
     const wallet = {
-      meltProofs: meltProofsSpy,
+      meltProofsBolt11: meltProofsBolt11Spy,
       getFeesForProofs: getFeesForProofsSpy,
     };
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
@@ -130,13 +137,13 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(setProofStateSpy).toHaveBeenNthCalledWith(1, mintUrl, ['secret-1'], 'inflight');
     expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-1'], 'spent');
 
-    // Verify meltProofs was called with selected proofs (not swapped proofs)
-    expect(meltProofsSpy).toHaveBeenCalledWith(quote, selectedProofs);
+    // Verify meltProofsBolt11 was called with selected proofs (not swapped proofs)
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
 
     // Verify createOutputsAndIncrementCounters was NOT called (no swap needed)
     expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
 
-    // Verify saveProofs WAS called to save the change from meltProofs
+    // Verify saveProofs WAS called to save the change from meltProofsBolt11
     expect(mockProofService.saveProofs).toHaveBeenCalled();
 
     // Verify events were emitted
@@ -178,24 +185,40 @@ describe('MeltQuoteService.payMeltQuote', () => {
       }),
     );
     mockProofService.createOutputsAndIncrementCounters = createOutputsSpy;
+    const createBlanksSpy = mock(() => Promise.resolve([]));
+    mockProofService.createBlankOutputs = createBlanksSpy;
+
     const saveProofsSpy = mock(() => Promise.resolve());
     mockProofService.saveProofs = saveProofsSpy;
-    const meltProofsSpy = mock(() => Promise.resolve({ change: [], quote: quote }));
+    const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [makeProof(10, 'secret-4')] }));
     const sendSpy = mock(() => Promise.resolve({ send: swappedProofs, keep: keepProofs }));
 
     // Create a wallet object that will be returned consistently
     const wallet = {
-      meltProofs: meltProofsSpy,
+      meltProofsBolt11: meltProofsBolt11Spy,
       send: sendSpy,
       getFeesForProofs: mock(() => 0), // Mock swap fees as 0
     };
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called
     expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, amountWithFee);
 
+    // Verify createBlankOutputs was called with the correct amount
+    // sendAmount ( quote.amount = 100 + quote.fee_reserve = 10) - quote.amount = 100
+    expect(createBlanksSpy).toHaveBeenCalledWith(
+      10, // 100 + 10 - 100
+      mintUrl,
+    );
     // Verify createOutputsAndIncrementCounters was called with includeFees option
     // selectedAmount = 150, quote.amount = 100, quote.fee_reserve = 10, swapFees = 0
     // keep = 150 - 100 - 10 - 0 = 40
@@ -210,7 +233,11 @@ describe('MeltQuoteService.payMeltQuote', () => {
     );
 
     // Verify wallet.send was called with sendAmount from outputData (includes receiver fees)
-    expect(sendSpy).toHaveBeenCalledWith(112, selectedProofs, expect.any(Object));
+    const expectedOutputConfig = {
+      send: { type: 'custom', data: [] },
+      keep: { type: 'custom', data: [] },
+    };
+    expect(sendSpy).toHaveBeenCalledWith(112, selectedProofs, undefined, expectedOutputConfig);
 
     // Verify saveProofs was called with swapped proofs
     expect(saveProofsSpy).toHaveBeenCalled();
@@ -224,8 +251,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-2'], 'inflight');
     expect(setProofStateSpy).toHaveBeenNthCalledWith(3, mintUrl, ['secret-2'], 'spent');
 
-    // Verify meltProofs was called with swapped proofs (not original selected proofs)
-    expect(meltProofsSpy).toHaveBeenCalledWith(quote, swappedProofs);
+    const expectedBlankOutputType = { type: 'custom', data: [] };
+
+    // Verify meltProofsBolt11 was called with swapped proofs (not original selected proofs)
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, swappedProofs, undefined, expectedBlankOutputType);
 
     // Verify events were emitted
     expect(emittedEvents.length).toBeGreaterThanOrEqual(2);
@@ -236,7 +265,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
   it('should throw error when quote not found', async () => {
     mockMeltQuoteRepo.getMeltQuote = mock(() => Promise.resolve(null));
 
-    await expect(service.payMeltQuote(mintUrl, quoteId)).rejects.toThrow('Quote not found');
+    expect(service.payMeltQuote(mintUrl, quoteId)).rejects.toThrow('Quote not found');
   });
 
   it('should throw error when insufficient proofs', async () => {
@@ -258,7 +287,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     mockMeltQuoteRepo.getMeltQuote = mock(() => Promise.resolve(quote));
     mockProofService.selectProofsToSend = mock(() => Promise.resolve(selectedProofs));
 
-    await expect(service.payMeltQuote(mintUrl, quoteId)).rejects.toThrow(
+    expect(service.payMeltQuote(mintUrl, quoteId)).rejects.toThrow(
       'Insufficient proofs to pay melt quote',
     );
   });
@@ -287,14 +316,21 @@ describe('MeltQuoteService.payMeltQuote', () => {
     mockProofService.selectProofsToSend = mock(() => Promise.resolve(selectedProofs));
     const setProofStateSpy = mock(() => Promise.resolve());
     mockProofService.setProofState = setProofStateSpy;
-    const meltProofsSpy = mock(() => Promise.resolve({ change: [], quote: quote }));
+    const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [], quote: quote }));
 
     // Create a wallet object that will be returned consistently
     const wallet = {
-      meltProofs: meltProofsSpy,
+      meltProofsBolt11: meltProofsBolt11Spy,
       getFeesForProofs: mock(() => 0),
     };
-    mockWalletService.getWalletWithActiveKeysetId = mock(() => Promise.resolve({ wallet }));
+    mockWalletService.getWalletWithActiveKeysetId = mock(() =>
+      Promise.resolve({
+        wallet,
+        keysetId: 'keyset-1',
+        keyset: { id: 'keyset-1', unit: 'sat', active: true },
+        keys: { id: 'keyset-1', unit: 'sat', keys: { '1': 'pubkey' } as any },
+      } as any),
+    );
 
     await service.payMeltQuote(mintUrl, quoteId);
 
@@ -312,8 +348,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       'spent',
     );
 
-    // Verify meltProofs was called with all selected proofs
-    expect(meltProofsSpy).toHaveBeenCalledWith(quote, selectedProofs);
+    // Verify meltProofsBolt11 was called with all selected proofs
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
 
     // Verify no swap was performed
     expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();

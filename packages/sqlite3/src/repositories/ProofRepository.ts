@@ -1,4 +1,3 @@
-import type { Proof } from '@cashu/cashu-ts';
 import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
@@ -16,7 +15,7 @@ interface ProofRow {
 }
 
 function rowToProof(r: ProofRow): CoreProof {
-  const base: Proof = {
+  const base = {
     id: r.id,
     amount: r.amount,
     secret: r.secret,

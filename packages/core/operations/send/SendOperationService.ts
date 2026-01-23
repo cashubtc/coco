@@ -1,4 +1,4 @@
-import { type Token, type Proof, type ProofState as CashuProofState } from '@cashu/cashu-ts';
+import { type Token, type Proof, type ProofState as CashuProofState, type OutputConfig } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -337,8 +337,12 @@ export class SendOperationService {
         sendOutputs: outputData.send.length,
       });
 
+      const outputConfig: OutputConfig = {
+        send: { type: 'custom', data: outputData.send },
+        keep: { type: 'custom', data: outputData.keep },
+      };
       // Perform the swap with the mint
-      const result = await wallet.send(amount, inputProofs, { outputData });
+      const result = await wallet.send(amount, inputProofs, undefined, outputConfig);
       sendProofs = result.send;
       keepProofs = result.keep;
 
@@ -366,6 +370,7 @@ export class SendOperationService {
     const token: Token = {
       mint: mintUrl,
       proofs: sendProofs,
+      unit: wallet.unit,
     };
 
     // Emit pending event
@@ -552,9 +557,7 @@ export class SendOperationService {
               );
 
               // Swap to reclaim
-              const { keep } = await wallet.send(reclaimAmount, sendProofs, {
-                outputData: { keep: outputResult.keep, send: [] },
-              });
+              const keep = await wallet.receive({ mint: mintUrl, proofs: sendProofs, unit: wallet.unit }, undefined, { type: 'custom', data: outputResult.keep });
 
               // Save reclaimed proofs
               await this.proofService.saveProofs(
@@ -667,7 +670,7 @@ export class SendOperationService {
       for (const op of rollingBackOps) {
         this.logger?.warn(
           'Found operation stuck in rolling_back state. ' +
-            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+          'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
           {
             operationId: op.id,
             mintUrl: op.mintUrl,

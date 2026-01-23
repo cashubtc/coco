@@ -1,4 +1,4 @@
-import type { MeltQuoteResponse, MeltQuoteState } from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response, MeltQuoteState, OutputConfig } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
@@ -33,7 +33,7 @@ export class MeltQuoteService {
     this.logger = logger;
   }
 
-  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteResponse> {
+  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteBolt11Response> {
     if (!mintUrl || !mintUrl.trim()) {
       this.logger?.warn('Invalid parameter: mintUrl is required for createMeltQuote');
       throw new Error('mintUrl is required');
@@ -53,7 +53,7 @@ export class MeltQuoteService {
     this.logger?.info('Creating melt quote', { mintUrl });
     try {
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-      const quote = await wallet.createMeltQuote(invoice);
+      const quote = await wallet.createMeltQuoteBolt11(invoice);
       await this.meltQuoteRepo.addMeltQuote({ ...quote, mintUrl });
       await this.eventBus.emit('melt-quote:created', { mintUrl, quoteId: quote.quote, quote });
       return quote;
@@ -114,7 +114,7 @@ export class MeltQuoteService {
           selectedProofs.map((proof) => proof.secret),
           'inflight',
         );
-        const { change } = await wallet.meltProofs(quote, selectedProofs);
+        const { change } = await wallet.meltProofsBolt11(quote, selectedProofs);
         await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
         await this.proofService.setProofState(
           mintUrl,
@@ -141,17 +141,27 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
+        const sendAmount = quote.amount + quote.fee_reserve;
+        const keepAmount = selectedAmount - sendAmount - swapFees;
+
+        // Create deterministic blank outputs for receiving change and reserve counters
+        const changeDelta = sendAmount - quote.amount;
+        const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl);
+
         const outputData = await this.proofService.createOutputsAndIncrementCounters(
           mintUrl,
           {
-            keep: selectedAmount - quote.amount - quote.fee_reserve - swapFees,
-            send: quote.amount + quote.fee_reserve,
+            keep: keepAmount,
+            send: sendAmount,
           },
           { includeFees: true },
         );
-        const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, {
-          outputData,
-        });
+        const outputConfig: OutputConfig = {
+          send: { type: 'custom', data: outputData.send },
+          keep: { type: 'custom', data: outputData.keep },
+        };
+
+        const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, undefined, outputConfig);
         this.logger?.debug('Swapped successfully', {
           mintUrl,
           quoteId,
@@ -173,7 +183,8 @@ export class MeltQuoteService {
           send.map((proof) => proof.secret),
           'inflight',
         );
-        const { change } = await wallet.meltProofs(quote, send);
+
+        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, { type: 'custom', data: blankOutputs });
         await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
         await this.proofService.setProofState(
           mintUrl,

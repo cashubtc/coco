@@ -392,8 +392,12 @@ describe('PaymentRequestService', () => {
 
       const response = await service.handleHttpPaymentRequest(transaction);
 
+      interface paymentResponse {
+        received: boolean,
+        id: string,
+      }
       expect(response.status).toBe(201);
-      const body = await response.json();
+      const body = await response.json() as paymentResponse;
       expect(body.received).toBe(true);
       expect(body.id).toBe('payment-123');
     });

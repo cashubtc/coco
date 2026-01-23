@@ -1,5 +1,5 @@
-import type { MeltQuoteResponse } from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response } from '@cashu/cashu-ts';
 
-export interface MeltQuote extends MeltQuoteResponse {
+export interface MeltQuote extends MeltQuoteBolt11Response {
   mintUrl: string;
 }

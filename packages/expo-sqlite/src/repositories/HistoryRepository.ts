@@ -1,5 +1,16 @@
-import type { MintQuoteState, MeltQuoteState, Token } from '@cashu/cashu-ts';
+import type {
+  HistoryEntry,
+  MeltHistoryEntry,
+  MintHistoryEntry,
+  ReceiveHistoryEntry,
+  SendHistoryEntry,
+} from 'coco-cashu-core';
 import { ExpoSqliteDb } from '../db.ts';
+
+type MintQuoteState = MintHistoryEntry['state'];
+type MeltQuoteState = MeltHistoryEntry['state'];
+type Token = SendHistoryEntry['token'];
+type SendHistoryState = SendHistoryEntry['state'];
 
 type Row = {
   id: number;
@@ -15,50 +26,6 @@ type Row = {
   metadata: string | null;
   operationId: string | null;
 };
-
-type BaseHistoryEntry = {
-  id: string;
-  createdAt: number;
-  mintUrl: string;
-  unit: string;
-  metadata?: Record<string, string>;
-};
-
-export type MintHistoryEntry = BaseHistoryEntry & {
-  type: 'mint';
-  paymentRequest: string;
-  quoteId: string;
-  state: MintQuoteState;
-  amount: number;
-};
-
-export type MeltHistoryEntry = BaseHistoryEntry & {
-  type: 'melt';
-  quoteId: string;
-  state: MeltQuoteState;
-  amount: number;
-};
-
-export type SendHistoryState = 'prepared' | 'pending' | 'finalized' | 'rolledBack';
-
-export type SendHistoryEntry = BaseHistoryEntry & {
-  type: 'send';
-  amount: number;
-  operationId: string;
-  state: SendHistoryState;
-  token?: Token;
-};
-
-export type ReceiveHistoryEntry = BaseHistoryEntry & {
-  type: 'receive';
-  amount: number;
-};
-
-export type HistoryEntry =
-  | MintHistoryEntry
-  | MeltHistoryEntry
-  | SendHistoryEntry
-  | ReceiveHistoryEntry;
 
 type NewHistoryEntry =
   | Omit<MintHistoryEntry, 'id'>

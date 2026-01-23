@@ -1,7 +1,6 @@
-import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
+import { hashToCurve, OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from './types';
 import type { Logger } from './logging/Logger.ts';
-import { hashToCurve } from '@cashu/cashu-ts/crypto/common';
 import { TokenValidationError } from './models/Error.ts';
 
 // ============================================================================
