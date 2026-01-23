@@ -30,7 +30,7 @@ class BunExpoSqliteDatabaseShim {
     }
   }
 
-  async runAsync(sql: string, ...params: unknown[]): Promise<RunResult> {
+  async runAsync(sql: string, ...params: any[]): Promise<RunResult> {
     const statement = this.db.prepare(sql);
     const result = statement.run(...params) as unknown as {
       changes?: number;
@@ -41,13 +41,13 @@ class BunExpoSqliteDatabaseShim {
     return { changes, lastInsertRowId, lastInsertRowid: lastInsertRowId };
   }
 
-  async getFirstAsync<T = unknown>(sql: string, ...params: unknown[]): Promise<T | null> {
+  async getFirstAsync<T = unknown>(sql: string, ...params: any[]): Promise<T | null> {
     const statement = this.db.prepare(sql);
     const row = statement.get(...params) as T | undefined;
     return row ?? null;
   }
 
-  async getAllAsync<T = unknown>(sql: string, ...params: unknown[]): Promise<T[]> {
+  async getAllAsync<T = unknown>(sql: string, ...params: any[]): Promise<T[]> {
     const statement = this.db.prepare(sql);
     const rows = statement.all(...params) as T[] | undefined;
     return rows ?? [];

@@ -118,8 +118,12 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
   runner: MigrationTestRunner,
 ): void {
   const { describe, it, expect, beforeEach, afterEach } = runner;
-  const { createRepositories, createRepositoriesAtMigration, completedToFinalizedMigration, logger } =
-    options;
+  const {
+    createRepositories,
+    createRepositoriesAtMigration,
+    completedToFinalizedMigration,
+    logger,
+  } = options;
 
   // Helper to create a deterministic seed for reproducible tests
   const createSeedGetter = () => {
@@ -169,7 +173,6 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
             keypairs: { '1': { pubKey: 'pk1' }, '2': { pubKey: 'pk2' } } as any,
             active: true,
             feePpk: 0,
-            updatedAt: Date.now(),
           });
 
           // Add proofs (user's money!)
@@ -197,7 +200,8 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
 
           // Record state before
           const mintsBefore = await repositories.mintRepository.getAllMints();
-          const keysetsBefore = await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
+          const keysetsBefore =
+            await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
           const proofsBefore = await repositories.proofRepository.getAllReadyProofs();
           const counterBefore = await repositories.counterRepository.getCounter(
             testMintUrl,
@@ -310,13 +314,12 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           expect(pendingOp!.state).toBe('pending');
 
           // Verify history state transformed
-          const history = await rawQuery<{ state: string; type: string }>(
-            'coco_cashu_history',
-            { type: 'send' },
-          );
+          const history = await rawQuery<{ state: string; type: string }>('coco_cashu_history', {
+            type: 'send',
+          });
 
           expect(history).toHaveLength(1);
-          expect(history[0].state).toBe('finalized');
+          expect(history[0]!.state).toBe('finalized');
 
           logger?.info('State transformation test passed');
         } finally {
@@ -363,7 +366,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           }>('coco_cashu_send_operations', { id: 'op-full-data' });
 
           expect(ops).toHaveLength(1);
-          const op = ops[0];
+          const op = ops[0]!;
 
           expect(op.id).toBe('op-full-data');
           expect(op.mintUrl).toBe('https://mint.test');
@@ -454,8 +457,8 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           const mintsAfter = await rawQuery<{ mintUrl: string; name: string }>('coco_cashu_mints');
 
           expect(mintsAfter.length).toBe(mintsBefore.length);
-          expect(mintsAfter[0].mintUrl).toBe(mintsBefore[0].mintUrl);
-          expect(mintsAfter[0].name).toBe(mintsBefore[0].name);
+          expect(mintsAfter[0]!.mintUrl).toBe(mintsBefore[0]!.mintUrl);
+          expect(mintsAfter[0]!.name).toBe(mintsBefore[0]!.name);
 
           logger?.info('Mints preservation test passed');
         } finally {
@@ -485,7 +488,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           );
 
           expect(countersAfter.length).toBe(countersBefore.length);
-          expect(countersAfter[0].counter).toBe(42);
+          expect(countersAfter[0]!.counter).toBe(42);
 
           logger?.info('Counters preservation test passed');
         } finally {
@@ -494,8 +497,9 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
       });
 
       it('should handle empty send_operations table gracefully', async () => {
-        const { dispose, runRemainingMigrations, rawQuery } =
-          await createRepositoriesAtMigration(completedToFinalizedMigration);
+        const { dispose, runRemainingMigrations, rawQuery } = await createRepositoriesAtMigration(
+          completedToFinalizedMigration,
+        );
 
         try {
           // Don't insert any data - simulate fresh install

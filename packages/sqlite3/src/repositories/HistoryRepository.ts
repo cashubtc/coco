@@ -1,14 +1,16 @@
-import type { MintQuoteState, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type {
   HistoryEntry,
   MintHistoryEntry,
   MeltHistoryEntry,
-  ReceiveHistoryEntry,
   SendHistoryEntry,
   SendHistoryState,
   HistoryRepository,
 } from 'coco-cashu-core';
 import { SqliteDb } from '../db.ts';
+
+type MintQuoteState = MintHistoryEntry['state'];
+type MeltQuoteState = MeltHistoryEntry['state'];
+type Token = SendHistoryEntry['token'];
 
 type Row = {
   id: number;
