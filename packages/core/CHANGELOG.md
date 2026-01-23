@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.42
+
+### Patch Changes
+
+- 7f02bb8: Bumped Cashu-TS to major version 3, added typechecks and fixed them
+
 ## 1.1.2-rc.41
 
 ### Patch Changes

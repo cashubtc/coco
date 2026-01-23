@@ -1,5 +1,13 @@
 # coco-cashu-react
 
+## 1.1.2-rc.42
+
+### Patch Changes
+
+- 7f02bb8: Bumped Cashu-TS to major version 3, added typechecks and fixed them
+- Updated dependencies [7f02bb8]
+  - coco-cashu-core@1.1.2-rc.42
+
 ## 1.1.2-rc.41
 
 ### Patch Changes
