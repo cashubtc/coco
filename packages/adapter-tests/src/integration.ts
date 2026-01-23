@@ -451,6 +451,60 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
     });
 
+    describe('Proof State Checks', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+
+      beforeEach(async () => {
+        const { repositories, dispose } = await createRepositories();
+        repositoriesDispose = dispose;
+        mgr = await initializeCoco({
+          repo: repositories,
+          seedGetter,
+          logger,
+          watchers: {
+            proofStateWatcher: { disabled: true },
+          },
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+
+        const quote = await mgr.quotes.createMintQuote(mintUrl, 200);
+        await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+      });
+
+      it('should mark inflight proofs as spent on manual check', async () => {
+        const sendAmount = 25;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+
+        await mgr!.wallet.receive(token);
+
+        const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
+        const proofService = (mgr as any).proofService as { checkInflightProofs: () => Promise<void> };
+
+        const beforeStates = await Promise.all(
+          token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
+        );
+        const inflightCount = beforeStates.filter((proof) => proof?.state === 'inflight').length;
+        expect(inflightCount).toBeGreaterThan(0);
+
+        await proofService.checkInflightProofs();
+
+        const afterStates = await Promise.all(
+          token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
+        );
+        const spentCount = afterStates.filter((proof) => proof?.state === 'spent').length;
+        expect(spentCount).toBe(token.proofs.length);
+      }, 10000);
+    });
+
     describe('Melt Quote Workflow', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
       let repositories: Repositories | undefined;
