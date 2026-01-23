@@ -7,7 +7,8 @@ import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
-import type { ProofRepository, MintAdapter } from '../../infra';
+import type { ProofRepository } from '../../repositories';
+import type { MintAdapter } from '../../infra';
 import type {
   InitMeltOperation,
   PreparedMeltOperation,
@@ -23,7 +24,7 @@ import type {
   RollbackContext,
   RecoverExecutingContext,
 } from '../../operations/melt/MeltMethodHandler';
-import type { CashuWallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
+import type { Wallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/MeltBolt11Handler.utils';
 
 describe('MeltBolt11Handler', () => {
@@ -39,7 +40,7 @@ describe('MeltBolt11Handler', () => {
   let mintAdapter: MintAdapter;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
-  let mockWallet: CashuWallet;
+  let mockWallet: Wallet;
 
   // ============================================================================
   // Test Helpers
@@ -159,7 +160,7 @@ describe('MeltBolt11Handler', () => {
           send: [makeProof('send-1', 60)],
         }),
       ),
-    } as unknown as CashuWallet;
+    } as unknown as Wallet;
 
     // Mock ProofRepository
     proofRepository = {
@@ -540,7 +541,7 @@ describe('MeltBolt11Handler', () => {
 
         // Melt should receive swap send proofs (from mock wallet.swap)
         expect(meltProofs).toHaveLength(1);
-        expect(meltProofs[0].secret).toBe('send-1');
+        expect(meltProofs[0]!.secret).toBe('send-1');
       });
 
       it('should throw if swap output data is missing', async () => {

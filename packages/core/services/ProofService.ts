@@ -585,7 +585,7 @@ export class ProofService {
         this.logger?.warn('Failed to create change proof', { reason, index: i });
         return [];
       }
-      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs, unit: keyset.unit })];
+      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs })];
     });
 
     if (proofs.length === 0) {

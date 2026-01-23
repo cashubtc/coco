@@ -1,4 +1,4 @@
-import type { CashuWallet, Proof } from '@cashu/cashu-ts';
+import type { Wallet, Proof } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -52,23 +52,23 @@ export interface BaseHandlerDeps {
 
 export interface BasePrepareContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: InitMeltOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
 }
 
 export interface PreparedContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PreparedMeltOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
 }
 
 export interface ExecuteContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: ExecutingMeltOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
   reservedProofs: Proof[];
 }
 
 export interface PendingContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PendingMeltOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
 }
 
 export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
@@ -77,34 +77,34 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
 
 export interface RollbackContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PreparedOrLaterOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
 }
 
 export interface RecoverExecutingContext<M extends MeltMethod = MeltMethod>
   extends BaseHandlerDeps {
   operation: ExecutingMeltOperation & MeltMethodMeta<M>;
-  wallet: CashuWallet;
+  wallet: Wallet;
 }
 
 export type ExecutionResult<M extends MeltMethod = MeltMethod> =
   | {
-      status: 'PAID';
-      finalized: FinalizedMeltOperation & MeltMethodMeta<M>;
-      sendProofs?: Proof[];
-      keepProofs?: Proof[];
-    }
+    status: 'PAID';
+    finalized: FinalizedMeltOperation & MeltMethodMeta<M>;
+    sendProofs?: Proof[];
+    keepProofs?: Proof[];
+  }
   | {
-      status: 'PENDING';
-      pending: PendingMeltOperation & MeltMethodMeta<M>;
-      sendProofs?: Proof[];
-      keepProofs?: Proof[];
-    }
+    status: 'PENDING';
+    pending: PendingMeltOperation & MeltMethodMeta<M>;
+    sendProofs?: Proof[];
+    keepProofs?: Proof[];
+  }
   | {
-      status: 'FAILED';
-      failed: FailedMeltOperation & MeltMethodMeta<M>;
-      sendProofs?: Proof[];
-      keepProofs?: Proof[];
-    };
+    status: 'FAILED';
+    failed: FailedMeltOperation & MeltMethodMeta<M>;
+    sendProofs?: Proof[];
+    keepProofs?: Proof[];
+  };
 
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 

@@ -149,7 +149,6 @@ describe('HybridTransport', () => {
 
     it('should track open state per mint independently', async () => {
       const mintUrl2 = 'https://mint2.example.com';
-      let socket2: MockWebSocket;
 
       // Create new transport with factory that tracks sockets
       const sockets: MockWebSocket[] = [];
@@ -169,12 +168,13 @@ describe('HybridTransport', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
+      expect(sockets.length).toEqual(2);
       // Open first mint's WS
-      sockets[0].triggerOpen();
+      sockets[0]!.triggerOpen();
       expect(handler1.mock.calls.length).toBe(1);
 
       // Open second mint's WS - should also emit (different mint)
-      sockets[1].triggerOpen();
+      sockets[1]!.triggerOpen();
       expect(handler2.mock.calls.length).toBe(1);
 
       t.closeAll();
