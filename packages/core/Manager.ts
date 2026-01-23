@@ -148,6 +148,9 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   // Recover any pending send operations from previous session
   await coco.recoverPendingSendOperations();
 
+  // Recover any pending melt operations from previous session
+  await coco.recoverPendingMeltOperations();
+
   return coco;
 }
 
@@ -420,6 +423,10 @@ export class Manager {
 
   async recoverPendingSendOperations(): Promise<void> {
     await this.sendOperationService.recoverPendingOperations();
+  }
+
+  async recoverPendingMeltOperations(): Promise<void> {
+    await this.meltOperationService.recoverPendingOperations();
   }
 
   async pauseSubscriptions(): Promise<void> {
