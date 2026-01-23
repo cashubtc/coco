@@ -247,7 +247,7 @@ export class HistoryService {
       quoteId,
       state: quote.state,
       createdAt: Date.now(),
-      amount: quote.amount ?? null,
+      amount: quote.amount,
     };
     try {
       await this.historyRepository.addHistoryEntry(entry);
@@ -276,7 +276,7 @@ export class HistoryService {
       quoteId,
       state: quote.state,
       createdAt: Date.now(),
-      amount: quote.amount || null,
+      amount: quote.amount,
     };
     try {
       const created = await this.historyRepository.addHistoryEntry(entry);

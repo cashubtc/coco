@@ -9,12 +9,13 @@ import {
   PaymentRequestTransportType,
   type MintKeys,
   type Token,
+  type HasKeysetKeys,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
 export type OutputDataFactory = (
   amount: number,
-  keys: MintKeys | { id: string; unit?: string },
+  keys: MintKeys | HasKeysetKeys,
 ) => OutputData;
 
 export type IntegrationTestRunner = {
