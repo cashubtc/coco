@@ -81,7 +81,7 @@ export class ExpoProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
-  async getInflightProofs(mintUrls: string[]): Promise<CoreProof[]> {
+  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
     if (!mintUrls || mintUrls.length === 0) {
       const rows = await this.db.all<ProofRow>(
         'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "inflight"',

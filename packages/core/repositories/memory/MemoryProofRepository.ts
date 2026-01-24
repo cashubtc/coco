@@ -32,7 +32,7 @@ export class MemoryProofRepository implements ProofRepository {
       .map((p) => ({ ...p }));
   }
 
-  async getInflightProofs(mintUrls: string[]): Promise<CoreProof[]> {
+  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
     if (!mintUrls || mintUrls.length === 0) {
       const all: CoreProof[] = [];
       for (const map of this.proofsByMint.values()) {
