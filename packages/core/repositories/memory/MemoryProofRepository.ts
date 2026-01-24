@@ -32,6 +32,34 @@ export class MemoryProofRepository implements ProofRepository {
       .map((p) => ({ ...p }));
   }
 
+  async getInflightProofs(mintUrls: string[]): Promise<CoreProof[]> {
+    if (!mintUrls || mintUrls.length === 0) {
+      const all: CoreProof[] = [];
+      for (const map of this.proofsByMint.values()) {
+        for (const p of map.values()) {
+          if (p.state === 'inflight') {
+            all.push({ ...p });
+          }
+        }
+      }
+      return all;
+    }
+    const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
+    if (mintUrlList.length === 0) return [];
+    const uniqueMintUrls = Array.from(new Set(mintUrlList));
+    const results: CoreProof[] = [];
+    for (const mintUrl of uniqueMintUrls) {
+      const map = this.proofsByMint.get(mintUrl);
+      if (!map) continue;
+      for (const p of map.values()) {
+        if (p.state === 'inflight') {
+          results.push({ ...p });
+        }
+      }
+    }
+    return results;
+  }
+
   async getAllReadyProofs(): Promise<CoreProof[]> {
     const all: CoreProof[] = [];
     for (const map of this.proofsByMint.values()) {
