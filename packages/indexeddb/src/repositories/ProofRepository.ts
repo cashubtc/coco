@@ -65,6 +65,27 @@ export class IdbProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
+  async getInflightProofs(mintUrls: string[]): Promise<CoreProof[]> {
+    if (!mintUrls || mintUrls.length === 0) {
+      const rows = (await (this.db as any)
+        .table('coco_cashu_proofs')
+        .where('state')
+        .equals('inflight')
+        .toArray()) as ProofRow[];
+      return rows.map(rowToProof);
+    }
+    const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
+    if (mintUrlList.length === 0) return [];
+    const uniqueMintUrls = Array.from(new Set(mintUrlList));
+    const keys = uniqueMintUrls.map((mintUrl) => [mintUrl, 'inflight'] as [string, string]);
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+state]')
+      .anyOf(keys)
+      .toArray()) as ProofRow[];
+    return rows.map(rowToProof);
+  }
+
   async getAllReadyProofs(): Promise<CoreProof[]> {
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
