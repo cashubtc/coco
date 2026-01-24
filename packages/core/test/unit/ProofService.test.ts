@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { ProofService } from '../../services/ProofService.ts';
@@ -47,7 +47,7 @@ describe('ProofService', () => {
       mintUrl,
       state: 'ready',
       ...overrides,
-    } as unknown as CoreProof);
+    }) as unknown as CoreProof;
 
   const makeSeed = () => new Uint8Array(64).fill(7);
 
@@ -371,7 +371,10 @@ describe('ProofService', () => {
       await proofRepo.saveProofs(mintUrl, mintProofs);
       await proofRepo.saveProofs(otherMintUrl, otherProofs);
 
-      proofRepo.getInflightProofs = mock(async () => [...mintProofs, ...otherProofs]);
+      proofRepo.getInflightProofs = mock(async (_mintUrls?: string[]) => [
+        ...mintProofs,
+        ...otherProofs,
+      ]);
 
       const checkProofsStates = mock(async (proofs: CoreProof[]) => {
         const requestedMintUrl = proofs[0]?.mintUrl;
@@ -389,6 +392,7 @@ describe('ProofService', () => {
       });
       walletService = {
         getWalletWithActiveKeysetId,
+        getWallet: walletService.getWallet,
       };
 
       const service = new ProofService(
@@ -418,7 +422,7 @@ describe('ProofService', () => {
     });
 
     it('skips checks when no inflight proofs exist', async () => {
-      const getInflightProofs = mock(async () => []);
+      const getInflightProofs = mock(async (_mintUrls?: string[]) => []);
       const checkProofsStates = mock(async () => [{ state: 'SPENT' }]);
       const getWalletWithActiveKeysetId = mock(async () => {
         return {
@@ -430,6 +434,7 @@ describe('ProofService', () => {
       proofRepo.getInflightProofs = getInflightProofs;
       walletService = {
         getWalletWithActiveKeysetId,
+        getWallet: walletService.getWallet,
       };
 
       const service = new ProofService(
