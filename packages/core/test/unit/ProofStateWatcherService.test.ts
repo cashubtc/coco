@@ -30,7 +30,7 @@ describe('ProofStateWatcherService', () => {
     bus = new EventBus<CoreEvents>();
   });
 
-  it('bootstraps inflight proofs on start when enabled', async () => {
+  it('bootstraps inflight proofs on start by default', async () => {
     const checkInflightProofs = mock(async () => {});
     const inflightProofs = [
       makeProof({ mintUrl: mintUrlA, secret: 'a1' }),
@@ -60,7 +60,6 @@ describe('ProofStateWatcherService', () => {
       proofRepository,
       bus,
       new NullLogger(),
-      { watchExistingInflightOnStart: true },
     );
     (watcher as { watchProof: typeof watchProof }).watchProof = watchProof;
 

@@ -13,10 +13,7 @@ import {
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
-export type OutputDataFactory = (
-  amount: number,
-  keys: MintKeys | HasKeysetKeys,
-) => OutputData;
+export type OutputDataFactory = (amount: number, keys: MintKeys | HasKeysetKeys) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -164,6 +161,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          const quote = await mgr!.quotes.createMintQuote(mintUrl, 50);
+          await mgr!.quotes.redeemMintQuote(mintUrl, quote.quote);
           await eventPromise;
         } finally {
           if (mgr) {
@@ -487,7 +487,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await mgr!.wallet.receive(token);
 
         const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
-        const proofService = (mgr as any).proofService as { checkInflightProofs: () => Promise<void> };
+        const proofService = (mgr as any).proofService as {
+          checkInflightProofs: () => Promise<void>;
+        };
 
         const beforeStates = await Promise.all(
           token.proofs.map((proof) => proofRepository.getProofBySecret(mintUrl, proof.secret)),
@@ -546,7 +548,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(meltQuote.quote).toBeDefined();
         expect(meltQuote.amount).toBeGreaterThan(0);
 
-        const stored = await repositories!.meltQuoteRepository.getMeltQuote(mintUrl, meltQuote.quote);
+        const stored = await repositories!.meltQuoteRepository.getMeltQuote(
+          mintUrl,
+          meltQuote.quote,
+        );
         expect(stored).toBeDefined();
         expect(stored?.quote).toBe(meltQuote.quote);
         expect(stored?.mintUrl).toBe(mintUrl);
@@ -1386,6 +1391,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
 
+          const quote = await mgr.quotes.createMintQuote(mintUrl, 200);
+          await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+
           let operationId: string | undefined;
           const pendingPromise = new Promise((resolve) => {
             mgr!.once('send:pending', (payload) => {
@@ -1985,7 +1993,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
           attempts++;
         }
-        const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote, {}, { type: 'deterministic', counter: 0 });
+        const senderProofs = await senderWallet.mintProofsBolt11(
+          100,
+          senderQuote.quote,
+          {},
+          { type: 'deterministic', counter: 0 },
+        );
 
         // Lock to a public key we don't have the private key for
         const fakePublicKey = '02' + '11'.repeat(31);
@@ -2035,7 +2048,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           keep: { type: 'factory', factory: keepFactory },
         };
         // Create P2PK token with multiple proofs
-        const { send: p2pkProofs } = await senderWallet.send(64, senderProofs, undefined, outputConfig);
+        const { send: p2pkProofs } = await senderWallet.send(
+          64,
+          senderProofs,
+          undefined,
+          outputConfig,
+        );
         // Create P2PK token with multiple proofs
         // const { send: p2pkProofs } = await senderWallet.ops
         //   .send(64, senderProofs)
@@ -2092,7 +2110,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             attempts++;
           }
           // Mint proofs to the wallet being swept
-          const toBeSweptProofs = await baseWallet.mintProofsBolt11(100, quote.quote, {}, { type: 'deterministic', counter: 0 });
+          const toBeSweptProofs = await baseWallet.mintProofsBolt11(
+            100,
+            quote.quote,
+            {},
+            { type: 'deterministic', counter: 0 },
+          );
           expect(toBeSweptProofs.length).toBeGreaterThan(0);
 
           // Verify balance before sweep
