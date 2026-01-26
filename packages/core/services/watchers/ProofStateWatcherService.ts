@@ -23,7 +23,7 @@ type ProofStateNotification = {
 };
 
 export interface ProofStateWatcherOptions {
-  // Potential future option to scan existing inflight proofs on start
+  // Scan existing inflight proofs on start.
   watchExistingInflightOnStart?: boolean;
 }
 
@@ -51,7 +51,7 @@ export class ProofStateWatcherService {
     proofRepository: ProofRepository,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
-    options: ProofStateWatcherOptions = { watchExistingInflightOnStart: false },
+    options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
   ) {
     this.subs = subs;
     this.mintService = mintService;
@@ -146,7 +146,11 @@ export class ProofStateWatcherService {
       }
     });
 
-    // Optionally: could scan existing inflight proofs here if repository supports it
+    if (this.options.watchExistingInflightOnStart) {
+      void this.bootstrapInflightProofs().catch((err) => {
+        this.logger?.warn('Failed to bootstrap inflight proof watchers', { err });
+      });
+    }
   }
 
   async stop(): Promise<void> {
@@ -274,6 +278,39 @@ export class ProofStateWatcherService {
       subId,
       filterCount: filters.length,
     });
+  }
+
+  private async bootstrapInflightProofs(): Promise<void> {
+    if (!this.running) return;
+    this.logger?.info('Bootstrapping inflight proof watchers');
+
+    await this.proofs.checkInflightProofs();
+    if (!this.running) return;
+
+    const inflightProofs = await this.proofRepository.getInflightProofs();
+    if (!this.running || inflightProofs.length === 0) return;
+
+    const byMint = new Map<string, string[]>();
+    for (const proof of inflightProofs) {
+      if (!proof.mintUrl || !proof.secret) continue;
+      const secrets = byMint.get(proof.mintUrl) ?? [];
+      secrets.push(proof.secret);
+      byMint.set(proof.mintUrl, secrets);
+    }
+
+    for (const [mintUrl, secrets] of byMint.entries()) {
+      if (!this.running) return;
+      if (secrets.length === 0) continue;
+      try {
+        await this.watchProof(mintUrl, secrets);
+      } catch (err) {
+        this.logger?.warn('Failed to watch existing inflight proofs', {
+          mintUrl,
+          count: secrets.length,
+          err,
+        });
+      }
+    }
   }
 
   private async stopWatching(key: ProofKey): Promise<void> {

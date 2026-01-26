@@ -1370,6 +1370,68 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await dispose();
         }
       });
+
+      it('should bootstrap inflight proof watchers on restart when enabled', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            watchers: {
+              mintQuoteWatcher: { disabled: true },
+              proofStateWatcher: { disabled: true },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          let operationId: string | undefined;
+          const pendingPromise = new Promise((resolve) => {
+            mgr!.once('send:pending', (payload) => {
+              operationId = payload.operationId;
+              resolve(payload);
+            });
+          });
+
+          const preparedSend = await mgr!.send.prepareSend(mintUrl, 20);
+          const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+          await pendingPromise;
+
+          const pendingOperation = await mgr!.send.getOperation(operationId!);
+          expect(pendingOperation!.state).toBe('pending');
+
+          await mgr.pauseSubscriptions();
+          await mgr.dispose();
+          mgr = undefined;
+
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            watchers: {
+              mintQuoteWatcher: { disabled: true },
+              proofStateWatcher: { watchExistingInflightOnStart: true },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          await new Promise((resolve) => setTimeout(resolve, 500));
+
+          await mgr!.wallet.receive(token);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+
+          const finalized = await mgr!.send.getOperation(operationId!);
+          expect(finalized!.state).toBe('finalized');
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      }, 20000);
     });
 
     describe('Full Workflow Integration', () => {
