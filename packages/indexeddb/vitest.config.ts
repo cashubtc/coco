@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+declare const process: { env: Record<string, string | undefined> };
+
 // Determine which browsers to test based on environment
 // In CI, test all browsers. Locally, default to just chromium for speed.
 const browsers = process.env.CI
