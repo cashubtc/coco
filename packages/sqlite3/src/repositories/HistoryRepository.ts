@@ -218,7 +218,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       const h = history as Omit<SendHistoryEntry, 'id' | 'createdAt'>;
       if (!h.operationId) throw new Error('operationId required for send entry');
       state = h.state;
-      tokenJson = h.token ? JSON.stringify(h.token as Token) : null;
+      tokenJson = h.token ? JSON.stringify(h.token as SendToken) : null;
 
       await this.db.run(
         `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, tokenJson = ?, metadata = ?
