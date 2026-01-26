@@ -3,6 +3,12 @@ import { runIntegrationTests } from 'coco-cashu-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 import { ConsoleLogger, type Logger } from 'coco-cashu-core';
 
+declare global {
+  interface ImportMeta {
+    env: Record<string, string | undefined>;
+  }
+}
+
 const mintUrl = import.meta.env.VITE_MINT_URL || 'http://localhost:3338';
 
 if (!mintUrl) {
