@@ -70,6 +70,7 @@ runMigrationTests(
     createRepositories,
     createRepositoriesAtMigration,
     completedToFinalizedMigration: '010_rename_completed_to_finalized',
+    keypairDerivationPathMigration: '012_keypair_derivation_path',
     logger: {
       info: (message, data) => console.log(`[INFO] ${message}`, data ?? ''),
       error: (message, data) => console.error(`[ERROR] ${message}`, data ?? ''),
@@ -77,5 +78,4 @@ runMigrationTests(
   },
   { describe, it, expect, beforeEach, afterEach },
 );
-
 

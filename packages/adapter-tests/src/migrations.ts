@@ -84,6 +84,13 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
   completedToFinalizedMigration: string;
 
   /**
+   * The migration ID/version that adds derivationPath to keypairs.
+   * For SQL adapters: '012_keypair_derivation_path'
+   * For IndexedDB: '10'
+   */
+  keypairDerivationPathMigration?: string;
+
+  /**
    * Logger for debugging test failures.
    */
   logger?: {
@@ -122,6 +129,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
     createRepositories,
     createRepositoriesAtMigration,
     completedToFinalizedMigration,
+    keypairDerivationPathMigration,
     logger,
   } = options;
 
@@ -562,5 +570,73 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
         }
       });
     });
+
+    if (keypairDerivationPathMigration) {
+      describe('keypair derivationPath migration', () => {
+        it('should backfill derivationPath from derivationIndex', async () => {
+          const { dispose, runRemainingMigrations, rawInsert, rawQuery } =
+            await createRepositoriesAtMigration(keypairDerivationPathMigration);
+
+          try {
+            await rawInsert('coco_cashu_keypairs', {
+              publicKey: 'pk-derivation-0',
+              secretKey: '00',
+              createdAt: 1000,
+              derivationIndex: 0,
+            });
+
+            await rawInsert('coco_cashu_keypairs', {
+              publicKey: 'pk-derivation-7',
+              secretKey: '01',
+              createdAt: 1001,
+              derivationIndex: 7,
+            });
+
+            await runRemainingMigrations();
+
+            const keypairs = await rawQuery<{
+              publicKey: string;
+              derivationIndex: number | null;
+              derivationPath: string | null;
+            }>('coco_cashu_keypairs');
+
+            const keypair0 = keypairs.find((kp) => kp.publicKey === 'pk-derivation-0');
+            const keypair7 = keypairs.find((kp) => kp.publicKey === 'pk-derivation-7');
+
+            expect(keypair0?.derivationPath).toBe("m/129373'/10'/0'/0'/0");
+            expect(keypair7?.derivationPath).toBe("m/129373'/10'/0'/0'/7");
+          } finally {
+            await dispose();
+          }
+        });
+
+        it('should not override existing derivationPath', async () => {
+          const { dispose, runRemainingMigrations, rawInsert, rawQuery } =
+            await createRepositoriesAtMigration(keypairDerivationPathMigration);
+
+          try {
+            await rawInsert('coco_cashu_keypairs', {
+              publicKey: 'pk-derivation-existing',
+              secretKey: '02',
+              createdAt: 1002,
+              derivationIndex: 3,
+              derivationPath: "m/129373'/10'/0'/0'/999",
+            });
+
+            await runRemainingMigrations();
+
+            const keypairs = await rawQuery<{
+              publicKey: string;
+              derivationPath: string | null;
+            }>('coco_cashu_keypairs', { publicKey: 'pk-derivation-existing' });
+
+            expect(keypairs).toHaveLength(1);
+            expect(keypairs[0].derivationPath).toBe("m/129373'/10'/0'/0'/999");
+          } finally {
+            await dispose();
+          }
+        });
+      });
+    }
   });
 }
