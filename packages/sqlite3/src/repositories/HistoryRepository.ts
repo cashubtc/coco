@@ -2,6 +2,7 @@ import type {
   HistoryEntry,
   MintHistoryEntry,
   MeltHistoryEntry,
+  ReceiveHistoryEntry,
   SendHistoryEntry,
   SendHistoryState,
   HistoryRepository,
@@ -10,7 +11,8 @@ import { SqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
 type MeltQuoteState = MeltHistoryEntry['state'];
-type Token = SendHistoryEntry['token'];
+type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
+type SendToken = NonNullable<SendHistoryEntry['token']>;
 
 type Row = {
   id: number;
@@ -87,13 +89,16 @@ export class SqliteHistoryRepository implements HistoryRepository {
       }
       case 'send': {
         const h = history as Omit<SendHistoryEntry, 'id'>;
-        tokenJson = h.token ? JSON.stringify(h.token as Token) : null;
+        tokenJson = h.token ? JSON.stringify(h.token as SendToken) : null;
         operationId = h.operationId;
         state = h.state;
         break;
       }
-      case 'receive':
+      case 'receive': {
+        const h = history as Omit<ReceiveHistoryEntry, 'id'>;
+        tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
         break;
+      }
     }
 
     const result = await this.db.run(
@@ -296,13 +301,15 @@ export class SqliteHistoryRepository implements HistoryRepository {
         amount: row.amount,
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as Token) : undefined,
+        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
       };
     }
+    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
     return {
       ...base,
       type: 'receive',
       amount: row.amount,
+      token,
     } satisfies HistoryEntry;
   }
 }

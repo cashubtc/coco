@@ -12,6 +12,7 @@ import type { IdbDb } from '../lib/db.ts';
 type MintQuoteState = MintHistoryEntry['state'];
 type MeltQuoteState = MeltHistoryEntry['state'];
 type SendToken = NonNullable<SendHistoryEntry['token']>;
+type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
 
 type NewHistoryEntry =
   | Omit<MintHistoryEntry, 'id'>
@@ -189,6 +190,8 @@ export class IdbHistoryRepository {
       base.tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
       base.operationId = history.operationId;
       base.state = history.state;
+    } else if (history.type === 'receive') {
+      base.tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
     }
     return base;
   }
@@ -230,6 +233,12 @@ export class IdbHistoryRepository {
         token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
       };
     }
-    return { ...base, type: 'receive', amount: row.amount } as HistoryEntry;
+    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
+    return {
+      ...base,
+      type: 'receive',
+      amount: row.amount,
+      token,
+    } satisfies HistoryEntry;
   }
 }
