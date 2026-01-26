@@ -160,6 +160,7 @@ export class HistoryService {
       unit: token.unit || 'sat',
       amount: token.proofs.reduce((acc, proof) => acc + proof.amount, 0),
       mintUrl,
+      token,
     };
     try {
       const entryRes = await this.historyRepository.addHistoryEntry(entry);
