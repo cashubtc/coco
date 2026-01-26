@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatcherService.ts';
@@ -40,7 +40,9 @@ describe('ProofStateWatcherService', () => {
       makeProof({ mintUrl: mintUrlA, secret: '' }),
     ];
     const getInflightProofs = mock(async () => inflightProofs);
-    const watchProof = mock(async () => {});
+    const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
+      async (_mintUrl: string, _secrets: string[]) => {},
+    );
 
     const proofService = {
       checkInflightProofs,
@@ -61,7 +63,7 @@ describe('ProofStateWatcherService', () => {
       bus,
       new NullLogger(),
     );
-    (watcher as { watchProof: typeof watchProof }).watchProof = watchProof;
+    watcher.watchProof = watchProof;
 
     await watcher.start();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -78,7 +80,9 @@ describe('ProofStateWatcherService', () => {
   it('skips bootstrapping inflight proofs when disabled', async () => {
     const checkInflightProofs = mock(async () => {});
     const getInflightProofs = mock(async () => []);
-    const watchProof = mock(async () => {});
+    const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
+      async (_mintUrl: string, _secrets: string[]) => {},
+    );
 
     const proofService = {
       checkInflightProofs,
@@ -100,7 +104,7 @@ describe('ProofStateWatcherService', () => {
       new NullLogger(),
       { watchExistingInflightOnStart: false },
     );
-    (watcher as { watchProof: typeof watchProof }).watchProof = watchProof;
+    watcher.watchProof = watchProof;
 
     await watcher.start();
     await new Promise((resolve) => setTimeout(resolve, 0));
