@@ -631,7 +631,9 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
             }>('coco_cashu_keypairs', { publicKey: 'pk-derivation-existing' });
 
             expect(keypairs).toHaveLength(1);
-            expect(keypairs[0].derivationPath).toBe("m/129373'/10'/0'/0'/999");
+            const keypair = keypairs[0];
+            expect(keypair).toBeDefined();
+            expect(keypair?.derivationPath).toBe("m/129373'/10'/0'/0'/999");
           } finally {
             await dispose();
           }

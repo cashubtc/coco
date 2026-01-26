@@ -517,13 +517,15 @@ describe('KeyRingService', () => {
     });
 
     it('generates correct public keys for test vectors', async () => {
-      for (let i = 0; i < EXPECTED_PUBKEYS.length; i++) {
+      let i = 0;
+      for (const expected of EXPECTED_PUBKEYS) {
         const keyPair = await vectorService.generateNewKeyPair();
-        expect(keyPair.publicKeyHex).toBe(EXPECTED_PUBKEYS[i]);
+        expect(keyPair.publicKeyHex).toBe(expected);
         
         // Also verify the derivation index is correct in storage
         const stored = await vectorRepo.getPersistedKeyPair(keyPair.publicKeyHex);
         expect(stored?.derivationIndex).toBe(i);
+        i++;
       }
     });
   });
