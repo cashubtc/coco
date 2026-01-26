@@ -43,6 +43,15 @@ export default defineConfig({
           { text: 'Plugins', link: '/pages/plugins' },
         ],
       },
+      {
+        text: 'React',
+        collapsed: true,
+        items: [
+          { text: 'Overview', link: '/pages/react-overview' },
+          { text: 'Providers & Contexts', link: '/pages/react-providers' },
+          { text: 'Hooks', link: '/pages/react-hooks' },
+        ],
+      },
     ],
 
     socialLinks: [{ icon: 'github', link: 'https://github.com/cashubtc/coco' }],
