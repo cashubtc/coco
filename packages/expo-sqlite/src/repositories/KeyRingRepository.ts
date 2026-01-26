@@ -14,8 +14,9 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
       publicKey: string;
       secretKey: string;
       derivationIndex: number | null;
+      derivationPath: string | null;
     }>(
-      'SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs WHERE publicKey = ? LIMIT 1',
+      'SELECT publicKey, secretKey, derivationIndex, derivationPath FROM coco_cashu_keypairs WHERE publicKey = ? LIMIT 1',
       [publicKey],
     );
     if (!row) return null;
@@ -26,6 +27,7 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
         publicKeyHex: row.publicKey,
         secretKey: secretKeyBytes,
         derivationIndex: row.derivationIndex ?? undefined,
+        derivationPath: row.derivationPath ?? undefined,
       };
     } catch (error) {
       throw new Error(
@@ -40,12 +42,19 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
     const secretKeyHex = bytesToHex(keyPair.secretKey);
 
     await this.db.run(
-      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex, derivationPath)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(publicKey) DO UPDATE SET
          secretKey=excluded.secretKey,
-         derivationIndex=COALESCE(excluded.derivationIndex, coco_cashu_keypairs.derivationIndex)`,
-      [keyPair.publicKeyHex, secretKeyHex, Date.now(), keyPair.derivationIndex ?? null],
+         derivationIndex=COALESCE(excluded.derivationIndex, coco_cashu_keypairs.derivationIndex),
+         derivationPath=COALESCE(excluded.derivationPath, coco_cashu_keypairs.derivationPath)`,
+      [
+        keyPair.publicKeyHex,
+        secretKeyHex,
+        Date.now(),
+        keyPair.derivationIndex ?? null,
+        keyPair.derivationPath ?? null,
+      ],
     );
   }
 
@@ -58,7 +67,8 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
       publicKey: string;
       secretKey: string;
       derivationIndex: number | null;
-    }>('SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs');
+      derivationPath: string | null;
+    }>('SELECT publicKey, secretKey, derivationIndex, derivationPath FROM coco_cashu_keypairs');
 
     return rows.map((row) => {
       try {
@@ -67,6 +77,7 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
           publicKeyHex: row.publicKey,
           secretKey: secretKeyBytes,
           derivationIndex: row.derivationIndex ?? undefined,
+          derivationPath: row.derivationPath ?? undefined,
         };
       } catch (error) {
         throw new Error(
@@ -83,8 +94,9 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
       publicKey: string;
       secretKey: string;
       derivationIndex: number | null;
+      derivationPath: string | null;
     }>(
-      'SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs ORDER BY createdAt DESC LIMIT 1',
+      'SELECT publicKey, secretKey, derivationIndex, derivationPath FROM coco_cashu_keypairs ORDER BY createdAt DESC LIMIT 1',
     );
     if (!row) return null;
 
@@ -94,6 +106,7 @@ export class ExpoKeyRingRepository implements KeyRingRepository {
         publicKeyHex: row.publicKey,
         secretKey: secretKeyBytes,
         derivationIndex: row.derivationIndex ?? undefined,
+        derivationPath: row.derivationPath ?? undefined,
       };
     } catch (error) {
       throw new Error(

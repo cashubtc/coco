@@ -16,16 +16,22 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
 
     // Preserve existing derivationIndex if new one is not provided
     let derivationIndex = keyPair.derivationIndex;
-    if (derivationIndex == null) {
+    let derivationPath = keyPair.derivationPath;
+
+    if (derivationIndex == null || derivationPath == null) {
       const existing = this.keyPairs.get(keyPair.publicKeyHex);
-      if (existing?.derivationIndex != null) {
+      if (derivationIndex == null && existing?.derivationIndex != null) {
         derivationIndex = existing.derivationIndex;
+      }
+      if (derivationPath == null && existing?.derivationPath != null) {
+        derivationPath = existing.derivationPath;
       }
     }
 
     this.keyPairs.set(keyPair.publicKeyHex, {
       ...keyPair,
       derivationIndex,
+      derivationPath,
     });
   }
 

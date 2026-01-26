@@ -7,6 +7,7 @@ interface KeypairRow {
   secretKey: string;
   createdAt: number;
   derivationIndex?: number;
+  derivationPath?: string;
 }
 
 export class IdbKeyRingRepository implements KeyRingRepository {
@@ -29,6 +30,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       publicKeyHex: keypairRow.publicKey,
       secretKey: secretKeyBytes,
       derivationIndex: keypairRow.derivationIndex,
+      derivationPath: keypairRow.derivationPath,
     };
   }
 
@@ -38,10 +40,14 @@ export class IdbKeyRingRepository implements KeyRingRepository {
 
     // Preserve existing derivationIndex if new one is not provided
     let derivationIndex = keyPair.derivationIndex;
-    if (derivationIndex == null) {
+    let derivationPath = keyPair.derivationPath;
+    if (derivationIndex == null || derivationPath == null) {
       const existing = (await table.get(keyPair.publicKeyHex)) as KeypairRow | undefined;
-      if (existing?.derivationIndex != null) {
+      if (derivationIndex == null && existing?.derivationIndex != null) {
         derivationIndex = existing.derivationIndex;
+      }
+      if (derivationPath == null && existing?.derivationPath != null) {
+        derivationPath = existing.derivationPath;
       }
     }
 
@@ -50,6 +56,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       secretKey: secretKeyHex,
       createdAt: Date.now(),
       derivationIndex,
+      derivationPath,
     });
   }
 
@@ -66,6 +73,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       publicKeyHex: row.publicKey,
       secretKey: hexToBytes(row.secretKey),
       derivationIndex: row.derivationIndex,
+      derivationPath: row.derivationPath,
     }));
   }
 
@@ -79,6 +87,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       publicKeyHex: row.publicKey,
       secretKey: hexToBytes(row.secretKey),
       derivationIndex: row.derivationIndex,
+      derivationPath: row.derivationPath,
     };
   }
 

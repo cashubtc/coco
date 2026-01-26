@@ -356,6 +356,21 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_melt_operations ADD COLUMN effectiveFee INTEGER;
     `,
   },
+  {
+    id: '017_keypair_derivation_path',
+    run: async (db: SqliteDb) => {
+      // Add derivationPath column
+      await db.exec('ALTER TABLE coco_cashu_keypairs ADD COLUMN derivationPath TEXT');
+
+      // Backfill derivationPath for existing derived keys with the legacy coin type (129373)
+      // We construct the path using string concatenation: 'm/129373\'/10\'/0\'/0\'/' || derivationIndex
+      await db.exec(`
+        UPDATE coco_cashu_keypairs 
+        SET derivationPath = 'm/129373''/10''/0''/0''/' || derivationIndex 
+        WHERE derivationIndex IS NOT NULL AND derivationPath IS NULL
+      `);
+    },
+  },
 ];
 
 // Export for testing

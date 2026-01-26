@@ -39,6 +39,7 @@ export class KeyRingService {
       publicKeyHex,
       secretKey,
       derivationIndex: nextDerivationIndex,
+      derivationPath,
     });
     this.logger?.debug('New key pair generated', { publicKeyHex });
     if (options?.dumpSecretKey) {
