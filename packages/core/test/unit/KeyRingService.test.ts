@@ -28,7 +28,7 @@ describe('KeyRingService', () => {
       const result = await service.generateNewKeyPair();
 
       expect(result.publicKeyHex).toBeDefined();
-      expect(result.publicKeyHex.length).toBe(66); // 32 bytes * 2 for hex + '02' prefix
+      expect(result.publicKeyHex.length).toBe(66); // 33 bytes * 2 for hex
       expect(result.publicKeyHex.startsWith('02') || result.publicKeyHex.startsWith('03')).toBe(true);
       expect('secretKey' in result).toBe(false);
 
@@ -80,6 +80,9 @@ describe('KeyRingService', () => {
       expect(stored1?.derivationIndex).toBe(0);
       expect(stored2?.derivationIndex).toBe(1);
       expect(stored3?.derivationIndex).toBe(2);
+      expect(stored1?.derivationPath).toBe("m/129372'/10'/0'/0'/0");
+      expect(stored2?.derivationPath).toBe("m/129372'/10'/0'/0'/1");
+      expect(stored3?.derivationPath).toBe("m/129372'/10'/0'/0'/2");
     });
 
     it('derives deterministic keys from the same seed', async () => {
