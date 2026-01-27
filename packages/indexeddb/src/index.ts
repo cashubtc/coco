@@ -38,6 +38,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
   readonly db: IdbDb;
+  private initialized = false;
 
   constructor(options: IndexedDbRepositoriesOptions) {
     this.db = new IdbDb(options);
@@ -54,7 +55,13 @@ export class IndexedDbRepositories implements Repositories {
   }
 
   async init(): Promise<void> {
+    if (this.initialized) return;
+    if (this.db.isOpen()) {
+      this.initialized = true;
+      return;
+    }
     await ensureSchema(this.db);
+    this.initialized = true;
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {

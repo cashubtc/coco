@@ -39,6 +39,5 @@ runIntegrationTests(
     logger: getTestLogger(),
     suiteName: 'SQLite3 Integration Tests',
   },
-  //@ts-expect-error stupid type error that no one cares about
   { describe, it, beforeEach, afterEach, expect },
 );

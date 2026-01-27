@@ -68,6 +68,8 @@ export interface CocoConfig {
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
       disabled?: boolean;
+      /** When enabled, scan existing inflight proofs on start (default: true) */
+      watchExistingInflightOnStart?: boolean;
     };
   };
   /**
@@ -135,7 +137,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
 
   const proofStateWatcherConfig = config.watchers?.proofStateWatcher;
   if (!proofStateWatcherConfig?.disabled) {
-    await coco.enableProofStateWatcher();
+    await coco.enableProofStateWatcher(proofStateWatcherConfig);
   }
 
   // Enable processors (default: all enabled unless explicitly disabled)
@@ -398,7 +400,7 @@ export class Manager {
     await this.mintQuoteProcessor.waitForCompletion();
   }
 
-  async enableProofStateWatcher(): Promise<void> {
+  async enableProofStateWatcher(options?: { watchExistingInflightOnStart?: boolean }): Promise<void> {
     if (this.proofStateWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'ProofStateWatcherService' })
@@ -410,6 +412,7 @@ export class Manager {
       this.proofRepository,
       this.eventBus,
       watcherLogger,
+      { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
     );
     this.proofStateWatcher.setSendOperationService(this.sendOperationService);
     await this.proofStateWatcher.start();
@@ -465,10 +468,10 @@ export class Manager {
       await this.enableMintQuoteWatcher(mintQuoteWatcherConfig);
     }
 
-    const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
-    if (!proofStateWatcherConfig?.disabled) {
-      await this.enableProofStateWatcher();
-    }
+  const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
+  if (!proofStateWatcherConfig?.disabled) {
+    await this.enableProofStateWatcher(proofStateWatcherConfig);
+  }
 
     // Re-enable processor based on original configuration (idempotent)
     const mintQuoteProcessorConfig = this.originalProcessorConfig?.mintQuoteProcessor;

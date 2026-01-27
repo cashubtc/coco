@@ -53,9 +53,8 @@ export class ProofService {
    * This is used when the sender pays fees for the receiver.
    */
   async calculateSendAmountWithFees(mintUrl: string, sendAmount: number): Promise<number> {
-    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-    );
+    const { wallet, keys, keysetId } =
+      await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     // Split the send amount to determine number of outputs
     let denominations = splitAmount(sendAmount, keys.keys);
 
@@ -75,6 +74,62 @@ export class ProofService {
     return sendAmount + receiveFee;
   }
 
+  async checkInflightProofs() {
+    const inflightProofs = await this.proofRepository.getInflightProofs();
+    this.logger?.debug('Checking inflight proofs', { count: inflightProofs.length });
+    if (inflightProofs.length === 0) {
+      return;
+    }
+    const batchedByMint: { [mintUrl: string]: CoreProof[] } = {};
+    for (const proof of inflightProofs) {
+      const mintUrl = proof.mintUrl;
+      if (!mintUrl) continue;
+      const batch = batchedByMint[mintUrl] ?? (batchedByMint[mintUrl] = []);
+      batch.push(proof);
+    }
+    const mintUrls = Object.keys(batchedByMint);
+    for (const mintUrl of mintUrls) {
+      const proofs = batchedByMint[mintUrl];
+      if (!proofs || proofs.length === 0) {
+        continue;
+      }
+      this.logger?.debug('Checking inflight proofs for mint', {
+        mintUrl,
+        count: proofs.length,
+      });
+      try {
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+        const proofStates = await wallet.checkProofsStates(proofs);
+        if (!Array.isArray(proofStates) || proofStates.length !== proofs.length) {
+          this.logger?.warn('Malformed proof state check response', {
+            mintUrl,
+            expected: proofs.length,
+            received: (proofStates as { length?: number } | null | undefined)?.length ?? 0,
+          });
+          continue;
+        }
+        const spentSecrets = proofStates.reduce<string[]>((acc, state, index) => {
+          if (state?.state === 'SPENT' && proofs[index]?.secret) {
+            acc.push(proofs[index].secret);
+          }
+          return acc;
+        }, []);
+        if (spentSecrets.length > 0) {
+          await this.setProofState(mintUrl, spentSecrets, 'spent');
+          this.logger?.info('Marked inflight proofs as spent after check', {
+            mintUrl,
+            count: spentSecrets.length,
+          });
+        }
+      } catch (error) {
+        this.logger?.warn('Failed to check inflight proofs for mint', {
+          mintUrl,
+          error,
+        });
+      }
+    }
+  }
+
   async createOutputsAndIncrementCounters(
     mintUrl: string,
     amount: { keep: number; send: number },
@@ -91,9 +146,8 @@ export class ProofService {
     ) {
       return { keep: [], send: [], sendAmount: 0, keepAmount: 0 };
     }
-    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-    );
+    const { wallet, keys, keysetId } =
+      await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const seed = await this.seedService.getSeed();
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
@@ -190,8 +244,8 @@ export class ProofService {
       const message =
         failedKeysets.length > 0
           ? `Failed to persist proofs for ${failed.length} keyset group(s) [${failedKeysets.join(
-            ', ',
-          )}]`
+              ', ',
+            )}]`
           : `Failed to persist proofs for ${failed.length} keyset group(s)`;
       throw new ProofOperationError(mintUrl, message, undefined, aggregate);
     }

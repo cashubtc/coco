@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import { ProofService } from '../../services/ProofService.ts';
@@ -47,7 +47,7 @@ describe('ProofService', () => {
       mintUrl,
       state: 'ready',
       ...overrides,
-    } as unknown as CoreProof);
+    }) as unknown as CoreProof;
 
   const makeSeed = () => new Uint8Array(64).fill(7);
 
@@ -355,6 +355,104 @@ describe('ProofService', () => {
 
       const remaining = await proofRepo.getReadyProofs(mintUrl);
       expect(remaining.map((p) => p.secret).sort()).toEqual(['p2']);
+    });
+  });
+
+  describe('checkInflightProofs', () => {
+    it('marks spent inflight proofs based on mint state checks', async () => {
+      const otherMintUrl = 'https://mint.other';
+
+      const mintProofs = [
+        makeProof({ secret: 's1', state: 'inflight', mintUrl }),
+        makeProof({ secret: 's2', state: 'inflight', mintUrl }),
+      ];
+      const otherProofs = [makeProof({ secret: 's3', state: 'inflight', mintUrl: otherMintUrl })];
+
+      await proofRepo.saveProofs(mintUrl, mintProofs);
+      await proofRepo.saveProofs(otherMintUrl, otherProofs);
+
+      proofRepo.getInflightProofs = mock(async (_mintUrls?: string[]) => [
+        ...mintProofs,
+        ...otherProofs,
+      ]);
+
+      const checkProofsStates = mock(async (proofs: CoreProof[]) => {
+        const requestedMintUrl = proofs[0]?.mintUrl;
+        if (requestedMintUrl === mintUrl) {
+          return [{ state: 'SPENT' }, { state: 'UNSPENT' }];
+        }
+        return [{ state: 'SPENT' }];
+      });
+      const getWalletWithActiveKeysetId = mock(async (_requestedMintUrl: string) => {
+        return {
+          wallet: {
+            checkProofsStates,
+          },
+        } as any;
+      });
+      walletService = {
+        getWalletWithActiveKeysetId,
+        getWallet: walletService.getWallet,
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await service.checkInflightProofs();
+
+      const proof1 = await proofRepo.getProofBySecret(mintUrl, 's1');
+      const proof2 = await proofRepo.getProofBySecret(mintUrl, 's2');
+      const proof3 = await proofRepo.getProofBySecret(otherMintUrl, 's3');
+
+      expect(proof1?.state).toBe('spent');
+      expect(proof2?.state).toBe('inflight');
+      expect(proof3?.state).toBe('spent');
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledTimes(2);
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl);
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(otherMintUrl);
+      expect(checkProofsStates).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips checks when no inflight proofs exist', async () => {
+      const getInflightProofs = mock(async (_mintUrls?: string[]) => []);
+      const checkProofsStates = mock(async () => [{ state: 'SPENT' }]);
+      const getWalletWithActiveKeysetId = mock(async () => {
+        return {
+          wallet: {
+            checkProofsStates,
+          },
+        } as any;
+      });
+      proofRepo.getInflightProofs = getInflightProofs;
+      walletService = {
+        getWalletWithActiveKeysetId,
+        getWallet: walletService.getWallet,
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await service.checkInflightProofs();
+
+      expect(getInflightProofs).toHaveBeenCalledTimes(1);
+      expect(getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+      expect(checkProofsStates).not.toHaveBeenCalled();
     });
   });
 

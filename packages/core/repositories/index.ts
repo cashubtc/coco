@@ -44,6 +44,10 @@ export interface CounterRepository {
 export interface ProofRepository {
   saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void>;
   getReadyProofs(mintUrl: string): Promise<CoreProof[]>;
+  /**
+   * Retrieves all proofs marked as inflight. Can be optionally filtered by a list of mint URLs.
+   */
+  getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]>;
   getAllReadyProofs(): Promise<CoreProof[]>;
   setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void>;
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;

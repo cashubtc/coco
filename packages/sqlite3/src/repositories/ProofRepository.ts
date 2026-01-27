@@ -81,6 +81,24 @@ export class SqliteProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
+  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
+    if (!mintUrls || mintUrls.length === 0) {
+      const rows = await this.db.all<ProofRow>(
+        'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "inflight"',
+      );
+      return rows.map(rowToProof);
+    }
+    const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
+    if (mintUrlList.length === 0) return [];
+    const uniqueMintUrls = Array.from(new Set(mintUrlList));
+    const placeholders = uniqueMintUrls.map(() => '?').join(', ');
+    const rows = await this.db.all<ProofRow>(
+      `SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "inflight" AND mintUrl IN (${placeholders})`,
+      uniqueMintUrls,
+    );
+    return rows.map(rowToProof);
+  }
+
   async getAllReadyProofs(): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
       'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "ready"',

@@ -91,6 +91,5 @@ runIntegrationTests(
     logger: getTestLogger(),
     suiteName: 'Expo SQLite Integration Tests',
   },
-  //@ts-expect-error stupid type error that no one cares about
   { describe, it, beforeEach, afterEach, expect },
 );
