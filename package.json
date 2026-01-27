@@ -12,7 +12,7 @@
     "@changesets/cli": "^2.29.8"
   },
   "scripts": {
-    "build": "bun run --filter='*' build",
+    "build": "bun run --filter='coco-cashu-core' build && bun run --filter='coco-cashu-adapter-tests' build && bun run --filter='coco-cashu-indexeddb' build && bun run --filter='coco-cashu-expo-sqlite' build && bun run --filter='coco-cashu-sqlite3' build && bun run --filter='coco-cashu-react' build",
     "typecheck": "bun run --filter='coco-cashu-core' typecheck && bun run --filter='coco-cashu-adapter-tests' typecheck && bun run --filter='coco-cashu-indexeddb' typecheck && bun run --filter='coco-cashu-expo-sqlite' typecheck && bun run --filter='coco-cashu-sqlite3' typecheck && bun run --filter='coco-cashu-react' typecheck",
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
