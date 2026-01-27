@@ -412,6 +412,25 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(amountAfterReceive).toBeGreaterThan(amountBeforeReceive);
       });
 
+      it('should encode and decode tokens via wallet api', async () => {
+        const sendAmount = 40;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+
+        const encodedToken = mgr!.wallet.encodeToken(token);
+        expect(encodedToken).toBeDefined();
+        expect(encodedToken).toBe(getEncodedToken(token));
+
+        const decodedToken = await mgr!.wallet.decodeToken(encodedToken);
+
+        expect(decodedToken.mint).toBe(token.mint);
+        expect(decodedToken.proofs).toHaveLength(token.proofs.length);
+
+        const decodedAmount = decodedToken.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+        const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+        expect(decodedAmount).toBe(tokenAmount);
+      });
+
       it('should handle multiple send/receive operations', async () => {
         const initialBalance = await mgr!.wallet.getBalances();
         const initialAmount = initialBalance[mintUrl] || 0;

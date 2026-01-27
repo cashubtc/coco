@@ -1,4 +1,9 @@
-import type { PaymentRequest, Token } from '@cashu/cashu-ts';
+import {
+  getEncodedToken,
+  getTokenMetadata,
+  type PaymentRequest,
+  type Token,
+} from '@cashu/cashu-ts';
 import type {
   MintService,
   WalletService,
@@ -170,5 +175,15 @@ export class WalletApi {
       throw new Error('Failed to restore some keysets');
     }
     this.logger?.info('Restore completed successfully', { mintUrl });
+  }
+
+  async decodeToken(tokenString: string): Promise<Token> {
+    const metadata = getTokenMetadata(tokenString);
+    const wallet = await this.walletService.getWallet(metadata.mint);
+    return wallet.decodeToken(tokenString);
+  }
+
+  encodeToken(token: Token): string {
+    return getEncodedToken(token);
   }
 }
