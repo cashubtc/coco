@@ -9,7 +9,8 @@ import { ExpoSqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
 type MeltQuoteState = MeltHistoryEntry['state'];
-type Token = SendHistoryEntry['token'];
+type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
+type SendToken = NonNullable<SendHistoryEntry['token']>;
 type SendHistoryState = SendHistoryEntry['state'];
 
 type Row = {
@@ -133,12 +134,12 @@ export class ExpoHistoryRepository {
         state = history.state;
         break;
       case 'send':
-        tokenJson = history.token ? JSON.stringify(history.token) : null;
+        tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
         operationId = history.operationId;
         state = history.state;
         break;
       case 'receive':
-        // no extra fields
+        tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
         break;
     }
 
@@ -342,13 +343,15 @@ export class ExpoHistoryRepository {
         amount: row.amount,
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as Token) : undefined,
+        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
       };
     }
+    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
     return {
       ...base,
       type: 'receive',
       amount: row.amount,
+      token,
     } satisfies HistoryEntry;
   }
 }
