@@ -268,4 +268,44 @@ describe('WalletApi - Trust Enforcement', () => {
       expect(mockMintService.addMintByUrl).toHaveBeenCalledWith(testMintUrl, { trusted: true });
     });
   });
+
+  describe('decodeToken', () => {
+    it('should use the wallet for the token mint', async () => {
+      const token = {
+        mint: testMintUrl,
+        proofs: testProofs,
+      };
+      const encodedToken = getEncodedToken(token);
+      const decodedToken = {
+        mint: testMintUrl,
+        proofs: testProofs,
+      };
+
+      const decodeTokenMock = mock(async () => decodedToken);
+      mockWalletService.getWallet = mock(async (mintUrl: string) => {
+        return {
+          decodeToken: decodeTokenMock,
+        };
+      });
+
+      const result = await walletApi.decodeToken(encodedToken);
+
+      expect(mockWalletService.getWallet).toHaveBeenCalledWith(testMintUrl);
+      expect(decodeTokenMock).toHaveBeenCalledWith(encodedToken);
+      expect(result).toEqual(decodedToken);
+    });
+  });
+
+  describe('encodeToken', () => {
+    it('should encode tokens with cashu encoder', () => {
+      const token = {
+        mint: testMintUrl,
+        proofs: testProofs,
+      };
+
+      const encodedToken = walletApi.encodeToken(token);
+
+      expect(encodedToken).toBe(getEncodedToken(token));
+    });
+  });
 });
