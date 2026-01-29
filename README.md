@@ -61,3 +61,7 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 ## Development
 
 Use TypeScript for type checking and `tsdown` to build packages. See `packages/core/README.md` for API details and usage.
+
+## Contributing
+
+Please see `CONTRIBUTING.md` for workflow, coding standards, and release notes.
