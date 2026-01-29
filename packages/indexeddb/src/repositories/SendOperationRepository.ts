@@ -2,6 +2,7 @@ import type {
   SendOperationRepository,
   SendOperation,
   SendOperationState,
+  SendMethod,
 } from 'coco-cashu-core';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
@@ -14,6 +15,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    method: row.method as SendMethod,
+    methodData: JSON.parse(row.methodDataJson),
   };
 
   if (row.state === 'init') {
@@ -60,6 +63,8 @@ function operationToRow(op: SendOperation): SendOperationRow {
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
       error: op.error ?? null,
+      method: op.method,
+      methodDataJson: JSON.stringify(op.methodData),
       needsSwap: null,
       fee: null,
       inputAmount: null,
@@ -77,6 +82,8 @@ function operationToRow(op: SendOperation): SendOperationRow {
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
     error: op.error ?? null,
+    method: op.method,
+    methodDataJson: JSON.stringify(op.methodData),
     needsSwap: op.needsSwap ? 1 : 0,
     fee: op.fee,
     inputAmount: op.inputAmount,
