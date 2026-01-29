@@ -24,7 +24,7 @@ import {
   ProofValidationError,
 } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
-import type { MeltHandlerProvider } from '../../infra/handlers';
+import type { MeltHandlerProvider } from '../../infra/handlers/melt';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 
