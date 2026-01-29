@@ -2,6 +2,11 @@
 
 Guidance for agentic coding in this repo.
 
+## AI-assisted workflow
+- We typically create a git worktree per feature.
+- If you are in a feature worktree, the project root is the worktree root (paths may differ).
+- When planning in a feature worktree, use `FEATURE_TODO.md` in the worktree root to track plan and progress. If you are building and this file is present, check whether it should be updated.
+
 ## Repository layout
 - packages/core: core TS library (services, models, repositories, tests).
 - packages/react: React hooks/providers for core (Vite build, ESLint).
