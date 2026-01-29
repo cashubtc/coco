@@ -25,6 +25,7 @@ export type SendOperationState =
   | 'rolled_back';
 
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import type { SendMethod, SendMethodData } from './SendMethodHandler';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -33,7 +34,7 @@ import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '.
 /**
  * Base fields present in all send operations
  */
-interface SendOperationBase {
+interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** Unique identifier for this operation */
   id: string;
 
@@ -42,6 +43,12 @@ interface SendOperationBase {
 
   /** The amount requested to send (before fees) */
   amount: number;
+
+  /** The send method (e.g., 'default', 'p2pk') */
+  method: M;
+
+  /** Method-specific data */
+  methodData: SendMethodData<M>;
 
   /** Timestamp when the operation was created */
   createdAt: number;
@@ -260,13 +267,19 @@ export function getKeepProofSecrets(op: PreparedOrLaterOperation): string[] {
 // Factory Function
 // ============================================================================
 
+export interface CreateSendOperationOptions<M extends SendMethod = SendMethod> {
+  method: M;
+  methodData: SendMethodData<M>;
+}
+
 /**
  * Creates a new SendOperation in init state
  */
-export function createSendOperation(
+export function createSendOperation<M extends SendMethod = SendMethod>(
   id: string,
   mintUrl: string,
   amount: number,
+  options: CreateSendOperationOptions<M>,
 ): InitSendOperation {
   const now = Date.now();
   return {
@@ -274,6 +287,8 @@ export function createSendOperation(
     state: 'init',
     mintUrl,
     amount,
+    method: options.method,
+    methodData: options.methodData,
     createdAt: now,
     updatedAt: now,
   };
