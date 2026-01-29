@@ -56,6 +56,8 @@ describe('SendOperationService - recoverPendingOperations', () => {
     amount: 100,
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
+    method: 'default',
+    methodData: {},
   });
 
   const makePreparedOp = (
@@ -73,6 +75,8 @@ describe('SendOperationService - recoverPendingOperations', () => {
     inputAmount: 101,
     inputProofSecrets: ['input-secret-1', 'input-secret-2'],
     outputData: serializeOutputData({ keep: [], send: [] }),
+    method: 'default',
+    methodData: {},
     ...overrides,
   });
 

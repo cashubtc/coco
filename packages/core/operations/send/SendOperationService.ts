@@ -17,7 +17,9 @@ import {
   getSendProofSecrets,
   getKeepProofSecrets,
   isTerminalOperation,
+  type CreateSendOperationOptions,
 } from './SendOperation';
+import type { SendMethod, SendMethodData } from './SendMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -104,7 +106,11 @@ export class SendOperationService {
    * Create a new send operation.
    * This is the entry point for the saga.
    */
-  async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
+  async init<M extends SendMethod = 'default'>(
+    mintUrl: string,
+    amount: number,
+    options: CreateSendOperationOptions<M> = { method: 'default' as M, methodData: {} as SendMethodData<M> },
+  ): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -115,10 +121,10 @@ export class SendOperationService {
     }
 
     const id = generateSubId();
-    const operation = createSendOperation(id, mintUrl, amount);
+    const operation = createSendOperation(id, mintUrl, amount, options);
 
     await this.sendOperationRepository.create(operation);
-    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount });
+    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount, method: options.method });
 
     return operation;
   }
@@ -229,6 +235,8 @@ export class SendOperationService {
       inputAmount: selectedProofs.reduce((acc, p) => acc + p.amount, 0),
       inputProofSecrets: inputSecrets,
       outputData: serializedOutputData,
+      method: operation.method,
+      methodData: operation.methodData,
     };
 
     await this.sendOperationRepository.update(prepared);
