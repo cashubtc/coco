@@ -1,4 +1,4 @@
-import type { Repositories, Manager, Logger } from 'coco-cashu-core';
+import { type Repositories, Manager, type Logger } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
 import {
   Mint,
@@ -2101,6 +2101,38 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Wallet Restore', () => {
+      it('should restore own seed', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            watchers: {
+              mintQuoteWatcher: { disabled: true },
+            },
+          });
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const quote = await mgr.quotes.createMintQuote(mintUrl, 21);
+          await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+          const allProofs = await repositories.proofRepository.getAllReadyProofs();
+          const toBeDeleted = allProofs[0]!;
+          expect(toBeDeleted).toBeDefined();
+          await repositories.proofRepository.deleteProofs(mintUrl, [toBeDeleted.secret]);
+          const balanceAfterStateLoss = await mgr.wallet.getBalances();
+          expect(balanceAfterStateLoss[mintUrl]).toBe(21 - toBeDeleted.amount);
+          await mgr.wallet.restore(mintUrl);
+          const balanceAfterRestore = await mgr.wallet.getBalances();
+          expect(balanceAfterRestore[mintUrl]).toBe(21);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
       it('should sweep a mint from another seed', async () => {
         const { repositories, dispose } = await createRepositories();
         try {

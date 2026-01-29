@@ -5,6 +5,7 @@ import type { CounterService } from '../../services/CounterService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
+import type { SeedService } from '../../services/SeedService.ts';
 import { Wallet, type Proof, type ProofState } from '@cashu/cashu-ts';
 
 describe('WalletRestoreService', () => {
@@ -16,6 +17,7 @@ describe('WalletRestoreService', () => {
   let counterService: CounterService;
   let walletService: WalletService;
   let requestProvider: MintRequestProvider;
+  let seedService: SeedService;
   let logger: Logger;
   let service: WalletRestoreService;
 
@@ -74,6 +76,10 @@ describe('WalletRestoreService', () => {
       getRequestFn: mock(() => undefined),
     } as unknown as MintRequestProvider;
 
+    seedService = {
+      seedEquals: mock(() => Promise.resolve(false)),
+    } as unknown as SeedService;
+
     // Prevent actual network calls when a new Wallet is created inside sweepKeyset
     // by stubbing loadMint on the Wallet prototype.
     (Wallet.prototype as any).loadMint = mock(() => Promise.resolve());
@@ -83,6 +89,7 @@ describe('WalletRestoreService', () => {
       counterService,
       walletService,
       requestProvider,
+      seedService,
       logger,
     );
   });
@@ -308,10 +315,13 @@ describe('WalletRestoreService', () => {
       expect(mockWallet.checkProofsStates).toHaveBeenCalledTimes(1);
       expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 11);
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledWith('Saved restored proofs for keyset', {
+      expect(logger.info).toHaveBeenCalledWith('Reconciled restored proofs for keyset', {
         mintUrl,
         keysetId,
-        total: 1,
+        savedReady: 1,
+        skippedReady: 0,
+        markedSpent: 0,
+        missingExisting: 0,
       });
     });
 
@@ -327,11 +337,11 @@ describe('WalletRestoreService', () => {
       expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
-    it('should throw when restored proofs are fewer than existing proofs', async () => {
+    it('should warn when restored proofs are fewer than existing proofs', async () => {
       const existingProofs = [
-        { id: keysetId, amount: 50 },
-        { id: keysetId, amount: 25 },
-        { id: keysetId, amount: 10 },
+        makeProof(50, 'proof1'),
+        makeProof(25, 'proof2'),
+        makeProof(10, 'proof3'),
       ];
       proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
 
@@ -342,14 +352,18 @@ describe('WalletRestoreService', () => {
         }),
       );
 
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
-        'Restored less proofs than expected.',
-      );
+      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
+
       expect(logger.warn).toHaveBeenCalledWith('Restored fewer proofs than previously stored', {
         mintUrl,
         keysetId,
         previous: 3,
         restored: 1,
+      });
+      expect(logger.warn).toHaveBeenCalledWith('Existing ready proofs missing from restore results', {
+        mintUrl,
+        keysetId,
+        count: 2,
       });
     });
 
@@ -427,10 +441,13 @@ describe('WalletRestoreService', () => {
         ready: 1,
         spent: 2,
       });
-      expect(logger.info).toHaveBeenCalledWith('Saved restored proofs for keyset', {
+      expect(logger.info).toHaveBeenCalledWith('Reconciled restored proofs for keyset', {
         mintUrl,
         keysetId,
-        total: 3,
+        savedReady: 1,
+        skippedReady: 0,
+        markedSpent: 0,
+        missingExisting: 0,
       });
     });
 
@@ -479,7 +496,7 @@ describe('WalletRestoreService', () => {
     });
 
     it('should log all key stages during restore', async () => {
-      const existingProofs = [{ id: keysetId, amount: 25 }];
+      const existingProofs = [makeProof(25, 'proof1')];
       proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
 
       await service.restoreKeyset(mintUrl, mockWallet, keysetId);
@@ -519,6 +536,44 @@ describe('WalletRestoreService', () => {
       expect(savedProofsCall[0]).toBe(mintUrl);
       // The second argument should be mapped proofs, we just check it was called
       expect(savedProofsCall[1]).toBeDefined();
+    });
+
+    it('should skip saving ready proofs that already exist', async () => {
+      const existingProofs = [makeProof(50, 'proof1')];
+      proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
+
+      const proofs = [makeProof(50, 'proof1'), makeProof(25, 'proof2')];
+
+      mockWallet.batchRestore = mock(() =>
+        Promise.resolve({
+          proofs,
+          lastCounterWithSignature: 5,
+        }),
+      );
+      mockWallet.checkProofsStates = mock(() =>
+        Promise.resolve([{ state: 'UNSPENT' }, { state: 'UNSPENT' }]),
+      );
+
+      await service.restoreKeyset(mintUrl, mockWallet, keysetId);
+
+      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
+      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
+      expect(savedProofsCall[0]).toBe(mintUrl);
+      expect(savedProofsCall[1]).toHaveLength(1);
+      expect(savedProofsCall[1][0].secret).toBe('proof2');
+      expect(logger.debug).toHaveBeenCalledWith('Skipping already stored ready proofs', {
+        mintUrl,
+        keysetId,
+        count: 1,
+      });
+      expect(logger.info).toHaveBeenCalledWith('Reconciled restored proofs for keyset', {
+        mintUrl,
+        keysetId,
+        savedReady: 1,
+        skippedReady: 1,
+        markedSpent: 0,
+        missingExisting: 0,
+      });
     });
   });
 

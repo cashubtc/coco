@@ -598,6 +598,7 @@ export class Manager {
       counterService,
       walletService,
       this.mintRequestProvider,
+      seedService,
       walletRestoreLogger,
     );
 
