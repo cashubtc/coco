@@ -2,7 +2,7 @@ import type {
   MeltMethod,
   MeltMethodHandler,
   MeltMethodHandlerRegistry,
-} from '../../operations/melt/MeltMethodHandler';
+} from '../../../operations/melt/MeltMethodHandler';
 
 /**
  * Runtime registry for melt method handlers.
