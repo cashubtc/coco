@@ -66,4 +66,17 @@ export class SeedService {
     this.cachedSeed = null;
     this.cachedUntil = 0;
   }
+
+  /**
+   * Checks whether the supplied seed matches the current seed.
+   * Note: This is not a constant-time comparison.
+   * @param seed Seed to compare against the internal seed.
+   */
+  async seedEquals(seed: Uint8Array): Promise<boolean> {
+    const internalSeed = await this.getSeed();
+    return (
+      internalSeed.length === seed.length &&
+      seed.every((byte, index) => byte === internalSeed[index])
+    );
+  }
 }
