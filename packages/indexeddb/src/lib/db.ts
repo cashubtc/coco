@@ -176,6 +176,8 @@ export interface SendOperationRow {
   createdAt: number;
   updatedAt: number;
   error?: string | null;
+  method: string;
+  methodDataJson: string;
   needsSwap?: number | null;
   fee?: number | null;
   inputAmount?: number | null;
