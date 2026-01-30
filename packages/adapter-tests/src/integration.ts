@@ -1,5 +1,5 @@
 import type { Repositories, Manager, Logger } from 'coco-cashu-core';
-import { initializeCoco, getEncodedToken } from 'coco-cashu-core';
+import { initializeCoco, getEncodedToken, ConsoleLogger } from 'coco-cashu-core';
 import {
   Mint,
   Wallet,
@@ -10,8 +10,11 @@ import {
   type MintKeys,
   type Token,
   type HasKeysetKeys,
+  parseP2PKSecret,
+  type Secret
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
+
 
 export type OutputDataFactory = (amount: number, keys: MintKeys | HasKeysetKeys) => OutputData;
 
@@ -2033,6 +2036,48 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Should fail because we don't have the private key
         await expect(mgr!.wallet.receive(p2pkToken)).rejects.toThrow();
+      });
+
+      it('should send P2PK locked tokens using prepareSendP2pk', async () => {
+        // Generate a keypair for the recipient
+        const recipientKeypair = await mgr!.keyring.generateKeyPair();
+        expect(recipientKeypair.publicKeyHex).toBeDefined();
+
+        const balanceBefore = await mgr!.wallet.getBalances();
+        const amountBefore = balanceBefore[mintUrl] || 0;
+
+        // Send P2PK locked tokens using the new API
+        const sendAmount = 30;
+        const preparedSend = await mgr!.send.prepareSendP2pk(
+          mintUrl,
+          sendAmount,
+          recipientKeypair.publicKeyHex,
+        );
+        expect(preparedSend.state).toBe('prepared');
+        expect(preparedSend.method).toBe('p2pk');
+
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+
+        // Verify the token proofs are P2PK locked
+        expect(token.proofs.length).toBeGreaterThan(0);
+        const firstProof = token.proofs[0];
+        expect(firstProof?.secret).toBeDefined();
+        const parsedSecret: Secret = parseP2PKSecret(firstProof!.secret);
+        expect(parsedSecret[0]).toBe('P2PK');
+        expect(parsedSecret[1].data).toBe(recipientKeypair.publicKeyHex);
+
+        // Balance should have decreased
+        const balanceAfter = await mgr!.wallet.getBalances();
+        const amountAfter = balanceAfter[mintUrl] || 0;
+        expect(amountAfter).toBeLessThan(amountBefore);
+
+        // Receive the P2PK token (we have the private key)
+        await mgr!.wallet.receive(token);
+
+        // Balance should be restored (minus fees)
+        const balanceFinal = await mgr!.wallet.getBalances();
+        const amountFinal = balanceFinal[mintUrl] || 0;
+        expect(amountFinal).toBeGreaterThan(amountAfter);
       });
 
       it('should handle multiple P2PK locked proofs in one token', async () => {
