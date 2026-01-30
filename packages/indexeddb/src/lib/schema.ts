@@ -247,4 +247,35 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_send_operations: '&id, state, mintUrl',
     coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
   });
+
+  // Version 10: Add method and methodData fields to send_operations
+  db.version(10)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+id+state], state, mintUrl, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    })
+    .upgrade(async (tx) => {
+      // Add default method and methodData to existing send operations
+      await tx
+        .table('coco_cashu_send_operations')
+        .toCollection()
+        .modify((op: any) => {
+          if (!op.method) {
+            op.method = 'default';
+          }
+          if (!op.methodData) {
+            op.methodData = {};
+          }
+        });
+    });
 }

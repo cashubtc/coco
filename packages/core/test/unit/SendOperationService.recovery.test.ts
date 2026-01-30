@@ -231,6 +231,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       mintService,
       walletService,
       eventBus,
+      undefined, // handlerProvider
       logger,
     );
   });
@@ -862,6 +863,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
         mintService,
         walletService,
         eventBus,
+        undefined, // handlerProvider
         logger,
       );
 

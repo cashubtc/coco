@@ -20,11 +20,11 @@ import type {
  * Extend via declaration merging if you need to add methods externally.
  *
  * Future methods may include:
- * - p2pk: { pubkey: string } - P2PK locked tokens
  * - htlc: { hash: string; timeout: number } - HTLC locked tokens
  */
 export interface SendMethodDefinitions {
   default: Record<string, never>;
+  p2pk: { pubkey: string };
 }
 
 export type SendMethod = keyof SendMethodDefinitions;

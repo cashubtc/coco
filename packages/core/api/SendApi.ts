@@ -4,7 +4,9 @@ import type {
   SendOperation,
   PreparedSendOperation,
   PendingSendOperation,
+  CreateSendOperationOptions,
 } from '../operations/send/SendOperation';
+import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHandler';
 
 /**
  * API for managing send operations.
@@ -39,6 +41,32 @@ export class SendApi {
    */
   async prepareSend(mintUrl: string, amount: number): Promise<PreparedSendOperation> {
     const initOp = await this.sendOperationService.init(mintUrl, amount);
+    return this.sendOperationService.prepare(initOp);
+  }
+
+  /**
+   * Prepare a P2PK (Pay-to-Public-Key) send operation.
+   * Creates tokens that are locked to a specific public key and can only be
+   * redeemed by the holder of the corresponding private key.
+   *
+   * Use this when you want to send tokens to a specific recipient identified
+   * by their public key. The recipient must sign the proofs with their private
+   * key to redeem them.
+   *
+   * @param mintUrl - The mint URL to send from
+   * @param amount - The amount to send
+   * @param pubkey - The recipient's public key (hex-encoded, 33 bytes compressed)
+   * @returns The prepared operation with fee information
+   */
+  async prepareSendP2pk(
+    mintUrl: string,
+    amount: number,
+    pubkey: string,
+  ): Promise<PreparedSendOperation> {
+    const initOp = await this.sendOperationService.init(mintUrl, amount, {
+      method: 'p2pk',
+      methodData: { pubkey },
+    });
     return this.sendOperationService.prepare(initOp);
   }
 
