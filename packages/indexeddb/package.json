@@ -12,7 +12,7 @@
     "@vitest/browser": "^3.2.4",
     "coco-cashu-adapter-tests": "1.1.2-rc.42",
     "playwright": "^1.52.0",
-    "tsdown": "^0.20.0-beta.3",
+    "tsdown": "0.20.1",
     "vitest": "^3.2.4"
   },
   "exports": {
