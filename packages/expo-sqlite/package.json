@@ -9,7 +9,7 @@
   ],
   "devDependencies": {
     "coco-cashu-adapter-tests": "1.1.2-rc.42",
-    "tsdown": "^0.20.0-beta.3"
+    "tsdown": "0.20.1"
   },
   "exports": {
     ".": {
