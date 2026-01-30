@@ -1,5 +1,15 @@
 # coco-cashu-react
 
+## 1.1.2-rc.43
+
+### Patch Changes
+
+- Updated dependencies [6f0ed09]
+- Updated dependencies [ad87919]
+- Updated dependencies [2057978]
+- Updated dependencies [db2baec]
+  - coco-cashu-core@1.1.2-rc.43
+
 ## 1.1.2-rc.42
 
 ### Patch Changes

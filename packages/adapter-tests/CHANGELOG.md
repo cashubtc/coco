@@ -1,5 +1,21 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.43
+
+### Patch Changes
+
+- 6f0ed09: feat: adds new methods to the WalletAPI:
+
+  - `WalletApi.encode`: This method encodes a Token into a V4 cashuB token
+  - `WalletApi.decode`: This method decodes a string token into its decoded Token form. It will use the internal keyset information to resolve short keyset IDs automatically
+
+- ad87919: Feat: Add checkInflightProofs method and wired it up inside proofStateWatcher, so that inflight proofs are state-checked on startup and subscribed to if still inflight
+- Updated dependencies [6f0ed09]
+- Updated dependencies [ad87919]
+- Updated dependencies [2057978]
+- Updated dependencies [db2baec]
+  - coco-cashu-core@1.1.2-rc.43
+
 ## 1.1.2-rc.42
 
 ### Patch Changes

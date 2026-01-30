@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-sqlite3",
-  "version": "1.1.2-rc.42",
+  "version": "1.1.2-rc.43",
   "module": "index.ts",
   "type": "module",
   "files": [
@@ -9,7 +9,7 @@
   ],
   "devDependencies": {
     "@types/sqlite3": "^3.1.8",
-    "coco-cashu-adapter-tests": "1.1.2-rc.42",
+    "coco-cashu-adapter-tests": "1.1.2-rc.43",
     "tsdown": "0.20.1"
   },
   "exports": {
@@ -28,6 +28,6 @@
   "peerDependencies": {
     "typescript": "^5",
     "sqlite3": "^5",
-    "coco-cashu-core": "1.1.2-rc.42"
+    "coco-cashu-core": "1.1.2-rc.43"
   }
 }

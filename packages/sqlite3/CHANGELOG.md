@@ -1,5 +1,17 @@
 # coco-cashu-sqlite3
 
+## 1.1.2-rc.43
+
+### Patch Changes
+
+- ad87919: Feat: Add checkInflightProofs method and wired it up inside proofStateWatcher, so that inflight proofs are state-checked on startup and subscribed to if still inflight
+- db2baec: Feat: Add optional token field to ReceiveHistoryEntries
+- Updated dependencies [6f0ed09]
+- Updated dependencies [ad87919]
+- Updated dependencies [2057978]
+- Updated dependencies [db2baec]
+  - coco-cashu-core@1.1.2-rc.43
+
 ## 1.1.2-rc.42
 
 ### Patch Changes
