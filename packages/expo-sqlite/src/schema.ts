@@ -307,6 +307,17 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE quoteId IS NOT NULL;
     `,
   },
+  {
+    id: '012_keypair_derivation_path',
+    run: async (db: ExpoSqliteDb) => {
+      await db.exec('ALTER TABLE coco_cashu_keypairs ADD COLUMN derivationPath TEXT');
+      await db.exec(`
+        UPDATE coco_cashu_keypairs 
+        SET derivationPath = 'm/129373''/10''/0''/0''/' || derivationIndex 
+        WHERE derivationIndex IS NOT NULL AND derivationPath IS NULL
+      `);
+    },
+  },
 ];
 
 // Export for testing
