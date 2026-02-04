@@ -47,9 +47,6 @@ export class PaymentRequestService {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const matchingMints = await this.findMatchingMints(decodedPaymentRequest);
-    if (matchingMints.length === 0) {
-      throw new PaymentRequestError('No matching mints found');
-    }
     const requiredMints = decodedPaymentRequest.mints ?? [];
     return {
       paymentRequest: decodedPaymentRequest,
