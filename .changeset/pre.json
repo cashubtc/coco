@@ -8,7 +8,8 @@
     "coco-cashu-indexeddb": "1.0.0-rc.11",
     "coco-cashu-react": "1.1.1",
     "coco-cashu-sqlite3": "1.0.0-rc.11",
-    "coco-cashu-adapter-tests": "1.0.0-rc.16"
+    "coco-cashu-adapter-tests": "1.0.0-rc.16",
+    "coco-cashu-sqlite-bun": "1.1.2-rc.43"
   },
   "changesets": [
     "bumpy-hats-poke",
@@ -39,6 +40,7 @@
     "nasty-candies-say",
     "neat-towns-love",
     "olive-numbers-sort",
+    "orange-ways-send",
     "plain-moose-fry",
     "plenty-clowns-divide",
     "polite-buses-open",
@@ -56,6 +58,7 @@
     "two-bushes-watch",
     "two-pugs-create",
     "vast-sheep-arrive",
+    "wise-dogs-warn",
     "yellow-forks-laugh"
   ]
 }

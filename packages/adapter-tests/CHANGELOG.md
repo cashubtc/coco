@@ -1,5 +1,18 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.44
+
+### Patch Changes
+
+- 8bb6f67: Fix: Migrate from deprecated sqlite3 package to better-sqlite3
+
+  Fix: Made sure bootstrap inflight check finalizes send operations when proofs are returned spent.
+
+  WARNING: This is a breaking change for bun environments, as bun currently does not support the better-sqlite3 binding! Bun consumers should use the sqlite-bun adapter instead!!
+
+- Updated dependencies [8bb6f67]
+  - coco-cashu-core@1.1.2-rc.44
+
 ## 1.1.2-rc.43
 
 ### Patch Changes
