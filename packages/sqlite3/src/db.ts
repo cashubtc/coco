@@ -56,51 +56,24 @@ export class SqliteDb {
     return this.root.db;
   }
 
-  exec(sql: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      try {
-        this.root.db.exec(sql);
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
-    });
+  async exec(sql: string): Promise<void> {
+    this.root.db.exec(sql);
   }
 
-  run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
-    return new Promise((resolve, reject) => {
-      try {
-        const result = this.root.db.prepare(sql).run(params);
-        resolve({
-          lastID: Number(result.lastInsertRowid),
-          changes: result.changes,
-        });
-      } catch (err) {
-        reject(err);
-      }
-    });
+  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    const result = this.root.db.prepare(sql).run(params);
+    return {
+      lastID: Number(result.lastInsertRowid),
+      changes: result.changes,
+    };
   }
 
-  get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
-    return new Promise((resolve, reject) => {
-      try {
-        const result = this.root.db.prepare(sql).get(params) as T | undefined;
-        resolve(result);
-      } catch (err) {
-        reject(err);
-      }
-    });
+  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+    return this.root.db.prepare(sql).get(params) as T | undefined;
   }
 
-  all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
-    return new Promise((resolve, reject) => {
-      try {
-        const result = this.root.db.prepare(sql).all(params) as T[];
-        resolve(result);
-      } catch (err) {
-        reject(err);
-      }
-    });
+  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+    return this.root.db.prepare(sql).all(params) as T[];
   }
 
   /**
@@ -193,15 +166,8 @@ export class SqliteDb {
     }
   }
 
-  close(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      try {
-        this.root.db.close();
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
-    });
+  async close(): Promise<void> {
+    this.root.db.close();
   }
 }
 
