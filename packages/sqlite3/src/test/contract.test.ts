@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import {
   runRepositoryTransactionContract,
@@ -25,7 +25,7 @@ async function createRepositories() {
   return {
     repositories,
     dispose: async () => {
-      repositories.db.close();
+      await repositories.db.close();
     },
   };
 }

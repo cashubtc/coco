@@ -108,6 +108,16 @@ export class ProofStateWatcherService {
                   err,
                 });
               }
+
+              try {
+                await this.tryFinalizeSendOperation(mintUrl, secret);
+              } catch (err) {
+                this.logger?.warn('Failed to finalize send operation from spent proof event', {
+                  mintUrl,
+                  secret,
+                  err,
+                });
+              }
             }
           }
         } catch (err) {

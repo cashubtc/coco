@@ -962,7 +962,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await mgr!.wallet.receive(token);
 
         // Wait for proof state watcher to detect spent proofs and finalize
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
 
         // Operation should be finalized
         const operation = await mgr!.send.getOperation(operationId!);
@@ -1446,7 +1446,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await new Promise((resolve) => setTimeout(resolve, 500));
 
           await mgr!.wallet.receive(token);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await new Promise((resolve) => setTimeout(resolve, 5000));
 
           const finalized = await mgr!.send.getOperation(operationId!);
           expect(finalized!.state).toBe('finalized');

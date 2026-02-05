@@ -178,7 +178,7 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
 
   async getPending(): Promise<SendOperation[]> {
     const rows = await this.db.all<SendOperationRow>(
-      'SELECT * FROM coco_cashu_send_operations WHERE state IN ("executing", "pending", "rolling_back")',
+      "SELECT * FROM coco_cashu_send_operations WHERE state IN ('executing', 'pending', 'rolling_back')",
     );
     return rows.map(rowToOperation);
   }

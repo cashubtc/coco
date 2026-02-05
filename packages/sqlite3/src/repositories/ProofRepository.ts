@@ -75,7 +75,7 @@ export class SqliteProofRepository implements ProofRepository {
 
   async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready"',
+      "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready'",
       [mintUrl],
     );
     return rows.map(rowToProof);
@@ -84,7 +84,7 @@ export class SqliteProofRepository implements ProofRepository {
   async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
     if (!mintUrls || mintUrls.length === 0) {
       const rows = await this.db.all<ProofRow>(
-        'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "inflight"',
+        "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = 'inflight'",
       );
       return rows.map(rowToProof);
     }
@@ -93,7 +93,7 @@ export class SqliteProofRepository implements ProofRepository {
     const uniqueMintUrls = Array.from(new Set(mintUrlList));
     const placeholders = uniqueMintUrls.map(() => '?').join(', ');
     const rows = await this.db.all<ProofRow>(
-      `SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "inflight" AND mintUrl IN (${placeholders})`,
+      `SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = 'inflight' AND mintUrl IN (${placeholders})`,
       uniqueMintUrls,
     );
     return rows.map(rowToProof);
@@ -101,14 +101,14 @@ export class SqliteProofRepository implements ProofRepository {
 
   async getAllReadyProofs(): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "ready"',
+      "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = 'ready'",
     );
     return rows.map(rowToProof);
   }
 
   async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = "ready"',
+      "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = 'ready'",
       [mintUrl, keysetId],
     );
     return rows.map(rowToProof);
@@ -218,7 +218,7 @@ export class SqliteProofRepository implements ProofRepository {
 
   async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = "ready" AND usedByOperationId IS NULL',
+      "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready' AND usedByOperationId IS NULL",
       [mintUrl],
     );
     return rows.map(rowToProof);
@@ -226,7 +226,7 @@ export class SqliteProofRepository implements ProofRepository {
 
   async getReservedProofs(): Promise<CoreProof[]> {
     const rows = await this.db.all<ProofRow>(
-      'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = "ready" AND usedByOperationId IS NOT NULL',
+      "SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE state = 'ready' AND usedByOperationId IS NOT NULL",
     );
     return rows.map(rowToProof);
   }

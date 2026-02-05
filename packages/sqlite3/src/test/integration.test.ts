@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
+import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { runIntegrationTests } from 'coco-cashu-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
@@ -27,7 +27,7 @@ async function createRepositories() {
   return {
     repositories,
     dispose: async () => {
-      repositories.db.close();
+      await repositories.db.close();
     },
   };
 }

@@ -199,7 +199,7 @@ run_test() {
         unset VITE_MINT_URL
         unset VITE_TEST_LOG_LEVEL
     else
-        # Standard bun test for non-browser packages
+        # Standard npm test for non-browser packages (uses vitest or bun:test)
         export MINT_URL="$mint_url"
         if [ -n "$log_level" ]; then
             export TEST_LOG_LEVEL="$log_level"
@@ -208,9 +208,9 @@ run_test() {
         fi
         
         if [ -n "$test_pattern" ]; then
-            bun test -t "$test_pattern" "$test_file" || test_result=$?
+            bun run test -- -t "$test_pattern" "$test_file" || test_result=$?
         else
-            bun test "$test_file" || test_result=$?
+            bun run test -- "$test_file" || test_result=$?
         fi
         
         unset MINT_URL
@@ -436,4 +436,3 @@ else
 fi
 
 log_info "All tests completed successfully!"
-
