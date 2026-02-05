@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
-import sqlite3 from 'sqlite3';
+import Database from 'better-sqlite3';
 import { runIntegrationTests } from 'coco-cashu-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
 import { ConsoleLogger, type Logger } from 'coco-cashu-core';
@@ -21,13 +21,13 @@ function getTestLogger(): Logger | undefined {
 }
 
 async function createRepositories() {
-  const database = new sqlite3.Database(':memory:');
+  const database = new Database(':memory:');
   const repositories = new SqliteRepositories({ database });
   await repositories.init();
   return {
     repositories,
     dispose: async () => {
-      await repositories.db.close();
+      repositories.db.close();
     },
   };
 }

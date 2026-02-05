@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import sqlite3 from 'sqlite3';
+import Database from 'better-sqlite3';
 import {
   runRepositoryTransactionContract,
   createDummyMint,
@@ -19,13 +19,13 @@ function createDeferred<T = void>() {
 }
 
 async function createRepositories() {
-  const database = new sqlite3.Database(':memory:');
+  const database = new Database(':memory:');
   const repositories = new Repositories({ database });
   await repositories.init();
   return {
     repositories,
     dispose: async () => {
-      await repositories.db.close();
+      repositories.db.close();
     },
   };
 }
