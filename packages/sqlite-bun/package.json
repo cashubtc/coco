@@ -1,0 +1,31 @@
+{
+  "name": "coco-cashu-sqlite-bun",
+  "version": "1.1.2-rc.43",
+  "module": "index.ts",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "devDependencies": {
+    "coco-cashu-adapter-tests": "1.1.2-rc.43",
+    "tsdown": "0.20.1"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {},
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "coco-cashu-core": "1.1.2-rc.43",
+    "typescript": "^5"
+  }
+}
