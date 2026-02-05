@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.45
+
+### Patch Changes
+
+- 30aa519: Fix: sqlite-bun package was missing from release pipeline. It's included now
+
 ## 1.1.2-rc.44
 
 ### Patch Changes

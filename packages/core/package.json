@@ -1,11 +1,11 @@
 {
   "name": "coco-cashu-core",
-  "version": "1.1.2-rc.44",
+  "version": "1.1.2-rc.45",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "devDependencies": {
     "@types/bun": "latest",
-    "coco-cashu-adapter-tests": "1.1.2-rc.44",
+    "coco-cashu-adapter-tests": "1.1.2-rc.45",
     "esbuild": "latest",
     "tsdown": "0.20.1",
     "typescript": "^5.9.2",

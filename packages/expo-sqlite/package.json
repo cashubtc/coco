@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-expo-sqlite",
-  "version": "1.1.2-rc.44",
+  "version": "1.1.2-rc.45",
   "module": "index.ts",
   "type": "module",
   "files": [
@@ -8,7 +8,7 @@
     "README.md"
   ],
   "devDependencies": {
-    "coco-cashu-adapter-tests": "1.1.2-rc.44",
+    "coco-cashu-adapter-tests": "1.1.2-rc.45",
     "tsdown": "0.20.1"
   },
   "exports": {
@@ -27,6 +27,6 @@
   "peerDependencies": {
     "typescript": "^5",
     "expo-sqlite": "*",
-    "coco-cashu-core": "1.1.2-rc.44"
+    "coco-cashu-core": "1.1.2-rc.45"
   }
 }
