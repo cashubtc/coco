@@ -1,5 +1,12 @@
 # coco-cashu-sqlite-bun
 
+## 1.1.2-rc.46
+
+### Patch Changes
+
+- 381adae: fix: made sure type declaration files of sqlite-bun are emitted with the expected file name
+  - coco-cashu-core@1.1.2-rc.46
+
 ## 1.1.2-rc.45
 
 ### Patch Changes
