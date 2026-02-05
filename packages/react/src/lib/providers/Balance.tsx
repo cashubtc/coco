@@ -19,9 +19,13 @@ const useBalance = (): BalanceContextValue => {
     getBalance();
     manager.on('proofs:saved', getBalance);
     manager.on('proofs:state-changed', getBalance);
+    manager.on('proofs:reserved', getBalance);
+    manager.on('proofs:released', getBalance);
     return () => {
       manager.off('proofs:saved', getBalance);
       manager.off('proofs:state-changed', getBalance);
+      manager.off('proofs:reserved', getBalance);
+      manager.off('proofs:released', getBalance);
     };
   }, [manager]);
 
