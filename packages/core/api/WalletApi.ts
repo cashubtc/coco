@@ -14,6 +14,7 @@ import type {
   ParsedPaymentRequest,
   PaymentRequestTransaction,
 } from '@core/services';
+import type { BalanceBreakdown, BalancesBreakdownByMint } from '../types';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { Logger } from '../logging/Logger.ts';
 
@@ -66,6 +67,32 @@ export class WalletApi {
 
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
     return this.proofService.getBalances();
+  }
+
+  /**
+   * Gets detailed balance breakdown for a single mint.
+   * @param mintUrl - The URL of the mint
+   * @returns Balance breakdown with ready, reserved, and total amounts
+   */
+  async getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown> {
+    return this.proofService.getBalanceBreakdown(mintUrl);
+  }
+
+  /**
+   * Gets detailed balance breakdown for all mints.
+   * Shows ready (available), reserved (locked by operations), and total for each mint.
+   * @returns An object mapping mint URLs to their balance breakdowns
+   */
+  async getBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    return this.proofService.getBalancesBreakdown();
+  }
+
+  /**
+   * Gets detailed balance breakdown for trusted mints only.
+   * @returns An object mapping trusted mint URLs to their balance breakdowns
+   */
+  async getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    return this.proofService.getTrustedBalancesBreakdown();
   }
 
   // Payment Request methods
