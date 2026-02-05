@@ -89,3 +89,32 @@ const coco = await initializeCoco({
   seedGetter,
 });
 ```
+
+## coco-cashu-sqlite-bun
+
+SQLite adapter for Bun runtime using Bun's built-in `bun:sqlite` module.
+
+Installation:
+
+```sh
+npm i coco-cashu-sqlite-bun
+```
+
+Usage:
+
+```ts
+import { initializeCoco } from 'coco-cashu-core';
+import { SqliteRepositories } from 'coco-cashu-sqlite-bun';
+import { Database } from 'bun:sqlite';
+
+// First we create a bun:sqlite client
+const db = new Database('./test.db');
+// Then we pass it to our storage implementation
+const repo = new SqliteRepositories({ database: db });
+const coco = await initializeCoco({
+  repo,
+  seedGetter,
+});
+```
+
+**Note:** This adapter is specifically designed for Bun runtime environments. For Node.js environments, use `coco-cashu-sqlite3` instead.
