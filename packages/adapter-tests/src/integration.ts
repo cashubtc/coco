@@ -948,24 +948,40 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should finalize a pending send operation when proofs are spent', async () => {
-        let operationId: string | undefined;
-
-        mgr!.once('send:pending', (payload) => {
-          operationId = payload.operationId;
+        const pendingPromise = new Promise<{ operationId: string }>((resolve) => {
+          mgr!.once('send:pending', (payload) => {
+            resolve({ operationId: payload.operationId });
+          });
         });
 
         const sendAmount = 20;
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
+        const { operationId } = await pendingPromise;
+        let offFinalized: (() => void) | undefined;
+        const finalizedPromise = new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            if (offFinalized) offFinalized();
+            reject(new Error('Timed out waiting for send:finalized'));
+          }, 9000);
+
+          offFinalized = mgr!.on('send:finalized', (payload) => {
+            if (payload.operationId !== operationId) return;
+            clearTimeout(timeout);
+            if (offFinalized) offFinalized();
+            resolve();
+          });
+        });
+
         // Receive the token (simulates recipient claiming)
         await mgr!.wallet.receive(token);
 
         // Wait for proof state watcher to detect spent proofs and finalize
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await finalizedPromise;
 
         // Operation should be finalized
-        const operation = await mgr!.send.getOperation(operationId!);
+        const operation = await mgr!.send.getOperation(operationId);
         expect(operation!.state).toBe('finalized');
 
         // Check history state
@@ -1446,7 +1462,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await new Promise((resolve) => setTimeout(resolve, 500));
 
           await mgr!.wallet.receive(token);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await new Promise((resolve) => setTimeout(resolve, 5000));
 
           const finalized = await mgr!.send.getOperation(operationId!);
           expect(finalized!.state).toBe('finalized');

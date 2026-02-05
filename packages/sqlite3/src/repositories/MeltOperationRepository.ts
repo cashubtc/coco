@@ -224,7 +224,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
 
   async getPending(): Promise<MeltOperation[]> {
     const rows = await this.db.all<MeltOperationRow>(
-      'SELECT * FROM coco_cashu_melt_operations WHERE state IN ("executing", "pending")',
+      "SELECT * FROM coco_cashu_melt_operations WHERE state IN ('executing', 'pending')",
     );
     return rows.map(rowToOperation);
   }
