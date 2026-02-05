@@ -388,6 +388,10 @@ bun run build
 cd "$PROJECT_ROOT/packages/core"
 bun run build
 
+# Build storage adapters
+cd "$PROJECT_ROOT/packages/sqlite-bun"
+bun run build
+
 # Check if any browser tests will be run and install Playwright if needed
 check_and_install_playwright() {
     local needs_playwright=false

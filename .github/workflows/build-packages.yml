@@ -37,6 +37,7 @@ jobs:
           cd packages/indexeddb && bun run build && cd ../..
           cd packages/expo-sqlite && bun run build && cd ../..
           cd packages/sqlite3 && bun run build && cd ../..
+          cd packages/sqlite-bun && bun run build && cd ../..
 
           # Build react (depends on core)
           cd packages/react && bun run build && cd ../..
