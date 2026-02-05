@@ -8,6 +8,7 @@
       "coco-cashu-indexeddb",
       "coco-cashu-expo-sqlite",
       "coco-cashu-sqlite3",
+      "coco-cashu-sqlite-bun",
       "coco-cashu-adapter-tests",
       "coco-cashu-react"
     ]
