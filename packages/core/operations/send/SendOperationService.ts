@@ -1,4 +1,4 @@
-import { type Token, type Proof, type ProofState as CashuProofState, type OutputConfig } from '@cashu/cashu-ts';
+import type { Token, Proof, ProofState as CashuProofState } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -17,7 +17,10 @@ import {
   getSendProofSecrets,
   getKeepProofSecrets,
   isTerminalOperation,
+  type CreateSendOperationOptions,
 } from './SendOperation';
+import type { SendMethod, SendMethodData } from './SendMethodHandler';
+import type { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -46,6 +49,7 @@ export class SendOperationService {
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly eventBus: EventBus<CoreEvents>;
+  private readonly handlerProvider?: SendHandlerProvider;
   private readonly logger?: Logger;
 
   /** In-memory locks to prevent concurrent operations on the same operation ID */
@@ -60,6 +64,7 @@ export class SendOperationService {
     mintService: MintService,
     walletService: WalletService,
     eventBus: EventBus<CoreEvents>,
+    handlerProvider?: SendHandlerProvider,
     logger?: Logger,
   ) {
     this.sendOperationRepository = sendOperationRepository;
@@ -68,6 +73,7 @@ export class SendOperationService {
     this.mintService = mintService;
     this.walletService = walletService;
     this.eventBus = eventBus;
+    this.handlerProvider = handlerProvider;
     this.logger = logger;
   }
 
@@ -113,7 +119,11 @@ export class SendOperationService {
    * Create a new send operation.
    * This is the entry point for the saga.
    */
-  async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
+  async init<M extends SendMethod = 'default'>(
+    mintUrl: string,
+    amount: number,
+    options: CreateSendOperationOptions<M> = { method: 'default' as M, methodData: {} as SendMethodData<M> },
+  ): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -124,10 +134,10 @@ export class SendOperationService {
     }
 
     const id = generateSubId();
-    const operation = createSendOperation(id, mintUrl, amount);
+    const operation = createSendOperation(id, mintUrl, amount, options);
 
     await this.sendOperationRepository.create(operation);
-    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount });
+    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount, method: options.method });
 
     return operation;
   }
@@ -138,11 +148,37 @@ export class SendOperationService {
    *
    * If preparation fails, automatically attempts to recover the init operation.
    * Throws if the operation is already in progress.
+   *
+   * Delegates to the appropriate handler based on the operation method.
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
+    if (!this.handlerProvider) {
+      throw new Error('SendHandlerProvider is required');
+    }
+
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
-      return await this.prepareInternal(operation);
+      const handler = this.handlerProvider.get(operation.method);
+      if (!handler) {
+        throw new Error(`No handler registered for method: ${operation.method}`);
+      }
+
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+      const ctx = {
+        operation,
+        wallet,
+        proofRepository: this.proofRepository,
+        proofService: this.proofService,
+        walletService: this.walletService,
+        mintService: this.mintService,
+        eventBus: this.eventBus,
+        logger: this.logger,
+      };
+
+      const prepared = await handler.prepare(ctx);
+      // Save the prepared operation to the repository
+      await this.sendOperationRepository.update(prepared);
+      return prepared;
     } catch (e) {
       // Attempt to clean up the init operation before re-throwing
       await this.tryRecoverInitOperation(operation);
@@ -153,121 +189,22 @@ export class SendOperationService {
   }
 
   /**
-   * Internal prepare logic, separated for error handling.
-   */
-  private async prepareInternal(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    const { mintUrl, amount } = operation;
-    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-
-    // Get available proofs (ready and not reserved by other operations)
-    const availableProofs = await this.proofRepository.getAvailableProofs(mintUrl);
-    const totalAvailable = availableProofs.reduce((acc, p) => acc + p.amount, 0);
-
-    if (totalAvailable < amount) {
-      throw new ProofValidationError(
-        `Insufficient balance: need ${amount}, have ${totalAvailable}`,
-      );
-    }
-
-    // Try exact match first (no swap needed)
-    const exactProofs = wallet.selectProofsToSend(availableProofs, amount, false);
-    const exactAmount = exactProofs.send.reduce((acc, p) => acc + p.amount, 0);
-    const needsSwap = exactAmount !== amount || exactProofs.send.length === 0;
-
-    let selectedProofs: Proof[];
-    let fee = 0;
-    let serializedOutputData: PreparedSendOperation['outputData'];
-
-    if (!needsSwap && exactProofs.send.length > 0) {
-      // Exact match - no swap needed, no OutputData
-      selectedProofs = exactProofs.send;
-      this.logger?.debug('Exact match found for send', {
-        operationId: operation.id,
-        amount,
-        proofCount: selectedProofs.length,
-      });
-    } else {
-      // Need to swap - select proofs including fees
-      const selected = wallet.selectProofsToSend(availableProofs, amount, true);
-      selectedProofs = selected.send;
-      const selectedAmount = selectedProofs.reduce((acc, p) => acc + p.amount, 0);
-      fee = wallet.getFeesForProofs(selectedProofs);
-      const keepAmount = selectedAmount - amount - fee;
-
-      // Use ProofService to create outputs and increment counters
-      const outputResult = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-        keep: keepAmount,
-        send: amount,
-      });
-
-      // Serialize for storage
-      serializedOutputData = serializeOutputData({
-        keep: outputResult.keep,
-        send: outputResult.send,
-      });
-
-      this.logger?.debug('Swap required for send', {
-        operationId: operation.id,
-        amount,
-        fee,
-        keepAmount,
-        selectedAmount,
-        proofCount: selectedProofs.length,
-        keepOutputs: outputResult.keep.length,
-        sendOutputs: outputResult.send.length,
-      });
-    }
-
-    // Reserve the selected proofs
-    const inputSecrets = selectedProofs.map((p) => p.secret);
-    await this.proofService.reserveProofs(mintUrl, inputSecrets, operation.id);
-
-    // Build prepared operation
-    const prepared: PreparedSendOperation = {
-      id: operation.id,
-      state: 'prepared',
-      mintUrl: operation.mintUrl,
-      amount: operation.amount,
-      createdAt: operation.createdAt,
-      updatedAt: Date.now(),
-      error: operation.error,
-      needsSwap,
-      fee,
-      inputAmount: selectedProofs.reduce((acc, p) => acc + p.amount, 0),
-      inputProofSecrets: inputSecrets,
-      outputData: serializedOutputData,
-    };
-
-    await this.sendOperationRepository.update(prepared);
-
-    // Emit prepared event
-    await this.eventBus.emit('send:prepared', {
-      mintUrl,
-      operationId: prepared.id,
-      operation: prepared,
-    });
-
-    this.logger?.info('Send operation prepared', {
-      operationId: operation.id,
-      needsSwap,
-      fee,
-      inputProofCount: inputSecrets.length,
-    });
-
-    return prepared;
-  }
-
-  /**
    * Execute the prepared operation.
    * Performs the swap (if needed) and creates the token.
    *
    * If execution fails after transitioning to 'executing' state,
    * automatically attempts to recover the operation.
    * Throws if the operation is already in progress.
+   *
+   * Delegates to the appropriate handler based on the operation method.
    */
   async execute(
     operation: PreparedSendOperation,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
+    if (!this.handlerProvider) {
+      throw new Error('SendHandlerProvider is required');
+    }
+
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
       // Mark as executing FIRST - this must happen before any mint interaction
@@ -279,7 +216,40 @@ export class SendOperationService {
       await this.sendOperationRepository.update(executing);
 
       try {
-        return await this.executeInternal(executing);
+        const handler = this.handlerProvider.get(operation.method);
+        if (!handler) {
+          throw new Error(`No handler registered for method: ${operation.method}`);
+        }
+
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+        const reservedProofs = await this.proofRepository.getProofsByOperationId(
+          operation.mintUrl,
+          operation.id,
+        );
+
+        const ctx = {
+          operation: executing,
+          wallet,
+          reservedProofs,
+          proofRepository: this.proofRepository,
+          proofService: this.proofService,
+          walletService: this.walletService,
+          mintService: this.mintService,
+          eventBus: this.eventBus,
+          logger: this.logger,
+        };
+
+        const result = await handler.execute(ctx);
+
+        if (result.status === 'PENDING') {
+          // Save the pending operation to the repository
+          await this.sendOperationRepository.update(result.pending);
+          return { operation: result.pending, token: result.token };
+        } else {
+          // Handler returned FAILED - save and throw
+          await this.sendOperationRepository.update(result.failed);
+          throw new Error(result.failed.error || 'Handler execution failed');
+        }
       } catch (e) {
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
@@ -288,106 +258,6 @@ export class SendOperationService {
     } finally {
       releaseLock();
     }
-  }
-
-  /**
-   * Internal execute logic, separated for error handling.
-   */
-  private async executeInternal(
-    executing: ExecutingSendOperation,
-  ): Promise<{ operation: PendingSendOperation; token: Token }> {
-    const { mintUrl, amount, needsSwap, inputProofSecrets } = executing;
-
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-
-    // Get the reserved proofs
-    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, executing.id);
-    const inputProofs = reservedProofs.filter((p) => inputProofSecrets.includes(p.secret));
-
-    if (inputProofs.length !== inputProofSecrets.length) {
-      throw new Error('Could not find all reserved proofs');
-    }
-
-    let sendProofs: Proof[];
-    let keepProofs: Proof[] = [];
-
-    if (!needsSwap) {
-      // Exact match - just use the proofs directly
-      sendProofs = inputProofs;
-      this.logger?.debug('Executing exact match send', {
-        operationId: executing.id,
-        proofCount: sendProofs.length,
-      });
-
-      // Mark send proofs as inflight
-      const sendSecrets = sendProofs.map((p) => p.secret);
-      await this.proofService.setProofState(mintUrl, sendSecrets, 'inflight');
-    } else {
-      // Perform swap using stored OutputData
-      if (!executing.outputData) {
-        throw new Error('Missing output data for swap operation');
-      }
-
-      // Deserialize OutputData
-      const outputData = deserializeOutputData(executing.outputData);
-
-      this.logger?.debug('Executing swap', {
-        operationId: executing.id,
-        keepOutputs: outputData.keep.length,
-        sendOutputs: outputData.send.length,
-      });
-
-      const outputConfig: OutputConfig = {
-        send: { type: 'custom', data: outputData.send },
-        keep: { type: 'custom', data: outputData.keep },
-      };
-      // Perform the swap with the mint
-      const result = await wallet.send(amount, inputProofs, undefined, outputConfig);
-      sendProofs = result.send;
-      keepProofs = result.keep;
-
-      // Save new proofs with correct states and operationId in a single call
-      const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
-        createdByOperationId: executing.id,
-      });
-      const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
-        createdByOperationId: executing.id,
-      });
-      await this.proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
-
-      // Mark input proofs as spent (use proofService to emit events)
-      await this.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
-    }
-
-    // Build pending operation
-    const pending: PendingSendOperation = {
-      ...executing,
-      state: 'pending',
-      updatedAt: Date.now(),
-    };
-    await this.sendOperationRepository.update(pending);
-
-    const token: Token = {
-      mint: mintUrl,
-      proofs: sendProofs,
-      unit: wallet.unit,
-    };
-
-    // Emit pending event
-    await this.eventBus.emit('send:pending', {
-      mintUrl,
-      operationId: pending.id,
-      operation: pending,
-      token,
-    });
-
-    this.logger?.info('Send operation executed', {
-      operationId: executing.id,
-      sendProofCount: sendProofs.length,
-      keepProofCount: keepProofs.length,
-    });
-
-    return { operation: pending, token };
   }
 
   /**

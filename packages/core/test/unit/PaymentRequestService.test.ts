@@ -37,6 +37,8 @@ describe('PaymentRequestService', () => {
     fee: 0,
     inputAmount: amount,
     inputProofSecrets: ['secret-1'],
+    method: 'default',
+    methodData: {},
   });
 
   beforeEach(() => {

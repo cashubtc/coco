@@ -8,7 +8,7 @@ import type { ProofService } from '../../services/ProofService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { Logger } from '../../logging/Logger.ts';
-import type { MeltHandlerProvider } from '../../infra/handlers/index.ts';
+import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { CoreProof } from '../../types.ts';
 import type {

@@ -25,7 +25,7 @@ import {
   OperationInProgressError,
 } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
-import type { MeltHandlerProvider } from '../../infra/handlers';
+import type { MeltHandlerProvider } from '../../infra/handlers/melt';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
