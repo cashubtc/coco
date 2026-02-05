@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite';
+import type { Database, Statement } from 'bun:sqlite';
 
 export interface SqliteDbOptions {
   database: Database;
@@ -17,6 +17,8 @@ interface SqliteDbRootState {
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
   scopeDepth: number;
+  /** Cache of prepared statements for frequently-used queries */
+  statementCache: Map<string, Statement>;
 }
 
 /**
@@ -43,6 +45,7 @@ export class SqliteDb {
         transactionQueue: Promise.resolve(),
         currentScope: null,
         scopeDepth: 0,
+        statementCache: new Map(),
       } satisfies SqliteDbRootState;
       this.scopeToken = null;
     } else {
@@ -54,6 +57,20 @@ export class SqliteDb {
 
   get raw(): Database {
     return this.root.db;
+  }
+
+  /**
+   * Get a cached prepared statement for the given SQL.
+   * Creates and caches the statement if it doesn't exist.
+   */
+  private getCachedStatement(sql: string): Statement {
+    const { statementCache } = this.root;
+    let statement = statementCache.get(sql);
+    if (!statement) {
+      statement = this.root.db.prepare(sql);
+      statementCache.set(sql, statement);
+    }
+    return statement;
   }
 
   exec(sql: string): Promise<void> {
@@ -70,7 +87,8 @@ export class SqliteDb {
   run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
     return new Promise((resolve, reject) => {
       try {
-        const result = this.root.db.prepare(sql).run(...params);
+        const statement = this.getCachedStatement(sql);
+        const result = statement.run(...params);
         resolve({
           lastID: Number(result.lastInsertRowid),
           changes: result.changes,
@@ -84,7 +102,8 @@ export class SqliteDb {
   get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
     return new Promise((resolve, reject) => {
       try {
-        const result = this.root.db.prepare(sql).get(...params) as T | undefined;
+        const statement = this.getCachedStatement(sql);
+        const result = statement.get(...params) as T | undefined;
         resolve(result);
       } catch (err) {
         reject(err);
@@ -95,7 +114,8 @@ export class SqliteDb {
   all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
     return new Promise((resolve, reject) => {
       try {
-        const result = this.root.db.prepare(sql).all(...params) as T[];
+        const statement = this.getCachedStatement(sql);
+        const result = statement.all(...params) as T[];
         resolve(result);
       } catch (err) {
         reject(err);
