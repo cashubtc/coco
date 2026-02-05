@@ -161,7 +161,12 @@ export class SqliteDb {
     try {
       // SERIALIZATION: Wait for the previous transaction to complete
       // This ensures only one transaction executes at a time
-      await previousTransaction;
+      // Use .catch() to prevent unhandled rejection warnings while preserving error for debugging
+      await previousTransaction.catch((error) => {
+        // Log error from previous transaction but continue with current transaction
+        // Previous transaction errors are handled by their respective callers
+        console.warn('Previous transaction failed:', error);
+      });
 
       // EXECUTE TRANSACTION:
       // Mark this scope as active and issue BEGIN
