@@ -5,7 +5,7 @@ import {
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
-import type { CoreProof } from '../types';
+import type { CoreProof, BalanceBreakdown, BalancesBreakdownByMint } from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
@@ -268,7 +268,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    const proofs = await this.getReadyProofs(mintUrl);
+    const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
     return proofs.reduce((acc, proof) => acc + proof.amount, 0);
   }
 
@@ -280,6 +280,7 @@ export class ProofService {
     const proofs = await this.getAllReadyProofs();
     const balances: { [mintUrl: string]: number } = {};
     for (const proof of proofs) {
+      if (proof.usedByOperationId) continue;
       const mintUrl = proof.mintUrl;
       const balance = balances[mintUrl] || 0;
       balances[mintUrl] = balance + proof.amount;
@@ -297,6 +298,67 @@ export class ProofService {
     const trustedUrls = new Set(trustedMints.map((m) => m.mintUrl));
 
     const trustedBalances: { [mintUrl: string]: number } = {};
+    for (const [mintUrl, balance] of Object.entries(balances)) {
+      if (trustedUrls.has(mintUrl)) {
+        trustedBalances[mintUrl] = balance;
+      }
+    }
+    return trustedBalances;
+  }
+
+  /**
+   * Gets detailed balance breakdown for a single mint.
+   * @param mintUrl - The URL of the mint
+   * @returns Balance breakdown with ready, reserved, and total amounts
+   */
+  async getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    const proofs = await this.getReadyProofs(mintUrl);
+    let ready = 0;
+    let reserved = 0;
+    for (const proof of proofs) {
+      if (proof.usedByOperationId) {
+        reserved += proof.amount;
+      } else {
+        ready += proof.amount;
+      }
+    }
+    return { ready, reserved, total: ready + reserved };
+  }
+
+  /**
+   * Gets detailed balance breakdown for all mints.
+   * @returns An object mapping mint URLs to their balance breakdowns
+   */
+  async getBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    const proofs = await this.getAllReadyProofs();
+    const balances: BalancesBreakdownByMint = {};
+    for (const proof of proofs) {
+      const mintUrl = proof.mintUrl;
+      const balance = balances[mintUrl] || { ready: 0, reserved: 0, total: 0 };
+      if (proof.usedByOperationId) {
+        balance.reserved += proof.amount;
+      } else {
+        balance.ready += proof.amount;
+      }
+      balance.total = balance.ready + balance.reserved;
+      balances[mintUrl] = balance;
+    }
+    return balances;
+  }
+
+  /**
+   * Gets detailed balance breakdown for trusted mints only.
+   * @returns An object mapping trusted mint URLs to their balance breakdowns
+   */
+  async getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    const balances = await this.getBalancesBreakdown();
+    const trustedMints = await this.mintService.getAllTrustedMints();
+    const trustedUrls = new Set(trustedMints.map((m) => m.mintUrl));
+
+    const trustedBalances: BalancesBreakdownByMint = {};
     for (const [mintUrl, balance] of Object.entries(balances)) {
       if (trustedUrls.has(mintUrl)) {
         trustedBalances[mintUrl] = balance;

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useManager } from '../contexts/ManagerContext';
 import { useMints } from '../contexts/MintContext';
+import type { BalancesBreakdownByMint } from '../../../../core';
 
 export type TrustedBalanceValue = {
   [mintUrl: string]: number;
@@ -18,15 +19,15 @@ const useTrustedBalance = () => {
 
   const refreshBalance = useCallback(async () => {
     try {
-      const allBalances = await manager.wallet.getBalances();
+      const allBalances: BalancesBreakdownByMint = await manager.wallet.getBalancesBreakdown();
       const trustedMintUrls = new Set(trustedMints.map((m) => m.mintUrl));
 
       const trustedBalances: TrustedBalanceValue = { total: 0 };
 
-      for (const [mintUrl, amount] of Object.entries(allBalances || {})) {
+      for (const [mintUrl, breakdown] of Object.entries(allBalances || {})) {
         if (trustedMintUrls.has(mintUrl)) {
-          trustedBalances[mintUrl] = amount;
-          trustedBalances.total += amount;
+          trustedBalances[mintUrl] = breakdown.ready;
+          trustedBalances.total += breakdown.total;
         }
       }
 
@@ -52,4 +53,3 @@ const useTrustedBalance = () => {
 };
 
 export default useTrustedBalance;
-
