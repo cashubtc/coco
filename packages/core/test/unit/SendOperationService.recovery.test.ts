@@ -54,6 +54,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     state: 'init',
     mintUrl,
     amount: 100,
+    unit: 'sat',
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
   });
@@ -66,6 +67,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     state: 'prepared',
     mintUrl,
     amount: 100,
+    unit: 'sat',
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     needsSwap: true,

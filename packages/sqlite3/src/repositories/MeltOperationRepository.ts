@@ -9,6 +9,7 @@ type MeltMethodData = MeltOperation['methodData'];
 interface MeltOperationRow {
   id: string;
   mintUrl: string;
+  unit: string | null;
   state: MeltOperationState;
   createdAt: number;
   updatedAt: number;
@@ -41,6 +42,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     method: row.method,
     methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
     createdAt: row.createdAt * 1000,
@@ -82,6 +84,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     return [
       operation.id,
       operation.mintUrl,
+      operation.unit,
       operation.state,
       createdAtSeconds,
       updatedAtSeconds,
@@ -103,6 +106,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
   return [
     operation.id,
     operation.mintUrl,
+    operation.unit,
     operation.state,
     createdAtSeconds,
     updatedAtSeconds,

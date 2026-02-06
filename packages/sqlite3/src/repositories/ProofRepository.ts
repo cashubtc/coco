@@ -114,6 +114,16 @@ export class SqliteProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
+  async getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]> {
+    if (!keysetIds || keysetIds.length === 0) return [];
+    const placeholders = keysetIds.map(() => '?').join(', ');
+    const rows = await this.db.all<ProofRow>(
+      `SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND id IN (${placeholders}) AND state = "ready"`,
+      [mintUrl, ...keysetIds],
+    );
+    return rows.map(rowToProof);
+  }
+
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
     if (!secrets || secrets.length === 0) return;
     await this.db.transaction(async (tx) => {

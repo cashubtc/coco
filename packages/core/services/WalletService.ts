@@ -9,7 +9,6 @@ interface CachedWallet {
   lastCheck: number;
 }
 
-//TODO: Allow dynamic units at some point
 const DEFAULT_UNIT = 'sat';
 
 export class WalletService {
@@ -33,37 +32,50 @@ export class WalletService {
     this.logger = logger;
   }
 
-  async getWallet(mintUrl: string): Promise<Wallet> {
+  /**
+   * Build a cache key for the wallet cache.
+   * Format: `${mintUrl}:${unit}`
+   */
+  private getCacheKey(mintUrl: string, unit: string): string {
+    return `${mintUrl}:${unit}`;
+  }
+
+  async getWallet(mintUrl: string, unit: string = DEFAULT_UNIT): Promise<Wallet> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new Error('mintUrl is required');
     }
 
+    const cacheKey = this.getCacheKey(mintUrl, unit);
+
     // Serve from cache when fresh
-    const cached = this.walletCache.get(mintUrl);
+    const cached = this.walletCache.get(cacheKey);
     const now = Date.now();
     if (cached && now - cached.lastCheck < this.CACHE_TTL) {
-      this.logger?.debug('Wallet served from cache', { mintUrl });
+      this.logger?.debug('Wallet served from cache', { mintUrl, unit });
       return cached.wallet;
     }
 
-    // De-duplicate concurrent requests per mintUrl
-    const existing = this.inFlight.get(mintUrl);
+    // De-duplicate concurrent requests per mintUrl+unit
+    const existing = this.inFlight.get(cacheKey);
     if (existing) return existing;
 
-    const promise = this.buildWallet(mintUrl).finally(() => {
-      this.inFlight.delete(mintUrl);
+    const promise = this.buildWallet(mintUrl, unit).finally(() => {
+      this.inFlight.delete(cacheKey);
     });
-    this.inFlight.set(mintUrl, promise);
+    this.inFlight.set(cacheKey, promise);
     return promise;
   }
 
-  async getWalletWithActiveKeysetId(mintUrl: string): Promise<{
+  async getWalletWithActiveKeysetId(
+    mintUrl: string,
+    unit: string = DEFAULT_UNIT,
+  ): Promise<{
     wallet: Wallet;
     keysetId: string;
     keyset: MintKeyset;
     keys: MintKeys;
   }> {
-    const wallet = await this.getWallet(mintUrl);
+    const wallet = await this.getWallet(mintUrl, unit);
     const keyset = wallet.keyChain.getCheapestKeyset();
     const mintKeys = keyset.toMintKeys();
 
@@ -80,11 +92,27 @@ export class WalletService {
   }
 
   /**
-   * Clear cached wallet for a specific mint URL
+   * Clear cached wallet for a specific mint URL and optionally a specific unit.
+   * If unit is not provided, clears all cached wallets for the mint URL.
    */
-  clearCache(mintUrl: string): void {
-    this.walletCache.delete(mintUrl);
-    this.logger?.debug('Wallet cache cleared', { mintUrl });
+  clearCache(mintUrl: string, unit?: string): void {
+    if (unit) {
+      const cacheKey = this.getCacheKey(mintUrl, unit);
+      this.walletCache.delete(cacheKey);
+      this.logger?.debug('Wallet cache cleared', { mintUrl, unit });
+    } else {
+      // Clear all units for this mint
+      const keysToDelete: string[] = [];
+      for (const key of this.walletCache.keys()) {
+        if (key.startsWith(`${mintUrl}:`)) {
+          keysToDelete.push(key);
+        }
+      }
+      for (const key of keysToDelete) {
+        this.walletCache.delete(key);
+      }
+      this.logger?.debug('Wallet cache cleared for all units', { mintUrl });
+    }
   }
 
   /**
@@ -98,23 +126,39 @@ export class WalletService {
   /**
    * Force refresh mint data and get fresh wallet
    */
-  async refreshWallet(mintUrl: string): Promise<Wallet> {
-    this.clearCache(mintUrl);
-    this.inFlight.delete(mintUrl);
+  async refreshWallet(mintUrl: string, unit: string = DEFAULT_UNIT): Promise<Wallet> {
+    const cacheKey = this.getCacheKey(mintUrl, unit);
+    this.walletCache.delete(cacheKey);
+    this.inFlight.delete(cacheKey);
     await this.mintService.updateMintData(mintUrl);
-    return this.getWallet(mintUrl);
+    return this.getWallet(mintUrl, unit);
   }
 
-  private async buildWallet(mintUrl: string): Promise<Wallet> {
+  /**
+   * Get all supported units for a mint.
+   * Returns a list of unique units from active keysets.
+   */
+  async getSupportedUnits(mintUrl: string): Promise<string[]> {
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    const units = new Set<string>();
+    for (const keyset of keysets) {
+      if (keyset.active && keyset.keypairs && Object.keys(keyset.keypairs).length > 0) {
+        units.add(keyset.unit);
+      }
+    }
+    return Array.from(units);
+  }
+
+  private async buildWallet(mintUrl: string, unit: string): Promise<Wallet> {
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
     const validKeysets = keysets.filter(
       (keyset) =>
-        keyset.keypairs && Object.keys(keyset.keypairs).length > 0 && keyset.unit === DEFAULT_UNIT,
+        keyset.keypairs && Object.keys(keyset.keypairs).length > 0 && keyset.unit === unit,
     );
 
     if (validKeysets.length === 0) {
-      throw new Error(`No valid keysets found for mint ${mintUrl}`);
+      throw new Error(`No valid keysets found for mint ${mintUrl} with unit ${unit}`);
     }
 
     const keysetCache = validKeysets.map((keyset) => ({
@@ -127,7 +171,7 @@ export class WalletService {
 
     const cache: KeyChainCache = {
       mintUrl: mint.mintUrl,
-      unit: DEFAULT_UNIT,
+      unit,
       keysets: keysetCache,
     };
 
@@ -135,7 +179,7 @@ export class WalletService {
 
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
     const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
-      unit: DEFAULT_UNIT,
+      unit,
       // @ts-ignore
       logger:
         this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
@@ -143,12 +187,13 @@ export class WalletService {
     });
     wallet.loadMintFromCache(mint.mintInfo, cache);
 
-    this.walletCache.set(mintUrl, {
+    const cacheKey = this.getCacheKey(mintUrl, unit);
+    this.walletCache.set(cacheKey, {
       wallet,
       lastCheck: Date.now(),
     });
 
-    this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
+    this.logger?.info('Wallet built', { mintUrl, unit, keysetCount: validKeysets.length });
     return wallet;
   }
 }

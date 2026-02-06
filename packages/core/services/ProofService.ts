@@ -262,13 +262,14 @@ export class ProofService {
   /**
    * Gets the balance for a single mint by summing ready proof amounts.
    * @param mintUrl - The URL of the mint
-   * @returns The total balance for the mint
+   * @param unit - The unit to filter by (default: 'sat')
+   * @returns The total balance for the mint and unit
    */
-  async getBalance(mintUrl: string): Promise<number> {
+  async getBalance(mintUrl: string, unit: string = 'sat'): Promise<number> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    const proofs = await this.getReadyProofs(mintUrl);
+    const proofs = await this.getReadyProofsByUnit(mintUrl, unit);
     return proofs.reduce((acc, proof) => acc + proof.amount, 0);
   }
 
@@ -285,6 +286,79 @@ export class ProofService {
       balances[mintUrl] = balance + proof.amount;
     }
     return balances;
+  }
+
+  /**
+   * Gets balances for all mints grouped by unit.
+   * @returns An object mapping mint URLs to objects mapping units to balances
+   */
+  async getBalancesByUnit(): Promise<{ [mintUrl: string]: { [unit: string]: number } }> {
+    const proofs = await this.getAllReadyProofs();
+    const balances: { [mintUrl: string]: { [unit: string]: number } } = {};
+
+    // Build a map of keysetId -> unit for each mint
+    const keysetUnitMap: { [mintUrl: string]: { [keysetId: string]: string } } = {};
+
+    for (const proof of proofs) {
+      const mintUrl = proof.mintUrl;
+      const keysetId = proof.id;
+
+      // Lazy load keyset unit mapping for this mint
+      if (!keysetUnitMap[mintUrl]) {
+        keysetUnitMap[mintUrl] = {};
+        try {
+          const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+          for (const keyset of keysets) {
+            keysetUnitMap[mintUrl][keyset.id] = keyset.unit;
+          }
+        } catch (e) {
+          this.logger?.warn('Failed to fetch keysets for mint', { mintUrl, error: e });
+          continue;
+        }
+      }
+
+      const unit = keysetUnitMap[mintUrl][keysetId];
+      if (!unit) {
+        this.logger?.warn('Unknown keyset for proof', { mintUrl, keysetId });
+        continue;
+      }
+
+      if (!balances[mintUrl]) {
+        balances[mintUrl] = {};
+      }
+      const currentBalance = balances[mintUrl][unit] || 0;
+      balances[mintUrl][unit] = currentBalance + proof.amount;
+    }
+
+    return balances;
+  }
+
+  /**
+   * Gets ready proofs for a specific mint and unit.
+   * @param mintUrl - The URL of the mint
+   * @param unit - The unit to filter by
+   * @returns The ready proofs for the mint and unit
+   */
+  async getReadyProofsByUnit(mintUrl: string, unit: string): Promise<CoreProof[]> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    if (!unit || unit.trim().length === 0) {
+      throw new ProofValidationError('unit is required');
+    }
+    const keysetIds = await this.getKeysetIdsForUnit(mintUrl, unit);
+    if (keysetIds.length === 0) {
+      return [];
+    }
+    return this.proofRepository.getReadyProofsByKeysetIds(mintUrl, keysetIds);
+  }
+
+  /**
+   * Helper to get keyset IDs for a specific unit.
+   */
+  private async getKeysetIdsForUnit(mintUrl: string, unit: string): Promise<string[]> {
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    return keysets.filter((ks) => ks.unit === unit).map((ks) => ks.id);
   }
 
   /**
@@ -432,6 +506,7 @@ export class ProofService {
    *
    * @param mintUrl - The mint URL to select proofs from
    * @param amount - The amount to send
+   * @param unit - The unit to select proofs for (default: 'sat')
    * @param includeFees - Whether to include fees in the selection (default: true)
    * @returns The selected proofs
    * @throws ProofValidationError if insufficient balance to cover the amount
@@ -439,17 +514,27 @@ export class ProofService {
   async selectProofsToSend(
     mintUrl: string,
     amount: number,
+    unit: string = 'sat',
     includeFees: boolean = true,
   ): Promise<Proof[]> {
-    const proofs = await this.getReadyProofs(mintUrl);
+    // Try to get proofs by unit if mintService is available
+    let proofs: CoreProof[];
+    try {
+      proofs = await this.getReadyProofsByUnit(mintUrl, unit);
+    } catch {
+      // Fallback to getting all ready proofs if unit-based filtering fails
+      // This maintains backwards compatibility with existing usage
+      proofs = await this.getReadyProofs(mintUrl);
+    }
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');
     }
-    const wallet = await this.walletService.getWallet(mintUrl);
+    const wallet = await this.walletService.getWallet(mintUrl, unit);
     const selectedProofs = wallet.selectProofsToSend(proofs, amount, includeFees);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
+      unit,
       amount,
       selectedProofs,
       count: selectedProofs.send.length,
