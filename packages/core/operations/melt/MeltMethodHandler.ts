@@ -75,6 +75,16 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
   operation: PendingMeltOperation & MeltMethodMeta<M>;
 }
 
+/**
+ * Data returned from the finalize method containing settlement information.
+ */
+export interface FinalizeResult {
+  /** Total amount returned as change by the mint */
+  changeAmount: number;
+  /** Actual fee impact after settlement */
+  effectiveFee: number;
+}
+
 export interface RollbackContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PreparedOrLaterOperation & MeltMethodMeta<M>;
   wallet: Wallet;
@@ -111,7 +121,7 @@ export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
-  finalize?(ctx: FinalizeContext<M>): Promise<void>;
+  finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult>;
   rollback?(ctx: RollbackContext<M>): Promise<void>;
   checkPending?(ctx: PendingContext<M>): Promise<PendingCheckResult>;
   /**
