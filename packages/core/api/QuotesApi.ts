@@ -1,6 +1,7 @@
 import type { MeltQuoteBolt11Response, MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type {
   FinalizedMeltOperation,
+  MeltOperation,
   MeltOperationService,
   PendingMeltOperation,
   PendingCheckResult,
@@ -82,6 +83,38 @@ export class QuotesApi {
     }
 
     return this.meltOperationService.checkPendingOperation(operation.id);
+  }
+
+  /**
+   * Rollback (abort) a prepared melt operation.
+   * Reclaims reserved proofs and cancels the operation.
+   * Only works for operations in 'prepared' or 'pending' states.
+   */
+  async rollbackMelt(operationId: string, reason?: string): Promise<void> {
+    return this.meltOperationService.rollback(operationId, reason);
+  }
+
+  /**
+   * Get a melt operation by its ID.
+   */
+  async getMeltOperation(operationId: string): Promise<MeltOperation | null> {
+    return this.meltOperationService.getOperation(operationId);
+  }
+
+  /**
+   * Get all pending melt operations.
+   * Pending operations are in 'executing' or 'pending' state.
+   */
+  async getPendingMeltOperations(): Promise<MeltOperation[]> {
+    return this.meltOperationService.getPendingOperations();
+  }
+
+  /**
+   * Get all prepared melt operations.
+   * Prepared operations are ready to be executed or rolled back.
+   */
+  async getPreparedMeltOperations(): Promise<PreparedMeltOperation[]> {
+    return this.meltOperationService.getPreparedOperations();
   }
 
   async addMintQuote(
