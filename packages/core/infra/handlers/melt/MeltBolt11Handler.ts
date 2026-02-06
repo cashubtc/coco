@@ -4,6 +4,7 @@ import type {
   ExecuteContext,
   ExecutionResult,
   FinalizeContext,
+  FinalizeResult,
   MeltMethodHandler,
   MeltMethodMeta,
   PendingCheckResult,
@@ -30,6 +31,26 @@ import {
 } from './MeltBolt11Handler.utils.ts';
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
+  // ============================================================================
+  // Helper Functions
+  // ============================================================================
+
+  /**
+   * Calculate change amount and effective fee from melt operation results.
+   * These values are derived from the actual melt settlement, not from the quote.
+   *
+   * changeAmount: Sum of amounts from change proofs returned by the mint
+   * effectiveFee: Actual fee paid = inputAmount - amount - changeAmount
+   */
+  private calculateSettlementAmounts(
+    inputAmount: number,
+    meltAmount: number,
+    changeProofs?: SerializedBlindedSignature[],
+  ): { changeAmount: number; effectiveFee: number } {
+    const changeAmount = changeProofs?.reduce((sum, p) => sum + p.amount, 0) ?? 0;
+    const effectiveFee = inputAmount - meltAmount - changeAmount;
+    return { changeAmount, effectiveFee };
+  }
   // ============================================================================
   // Prepare Phase
   // ============================================================================
@@ -276,9 +297,16 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl } = ctx.operation;
 
     switch (state) {
-      case 'PAID':
+      case 'PAID': {
+        const { inputAmount, amount: meltAmount } = ctx.operation;
+        const { changeAmount, effectiveFee } = this.calculateSettlementAmounts(
+          inputAmount,
+          meltAmount,
+          change,
+        );
         await this.finalizeOperation(ctx, change);
-        return buildPaidResult(ctx.operation);
+        return buildPaidResult(ctx.operation, changeAmount, effectiveFee);
+      }
 
       case 'PENDING':
         // Proofs stay inflight, finalize will be called later via checkPending -> finalize
@@ -362,9 +390,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   /**
    * Finalize a pending melt operation that has succeeded.
    * Called by MeltOperationService when checkPending returns 'finalize'.
+   * Returns settlement amounts for accurate accounting.
    */
-  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<void> {
-    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<FinalizeResult> {
+    const { mintUrl, quoteId, id: operationId, inputAmount, amount: meltAmount } = ctx.operation;
 
     ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
 
@@ -375,7 +404,23 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
     }
 
+    // Calculate actual settlement amounts from the mint response
+    const { changeAmount, effectiveFee } = this.calculateSettlementAmounts(
+      inputAmount,
+      meltAmount,
+      res.change,
+    );
+
     await this.finalizeOperation(ctx, res.change);
+
+    ctx.logger?.info('Pending melt operation finalized with settlement amounts', {
+      operationId,
+      quoteId,
+      changeAmount,
+      effectiveFee,
+    });
+
+    return { changeAmount, effectiveFee };
   }
 
   /**
@@ -508,11 +553,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   /**
    * Recover an executing operation that was actually paid.
    * Fetches change signatures and finalizes the operation.
+   * Returns execution result with actual settlement amounts.
    */
   private async recoverExecutingPaidOperation(
     ctx: RecoverExecutingContext<'bolt11'>,
   ): Promise<ExecutionResult<'bolt11'>> {
-    const { mintUrl, quoteId, id: operationId } = ctx.operation;
+    const { mintUrl, quoteId, id: operationId, inputAmount, amount: meltAmount } = ctx.operation;
 
     ctx.logger?.debug('Recovering executing operation as paid, fetching change', {
       operationId,
@@ -522,15 +568,24 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     // Fetch melt quote to get any change signatures
     const res = await ctx.mintAdapter.checkMeltQuote(mintUrl, quoteId);
 
+    // Calculate actual settlement amounts from the mint response
+    const { changeAmount, effectiveFee } = this.calculateSettlementAmounts(
+      inputAmount,
+      meltAmount,
+      res.change,
+    );
+
     // Finalize the operation (mark proofs spent, save change)
     await this.finalizeOperation(ctx, res.change);
 
     ctx.logger?.info('Recovered and finalized paid melt operation', {
       operationId,
       quoteId,
+      changeAmount,
+      effectiveFee,
     });
 
-    return buildPaidResult(ctx.operation);
+    return buildPaidResult(ctx.operation, changeAmount, effectiveFee);
   }
 
   /**
