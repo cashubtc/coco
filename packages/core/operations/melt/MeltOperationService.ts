@@ -110,6 +110,7 @@ export class MeltOperationService {
     mintUrl: string,
     method: MeltMethod,
     methodData: MeltMethodData,
+    unit: string = 'sat',
   ): Promise<InitMeltOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -124,13 +125,13 @@ export class MeltOperationService {
     }
 
     const id = generateSubId();
-    const operation = createMeltOperation(id, mintUrl, {
+    const operation = createMeltOperation(id, mintUrl, unit, {
       method,
       methodData,
     });
 
     await this.meltOperationRepository.create(operation);
-    this.logger?.debug('Melt operation created', { operationId: id, mintUrl, method });
+    this.logger?.debug('Melt operation created', { operationId: id, mintUrl, method, unit });
 
     return operation;
   }
@@ -158,7 +159,7 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(initOp.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(initOp.mintUrl, initOp.unit);
         const prepared = await handler.prepare({
           ...this.buildDeps(),
           operation: initOp,
@@ -226,7 +227,7 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl, executing.unit);
         const operationProofs = await this.proofRepository.getProofsByOperationId(
           executing.mintUrl,
           executing.id,
@@ -371,7 +372,7 @@ export class MeltOperationService {
       }
 
       const handler = this.handlerProvider.get(operation.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl, operation.unit);
 
       // For pending operations, verify the quote is actually UNPAID before rolling back.
       // This prevents releasing proofs that are still inflight with the Lightning network.
@@ -513,7 +514,7 @@ export class MeltOperationService {
       );
     }
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
     const decision: PendingCheckResult =
       (await handler.checkPending?.({
         ...this.buildDeps(),
@@ -602,7 +603,7 @@ export class MeltOperationService {
    */
   private async recoverExecutingOperation(op: ExecutingMeltOperation): Promise<void> {
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
     const result = await handler.recoverExecuting({
       ...this.buildDeps(),

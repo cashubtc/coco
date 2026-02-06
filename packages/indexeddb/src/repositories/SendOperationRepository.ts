@@ -10,6 +10,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     amount: row.amount,
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
@@ -55,6 +56,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
     return {
       id: op.id,
       mintUrl: op.mintUrl,
+      unit: op.unit,
       amount: op.amount,
       state: op.state,
       createdAt: createdAtSeconds,
@@ -72,6 +74,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
   return {
     id: op.id,
     mintUrl: op.mintUrl,
+    unit: op.unit,
     amount: op.amount,
     state: op.state,
     createdAt: createdAtSeconds,

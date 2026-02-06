@@ -104,6 +104,17 @@ export class IdbProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
+  async getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]> {
+    if (!keysetIds || keysetIds.length === 0) return [];
+    const keys = keysetIds.map((id) => [mintUrl, id, 'ready'] as [string, string, string]);
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+id+state]')
+      .anyOf(keys)
+      .toArray()) as ProofRow[];
+    return rows.map(rowToProof);
+  }
+
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
     if (!secrets || secrets.length === 0) return;
     await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {

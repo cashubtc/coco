@@ -113,7 +113,7 @@ export class SendOperationService {
    * Create a new send operation.
    * This is the entry point for the saga.
    */
-  async init(mintUrl: string, amount: number): Promise<InitSendOperation> {
+  async init(mintUrl: string, amount: number, unit: string = 'sat'): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -124,10 +124,10 @@ export class SendOperationService {
     }
 
     const id = generateSubId();
-    const operation = createSendOperation(id, mintUrl, amount);
+    const operation = createSendOperation(id, mintUrl, amount, unit);
 
     await this.sendOperationRepository.create(operation);
-    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount });
+    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount, unit });
 
     return operation;
   }
@@ -156,8 +156,8 @@ export class SendOperationService {
    * Internal prepare logic, separated for error handling.
    */
   private async prepareInternal(operation: InitSendOperation): Promise<PreparedSendOperation> {
-    const { mintUrl, amount } = operation;
-    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { mintUrl, amount, unit } = operation;
+    const { wallet, keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     // Get available proofs (ready and not reserved by other operations)
     const availableProofs = await this.proofRepository.getAvailableProofs(mintUrl);
@@ -227,6 +227,7 @@ export class SendOperationService {
       id: operation.id,
       state: 'prepared',
       mintUrl: operation.mintUrl,
+      unit: operation.unit,
       amount: operation.amount,
       createdAt: operation.createdAt,
       updatedAt: Date.now(),
@@ -296,9 +297,9 @@ export class SendOperationService {
   private async executeInternal(
     executing: ExecutingSendOperation,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
-    const { mintUrl, amount, needsSwap, inputProofSecrets } = executing;
+    const { mintUrl, amount, unit, needsSwap, inputProofSecrets } = executing;
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     // Get the reserved proofs
     const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, executing.id);
@@ -394,8 +395,8 @@ export class SendOperationService {
    * High-level send method that orchestrates init → prepare → execute.
    * This is the main entry point for consumers.
    */
-  async send(mintUrl: string, amount: number): Promise<Token> {
-    const initOp = await this.init(mintUrl, amount);
+  async send(mintUrl: string, amount: number, unit: string = 'sat'): Promise<Token> {
+    const initOp = await this.init(mintUrl, amount, unit);
     const preparedOp = await this.prepare(initOp);
     const { token } = await this.execute(preparedOp);
     return token;
@@ -536,7 +537,7 @@ export class SendOperationService {
         const sendSecrets = getSendProofSecrets(operation);
 
         if (sendSecrets.length > 0) {
-          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, operation.unit);
 
           // Get the send proofs
           const allProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
@@ -747,7 +748,7 @@ export class SendOperationService {
     // Case: Swap required - need to check with mint
     let inputStates: CashuProofState[];
     try {
-      inputStates = await this.checkProofStatesWithMint(op.mintUrl, op.inputProofSecrets);
+      inputStates = await this.checkProofStatesWithMint(op.mintUrl, op.inputProofSecrets, op.unit);
     } catch (e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: op.id,
@@ -830,7 +831,7 @@ export class SendOperationService {
 
     let sendStates: CashuProofState[];
     try {
-      sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets);
+      sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets, op.unit);
     } catch (e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: op.id,
@@ -859,8 +860,9 @@ export class SendOperationService {
   private async checkProofStatesWithMint(
     mintUrl: string,
     secrets: string[],
+    unit: string = 'sat',
   ): Promise<CashuProofState[]> {
-    const wallet = await this.walletService.getWallet(mintUrl);
+    const wallet = await this.walletService.getWallet(mintUrl, unit);
     const proofInputs = secrets.map((secret) => ({ secret }));
     return wallet.checkProofsStates(proofInputs as unknown as Proof[]);
   }

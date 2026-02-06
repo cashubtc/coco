@@ -8,6 +8,7 @@ import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 interface SendOperationRow {
   id: string;
   mintUrl: string;
+  unit: string | null;
   amount: number;
   state: SendOperationState;
   createdAt: number;
@@ -24,6 +25,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     amount: row.amount,
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
@@ -67,6 +69,7 @@ function operationToParams(op: SendOperation): unknown[] {
     return [
       op.id,
       op.mintUrl,
+      op.unit,
       op.amount,
       op.state,
       createdAtSeconds,
@@ -84,6 +87,7 @@ function operationToParams(op: SendOperation): unknown[] {
   return [
     op.id,
     op.mintUrl,
+    op.unit,
     op.amount,
     op.state,
     createdAtSeconds,

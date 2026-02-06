@@ -555,4 +555,130 @@ describe('ProofService', () => {
       expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
     });
   });
+
+  describe('multi-unit support', () => {
+    const satKeysetId = 'keyset-sat';
+    const usdKeysetId = 'keyset-usd';
+
+    const makeMultiUnitMintService = () => ({
+      async getAllTrustedMints() {
+        return [{ mintUrl }];
+      },
+      async ensureUpdatedMint(_mintUrl: string) {
+        return {
+          mint: { mintUrl },
+          keysets: [
+            { id: satKeysetId, unit: 'sat', active: true, keypairs: { 1: 'key1' } },
+            { id: usdKeysetId, unit: 'usd', active: true, keypairs: { 1: 'key2' } },
+          ],
+        };
+      },
+    });
+
+    it('getBalance returns balance for specific unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      // Save proofs with different keyset IDs (representing different units)
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+        makeProof({ secret: 'u2', id: usdKeysetId, amount: 20 }),
+      ]);
+
+      // Default unit (sat)
+      const satBalance = await service.getBalance(mintUrl);
+      expect(satBalance).toBe(150);
+
+      // Explicit sat
+      const satBalanceExplicit = await service.getBalance(mintUrl, 'sat');
+      expect(satBalanceExplicit).toBe(150);
+
+      // USD unit
+      const usdBalance = await service.getBalance(mintUrl, 'usd');
+      expect(usdBalance).toBe(30);
+    });
+
+    it('getReadyProofsByUnit returns proofs filtered by unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+      ]);
+
+      const satProofs = await service.getReadyProofsByUnit(mintUrl, 'sat');
+      expect(satProofs.length).toBe(2);
+      expect(satProofs.every((p) => p.id === satKeysetId)).toBe(true);
+
+      const usdProofs = await service.getReadyProofsByUnit(mintUrl, 'usd');
+      expect(usdProofs.length).toBe(1);
+      expect(usdProofs[0]!.id).toBe(usdKeysetId);
+    });
+
+    it('getBalancesByUnit returns balances grouped by unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+        makeProof({ secret: 'u2', id: usdKeysetId, amount: 20 }),
+      ]);
+
+      const balances = await service.getBalancesByUnit();
+
+      expect(balances[mintUrl]).toBeDefined();
+      expect(balances[mintUrl]!['sat']).toBe(150);
+      expect(balances[mintUrl]!['usd']).toBe(30);
+    });
+
+    it('returns 0 balance for unit with no proofs', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+      ]);
+
+      const usdBalance = await service.getBalance(mintUrl, 'usd');
+      expect(usdBalance).toBe(0);
+    });
+  });
 });

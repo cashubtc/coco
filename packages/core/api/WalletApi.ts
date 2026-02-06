@@ -58,14 +58,33 @@ export class WalletApi {
    *
    * @param mintUrl - The mint URL to send from
    * @param amount - The amount to send
+   * @param unit - The unit to send (default: 'sat')
    * @returns The token to share with the recipient
    */
-  async send(mintUrl: string, amount: number): Promise<Token> {
-    return this.sendOperationService.send(mintUrl, amount);
+  async send(mintUrl: string, amount: number, unit: string = 'sat'): Promise<Token> {
+    return this.sendOperationService.send(mintUrl, amount, unit);
   }
 
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
     return this.proofService.getBalances();
+  }
+
+  /**
+   * Gets balances for all mints grouped by unit.
+   * @returns An object mapping mint URLs to objects mapping units to balances
+   */
+  async getBalancesByUnit(): Promise<{ [mintUrl: string]: { [unit: string]: number } }> {
+    return this.proofService.getBalancesByUnit();
+  }
+
+  /**
+   * Get all supported units for a mint.
+   * Returns a list of unique units from active keysets.
+   * @param mintUrl - The mint URL to query
+   * @returns A list of supported unit strings (e.g., ['sat', 'usd'])
+   */
+  async getSupportedUnits(mintUrl: string): Promise<string[]> {
+    return this.walletService.getSupportedUnits(mintUrl);
   }
 
   // Payment Request methods

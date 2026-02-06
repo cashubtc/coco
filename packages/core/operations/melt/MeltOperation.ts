@@ -45,6 +45,9 @@ interface MeltOperationBase extends MeltMethodMeta {
   /** The mint URL for this operation */
   mintUrl: string;
 
+  /** The unit for this operation (e.g., 'sat', 'usd') */
+  unit: string;
+
   /** Timestamp when the operation was created */
   createdAt: number;
 
@@ -248,11 +251,12 @@ export function isTerminalOperation(op: MeltOperation): op is TerminalMeltOperat
 // ============================================================================
 
 /**
- * Creates a new SendOperation in init state
+ * Creates a new MeltOperation in init state
  */
 export function createMeltOperation(
   id: string,
   mintUrl: string,
+  unit: string,
   meta: MeltMethodMeta,
 ): InitMeltOperation {
   const now = Date.now();
@@ -261,6 +265,7 @@ export function createMeltOperation(
     id,
     state: 'init',
     mintUrl,
+    unit,
     createdAt: now,
     updatedAt: now,
   };

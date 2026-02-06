@@ -171,6 +171,7 @@ export interface MeltQuoteRow {
 export interface SendOperationRow {
   id: string;
   mintUrl: string;
+  unit?: string | null;
   amount: number;
   state: 'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
   createdAt: number;
@@ -186,6 +187,7 @@ export interface SendOperationRow {
 export interface MeltOperationRow {
   id: string;
   mintUrl: string;
+  unit?: string | null;
   state: 'init' | 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
   createdAt: number;
   updatedAt: number;

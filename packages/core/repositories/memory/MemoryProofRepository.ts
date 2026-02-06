@@ -83,6 +83,19 @@ export class MemoryProofRepository implements ProofRepository {
     return results;
   }
 
+  async getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]> {
+    if (!keysetIds || keysetIds.length === 0) return [];
+    const keysetIdSet = new Set(keysetIds);
+    const map = this.getMintMap(mintUrl);
+    const results: CoreProof[] = [];
+    for (const p of map.values()) {
+      if (p.state === 'ready' && keysetIdSet.has(p.id)) {
+        results.push({ ...p });
+      }
+    }
+    return results;
+  }
+
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
     const map = this.getMintMap(mintUrl);
     for (const secret of secrets) {

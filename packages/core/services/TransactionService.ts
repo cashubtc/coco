@@ -98,7 +98,7 @@ export class TransactionService {
 
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     // Try exact send first (without fees)
-    const exactProofs = await this.proofService.selectProofsToSend(mintUrl, amount, false);
+    const exactProofs = await this.proofService.selectProofsToSend(mintUrl, amount, 'sat', false);
     const exactAmount = exactProofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (exactAmount === amount && exactProofs.length > 0) {
       this.logger?.info('Exact amount match, skipping swap', {
@@ -116,7 +116,7 @@ export class TransactionService {
       return token;
     }
     // If not exact send, include fees and perform swap
-    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount, true);
+    const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, amount, 'sat', true);
     const fees = wallet.getFeesForProofs(selectedProofs);
     const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
     const outputData = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {

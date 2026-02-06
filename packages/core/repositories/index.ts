@@ -52,6 +52,11 @@ export interface ProofRepository {
   setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void>;
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
   getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]>;
+  /**
+   * Get ready proofs by multiple keyset IDs.
+   * Used for filtering proofs by unit (via keyset IDs belonging to that unit).
+   */
+  getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]>;
   wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void>;
 
   /**

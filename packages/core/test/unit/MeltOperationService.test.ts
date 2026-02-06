@@ -60,6 +60,7 @@ describe('MeltOperationService', () => {
     id,
     state: 'init',
     mintUrl,
+    unit: 'sat',
     method: 'bolt11',
     methodData: { invoice },
     createdAt: Date.now() - 1000,
