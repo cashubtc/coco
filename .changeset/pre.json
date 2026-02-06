@@ -13,6 +13,7 @@
   },
   "changesets": [
     "bumpy-hats-poke",
+    "clear-cycles-slide",
     "common-books-grin",
     "common-humans-relate",
     "cool-clubs-switch",

@@ -1,5 +1,12 @@
 # coco-cashu-adapter-tests
 
+## 1.1.2-rc.47
+
+### Patch Changes
+
+- Updated dependencies [980cff1]
+  - coco-cashu-core@1.1.2-rc.47
+
 ## 1.1.2-rc.46
 
 ### Patch Changes

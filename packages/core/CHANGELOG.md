@@ -1,5 +1,11 @@
 # coco-cashu-core
 
+## 1.1.2-rc.47
+
+### Patch Changes
+
+- 980cff1: feat: Added missing util method to QuotesApi (rollback, getPending/getPrepared)
+
 ## 1.1.2-rc.46
 
 ## 1.1.2-rc.45
