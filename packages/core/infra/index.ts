@@ -8,4 +8,5 @@ export * from './WsTransport';
 export * from './PollingTransport';
 export * from './HybridTransport';
 export * from './SubscriptionProtocol';
-export * from './handlers';
+export * from './handlers/melt';
+export * from './handlers/send';

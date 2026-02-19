@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { MeltBolt11Handler } from '../../infra/handlers/MeltBolt11Handler';
+import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { ProofService } from '../../services/ProofService';
@@ -25,7 +25,7 @@ import type {
   RecoverExecutingContext,
 } from '../../operations/melt/MeltMethodHandler';
 import type { Wallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
-import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/MeltBolt11Handler.utils';
+import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
 
 describe('MeltBolt11Handler', () => {
   const mintUrl = 'https://mint.test';
