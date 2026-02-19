@@ -1483,8 +1483,22 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await mgr.mint.addMint(mintUrl, { trusted: true });
           await new Promise((resolve) => setTimeout(resolve, 500));
 
+          let offFinalized: (() => void) | undefined;
+          const finalizedPromise = new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              if (offFinalized) offFinalized();
+              reject(new Error('Timed out waiting for send:finalized'));
+            }, 9000);
+
+            offFinalized = mgr!.on('send:finalized', (payload) => {
+              if (payload.operationId !== operationId) return;
+              clearTimeout(timeout);
+              if (offFinalized) offFinalized();
+              resolve();
+            });
+          });
           await mgr!.wallet.receive(token);
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+          await finalizedPromise;
 
           const finalized = await mgr!.send.getOperation(operationId!);
           expect(finalized!.state).toBe('finalized');
