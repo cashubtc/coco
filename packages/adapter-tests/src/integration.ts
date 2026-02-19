@@ -94,7 +94,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(keysets.length).toBeGreaterThan(0);
 
           const mintInfo = await mgr.mint.getMintInfo(mintUrl);
-          expect(mintInfo.name).toBeDefined();
+          expect(mintInfo.pubkey).toBeDefined();
           expect(mintInfo.version).toBeDefined();
 
           const isKnown = await mgr.mint.isTrustedMint(mintUrl);
