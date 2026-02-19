@@ -6,6 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE_PORT=3338
 
+# Platform flag (arm64 hosts need linux/amd64 for mintd image)
+case "$(uname -m)" in
+arm64|aarch64) PLATFORM_FLAG=(--platform=linux/amd64) ;;
+*) PLATFORM_FLAG=() ;;
+esac
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,7 +94,7 @@ start_mint_container() {
     docker rm "$container_name" 2>/dev/null || true
     
     # Start new container
-    docker run -d \
+    docker run -d "${PLATFORM_FLAG[@]}" \
         -p "${port}:3338" \
         --name "$container_name" \
         -e CDK_MINTD_DATABASE=sqlite \
@@ -99,8 +105,8 @@ start_mint_container() {
         -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
         -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
         -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
-        cashubtc/mintd:0.13
-    
+        cashubtc/mintd:0.15.1
+
     # Wait for mint to be ready
     log_info "Waiting for mint to be ready..."
     MAX_ATTEMPTS=30
