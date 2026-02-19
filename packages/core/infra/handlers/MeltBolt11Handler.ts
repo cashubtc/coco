@@ -64,7 +64,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       totalAmount,
     });
 
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, ctx.operation.unit, false);
     const selectedAmount = sumProofs(selectedProofs);
     const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
 
@@ -139,7 +139,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx.logger?.debug('Preparing swap-then-melt', { operationId, totalAmount });
 
     // Re-select proofs including the swap fee
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, ctx.operation.unit, true);
     const selectedAmount = sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
@@ -324,7 +324,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const swapData = deserializeOutputData(swapOutputData);
     const sendAmount = swapData.send.reduce((a, c) => a + c.blindedMessage.amount, 0);
-    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl, ctx.operation.unit);
 
     ctx.logger?.debug('Executing pre-melt swap', {
       operationId,

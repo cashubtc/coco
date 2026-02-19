@@ -251,7 +251,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
       expect(result.mint).toBe(testMintUrl);
       expect(result.proofs).toEqual(testProofs);
-      expect(mockSendOperationService.send).toHaveBeenCalledWith(testMintUrl, amount);
+      expect(mockSendOperationService.send).toHaveBeenCalledWith(testMintUrl, amount, 'sat');
     });
   });
 

@@ -23,8 +23,12 @@ export class QuotesApi {
     this.meltOperationService = meltOperationService;
   }
 
-  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteBolt11Response> {
-    return this.mintQuoteService.createMintQuote(mintUrl, amount);
+  async createMintQuote(
+    mintUrl: string,
+    amount: number,
+    unit: string = 'sat',
+  ): Promise<MintQuoteBolt11Response> {
+    return this.mintQuoteService.createMintQuote(mintUrl, amount, unit);
   }
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {

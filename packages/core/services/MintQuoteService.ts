@@ -32,8 +32,12 @@ export class MintQuoteService {
     this.logger = logger;
   }
 
-  async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteBolt11Response> {
-    this.logger?.info('Creating mint quote', { mintUrl, amount });
+  async createMintQuote(
+    mintUrl: string,
+    amount: number,
+    unit: string = 'sat',
+  ): Promise<MintQuoteBolt11Response> {
+    this.logger?.info('Creating mint quote', { mintUrl, amount, unit });
 
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -41,13 +45,13 @@ export class MintQuoteService {
     }
 
     try {
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
       const quote = await wallet.createMintQuoteBolt11(amount);
       await this.mintQuoteRepo.addMintQuote({ ...quote, mintUrl });
       await this.eventBus.emit('mint-quote:created', { mintUrl, quoteId: quote.quote, quote });
       return quote;
     } catch (err) {
-      this.logger?.error('Failed to create mint quote', { mintUrl, amount, err });
+      this.logger?.error('Failed to create mint quote', { mintUrl, amount, unit, err });
       throw err;
     }
   }
@@ -70,7 +74,8 @@ export class MintQuoteService {
         this.logger?.warn('Mint quote had undefined amount', { mintUrl, quoteId });
         throw new Error('Quote amount undefined');
       }
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+      const unit = quote.unit || 'sat';
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
       const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
         keep: quote.amount,
         send: 0,

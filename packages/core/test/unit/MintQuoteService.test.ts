@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, expect } from 'bun:test';
+import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MintQuoteService } from '../../services/MintQuoteService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -247,5 +247,111 @@ describe('MintQuoteService.addExistingMintQuotes', () => {
     // Check events have correct mint URLs
     expect(emittedEvents[0]?.payload.mintUrl).toBe('https://mint1.test');
     expect(emittedEvents[1]?.payload.mintUrl).toBe('https://mint2.test');
+  });
+});
+
+describe('MintQuoteService.createMintQuote', () => {
+  let service: MintQuoteService;
+  let mockRepo: MintQuoteRepository;
+  let eventBus: EventBus<CoreEvents>;
+  let mockWalletService: any;
+  let mockMintService: any;
+  let mockWallet: any;
+  let capturedUnit: string | undefined;
+
+  beforeEach(() => {
+    capturedUnit = undefined;
+
+    mockRepo = {
+      async getMintQuote(): Promise<MintQuote | null> {
+        return null;
+      },
+      async addMintQuote(): Promise<void> {},
+      async setMintQuoteState(): Promise<void> {},
+      async getPendingMintQuotes(): Promise<MintQuote[]> {
+        return [];
+      },
+    };
+
+    mockWallet = {
+      createMintQuoteBolt11: mock(async (amount: number) => ({
+        quote: 'test-quote-id',
+        amount,
+        request: 'lnbc1000...',
+        state: 'UNPAID',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+      })),
+    };
+
+    mockWalletService = {
+      getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit?: string) => {
+        capturedUnit = unit;
+        return { wallet: mockWallet, keysetId: 'keyset-1' };
+      }),
+    };
+
+    mockMintService = {
+      isTrustedMint: async () => true,
+    };
+
+    eventBus = new EventBus<CoreEvents>();
+
+    service = new MintQuoteService(
+      mockRepo,
+      mockMintService,
+      mockWalletService,
+      {} as any,
+      eventBus,
+      undefined,
+    );
+  });
+
+  it('creates mint quote with default unit (sat)', async () => {
+    const quote = await service.createMintQuote('https://mint.test', 1000);
+
+    expect(quote.quote).toBe('test-quote-id');
+    expect(quote.amount).toBe(1000);
+    expect(capturedUnit).toBe('sat');
+    expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
+      'https://mint.test',
+      'sat',
+    );
+  });
+
+  it('creates mint quote with explicit unit (sat)', async () => {
+    const quote = await service.createMintQuote('https://mint.test', 1000, 'sat');
+
+    expect(quote.quote).toBe('test-quote-id');
+    expect(capturedUnit).toBe('sat');
+  });
+
+  it('creates mint quote with usd unit', async () => {
+    const quote = await service.createMintQuote('https://mint.test', 100, 'usd');
+
+    expect(quote.quote).toBe('test-quote-id');
+    expect(quote.amount).toBe(100);
+    expect(capturedUnit).toBe('usd');
+    expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
+      'https://mint.test',
+      'usd',
+    );
+  });
+
+  it('creates mint quote with eur unit', async () => {
+    await service.createMintQuote('https://mint.test', 50, 'eur');
+
+    expect(capturedUnit).toBe('eur');
+    expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
+      'https://mint.test',
+      'eur',
+    );
+  });
+
+  it('throws for untrusted mint', async () => {
+    mockMintService.isTrustedMint = async () => false;
+
+    await expect(service.createMintQuote('https://untrusted.mint', 100, 'sat')).rejects.toThrow(
+      'not trusted',
+    );
   });
 });

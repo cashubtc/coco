@@ -9,6 +9,7 @@ type MeltMethodData = MeltOperation['methodData'];
 interface MeltOperationRow {
   id: string;
   mintUrl: string;
+  unit: string | null;
   state: MeltOperationState;
   createdAt: number;
   updatedAt: number;
@@ -41,6 +42,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     method: row.method,
     methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
     createdAt: row.createdAt * 1000,
@@ -82,6 +84,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     return [
       operation.id,
       operation.mintUrl,
+      operation.unit,
       operation.state,
       createdAtSeconds,
       updatedAtSeconds,
@@ -103,6 +106,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
   return [
     operation.id,
     operation.mintUrl,
+    operation.unit,
     operation.state,
     createdAtSeconds,
     updatedAtSeconds,
@@ -144,8 +148,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-        (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }

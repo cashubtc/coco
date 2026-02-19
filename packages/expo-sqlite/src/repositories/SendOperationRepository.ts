@@ -1,6 +1,6 @@
 import type {
-  SendOperationRepository,
   SendOperation,
+  SendOperationRepository,
   SendOperationState,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
@@ -8,6 +8,7 @@ import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 interface SendOperationRow {
   id: string;
   mintUrl: string;
+  unit: string | null;
   amount: number;
   state: SendOperationState;
   createdAt: number;
@@ -24,6 +25,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     amount: row.amount,
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
@@ -67,6 +69,7 @@ function operationToParams(op: SendOperation): unknown[] {
     return [
       op.id,
       op.mintUrl,
+      op.unit,
       op.amount,
       op.state,
       createdAtSeconds,
@@ -84,6 +87,7 @@ function operationToParams(op: SendOperation): unknown[] {
   return [
     op.id,
     op.mintUrl,
+    op.unit,
     op.amount,
     op.state,
     createdAtSeconds,
@@ -116,8 +120,8 @@ export class ExpoSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, state, createdAt, updatedAt, error, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }

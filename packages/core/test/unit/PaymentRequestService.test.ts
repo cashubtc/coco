@@ -30,6 +30,7 @@ describe('PaymentRequestService', () => {
     id: 'test-op-id',
     state: 'prepared',
     mintUrl,
+    unit: 'sat',
     amount,
     createdAt: Date.now(),
     updatedAt: Date.now(),

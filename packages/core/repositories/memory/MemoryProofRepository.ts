@@ -1,8 +1,8 @@
-import type { ProofRepository } from '..';
+import type { KeysetRepository, ProofRepository } from '..';
 import type { CoreProof, ProofState } from '../../types';
-
 export class MemoryProofRepository implements ProofRepository {
   private proofsByMint: Map<string, Map<string, CoreProof>> = new Map();
+  constructor(private readonly keysetRepo: KeysetRepository) {}
 
   private getMintMap(mintUrl: string): Map<string, CoreProof> {
     if (!this.proofsByMint.has(mintUrl)) {
@@ -77,6 +77,19 @@ export class MemoryProofRepository implements ProofRepository {
     const results: CoreProof[] = [];
     for (const p of map.values()) {
       if (p.state === 'ready' && p.id === keysetId) {
+        results.push({ ...p });
+      }
+    }
+    return results;
+  }
+
+  async getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]> {
+    if (!keysetIds || keysetIds.length === 0) return [];
+    const keysetIdSet = new Set(keysetIds);
+    const map = this.getMintMap(mintUrl);
+    const results: CoreProof[] = [];
+    for (const p of map.values()) {
+      if (p.state === 'ready' && keysetIdSet.has(p.id)) {
         results.push({ ...p });
       }
     }
@@ -169,10 +182,14 @@ export class MemoryProofRepository implements ProofRepository {
     return results;
   }
 
-  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getAvailableProofs(mintUrl: string, unit:string): Promise<CoreProof[]> {
+    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mintUrl);
+    const unitKeysetIds = new Set(
+      keysets.filter((k) =>k.unit === unit).map((k) => k.id),
+    );
     const map = this.getMintMap(mintUrl);
     return Array.from(map.values())
-      .filter((p) => p.state === 'ready' && !p.usedByOperationId)
+      .filter((p) => p.state === 'ready' && !p.usedByOperationId && unitKeysetIds.has(p.id))
       .map((p) => ({ ...p }));
   }
 

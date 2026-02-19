@@ -2424,5 +2424,339 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect((balanceAfter[mintUrl] || 0) - (balanceBefore[mintUrl] || 0)).toBeGreaterThan(0);
       });
     });
+
+    /**
+     * Multi-Unit Support Integration Tests
+     *
+     * These tests verify that the wallet correctly handles multiple units (e.g., sat, usd).
+     * Tests cover:
+     * - Getting supported units from a mint
+     * - Unit-specific balance queries
+     * - Unit isolation (proofs from different units don't mix)
+     * - Send/receive operations with specific units
+     *
+     * NOTE: These tests require a mint that supports multiple units.
+     * If the mint only supports 'sat', some tests will be skipped.
+     */
+    describe('Multi-Unit Support', () => {
+      let repositories: Awaited<ReturnType<typeof createRepositories>>['repositories'];
+      let dispose: () => Promise<void>;
+      let supportedUnits: string[];
+      let secondUnit: string | undefined;
+
+      it('should get supported units from mint', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          // Get supported units
+          supportedUnits = await mgr.wallet.getSupportedUnits(mintUrl);
+
+          expect(supportedUnits).toBeDefined();
+          expect(supportedUnits.length).toBeGreaterThan(0);
+          expect(supportedUnits).toContain('sat');
+
+          // Find a second unit if available
+          secondUnit = supportedUnits.find((u) => u !== 'sat');
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should return empty balances by unit initially', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          const balancesByUnit = await mgr.wallet.getBalancesByUnit();
+
+          // Initially should be empty or have zero balances
+          const mintBalances = balancesByUnit[mintUrl];
+          if (mintBalances) {
+            for (const unit of Object.keys(mintBalances)) {
+              expect(mintBalances[unit]).toBe(0);
+            }
+          }
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should mint and track balance for default unit (sat)', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          // Mint 100 sats (default unit)
+          const mintQuote = await mgr.quotes.createMintQuote(mintUrl, 100);
+          expect(mintQuote.unit).toBe('sat');
+          await mgr.quotes.redeemMintQuote(mintUrl, mintQuote.quote);
+
+          // Check balance by unit
+          const balancesByUnit = await mgr.wallet.getBalancesByUnit();
+          expect(balancesByUnit[mintUrl]).toBeDefined();
+          expect(balancesByUnit[mintUrl]!['sat']).toBeGreaterThanOrEqual(100);
+
+          // Legacy getBalances should also work
+          const legacyBalances = await mgr.wallet.getBalances();
+          expect(legacyBalances[mintUrl]).toBeGreaterThanOrEqual(100);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should send with explicit unit parameter', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          // Mint some sats
+          const mintQuote = await mgr.quotes.createMintQuote(mintUrl, 200);
+          await mgr.quotes.redeemMintQuote(mintUrl, mintQuote.quote);
+
+          const balanceBefore = await mgr.wallet.getBalancesByUnit();
+          const satBefore = balanceBefore[mintUrl]?.['sat'] || 0;
+
+          // Send with explicit unit
+          const prepared = await mgr.send.prepareSend(mintUrl, 50, 'sat');
+          expect(prepared.unit).toBe('sat');
+
+          const { token } = await mgr.send.executePreparedSend(prepared.id);
+          expect(token.unit).toBe('sat');
+
+          // Balance should decrease
+          const balanceAfter = await mgr.wallet.getBalancesByUnit();
+          const satAfter = balanceAfter[mintUrl]?.['sat'] || 0;
+          expect(satAfter).toBeLessThan(satBefore);
+
+          // Receive back
+          await mgr.wallet.receive(token);
+
+          // Balance should recover (minus fees)
+          const balanceFinal = await mgr.wallet.getBalancesByUnit();
+          const satFinal = balanceFinal[mintUrl]?.['sat'] || 0;
+          expect(satFinal).toBeGreaterThan(satAfter);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should isolate proofs between units (requires multi-unit mint)', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const units = await mgr.wallet.getSupportedUnits(mintUrl);
+          const otherUnit = units.find((u) => u !== 'sat');
+
+          if (!otherUnit) {
+            // Skip if mint doesn't support multiple units
+            logger?.info('Skipping multi-unit isolation test: mint only supports sat');
+            return;
+          }
+
+          // Mint sat proofs
+          const satQuote = await mgr.quotes.createMintQuote(mintUrl, 100, 'sat');
+          expect(satQuote.unit).toBe('sat');
+          await mgr.quotes.redeemMintQuote(mintUrl, satQuote.quote);
+
+          // Mint other unit proofs
+          const otherQuote = await mgr.quotes.createMintQuote(mintUrl, 50, otherUnit);
+          expect(otherQuote.unit).toBe(otherUnit);
+          await mgr.quotes.redeemMintQuote(mintUrl, otherQuote.quote);
+
+          // Verify balances are isolated by unit
+          const balances = await mgr.wallet.getBalancesByUnit();
+          expect(balances[mintUrl]).toBeDefined();
+          expect(balances[mintUrl]!['sat']).toBeGreaterThanOrEqual(100);
+          expect(balances[mintUrl]![otherUnit]).toBeGreaterThanOrEqual(50);
+
+          // Sending sat should not affect other unit balance
+          const prepared = await mgr.send.prepareSend(mintUrl, 30, 'sat');
+          const { token } = await mgr.send.executePreparedSend(prepared.id);
+          await mgr.wallet.receive(token);
+
+          // Other unit balance should remain unchanged
+          const balancesAfterSat = await mgr.wallet.getBalancesByUnit();
+          expect(balancesAfterSat[mintUrl]![otherUnit]).toBeGreaterThanOrEqual(50);
+
+          logger?.info('Multi-unit isolation verified', { units, satBalance: balancesAfterSat[mintUrl]!['sat'], otherBalance: balancesAfterSat[mintUrl]![otherUnit] });
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should fail when sending more than available for specific unit', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const units = await mgr.wallet.getSupportedUnits(mintUrl);
+          const otherUnit = units.find((u) => u !== 'sat');
+
+          if (!otherUnit) {
+            logger?.info('Skipping: mint only supports sat');
+            return;
+          }
+
+          // Mint only sats, not other unit
+          const satQuote = await mgr.quotes.createMintQuote(mintUrl, 100);
+          await mgr.quotes.redeemMintQuote(mintUrl, satQuote.quote);
+
+          // Trying to send other unit should fail (no balance)
+          await expect(mgr.send.prepareSend(mintUrl, 10, otherUnit)).rejects.toThrow();
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should handle full lifecycle for second unit (requires multi-unit mint)', async () => {
+        const result = await createRepositories();
+        repositories = result.repositories;
+        dispose = result.dispose;
+
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const units = await mgr.wallet.getSupportedUnits(mintUrl);
+          const otherUnit = units.find((u) => u !== 'sat');
+
+          if (!otherUnit) {
+            logger?.info('Skipping: mint only supports sat');
+            return;
+          }
+
+          logger?.info('Testing full lifecycle for unit', { unit: otherUnit });
+
+          // 1. Mint with second unit
+          const quote = await mgr.quotes.createMintQuote(mintUrl, 100, otherUnit);
+          expect(quote.unit).toBe(otherUnit);
+          await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
+
+          // 2. Check balance by unit
+          const balanceAfterMint = await mgr.wallet.getBalancesByUnit();
+          expect(balanceAfterMint[mintUrl]![otherUnit]).toBeGreaterThanOrEqual(100);
+          logger?.info('Balance after mint', { balance: balanceAfterMint[mintUrl]![otherUnit] });
+
+          // 3. Send with second unit
+          const prepared = await mgr.send.prepareSend(mintUrl, 30, otherUnit);
+          expect(prepared.unit).toBe(otherUnit);
+          const { token } = await mgr.send.executePreparedSend(prepared.id);
+          expect(token.unit).toBe(otherUnit);
+
+          // 4. Verify balance decreased
+          const balanceAfterSend = await mgr.wallet.getBalancesByUnit();
+          const sendBalance = balanceAfterSend[mintUrl]![otherUnit] || 0;
+          const mintBalance = balanceAfterMint[mintUrl]![otherUnit] || 0;
+          expect(sendBalance).toBeLessThan(mintBalance);
+          logger?.info('Balance after send', { balance: sendBalance });
+
+          // 5. Receive back
+          await mgr.wallet.receive(token);
+
+          // 6. Verify balance recovered (minus fees)
+          const balanceAfterReceive = await mgr.wallet.getBalancesByUnit();
+          const receiveBalance = balanceAfterReceive[mintUrl]![otherUnit] || 0;
+          expect(receiveBalance).toBeGreaterThan(sendBalance);
+          logger?.info('Balance after receive', { balance: balanceAfterReceive[mintUrl]![otherUnit] });
+
+          logger?.info('Full lifecycle for second unit completed successfully', { unit: otherUnit });
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      }, 30000);
+    });
   });
 }

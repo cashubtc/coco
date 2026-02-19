@@ -35,10 +35,15 @@ export class SendApi {
    *
    * @param mintUrl - The mint URL to send from
    * @param amount - The amount to send
+   * @param unit - The unit to send (default: 'sat')
    * @returns The prepared operation with fee information
    */
-  async prepareSend(mintUrl: string, amount: number): Promise<PreparedSendOperation> {
-    const initOp = await this.sendOperationService.init(mintUrl, amount);
+  async prepareSend(
+    mintUrl: string,
+    amount: number,
+    unit: string = 'sat',
+  ): Promise<PreparedSendOperation> {
+    const initOp = await this.sendOperationService.init(mintUrl, amount, unit);
     return this.sendOperationService.prepare(initOp);
   }
 

@@ -43,6 +43,9 @@ interface SendOperationBase {
   /** The amount requested to send (before fees) */
   amount: number;
 
+  /** The unit for this operation (e.g., 'sat', 'usd') */
+  unit: string;
+
   /** Timestamp when the operation was created */
   createdAt: number;
 
@@ -267,6 +270,7 @@ export function createSendOperation(
   id: string,
   mintUrl: string,
   amount: number,
+  unit: string = 'sat',
 ): InitSendOperation {
   const now = Date.now();
   return {
@@ -274,6 +278,7 @@ export function createSendOperation(
     state: 'init',
     mintUrl,
     amount,
+    unit,
     createdAt: now,
     updatedAt: now,
   };

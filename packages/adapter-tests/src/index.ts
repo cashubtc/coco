@@ -129,6 +129,7 @@ export function createDummyMeltOperation(): MeltOperation {
     id: 'melt-op',
     state: 'init',
     mintUrl: 'https://mint.test',
+    unit: 'sat',
     method: 'bolt11',
     methodData: { invoice: 'lnbc1test' },
     createdAt: 0,

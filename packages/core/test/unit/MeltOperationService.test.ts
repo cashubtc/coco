@@ -1,32 +1,33 @@
-import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import type { ProofService } from '../../services/ProofService.ts';
-import type { MintService } from '../../services/MintService.ts';
-import type { WalletService } from '../../services/WalletService.ts';
-import type { Logger } from '../../logging/Logger.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
-import type { CoreProof } from '../../types.ts';
-import type {
-  InitMeltOperation,
-  PreparedMeltOperation,
-  ExecutingMeltOperation,
-  PendingMeltOperation,
-  FinalizedMeltOperation,
-} from '../../operations/melt/MeltOperation.ts';
+import type { Logger } from '../../logging/Logger.ts';
+import {
+  OperationInProgressError,
+  ProofValidationError,
+  UnknownMintError,
+} from '../../models/Error.ts';
 import type {
   MeltMethodHandler,
   PendingCheckResult,
 } from '../../operations/melt/MeltMethodHandler.ts';
-import {
-  UnknownMintError,
-  ProofValidationError,
-  OperationInProgressError,
-} from '../../models/Error.ts';
+import type {
+  ExecutingMeltOperation,
+  FinalizedMeltOperation,
+  InitMeltOperation,
+  PendingMeltOperation,
+  PreparedMeltOperation,
+} from '../../operations/melt/MeltOperation.ts';
+import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
+import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import type { MintService } from '../../services/MintService.ts';
+import type { ProofService } from '../../services/ProofService.ts';
+import type { WalletService } from '../../services/WalletService.ts';
+import type { CoreProof } from '../../types.ts';
 
 describe('MeltOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -60,6 +61,7 @@ describe('MeltOperationService', () => {
     id,
     state: 'init',
     mintUrl,
+    unit: 'sat',
     method: 'bolt11',
     methodData: { invoice },
     createdAt: Date.now() - 1000,
@@ -104,7 +106,7 @@ describe('MeltOperationService', () => {
 
   beforeEach(() => {
     meltOperationRepository = new MemoryMeltOperationRepository();
-    proofRepository = new MemoryProofRepository();
+    proofRepository = new MemoryProofRepository(new MemoryKeysetRepository());
     eventBus = new EventBus<CoreEvents>();
 
     handler = {

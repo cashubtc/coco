@@ -1,5 +1,5 @@
-import { ExpoSqliteDb, getUnixTimeSeconds } from './db.ts';
 import { normalizeMintUrl } from 'coco-cashu-core';
+import { ExpoSqliteDb, getUnixTimeSeconds } from './db.ts';
 
 interface Migration {
   id: string;
@@ -306,6 +306,13 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_operations(mintUrl, quoteId)
         WHERE quoteId IS NOT NULL;
     `,
+  },
+  {
+    id: '012_operation_unit_field',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN unit TEXT DEFAULT 'sat';
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN unit TEXT DEFAULT 'sat';
+    `
   },
 ];
 

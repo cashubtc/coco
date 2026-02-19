@@ -1,14 +1,15 @@
-import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
+import { OutputData } from '@cashu/cashu-ts';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import { ProofService } from '../../services/ProofService.ts';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
-import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
-import { CounterService } from '../../services/CounterService.ts';
-import { SeedService } from '../../services/SeedService.ts';
 import { ProofOperationError, ProofValidationError } from '../../models/Error.ts';
+import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
+import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { CounterService } from '../../services/CounterService.ts';
+import { ProofService } from '../../services/ProofService.ts';
+import { SeedService } from '../../services/SeedService.ts';
 import type { CoreProof } from '../../types.ts';
-import { OutputData } from '@cashu/cashu-ts';
 
 describe('ProofService', () => {
   const mintUrl = 'https://mint.test';
@@ -31,6 +32,10 @@ describe('ProofService', () => {
   // Minimal mint service stub
   let mintService: {
     getAllTrustedMints: () => Promise<{ mintUrl: string }[]>;
+    ensureUpdatedMint: (mintUrl: string) => Promise<{
+      mint: { mintUrl: string };
+      keysets: { id: string; unit: string; active: boolean; keypairs: Record<string, string> }[];
+    }>;
   };
 
   // Minimal keyRingService stub
@@ -54,7 +59,7 @@ describe('ProofService', () => {
   let originalCreateDeterministicData: typeof OutputData.createDeterministicData;
 
   beforeEach(() => {
-    proofRepo = new MemoryProofRepository();
+    proofRepo = new MemoryProofRepository(new MemoryKeysetRepository());
     counterRepo = new MemoryCounterRepository();
     bus = new EventBus<CoreEvents>();
     counterService = new CounterService(counterRepo, undefined, bus);
@@ -77,6 +82,12 @@ describe('ProofService', () => {
     mintService = {
       async getAllTrustedMints() {
         return [{ mintUrl }];
+      },
+      async ensureUpdatedMint(_mintUrl: string) {
+        return {
+          mint: { mintUrl },
+          keysets: [{ id: keysetId, unit: 'sat', active: true, keypairs: { 1: 'key1' } }],
+        };
       },
     };
 
@@ -504,8 +515,8 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'a1', id: 'k1', amount: 5 }),
-        makeProof({ secret: 'a2', id: 'k1', amount: 10 }),
+        makeProof({ secret: 'a1', id: keysetId, amount: 5 }),
+        makeProof({ secret: 'a2', id: keysetId, amount: 10 }),
       ]);
 
       await expect(service.selectProofsToSend(mintUrl, 100)).rejects.toThrow(ProofValidationError);
@@ -545,14 +556,140 @@ describe('ProofService', () => {
         bus,
       );
 
-      const p1 = makeProof({ secret: 'b1', id: 'k1', amount: 30 });
-      const p2 = makeProof({ secret: 'b2', id: 'k1', amount: 50 });
-      const p3 = makeProof({ secret: 'b3', id: 'k1', amount: 80 });
+      const p1 = makeProof({ secret: 'b1', id: keysetId, amount: 30 });
+      const p2 = makeProof({ secret: 'b2', id: keysetId, amount: 50 });
+      const p3 = makeProof({ secret: 'b3', id: keysetId, amount: 80 });
       await proofRepo.saveProofs(mintUrl, [p1, p2, p3]);
 
       const selected = await service.selectProofsToSend(mintUrl, 60);
       // Expect our wallet stub to choose p1 + p2
       expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
+    });
+  });
+
+  describe('multi-unit support', () => {
+    const satKeysetId = 'keyset-sat';
+    const usdKeysetId = 'keyset-usd';
+
+    const makeMultiUnitMintService = () => ({
+      async getAllTrustedMints() {
+        return [{ mintUrl }];
+      },
+      async ensureUpdatedMint(_mintUrl: string) {
+        return {
+          mint: { mintUrl },
+          keysets: [
+            { id: satKeysetId, unit: 'sat', active: true, keypairs: { 1: 'key1' } },
+            { id: usdKeysetId, unit: 'usd', active: true, keypairs: { 1: 'key2' } },
+          ],
+        };
+      },
+    });
+
+    it('getBalance returns balance for specific unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      // Save proofs with different keyset IDs (representing different units)
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+        makeProof({ secret: 'u2', id: usdKeysetId, amount: 20 }),
+      ]);
+
+      // Default unit (sat)
+      const satBalance = await service.getBalance(mintUrl);
+      expect(satBalance).toBe(150);
+
+      // Explicit sat
+      const satBalanceExplicit = await service.getBalance(mintUrl, 'sat');
+      expect(satBalanceExplicit).toBe(150);
+
+      // USD unit
+      const usdBalance = await service.getBalance(mintUrl, 'usd');
+      expect(usdBalance).toBe(30);
+    });
+
+    it('getReadyProofsByUnit returns proofs filtered by unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+      ]);
+
+      const satProofs = await service.getReadyProofsByUnit(mintUrl, 'sat');
+      expect(satProofs.length).toBe(2);
+      expect(satProofs.every((p) => p.id === satKeysetId)).toBe(true);
+
+      const usdProofs = await service.getReadyProofsByUnit(mintUrl, 'usd');
+      expect(usdProofs.length).toBe(1);
+      expect(usdProofs[0]!.id).toBe(usdKeysetId);
+    });
+
+    it('getBalancesByUnit returns balances grouped by unit', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+        makeProof({ secret: 's2', id: satKeysetId, amount: 50 }),
+        makeProof({ secret: 'u1', id: usdKeysetId, amount: 10 }),
+        makeProof({ secret: 'u2', id: usdKeysetId, amount: 20 }),
+      ]);
+
+      const balances = await service.getBalancesByUnit();
+
+      expect(balances[mintUrl]).toBeDefined();
+      expect(balances[mintUrl]!['sat']).toBe(150);
+      expect(balances[mintUrl]!['usd']).toBe(30);
+    });
+
+    it('returns 0 balance for unit with no proofs', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        makeMultiUnitMintService() as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 's1', id: satKeysetId, amount: 100 }),
+      ]);
+
+      const usdBalance = await service.getBalance(mintUrl, 'usd');
+      expect(usdBalance).toBe(0);
     });
   });
 });

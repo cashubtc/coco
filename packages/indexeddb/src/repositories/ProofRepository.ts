@@ -104,6 +104,17 @@ export class IdbProofRepository implements ProofRepository {
     return rows.map(rowToProof);
   }
 
+  async getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]> {
+    if (!keysetIds || keysetIds.length === 0) return [];
+    const keys = keysetIds.map((id) => [mintUrl, id, 'ready'] as [string, string, string]);
+    const rows = (await (this.db as any)
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+id+state]')
+      .anyOf(keys)
+      .toArray()) as ProofRow[];
+    return rows.map(rowToProof);
+  }
+
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
     if (!secrets || secrets.length === 0) return;
     await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
@@ -235,13 +246,24 @@ export class IdbProofRepository implements ProofRepository {
     return results;
   }
 
-  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getAvailableProofs(mintUrl: string, unit: string): Promise<CoreProof[]> {
+    // First, get keyset IDs for this unit
+    const keysets = (await (this.db as any)
+      .table('coco_cashu_keysets')
+      .where('[mintUrl+unit]')
+      .equals([mintUrl, unit])
+      .toArray()) as { id: string }[];
+    const keysetIds = new Set(keysets.map((k) => k.id));
+
+    // Then filter proofs by those keyset IDs
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('[mintUrl+state]')
       .equals([mintUrl, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.filter((r) => !r.usedByOperationId).map(rowToProof);
+    return rows
+      .filter((r) => !r.usedByOperationId && keysetIds.has(r.id))
+      .map(rowToProof);
   }
 
   async getReservedProofs(): Promise<CoreProof[]> {

@@ -1,22 +1,23 @@
-import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { SendOperationService } from '../../operations/send/SendOperationService';
-import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { type ProofState as CashuProofState } from '@cashu/cashu-ts';
+import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { ProofService } from '../../services/ProofService';
-import type { MintService } from '../../services/MintService';
-import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
-import type { CoreProof } from '../../types';
 import type {
-  InitSendOperation,
-  PreparedSendOperation,
   ExecutingSendOperation,
+  InitSendOperation,
   PendingSendOperation,
+  PreparedSendOperation,
 } from '../../operations/send/SendOperation';
+import { SendOperationService } from '../../operations/send/SendOperationService';
+import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
+import type { MintService } from '../../services/MintService';
+import type { ProofService } from '../../services/ProofService';
+import type { WalletService } from '../../services/WalletService';
+import type { CoreProof } from '../../types';
 import { serializeOutputData } from '../../utils';
-import { OutputData, type Proof, type ProofState as CashuProofState } from '@cashu/cashu-ts';
 
 describe('SendOperationService - recoverPendingOperations', () => {
   const mintUrl = 'https://mint.test';
@@ -54,6 +55,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     state: 'init',
     mintUrl,
     amount: 100,
+    unit: 'sat',
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
   });
@@ -66,6 +68,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     state: 'prepared',
     mintUrl,
     amount: 100,
+    unit: 'sat',
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     needsSwap: true,
@@ -120,7 +123,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
   beforeEach(() => {
     sendOpRepo = new MemorySendOperationRepository();
-    proofRepo = new MemoryProofRepository();
+    proofRepo = new MemoryProofRepository(new MemoryKeysetRepository());
     eventBus = new EventBus<CoreEvents>();
 
     // Mock checkProofsStates - default to UNSPENT

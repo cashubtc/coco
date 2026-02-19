@@ -1,27 +1,27 @@
 import type {
+  CounterRepository,
+  HistoryRepository,
+  KeyRingRepository,
+  KeysetRepository,
+  MeltOperationRepository,
+  MeltQuoteRepository,
+  MintQuoteRepository,
+  MintRepository,
+  ProofRepository,
   Repositories,
   RepositoryTransactionScope,
-  MintRepository,
-  KeysetRepository,
-  KeyRingRepository,
-  CounterRepository,
-  ProofRepository,
-  MintQuoteRepository,
-  MeltQuoteRepository,
-  HistoryRepository,
   SendOperationRepository,
-  MeltOperationRepository,
 } from '..';
-import { MemoryMintRepository } from './MemoryMintRepository';
-import { MemoryKeysetRepository } from './MemoryKeysetRepository';
-import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
 import { MemoryCounterRepository } from './MemoryCounterRepository';
-import { MemoryProofRepository } from './MemoryProofRepository';
-import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
-import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
 import { MemoryHistoryRepository } from './MemoryHistoryRepository';
-import { MemorySendOperationRepository } from './MemorySendOperationRepository';
+import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
+import { MemoryKeysetRepository } from './MemoryKeysetRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
+import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
+import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
+import { MemoryMintRepository } from './MemoryMintRepository';
+import { MemoryProofRepository } from './MemoryProofRepository';
+import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
@@ -40,7 +40,7 @@ export class MemoryRepositories implements Repositories {
     this.keyRingRepository = new MemoryKeyRingRepository();
     this.counterRepository = new MemoryCounterRepository();
     this.keysetRepository = new MemoryKeysetRepository();
-    this.proofRepository = new MemoryProofRepository();
+    this.proofRepository = new MemoryProofRepository(this.keysetRepository);
     this.mintQuoteRepository = new MemoryMintQuoteRepository();
     this.meltQuoteRepository = new MemoryMeltQuoteRepository();
     this.historyRepository = new MemoryHistoryRepository();

@@ -13,6 +13,7 @@ const makePendingOperation = (): PendingMeltOperation => ({
   id: 'op-1',
   state: 'pending',
   mintUrl,
+  unit: 'sat',
   method: 'bolt11',
   methodData: { invoice: 'lnbc1test' },
   createdAt: Date.now(),

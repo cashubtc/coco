@@ -21,6 +21,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     method: row.method as MeltOperation['method'],
     methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
     createdAt: row.createdAt * 1000,
@@ -66,6 +67,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     return {
       id: operation.id,
       mintUrl: operation.mintUrl,
+      unit: operation.unit,
       state: operation.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
@@ -87,6 +89,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
   return {
     id: operation.id,
     mintUrl: operation.mintUrl,
+    unit: operation.unit,
     state: operation.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,

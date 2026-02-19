@@ -1,9 +1,3 @@
-import type { Mint } from '../models/Mint';
-import type { Keyset } from '../models/Keyset';
-import type { Counter } from '../models/Counter';
-import type { CoreProof, ProofState } from '../types';
-import type { MintQuote } from '@core/models/MintQuote';
-import type { MeltQuote } from '@core/models/MeltQuote';
 import type {
   HistoryEntry,
   MeltHistoryEntry,
@@ -11,10 +5,15 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
-import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
-import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
+import type { MeltQuote } from '@core/models/MeltQuote';
+import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
+import type { Counter } from '../models/Counter';
+import type { Keyset } from '../models/Keyset';
+import type { Mint } from '../models/Mint';
+import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
+import type { CoreProof, ProofState } from '../types';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
@@ -52,6 +51,11 @@ export interface ProofRepository {
   setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void>;
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
   getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]>;
+  /**
+   * Get ready proofs by multiple keyset IDs.
+   * Used for filtering proofs by unit (via keyset IDs belonging to that unit).
+   */
+  getReadyProofsByKeysetIds(mintUrl: string, keysetIds: string[]): Promise<CoreProof[]>;
   wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void>;
 
   /**
@@ -84,7 +88,7 @@ export interface ProofRepository {
    * Get available (ready and not reserved) proofs for a mint.
    * This filters out proofs that have usedByOperationId set.
    */
-  getAvailableProofs(mintUrl: string): Promise<CoreProof[]>;
+  getAvailableProofs(mintUrl: string, unit:string): Promise<CoreProof[]>;
 
   /**
    * Get all proofs that are reserved (have usedByOperationId set) and are still in ready state.
