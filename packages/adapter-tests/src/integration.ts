@@ -2355,8 +2355,17 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        // processPaymentRequest should throw because no matching mints found
-        await expect(mgr!.wallet.processPaymentRequest(encoded)).rejects.toThrow();
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+
+        expect(parsed.matchingMints).toHaveLength(0);
+        expect(parsed.requiredMints).toHaveLength(1);
+        expect(parsed.requiredMints).toContain(otherMintUrl);
+
+        if (parsed.transport.type === 'inband') {
+          await expect(
+            mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed),
+          ).rejects.toThrow();
+        }
       });
 
       it('should throw if amount is missing when preparing transaction', async () => {

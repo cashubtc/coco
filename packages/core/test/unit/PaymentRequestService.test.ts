@@ -163,7 +163,7 @@ describe('PaymentRequestService', () => {
       expect(result.matchingMints).toContain(testMintUrl2);
     });
 
-    it('should throw if no matching mints found', async () => {
+    it('should return an empty matching mint list if no matching mints found', async () => {
       // Mock low balance
       (mockProofService.getTrustedBalances as any).mockImplementation(async () => ({
         [testMintUrl]: 50, // Not enough
@@ -178,8 +178,11 @@ describe('PaymentRequestService', () => {
       );
       const encoded = pr.toEncodedRequest();
 
-      await expect(service.processPaymentRequest(encoded)).rejects.toThrow(PaymentRequestError);
-      await expect(service.processPaymentRequest(encoded)).rejects.toThrow('No matching mints found');
+      const result = await service.processPaymentRequest(encoded);
+
+      expect(result.matchingMints).toEqual([]);
+      expect(result.requiredMints).toEqual([testMintUrl]);
+      expect(result.amount).toBe(100);
     });
   });
 
