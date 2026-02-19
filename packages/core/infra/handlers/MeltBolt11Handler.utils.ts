@@ -71,10 +71,18 @@ export function getSwapSendSecrets(swapOutputData: SerializedOutputData): string
  */
 export function buildPaidResult<M extends MeltMethod>(
   operation: ExecutingMeltOperation & MeltMethodMeta<M>,
+  changeAmount: number,
+  effectiveFee: number,
 ): ExecutionResult<M> {
   return {
     status: 'PAID',
-    finalized: { ...operation, state: 'finalized', updatedAt: Date.now() },
+    finalized: {
+      ...operation,
+      state: 'finalized',
+      updatedAt: Date.now(),
+      changeAmount,
+      effectiveFee,
+    },
   };
 }
 
