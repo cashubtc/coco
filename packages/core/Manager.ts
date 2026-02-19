@@ -3,6 +3,7 @@ import type {
   MintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  ReceiveOperationRepository,
 } from './repositories';
 import {
   CounterService,
@@ -23,6 +24,7 @@ import {
 } from './services';
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
+import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import {
   SubscriptionManager,
   type WebSocketFactory,
@@ -153,6 +155,9 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   // Recover any pending melt operations from previous session
   await coco.recoverPendingMeltOperations();
 
+  // Recover any pending receive operations from previous session
+  await coco.recoverPendingReceiveOperations();
+
   return coco;
 }
 
@@ -188,6 +193,8 @@ export class Manager {
   private sendOperationRepository: SendOperationRepository;
   private meltOperationService: MeltOperationService;
   private meltOperationRepository: MeltOperationRepository;
+  private receiveOperationService: ReceiveOperationService;
+  private receiveOperationRepository: ReceiveOperationRepository;
   private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
@@ -239,6 +246,8 @@ export class Manager {
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
     this.sendOperationRepository = core.sendOperationRepository;
+    this.receiveOperationService = core.receiveOperationService;
+    this.receiveOperationRepository = core.receiveOperationRepository;
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
     this.proofRepository = repositories.proofRepository;
@@ -274,6 +283,7 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      receiveOperationService: this.receiveOperationService,
       paymentRequestService: this.paymentRequestService,
       meltOperationService: this.meltOperationService,
       subscriptions: this.subscriptions,
@@ -327,6 +337,7 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      receiveOperationService: this.receiveOperationService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -400,7 +411,9 @@ export class Manager {
     await this.mintQuoteProcessor.waitForCompletion();
   }
 
-  async enableProofStateWatcher(options?: { watchExistingInflightOnStart?: boolean }): Promise<void> {
+  async enableProofStateWatcher(options?: {
+    watchExistingInflightOnStart?: boolean;
+  }): Promise<void> {
     if (this.proofStateWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'ProofStateWatcherService' })
@@ -430,6 +443,10 @@ export class Manager {
 
   async recoverPendingMeltOperations(): Promise<void> {
     await this.meltOperationService.recoverPendingOperations();
+  }
+
+  async recoverPendingReceiveOperations(): Promise<void> {
+    await this.receiveOperationService.recoverPendingOperations();
   }
 
   async pauseSubscriptions(): Promise<void> {
@@ -468,10 +485,10 @@ export class Manager {
       await this.enableMintQuoteWatcher(mintQuoteWatcherConfig);
     }
 
-  const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
-  if (!proofStateWatcherConfig?.disabled) {
-    await this.enableProofStateWatcher(proofStateWatcherConfig);
-  }
+    const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
+    if (!proofStateWatcherConfig?.disabled) {
+      await this.enableProofStateWatcher(proofStateWatcherConfig);
+    }
 
     // Re-enable processor based on original configuration (idempotent)
     const mintQuoteProcessorConfig = this.originalProcessorConfig?.mintQuoteProcessor;
@@ -509,7 +526,7 @@ export class Manager {
     const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
     const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (url: string) => new (globalThis as any).WebSocket(url)
+        (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
     const options = {
@@ -547,6 +564,8 @@ export class Manager {
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
     sendOperationRepository: SendOperationRepository;
+    receiveOperationService: ReceiveOperationService;
+    receiveOperationRepository: ReceiveOperationRepository;
     meltOperationService: MeltOperationService;
     meltOperationRepository: MeltOperationRepository;
   } {
@@ -648,6 +667,19 @@ export class Manager {
     );
     const sendOperationRepository = repositories.sendOperationRepository;
 
+    const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
+    const receiveOperationService = new ReceiveOperationService(
+      repositories.receiveOperationRepository,
+      repositories.proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      this.mintAdapter,
+      this.eventBus,
+      receiveOperationLogger,
+    );
+    const receiveOperationRepository = repositories.receiveOperationRepository;
+
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({
       bolt11: new MeltBolt11Handler(),
@@ -688,6 +720,8 @@ export class Manager {
       paymentRequestService,
       sendOperationService,
       sendOperationRepository,
+      receiveOperationService,
+      receiveOperationRepository,
       meltOperationService,
       meltOperationRepository,
     };
@@ -713,6 +747,7 @@ export class Manager {
       this.transactionService,
       this.paymentRequestService,
       this.sendOperationService,
+      this.receiveOperationService,
       walletApiLogger,
     );
     const quotes = new QuotesApi(
