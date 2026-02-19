@@ -15,6 +15,7 @@ import type {
   PaymentRequestTransaction,
 } from '@core/services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
+import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
 
 export class WalletApi {
@@ -25,6 +26,7 @@ export class WalletApi {
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private sendOperationService: SendOperationService;
+  private receiveOperationService: ReceiveOperationService;
   private readonly logger?: Logger;
 
   constructor(
@@ -35,6 +37,7 @@ export class WalletApi {
     transactionService: TransactionService,
     paymentRequestService: PaymentRequestService,
     sendOperationService: SendOperationService,
+    receiveOperationService: ReceiveOperationService,
     logger?: Logger,
   ) {
     this.mintService = mintService;
@@ -44,11 +47,12 @@ export class WalletApi {
     this.transactionService = transactionService;
     this.paymentRequestService = paymentRequestService;
     this.sendOperationService = sendOperationService;
+    this.receiveOperationService = receiveOperationService;
     this.logger = logger;
   }
 
   async receive(token: Token | string): Promise<void> {
-    return this.transactionService.receive(token);
+    return this.receiveOperationService.receive(token);
   }
 
   /**
