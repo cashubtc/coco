@@ -671,11 +671,13 @@ export class ProofService {
    *
    * @param mintUrl - The mint URL
    * @param serializedOutputData - The serialized output data containing secrets and blinding factors
+   * @param options - Optional metadata to attach to recovered proofs
    * @returns The recovered proofs (only unspent ones)
    */
   async recoverProofsFromOutputData(
     mintUrl: string,
     serializedOutputData: SerializedOutputData,
+    options?: { createdByOperationId?: string },
   ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -738,7 +740,12 @@ export class ProofService {
     }
 
     // Save only unspent proofs
-    await this.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', unspentProofs));
+    await this.saveProofs(
+      mintUrl,
+      mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
+        createdByOperationId: options?.createdByOperationId,
+      }),
+    );
 
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,

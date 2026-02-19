@@ -1,20 +1,21 @@
-import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
-import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
   ReceiveOperation,
 } from '../../operations/receive/ReceiveOperation';
-import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import { ProofValidationError, UnknownMintError } from '../../models/Error';
-import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
-import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import type { MintAdapter } from '../../infra/MintAdapter';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
+import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
+import { ProofValidationError, UnknownMintError } from '../../models/Error';
+import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
+import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
 
 describe('ReceiveOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -25,6 +26,7 @@ describe('ReceiveOperationService', () => {
   let proofService: ProofService;
   let mintService: MintService;
   let walletService: WalletService;
+  let mintAdapter: MintAdapter;
   let eventBus: EventBus<CoreEvents>;
   let service: ReceiveOperationService;
 
@@ -52,10 +54,16 @@ describe('ReceiveOperationService', () => {
         ),
     );
 
+  const createMockMintAdapter = (): MintAdapter =>
+    ({
+      checkProofStates: mock(() => Promise.resolve([])),
+    }) as unknown as MintAdapter;
+
   beforeEach(() => {
     receiveOpRepo = new MemoryReceiveOperationRepository();
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
+    mintAdapter = createMockMintAdapter();
 
     mockWalletReceive = mock(async () => [makeProof('n1'), makeProof('n2')]);
 
@@ -98,6 +106,7 @@ describe('ReceiveOperationService', () => {
       proofService,
       mintService,
       walletService,
+      mintAdapter,
       eventBus,
     );
   });
