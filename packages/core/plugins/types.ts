@@ -12,6 +12,7 @@ import type {
   PaymentRequestService,
   ProofService,
   SeedService,
+  TokenService,
   TransactionService,
   WalletRestoreService,
   WalletService,
@@ -30,6 +31,7 @@ export interface ServiceMap {
   seedService: SeedService;
   walletRestoreService: WalletRestoreService;
   counterService: CounterService;
+  tokenService: TokenService;
   mintQuoteService: MintQuoteService;
   meltQuoteService: MeltQuoteService;
   historyService: HistoryService;

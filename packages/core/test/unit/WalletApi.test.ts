@@ -14,6 +14,8 @@ import { getEncodedToken, OutputData } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
+import { TokenService } from '../../services/TokenService';
+import type { MintAdapter } from '../../infra/MintAdapter';
 
 describe('WalletApi - Trust Enforcement', () => {
   let walletApi: WalletApi;
@@ -28,6 +30,8 @@ describe('WalletApi - Trust Enforcement', () => {
   let proofReceiveRepo: MemoryProofRepository;
   let receiveOpRepo: MemoryReceiveOperationRepository;
   let receiveOperationService: ReceiveOperationService;
+  let tokenService: TokenService;
+  let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
@@ -49,6 +53,11 @@ describe('WalletApi - Trust Enforcement', () => {
           new TextEncoder().encode(secret),
         ),
     );
+
+  const createMockMintAdapter = (): MintAdapter =>
+    ({
+      checkProofStates: mock(() => Promise.resolve([])),
+    }) as unknown as MintAdapter;
 
   beforeEach(() => {
     eventBus = new EventBus<CoreEvents>();
@@ -113,6 +122,8 @@ describe('WalletApi - Trust Enforcement', () => {
 
     receiveOpRepo = new MemoryReceiveOperationRepository();
     proofReceiveRepo = new MemoryProofRepository();
+    tokenService = new TokenService(mockMintService);
+    mintAdapter = createMockMintAdapter();
 
     receiveOperationService = new ReceiveOperationService(
       receiveOpRepo,
@@ -120,6 +131,8 @@ describe('WalletApi - Trust Enforcement', () => {
       mockProofService,
       mockMintService,
       mockWalletService,
+      mintAdapter,
+      tokenService,
       eventBus,
     );
 
@@ -132,6 +145,7 @@ describe('WalletApi - Trust Enforcement', () => {
       paymentRequestService,
       mockSendOperationService as SendOperationService,
       receiveOperationService,
+      tokenService,
     );
   });
 

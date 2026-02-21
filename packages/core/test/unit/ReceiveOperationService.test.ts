@@ -4,15 +4,18 @@ import type {
   PreparedReceiveOperation,
   ReceiveOperation,
 } from '../../operations/receive/ReceiveOperation';
+import type { CoreProof } from '../../types';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
+import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import { ProofValidationError, UnknownMintError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
+import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -27,6 +30,7 @@ describe('ReceiveOperationService', () => {
   let mintService: MintService;
   let walletService: WalletService;
   let mintAdapter: MintAdapter;
+  let tokenService: TokenService;
   let eventBus: EventBus<CoreEvents>;
   let service: ReceiveOperationService;
 
@@ -100,6 +104,8 @@ describe('ReceiveOperationService', () => {
       ensureUpdatedMint: mockEnsureUpdatedMint,
     } as unknown as MintService;
 
+    tokenService = new TokenService(mintService);
+
     service = new ReceiveOperationService(
       receiveOpRepo,
       proofRepo,
@@ -107,6 +113,7 @@ describe('ReceiveOperationService', () => {
       mintService,
       walletService,
       mintAdapter,
+      tokenService,
       eventBus,
     );
   });
@@ -185,6 +192,7 @@ describe('ReceiveOperationService', () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
+    await receiveOpRepo.create(initOp);
 
     expect(service.prepare(initOp)).rejects.toThrow(ProofValidationError);
   });
@@ -226,8 +234,9 @@ describe('ReceiveOperationService', () => {
       ...prepared,
       outputData: undefined,
     } as unknown as PreparedReceiveOperation;
+    await receiveOpRepo.update(brokenPrepared as unknown as ReceiveOperation);
 
-    expect(service.execute(brokenPrepared)).rejects.toThrow('Missing output data');
+    expect(service.execute(prepared)).rejects.toThrow('Missing output data');
   });
 
   it('finalize is idempotent on an already finalized operation', async () => {
@@ -240,6 +249,18 @@ describe('ReceiveOperationService', () => {
       updatedAt: Date.now(),
     } as ReceiveOperation;
     await receiveOpRepo.update(executing);
+
+    const outputSecrets = getOutputProofSecrets(executing as PreparedReceiveOperation);
+    const savedProofs: CoreProof[] = outputSecrets.map((secret) => ({
+      id: keysetId,
+      amount: 1,
+      secret,
+      C: `C_${secret}`,
+      mintUrl,
+      state: 'ready',
+      createdByOperationId: executing.id,
+    }));
+    await proofRepo.saveProofs(mintUrl, savedProofs);
 
     await service.finalize(executing.id);
     await service.finalize(executing.id);

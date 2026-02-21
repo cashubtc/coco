@@ -3,13 +3,16 @@ import type {
   PreparedReceiveOperation,
   ExecutingReceiveOperation,
 } from '../../operations/receive/ReceiveOperation';
+import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { MintService } from '../../services/MintService';
+import { TokenService } from '../../services/TokenService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
+import type { CoreProof } from '../../types';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
@@ -25,6 +28,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
   let mintService: MintService;
   let walletService: WalletService;
   let mintAdapter: MintAdapter;
+  let tokenService: TokenService;
   let eventBus: EventBus<CoreEvents>;
   let service: ReceiveOperationService;
 
@@ -115,6 +119,8 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
 
     mintService = {} as MintService;
 
+    tokenService = new TokenService(mintService);
+
     service = new ReceiveOperationService(
       receiveOpRepo,
       proofRepo,
@@ -122,6 +128,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       mintService,
       walletService,
       mintAdapter,
+      tokenService,
       eventBus,
     );
   });
@@ -170,6 +177,20 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) => {
       const count = Math.max(1, ys.length);
       return Array.from({ length: count }, () => ({ state: 'SPENT' }) as CashuProofState);
+    });
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
+      const outputSecrets = getOutputProofSecrets(op);
+      const recovered: CoreProof[] = outputSecrets.map((secret) => ({
+        id: keysetId,
+        amount: 10,
+        secret,
+        C: `C_${secret}`,
+        mintUrl,
+        state: 'ready',
+        createdByOperationId: op.id,
+      }));
+      await proofRepo.saveProofs(mintUrl, recovered);
+      return recovered as unknown as Proof[];
     });
 
     await service.recoverPendingOperations();
