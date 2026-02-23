@@ -20,3 +20,43 @@ export interface CoreProof extends Proof {
    */
   createdByOperationId?: string;
 }
+
+// --- Blind Auth (non-standard cdk extension) ---
+
+/** Wire format for AuthProof — subset of Proof without amount/witness. */
+export interface AuthProof {
+  id: string;
+  secret: string;
+  C: string;
+  dleq?: { e: string; s: string; r: string };
+}
+
+export interface CheckBlindAuthStateRequest {
+  auth_proofs: AuthProof[];
+}
+
+/** NUT-07 ProofState wire format (reused by auth/blind endpoints). */
+export interface BlindAuthProofState {
+  Y: string;
+  state: 'SPENT' | 'UNSPENT' | 'PENDING';
+  witness?: string;
+}
+
+export interface CheckBlindAuthStateResponse {
+  states: BlindAuthProofState[];
+}
+
+export interface SpendBlindAuthRequest {
+  auth_proof: AuthProof;
+}
+
+export interface SpendBlindAuthResponse {
+  state: BlindAuthProofState;
+}
+
+/** Strip amount/witness from a BAT Proof to produce the cdk AuthProof wire format. */
+export function toAuthProof(proof: Proof): AuthProof {
+  const ap: AuthProof = { id: proof.id, secret: proof.secret, C: proof.C };
+  if (proof.dleq) ap.dleq = { e: proof.dleq.e, s: proof.dleq.s, r: proof.dleq.r };
+  return ap;
+}

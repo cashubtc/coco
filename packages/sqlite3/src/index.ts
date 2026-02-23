@@ -9,6 +9,7 @@ import type {
   MeltQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  AuthSessionRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
@@ -23,6 +24,7 @@ import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
+import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -37,6 +39,7 @@ export class SqliteRepositories implements Repositories {
   readonly historyRepository: SqliteHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
+  readonly authSessionRepository: AuthSessionRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -51,6 +54,7 @@ export class SqliteRepositories implements Repositories {
     this.historyRepository = new SqliteHistoryRepository(this.db);
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
+    this.authSessionRepository = new SqliteAuthSessionRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -70,6 +74,7 @@ export class SqliteRepositories implements Repositories {
         historyRepository: new SqliteHistoryRepository(txDb),
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
+        authSessionRepository: new SqliteAuthSessionRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -92,6 +97,7 @@ export {
   SqliteHistoryRepository,
   SqliteSendOperationRepository,
   SqliteMeltOperationRepository,
+  SqliteAuthSessionRepository,
 };
 
 export type { Migration };

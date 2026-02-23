@@ -9,6 +9,7 @@ import type {
   MeltQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  AuthSessionRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
@@ -23,6 +24,7 @@ import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { IdbMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
+import { IdbAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -37,6 +39,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly historyRepository: IdbHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
+  readonly authSessionRepository: AuthSessionRepository;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -52,6 +55,7 @@ export class IndexedDbRepositories implements Repositories {
     this.historyRepository = new IdbHistoryRepository(this.db);
     this.sendOperationRepository = new IdbSendOperationRepository(this.db);
     this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
+    this.authSessionRepository = new IdbAuthSessionRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -79,6 +83,7 @@ export class IndexedDbRepositories implements Repositories {
         historyRepository: new IdbHistoryRepository(scopedDb),
         sendOperationRepository: new IdbSendOperationRepository(scopedDb),
         meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
+        authSessionRepository: new IdbAuthSessionRepository(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -98,4 +103,5 @@ export {
   IdbHistoryRepository,
   IdbSendOperationRepository,
   IdbMeltOperationRepository,
+  IdbAuthSessionRepository,
 };

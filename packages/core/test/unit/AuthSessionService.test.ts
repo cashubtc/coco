@@ -14,7 +14,7 @@ describe('AuthSessionService', () => {
     beforeEach(() => {
         repo = new MemoryAuthSessionRepository();
         bus = new EventBus<CoreEvents>;
-        service = new AuthSessionService(repo,undefined, bus);
+        service = new AuthSessionService(repo, bus);
     });
 
     it('saves and retrieves a valid session', async() =>{
@@ -72,4 +72,51 @@ describe('AuthSessionService', () => {
         await expect(service.getValidSession(mintUrl)).rejects.toThrow();
         expect(events).toEqual([mintUrl]);
     })
+
+    it('hasSession returns true for valid session', async () => {
+        await service.saveSession(mintUrl, {
+            access_token: 'abc',
+            expires_in: 3600,
+        });
+        expect(await service.hasSession(mintUrl)).toBe(true);
+    });
+
+    it('hasSession returns false for expired session', async () => {
+        await repo.saveSession({
+            mintUrl,
+            accessToken: 'old',
+            expiresAt: 0,
+        });
+        expect(await service.hasSession(mintUrl)).toBe(false);
+    });
+
+    it('hasSession returns false for non-existent session', async () => {
+        expect(await service.hasSession(mintUrl)).toBe(false);
+    });
+
+    it('saves and retrieves session with batPool', async () => {
+        const batPool = [
+            { id: 'key1', amount: 1, secret: 's1', C: 'c1' },
+            { id: 'key1', amount: 2, secret: 's2', C: 'c2' },
+        ] as any;
+
+        await service.saveSession(mintUrl, {
+            access_token: 'abc',
+            expires_in: 3600,
+        }, batPool);
+
+        const session = await service.getValidSession(mintUrl);
+        expect(session.batPool).toEqual(batPool);
+        expect(session.batPool).toHaveLength(2);
+    });
+
+    it('saves session without batPool (backward compat)', async () => {
+        await service.saveSession(mintUrl, {
+            access_token: 'abc',
+            expires_in: 3600,
+        });
+
+        const session = await service.getValidSession(mintUrl);
+        expect(session.batPool).toBeUndefined();
+    });
 });

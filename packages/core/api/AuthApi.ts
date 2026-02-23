@@ -5,11 +5,13 @@ import {
   type AuthProvider,
   type TokenResponse,
 } from '@cashu/cashu-ts';
+import type { Proof } from '@cashu/cashu-ts';
 import type { AuthSessionService } from '@core/services';
 import type { AuthSession } from '@core/models';
 import type { MintAdapter } from '@core/infra/MintAdapter';
 import type { Logger } from '@core/logging';
 import { normalizeMintUrl } from '@core/utils';
+import { toAuthProof } from '@core/types';
 
 /**
  * Public API for NUT-21/22 authentication.
@@ -51,10 +53,15 @@ export class AuthApi {
       onTokens: (t: TokenResponse) => {
         auth.setCAT(t.access_token);
         if (t.access_token) {
-          void this.authSessionService.saveSession(mintUrl, {
+          this.saveSessionWithPool(mintUrl, auth, {
             access_token: t.access_token,
             refresh_token: t.refresh_token,
             expires_in: t.expires_in,
+          }).catch((err) => {
+            this.logger?.error('Failed to persist session in onTokens', {
+              mintUrl,
+              cause: err instanceof Error ? err.message : String(err),
+            });
           });
         }
       },
@@ -70,14 +77,14 @@ export class AuthApi {
       /** Poll until the user authorizes; resolves with the OIDC tokens. */
       poll: async (): Promise<TokenResponse> => {
         const tokens = await device.poll();
-        await this.authSessionService.saveSession(mintUrl, {
+        await this.saveSessionWithPool(mintUrl, auth, {
           access_token: tokens.access_token!,
           refresh_token: tokens.refresh_token,
           expires_in: tokens.expires_in,
         });
         this.managers.set(mintUrl, auth);
         this.oidcClients.set(mintUrl, oidc);
-        this.mintAdapter.setAuthProvider(mintUrl, auth);
+        this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
         this.logger?.info('Auth session established', { mintUrl });
         return tokens;
       },
@@ -106,7 +113,6 @@ export class AuthApi {
     },
   ): Promise<AuthSession> {
     mintUrl = normalizeMintUrl(mintUrl);
-    const session = await this.authSessionService.saveSession(mintUrl, tokens);
 
     const auth = new AuthManager(mintUrl);
     auth.setCAT(tokens.access_token);
@@ -115,8 +121,10 @@ export class AuthApi {
       await this.attachOIDC(mintUrl, auth);
     }
 
+    const session = await this.saveSessionWithPool(mintUrl, auth, tokens);
+
     this.managers.set(mintUrl, auth);
-    this.mintAdapter.setAuthProvider(mintUrl, auth);
+    this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
     this.logger?.info('Auth login completed', { mintUrl });
     return session;
   }
@@ -144,6 +152,10 @@ export class AuthApi {
     const auth = new AuthManager(mintUrl);
     auth.setCAT(session.accessToken);
 
+    if (session.batPool?.length) {
+      auth.importPool(session.batPool, 'replace');
+    }
+
     if (session.refreshToken) {
       try {
         await this.attachOIDC(mintUrl, auth);
@@ -156,7 +168,7 @@ export class AuthApi {
     }
 
     this.managers.set(mintUrl, auth);
-    this.mintAdapter.setAuthProvider(mintUrl, auth);
+    this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
     this.logger?.info('Auth session restored', { mintUrl });
     return true;
   }
@@ -200,6 +212,33 @@ export class AuthApi {
   }
 
   // ---------------------------------------------------------------------------
+  // BAT state queries (non-standard cdk extension)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether BATs are valid and unspent without consuming them.
+   * Calls the mint's POST /v1/auth/blind/checkstate endpoint.
+   */
+  async checkBlindAuthState(mintUrl: string, proofs: Proof[]) {
+    mintUrl = normalizeMintUrl(mintUrl);
+    return this.mintAdapter.checkBlindAuthState(mintUrl, {
+      auth_proofs: proofs.map(toAuthProof),
+    });
+  }
+
+  /**
+   * Mark a single BAT as spent on the mint.
+   * Calls the mint's POST /v1/auth/blind/spend endpoint.
+   * Does not modify the local BAT pool — caller is responsible for pool management.
+   */
+  async spendBlindAuth(mintUrl: string, proof: Proof) {
+    mintUrl = normalizeMintUrl(mintUrl);
+    return this.mintAdapter.spendBlindAuth(mintUrl, {
+      auth_proof: toAuthProof(proof),
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
 
@@ -214,15 +253,64 @@ export class AuthApi {
       onTokens: (t: TokenResponse) => {
         auth.setCAT(t.access_token);
         if (t.access_token) {
-          void this.authSessionService.saveSession(mintUrl, {
+          this.saveSessionWithPool(mintUrl, auth, {
             access_token: t.access_token,
             refresh_token: t.refresh_token,
             expires_in: t.expires_in,
+          }).catch((err) => {
+            this.logger?.error('Failed to persist session in onTokens', {
+              mintUrl,
+              cause: err instanceof Error ? err.message : String(err),
+            });
           });
         }
       },
     });
     auth.attachOIDC(oidc);
     this.oidcClients.set(mintUrl, oidc);
+  }
+
+  /**
+   * Wrap an AuthManager so that every BAT consumption/topUp automatically
+   * persists the updated pool to the session store.
+   */
+  private createPersistingProvider(mintUrl: string, auth: AuthManager): AuthProvider {
+    return {
+      getBlindAuthToken: async (input) => {
+        const token = await auth.getBlindAuthToken(input);
+        this.persistPool(mintUrl, auth);
+        return token;
+      },
+      ensure: async (minTokens: number) => {
+        await auth.ensure?.(minTokens);
+        this.persistPool(mintUrl, auth);
+      },
+      getCAT: () => auth.getCAT(),
+      setCAT: (cat) => auth.setCAT(cat),
+      ensureCAT: (minValiditySec) => auth.ensureCAT?.(minValiditySec),
+    };
+  }
+
+  private persistPool(mintUrl: string, auth: AuthManager): void {
+    const pool = auth.exportPool();
+    this.authSessionService.updateBatPool(mintUrl, pool.length > 0 ? pool : undefined).catch((err) => {
+      this.logger?.error('Failed to persist BAT pool after change', {
+        mintUrl,
+        cause: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  private async saveSessionWithPool(
+    mintUrl: string,
+    auth: AuthManager,
+    tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string },
+  ): Promise<AuthSession> {
+    const batPool = auth.exportPool();
+    return this.authSessionService.saveSession(
+      mintUrl,
+      tokens,
+      batPool.length > 0 ? batPool : undefined,
+    );
   }
 }

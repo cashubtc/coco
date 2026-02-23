@@ -32,6 +32,8 @@ function makeMocks() {
   const mintAdapter = {
     setAuthProvider: mock(() => {}),
     clearAuthProvider: mock(() => {}),
+    checkBlindAuthState: mock(async () => ({ states: [] })),
+    spendBlindAuth: mock(async () => ({ state: { Y: 'y1', state: 'SPENT' } })),
   } as unknown as MintAdapter;
 
   return { authSessionService, mintAdapter };
@@ -73,6 +75,16 @@ describe('AuthApi', () => {
       expect(provider).toBeDefined();
       expect(provider!.getCAT()).toBe('no-refresh');
       expect(mintAdapter.setAuthProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls saveSession with batPool from exportPool', async () => {
+      await api.login(mintUrl, { access_token: 'cat-token-abc' });
+
+      // At login time the pool is empty, so batPool should be undefined
+      const calls = (authSessionService.saveSession as ReturnType<typeof mock>).mock.calls;
+      expect(calls).toHaveLength(1);
+      // 3rd arg is batPool — empty pool yields undefined
+      expect(calls[0][2]).toBeUndefined();
     });
   });
 
@@ -132,6 +144,37 @@ describe('AuthApi', () => {
       expect(provider).toBeDefined();
       expect(provider!.getCAT()).toBe('cat-token-abc');
     });
+
+    it('imports batPool into AuthManager when session has batPool', async () => {
+      const fakeBatPool = [
+        { id: 'key1', amount: 1, secret: 's1', C: 'c1' },
+      ] as any;
+      const sessionWithPool: AuthSession = {
+        ...fakeSession,
+        batPool: fakeBatPool,
+      };
+      const mocks = makeMocks();
+      (mocks.authSessionService.getValidSession as ReturnType<typeof mock>).mockImplementation(
+        async () => sessionWithPool,
+      );
+      const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
+
+      const result = await testApi.restore(mintUrl);
+      expect(result).toBe(true);
+
+      const provider = testApi.getAuthProvider(mintUrl);
+      expect(provider).toBeDefined();
+      expect(provider!.poolSize).toBe(1);
+    });
+
+    it('handles restore gracefully when session has no batPool', async () => {
+      const result = await api.restore(mintUrl);
+      expect(result).toBe(true);
+
+      const provider = api.getAuthProvider(mintUrl);
+      expect(provider).toBeDefined();
+      expect(provider!.poolSize).toBe(0);
+    });
   });
 
   describe('getAuthProvider', () => {
@@ -145,6 +188,64 @@ describe('AuthApi', () => {
       expect(provider).toBeDefined();
       expect(typeof provider!.getCAT).toBe('function');
       expect(typeof provider!.getBlindAuthToken).toBe('function');
+    });
+  });
+
+  describe('checkBlindAuthState', () => {
+    it('converts Proof[] to AuthProof[] and delegates to mintAdapter', async () => {
+      const proofs = [
+        { id: 'k1', amount: 1, secret: 's1', C: 'C1', dleq: { e: 'e1', s: 's1', r: 'r1' } },
+        { id: 'k2', amount: 1, secret: 's2', C: 'C2' },
+      ] as any;
+
+      await api.checkBlindAuthState(mintUrl, proofs);
+
+      const calls = (mintAdapter.checkBlindAuthState as ReturnType<typeof mock>).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe(normalizedUrl);
+      const payload = calls[0][1];
+      // dleq should have e, s, r (amount/witness stripped)
+      expect(payload).toEqual({
+        auth_proofs: [
+          { id: 'k1', secret: 's1', C: 'C1', dleq: { e: 'e1', s: 's1', r: 'r1' } },
+          { id: 'k2', secret: 's2', C: 'C2' },
+        ],
+      });
+    });
+
+    it('normalizes mintUrl before calling mintAdapter', async () => {
+      await api.checkBlindAuthState('https://mint.test/', []);
+
+      const calls = (mintAdapter.checkBlindAuthState as ReturnType<typeof mock>).mock.calls;
+      expect(calls[0][0]).toBe(normalizedUrl);
+    });
+  });
+
+  describe('spendBlindAuth', () => {
+    it('converts a single Proof to AuthProof and delegates to mintAdapter', async () => {
+      const proof = { id: 'k1', amount: 1, secret: 's1', C: 'C1' } as any;
+
+      const result = await api.spendBlindAuth(mintUrl, proof);
+
+      const calls = (mintAdapter.spendBlindAuth as ReturnType<typeof mock>).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe(normalizedUrl);
+      expect(calls[0][1]).toEqual({
+        auth_proof: { id: 'k1', secret: 's1', C: 'C1' },
+      });
+      expect(result).toEqual({ state: { Y: 'y1', state: 'SPENT' } });
+    });
+
+    it('propagates errors from mintAdapter', async () => {
+      const mocks = makeMocks();
+      (mocks.mintAdapter.spendBlindAuth as ReturnType<typeof mock>).mockImplementation(
+        async () => { throw new Error('HttpResponseError: 400'); },
+      );
+      const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
+
+      await expect(
+        testApi.spendBlindAuth(mintUrl, { id: 'k1', amount: 1, secret: 's1', C: 'C1' } as any),
+      ).rejects.toThrow('HttpResponseError: 400');
     });
   });
 });

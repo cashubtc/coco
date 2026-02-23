@@ -8,7 +8,13 @@ import {
   type GetKeysetsResponse,
   type AuthProvider,
 } from '@cashu/cashu-ts';
-import type { MintInfo } from '../types';
+import type {
+  MintInfo,
+  CheckBlindAuthStateRequest,
+  CheckBlindAuthStateResponse,
+  SpendBlindAuthRequest,
+  SpendBlindAuthResponse,
+} from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 
 /**
@@ -30,6 +36,11 @@ export class MintAdapter {
   setAuthProvider(mintUrl: string, provider: AuthProvider): void {
     this.authProviders.set(mintUrl, provider);
     delete this.cashuMints[mintUrl];
+  }
+
+  /** Get the AuthProvider for a mint (if registered). */
+  getAuthProvider(mintUrl: string): AuthProvider | undefined {
+    return this.authProviders.get(mintUrl);
   }
 
   /** Remove the AuthProvider for a mint. Invalidates the cached Mint instance. */
@@ -112,5 +123,31 @@ export class MintAdapter {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
     return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+  }
+
+  // ---- Non-standard cdk endpoints (not in cashu-ts Mint) ----
+
+  async checkBlindAuthState(
+    mintUrl: string,
+    payload: CheckBlindAuthStateRequest,
+  ): Promise<CheckBlindAuthStateResponse> {
+    const requestFn = this.requestProvider.getRequestFn(mintUrl);
+    return requestFn<CheckBlindAuthStateResponse>({
+      endpoint: `${mintUrl}/v1/auth/blind/checkstate`,
+      requestBody: payload as unknown as Record<string, unknown>,
+      method: 'POST',
+    });
+  }
+
+  async spendBlindAuth(
+    mintUrl: string,
+    payload: SpendBlindAuthRequest,
+  ): Promise<SpendBlindAuthResponse> {
+    const requestFn = this.requestProvider.getRequestFn(mintUrl);
+    return requestFn<SpendBlindAuthResponse>({
+      endpoint: `${mintUrl}/v1/auth/blind/spend`,
+      requestBody: payload as unknown as Record<string, unknown>,
+      method: 'POST',
+    });
   }
 }

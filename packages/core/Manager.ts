@@ -265,6 +265,14 @@ export class Manager {
       this.subscriptions.closeMint(mintUrl);
     });
 
+    // Invalidate wallet cache when auth state changes so next getWallet() picks up the new authProvider
+    this.eventBus.on('auth-session:updated', ({ mintUrl }) => {
+      this.walletService.clearCache(mintUrl);
+    });
+    this.eventBus.on('auth-session:deleted', ({ mintUrl }) => {
+      this.walletService.clearCache(mintUrl);
+    });
+
     // Initialize plugins asynchronously to keep constructor sync
     const services: ServiceMap = {
       mintService: this.mintService,
@@ -583,6 +591,7 @@ export class Manager {
       seedService,
       this.mintRequestProvider,
       walletLogger,
+      (mintUrl: string) => this.mintAdapter.getAuthProvider(mintUrl),
     );
     const counterService = new CounterService(
       repositories.counterRepository,
@@ -681,8 +690,8 @@ export class Manager {
     const authSessionLogger = this.getChildLogger('AuthSessionService');
     const authSessionService = new AuthSessionService(
       repositories.authSessionRepository,
-      authSessionLogger,
       this.eventBus,
+      authSessionLogger,
     );
 
     return {
