@@ -144,7 +144,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect(stored).toBe(null);
   });
 
-  it('rolls back prepared operations', async () => {
+  it('leaves prepared operations unchanged for manual rollback', async () => {
     const proofs = [makeProof('p1')];
     const op = makePreparedOp('prepared-op', proofs);
     await receiveOpRepo.create(op);
@@ -152,7 +152,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     await service.recoverPendingOperations();
 
     const stored = await receiveOpRepo.getById(op.id);
-    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.state).toBe('prepared');
   });
 
   it('retries executing operations when all inputs are unspent', async () => {

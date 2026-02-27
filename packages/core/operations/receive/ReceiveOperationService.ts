@@ -362,7 +362,7 @@ export class ReceiveOperationService {
 
   /**
    * Recover pending operations on startup.
-   * Handles init/prepared cleanup and executing recovery.
+   * Handles init cleanup, logs stale prepared operations, and recovers executing operations.
    */
   async recoverPendingOperations(): Promise<void> {
     if (this.recoveryLock) {
@@ -376,7 +376,6 @@ export class ReceiveOperationService {
 
     try {
       let initCount = 0;
-      let preparedCount = 0;
       let executingCount = 0;
 
       const initOps = await this.receiveOperationRepository.getByState('init');
@@ -409,33 +408,9 @@ export class ReceiveOperationService {
 
       const preparedOps = await this.receiveOperationRepository.getByState('prepared');
       for (const op of preparedOps) {
-        let didRollback = false;
-        try {
-          const releaseLock = await this.acquireOperationLock(op.id);
-          try {
-            const current = await this.receiveOperationRepository.getById(op.id);
-            if (current && current.state === 'prepared') {
-              await this.markAsRolledBack(
-                current as PreparedReceiveOperation,
-                'Recovered: prepared operation never executed',
-              );
-              didRollback = true;
-            }
-          } finally {
-            releaseLock();
-          }
-        } catch (e) {
-          if (e instanceof OperationInProgressError) {
-            this.logger?.debug('Prepared receive operation is in progress, skipping recovery', {
-              operationId: op.id,
-            });
-            continue;
-          }
-          throw e;
-        }
-        if (didRollback) {
-          preparedCount++;
-        }
+        this.logger?.warn('Found stale prepared receive operation, user can rollback manually', {
+          operationId: op.id,
+        });
       }
 
       const executingOps = await this.receiveOperationRepository.getByState('executing');
@@ -466,7 +441,6 @@ export class ReceiveOperationService {
 
       this.logger?.info('Receive recovery completed', {
         initOperations: initCount,
-        preparedOperations: preparedCount,
         executingOperations: executingCount,
       });
     } finally {
