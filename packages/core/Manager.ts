@@ -26,6 +26,7 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
+import { MintScopedLock } from './operations/MintScopedLock';
 import {
   SubscriptionManager,
   type WebSocketFactory,
@@ -664,6 +665,8 @@ export class Manager {
       transactionLogger,
     );
 
+    const mintScopedLock = new MintScopedLock();
+
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendOperationService = new SendOperationService(
       repositories.sendOperationRepository,
@@ -673,6 +676,7 @@ export class Manager {
       walletService,
       this.eventBus,
       sendOperationLogger,
+      mintScopedLock,
     );
     const sendOperationRepository = repositories.sendOperationRepository;
 
@@ -706,6 +710,7 @@ export class Manager {
       this.mintAdapter,
       this.eventBus,
       meltOperationLogger,
+      mintScopedLock,
     );
     const meltOperationRepository = repositories.meltOperationRepository;
 

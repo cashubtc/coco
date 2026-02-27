@@ -429,6 +429,7 @@ export class ProofService {
   /**
    * Select proofs to send for a given amount.
    * Uses the wallet's proof selection algorithm to choose optimal denominations.
+   * Only available proofs are considered (ready and not reserved by another operation).
    *
    * @param mintUrl - The mint URL to select proofs from
    * @param amount - The amount to send
@@ -441,7 +442,7 @@ export class ProofService {
     amount: number,
     includeFees: boolean = true,
   ): Promise<Proof[]> {
-    const proofs = await this.getReadyProofs(mintUrl);
+    const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');

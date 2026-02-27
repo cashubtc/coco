@@ -31,7 +31,9 @@ import {
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
 } from '../../utils';
-import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
+import { UnknownMintError, ProofValidationError } from '../../models/Error';
+import { MintScopedLock } from '../MintScopedLock';
+import { OperationIdLock } from '../OperationIdLock';
 
 /**
  * Service that manages send operations as sagas.
@@ -48,10 +50,12 @@ export class SendOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  /** In-memory locks to prevent concurrent operations on the same operation ID */
-  private readonly operationLocks: Map<string, Promise<void>> = new Map();
+  /** In-memory lock to prevent concurrent operations on the same operation ID */
+  private readonly operationIdLock = new OperationIdLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
+  /** In-memory lock to serialize proof selection/reservation per mint */
+  private readonly mintScopedLock: MintScopedLock;
 
   constructor(
     sendOperationRepository: SendOperationRepository,
@@ -61,6 +65,7 @@ export class SendOperationService {
     walletService: WalletService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
+    mintScopedLock?: MintScopedLock,
   ) {
     this.sendOperationRepository = sendOperationRepository;
     this.proofRepository = proofRepository;
@@ -69,6 +74,7 @@ export class SendOperationService {
     this.walletService = walletService;
     this.eventBus = eventBus;
     this.logger = logger;
+    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
   }
 
   /**
@@ -77,29 +83,14 @@ export class SendOperationService {
    * Throws if the operation is already locked.
    */
   private async acquireOperationLock(operationId: string): Promise<() => void> {
-    const existingLock = this.operationLocks.get(operationId);
-    if (existingLock) {
-      throw new OperationInProgressError(operationId);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-
-    this.operationLocks.set(operationId, lockPromise);
-
-    return () => {
-      this.operationLocks.delete(operationId);
-      releaseLock!();
-    };
+    return this.operationIdLock.acquire(operationId);
   }
 
   /**
    * Check if an operation is currently locked.
    */
   isOperationLocked(operationId: string): boolean {
-    return this.operationLocks.has(operationId);
+    return this.operationIdLock.isLocked(operationId);
   }
 
   /**
@@ -141,6 +132,7 @@ export class SendOperationService {
    */
   async prepare(operation: InitSendOperation): Promise<PreparedSendOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
+    const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
     try {
       return await this.prepareInternal(operation);
     } catch (e) {
@@ -148,6 +140,7 @@ export class SendOperationService {
       await this.tryRecoverInitOperation(operation);
       throw e;
     } finally {
+      releaseMintLock();
       releaseLock();
     }
   }
