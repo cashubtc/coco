@@ -241,6 +241,48 @@ describe('MeltOperationService', () => {
       releasePrepare!();
       await first;
     });
+
+    it('serializes prepare calls for the same mint', async () => {
+      const firstOp = makeInitOp('op-12');
+      const secondOp = makeInitOp('op-13');
+      await meltOperationRepository.create(firstOp);
+      await meltOperationRepository.create(secondOp);
+
+      let releaseFirstPrepare: () => void;
+      const firstPrepareBlocked = new Promise<void>((resolve) => {
+        releaseFirstPrepare = resolve;
+      });
+      (handler.prepare as Mock<any>).mockImplementation(async ({ operation }: { operation: any }) => {
+        if (operation.id === 'op-12') {
+          await firstPrepareBlocked;
+        }
+        return makePreparedOp(operation.id, {
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          methodData: operation.methodData,
+        });
+      });
+
+      const first = service.prepare('op-12');
+      await Promise.resolve();
+
+      let secondResolved = false;
+      const second = service.prepare('op-13').then((operation) => {
+        secondResolved = true;
+        return operation;
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secondResolved).toBe(false);
+
+      releaseFirstPrepare!();
+
+      const [firstPrepared, secondPrepared] = await Promise.all([first, second]);
+      expect(firstPrepared.state).toBe('prepared');
+      expect(secondPrepared.state).toBe('prepared');
+      expect(secondResolved).toBe(true);
+    });
   });
 
   describe('execute', () => {

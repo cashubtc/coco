@@ -38,6 +38,7 @@ import type { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
+import { OperationIdLock } from '../OperationIdLock';
 
 /**
  * Service that manages receive operations as sagas.
@@ -57,8 +58,8 @@ export class ReceiveOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  /** In-memory locks to prevent concurrent operations on the same operation ID */
-  private readonly operationLocks: Map<string, Promise<void>> = new Map();
+  /** In-memory lock to prevent concurrent operations on the same operation ID */
+  private readonly operationIdLock = new OperationIdLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
 
@@ -90,27 +91,12 @@ export class ReceiveOperationService {
    * Throws if the operation is already locked.
    */
   private async acquireOperationLock(operationId: string): Promise<() => void> {
-    const existingLock = this.operationLocks.get(operationId);
-    if (existingLock) {
-      throw new OperationInProgressError(operationId);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-
-    this.operationLocks.set(operationId, lockPromise);
-
-    return () => {
-      this.operationLocks.delete(operationId);
-      releaseLock!();
-    };
+    return this.operationIdLock.acquire(operationId);
   }
 
   /** Check if an operation is currently locked (for concurrency control). */
   isOperationLocked(operationId: string): boolean {
-    return this.operationLocks.has(operationId);
+    return this.operationIdLock.isLocked(operationId);
   }
 
   /** Check if a recovery sweep is in progress. */

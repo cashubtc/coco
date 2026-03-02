@@ -511,6 +511,27 @@ describe('ProofService', () => {
       await expect(service.selectProofsToSend(mintUrl, 100)).rejects.toThrow(ProofValidationError);
     });
 
+    it('ignores proofs that are already reserved by another operation', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'available-1', id: 'k1', amount: 50 }),
+        makeProof({ secret: 'reserved-1', id: 'k1', amount: 100, usedByOperationId: 'op-1' }),
+      ]);
+
+      const selected = await service.selectProofsToSend(mintUrl, 40);
+      expect(selected.map((p) => p.secret)).toEqual(['available-1']);
+    });
+
     it('delegates to wallet.selectProofsToSend and returns selected proofs', async () => {
       // Override wallet selector to return a specific subset
       walletService = {

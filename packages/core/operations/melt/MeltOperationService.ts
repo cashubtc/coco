@@ -22,10 +22,11 @@ import { generateSubId } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
-  OperationInProgressError,
 } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers';
+import { MintScopedLock } from '../MintScopedLock';
+import { OperationIdLock } from '../OperationIdLock';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -42,8 +43,9 @@ export class MeltOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  private readonly operationLocks: Map<string, Promise<void>> = new Map();
+  private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
+  private readonly mintScopedLock: MintScopedLock;
 
   constructor(
     handlerProvider: MeltHandlerProvider,
@@ -55,6 +57,7 @@ export class MeltOperationService {
     mintAdapter: MintAdapter,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
+    mintScopedLock?: MintScopedLock,
   ) {
     this.handlerProvider = handlerProvider;
     this.meltOperationRepository = meltOperationRepository;
@@ -65,6 +68,7 @@ export class MeltOperationService {
     this.mintAdapter = mintAdapter;
     this.eventBus = eventBus;
     this.logger = logger;
+    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
   }
 
   private buildDeps() {
@@ -80,26 +84,11 @@ export class MeltOperationService {
   }
 
   private async acquireOperationLock(operationId: string): Promise<() => void> {
-    const existingLock = this.operationLocks.get(operationId);
-    if (existingLock) {
-      throw new OperationInProgressError(operationId);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-
-    this.operationLocks.set(operationId, lockPromise);
-
-    return () => {
-      this.operationLocks.delete(operationId);
-      releaseLock!();
-    };
+    return this.operationIdLock.acquire(operationId);
   }
 
   isOperationLocked(operationId: string): boolean {
-    return this.operationLocks.has(operationId);
+    return this.operationIdLock.isLocked(operationId);
   }
 
   isRecoveryInProgress(): boolean {
@@ -155,6 +144,7 @@ export class MeltOperationService {
       }
 
       const initOp = operation as InitMeltOperation;
+      const releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
 
       try {
         const handler = this.handlerProvider.get(initOp.method);
@@ -188,6 +178,8 @@ export class MeltOperationService {
         // Attempt to clean up the init operation before re-throwing
         await this.tryRecoverInitOperation(initOp);
         throw e;
+      } finally {
+        releaseMintLock();
       }
     } finally {
       releaseLock();
