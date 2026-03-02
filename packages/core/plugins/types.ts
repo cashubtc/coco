@@ -12,12 +12,14 @@ import type {
   PaymentRequestService,
   ProofService,
   SeedService,
+  TokenService,
   TransactionService,
   WalletRestoreService,
   WalletService,
 } from '../services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { MeltOperationService } from '../operations/melt/MeltOperationService';
+import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 
 export type ServiceKey = keyof ServiceMap;
 
@@ -29,11 +31,13 @@ export interface ServiceMap {
   seedService: SeedService;
   walletRestoreService: WalletRestoreService;
   counterService: CounterService;
+  tokenService: TokenService;
   mintQuoteService: MintQuoteService;
   meltQuoteService: MeltQuoteService;
   historyService: HistoryService;
   transactionService: TransactionService;
   sendOperationService: SendOperationService;
+  receiveOperationService: ReceiveOperationService;
   meltOperationService: MeltOperationService;
   paymentRequestService: PaymentRequestService;
   subscriptions: SubscriptionManager;

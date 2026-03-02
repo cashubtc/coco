@@ -3,6 +3,7 @@ import type {
   MintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  ReceiveOperationRepository,
 } from './repositories';
 import {
   CounterService,
@@ -20,9 +21,11 @@ import {
   KeyRingService,
   TransactionService,
   PaymentRequestService,
+  TokenService,
 } from './services';
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
+import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import {
   SubscriptionManager,
   type WebSocketFactory,
@@ -34,7 +37,7 @@ import {
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi } from './api';
+import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi, ReceiveApi } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
@@ -153,6 +156,9 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   // Recover any pending melt operations from previous session
   await coco.recoverPendingMeltOperations();
 
+  // Recover any pending receive operations from previous session
+  await coco.recoverPendingReceiveOperations();
+
   return coco;
 }
 
@@ -164,6 +170,7 @@ export class Manager {
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
   readonly send: SendApi;
+  readonly receive: ReceiveApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
@@ -182,12 +189,15 @@ export class Manager {
   private historyService: HistoryService;
   private seedService: SeedService;
   private counterService: CounterService;
+  private tokenService: TokenService;
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private sendOperationService: SendOperationService;
   private sendOperationRepository: SendOperationRepository;
   private meltOperationService: MeltOperationService;
   private meltOperationRepository: MeltOperationRepository;
+  private receiveOperationService: ReceiveOperationService;
+  private receiveOperationRepository: ReceiveOperationRepository;
   private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
@@ -238,7 +248,10 @@ export class Manager {
     this.transactionService = core.transactionService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
+    this.tokenService = core.tokenService;
     this.sendOperationRepository = core.sendOperationRepository;
+    this.receiveOperationService = core.receiveOperationService;
+    this.receiveOperationRepository = core.receiveOperationRepository;
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
     this.proofRepository = repositories.proofRepository;
@@ -250,6 +263,7 @@ export class Manager {
     this.subscription = apis.subscription;
     this.history = apis.history;
     this.send = apis.send;
+    this.receive = apis.receive;
 
     // Point ext to pluginHost's extensions storage
     this.ext = this.pluginHost.getExtensions() as PluginExtensions;
@@ -274,8 +288,10 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      receiveOperationService: this.receiveOperationService,
       paymentRequestService: this.paymentRequestService,
       meltOperationService: this.meltOperationService,
+      tokenService: this.tokenService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -327,6 +343,8 @@ export class Manager {
       historyService: this.historyService,
       transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
+      receiveOperationService: this.receiveOperationService,
+      tokenService: this.tokenService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -400,7 +418,9 @@ export class Manager {
     await this.mintQuoteProcessor.waitForCompletion();
   }
 
-  async enableProofStateWatcher(options?: { watchExistingInflightOnStart?: boolean }): Promise<void> {
+  async enableProofStateWatcher(options?: {
+    watchExistingInflightOnStart?: boolean;
+  }): Promise<void> {
     if (this.proofStateWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'ProofStateWatcherService' })
@@ -430,6 +450,10 @@ export class Manager {
 
   async recoverPendingMeltOperations(): Promise<void> {
     await this.meltOperationService.recoverPendingOperations();
+  }
+
+  async recoverPendingReceiveOperations(): Promise<void> {
+    await this.receiveOperationService.recoverPendingOperations();
   }
 
   async pauseSubscriptions(): Promise<void> {
@@ -468,10 +492,10 @@ export class Manager {
       await this.enableMintQuoteWatcher(mintQuoteWatcherConfig);
     }
 
-  const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
-  if (!proofStateWatcherConfig?.disabled) {
-    await this.enableProofStateWatcher(proofStateWatcherConfig);
-  }
+    const proofStateWatcherConfig = this.originalWatcherConfig?.proofStateWatcher;
+    if (!proofStateWatcherConfig?.disabled) {
+      await this.enableProofStateWatcher(proofStateWatcherConfig);
+    }
 
     // Re-enable processor based on original configuration (idempotent)
     const mintQuoteProcessorConfig = this.originalProcessorConfig?.mintQuoteProcessor;
@@ -509,7 +533,7 @@ export class Manager {
     const hasGlobalWs = typeof (globalThis as any).WebSocket !== 'undefined';
     const defaultFactory: WebSocketFactory | undefined = hasGlobalWs
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (url: string) => new (globalThis as any).WebSocket(url)
+        (url: string) => new (globalThis as any).WebSocket(url)
       : undefined;
     const wsFactoryToUse = webSocketFactory ?? defaultFactory;
     const options = {
@@ -537,6 +561,7 @@ export class Manager {
     walletService: WalletService;
     counterService: CounterService;
     proofService: ProofService;
+    tokenService: TokenService;
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
     mintQuoteService: MintQuoteService;
@@ -547,6 +572,8 @@ export class Manager {
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
     sendOperationRepository: SendOperationRepository;
+    receiveOperationService: ReceiveOperationService;
+    receiveOperationRepository: ReceiveOperationRepository;
     meltOperationService: MeltOperationService;
     meltOperationRepository: MeltOperationRepository;
   } {
@@ -559,6 +586,7 @@ export class Manager {
     const keyRingLogger = this.getChildLogger('KeyRingService');
     const meltQuoteLogger = this.getChildLogger('MeltQuoteService');
     const historyLogger = this.getChildLogger('HistoryService');
+    const tokenLogger = this.getChildLogger('TokenService');
     const mintService = new MintService(
       repositories.mintRepository,
       repositories.keysetRepository,
@@ -648,6 +676,22 @@ export class Manager {
     );
     const sendOperationRepository = repositories.sendOperationRepository;
 
+    const tokenService = new TokenService(mintService, tokenLogger);
+
+    const receiveOperationLogger = this.getChildLogger('ReceiveOperationService');
+    const receiveOperationService = new ReceiveOperationService(
+      repositories.receiveOperationRepository,
+      repositories.proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      this.mintAdapter,
+      tokenService,
+      this.eventBus,
+      receiveOperationLogger,
+    );
+    const receiveOperationRepository = repositories.receiveOperationRepository;
+
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({
       bolt11: new MeltBolt11Handler(),
@@ -678,6 +722,7 @@ export class Manager {
       walletService,
       counterService,
       proofService,
+      tokenService,
       walletRestoreService,
       keyRingService,
       mintQuoteService,
@@ -688,6 +733,8 @@ export class Manager {
       paymentRequestService,
       sendOperationService,
       sendOperationRepository,
+      receiveOperationService,
+      receiveOperationRepository,
       meltOperationService,
       meltOperationRepository,
     };
@@ -701,6 +748,7 @@ export class Manager {
     subscription: SubscriptionApi;
     history: HistoryApi;
     send: SendApi;
+    receive: ReceiveApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -713,6 +761,8 @@ export class Manager {
       this.transactionService,
       this.paymentRequestService,
       this.sendOperationService,
+      this.receiveOperationService,
+      this.tokenService,
       walletApiLogger,
     );
     const quotes = new QuotesApi(
@@ -724,6 +774,7 @@ export class Manager {
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
     const send = new SendApi(this.sendOperationService);
-    return { mint, wallet, quotes, keyring, subscription, history, send };
+    const receive = new ReceiveApi(this.receiveOperationService);
+    return { mint, wallet, quotes, keyring, subscription, history, send, receive };
   }
 }

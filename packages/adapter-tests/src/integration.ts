@@ -395,6 +395,28 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(amountAfterReceive).toBeGreaterThan(amountAfterSend);
       });
 
+      it('should orchestrate receive operation service and finalize operation', async () => {
+        const sendAmount = 30;
+        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
+        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+
+        const balances = await mgr!.wallet.getBalances();
+        const preBalance = balances[mintUrl]!;
+
+        const prepOp = await mgr!.receive.prepareReceive(token);
+
+        const op = await mgr!.receive.executeReceive(prepOp.id);
+
+        const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+        expect(op.state).toBe('finalized');
+
+        const balances2 = await mgr!.wallet.getBalances();
+        expect(balances2[mintUrl]).toBeGreaterThan(preBalance);
+
+        expect(op.amount).toBe(tokenAmount);
+        expect(op.outputData).toBeDefined();
+      });
+
       it('should receive tokens from encoded string', async () => {
         const sendAmount = 25;
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);

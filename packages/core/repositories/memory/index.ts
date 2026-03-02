@@ -9,3 +9,4 @@ export * from './MemoryMeltQuoteRepository';
 export * from './MemoryHistoryRepository';
 export * from './MemorySendOperationRepository';
 export * from './MemoryMeltOperationRepository';
+export * from './MemoryReceiveOperationRepository';

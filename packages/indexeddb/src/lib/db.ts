@@ -183,6 +183,19 @@ export interface SendOperationRow {
   outputDataJson?: string | null;
 }
 
+export interface ReceiveOperationRow {
+  id: string;
+  mintUrl: string;
+  amount: number;
+  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  fee?: number | null;
+  inputProofsJson?: string | null;
+  outputDataJson?: string | null;
+}
+
 export interface MeltOperationRow {
   id: string;
   mintUrl: string;

@@ -11,3 +11,4 @@ export * from './MeltQuoteService';
 export * from './HistoryService';
 export * from './TransactionService';
 export * from './PaymentRequestService';
+export * from './TokenService';

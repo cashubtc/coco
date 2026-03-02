@@ -13,8 +13,10 @@ import type {
   PaymentRequestService,
   ParsedPaymentRequest,
   PaymentRequestTransaction,
+  TokenService,
 } from '@core/services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
+import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
 
 export class WalletApi {
@@ -25,6 +27,8 @@ export class WalletApi {
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private sendOperationService: SendOperationService;
+  private receiveOperationService: ReceiveOperationService;
+  private readonly tokenService: TokenService;
   private readonly logger?: Logger;
 
   constructor(
@@ -35,6 +39,8 @@ export class WalletApi {
     transactionService: TransactionService,
     paymentRequestService: PaymentRequestService,
     sendOperationService: SendOperationService,
+    receiveOperationService: ReceiveOperationService,
+    tokenService: TokenService,
     logger?: Logger,
   ) {
     this.mintService = mintService;
@@ -44,11 +50,19 @@ export class WalletApi {
     this.transactionService = transactionService;
     this.paymentRequestService = paymentRequestService;
     this.sendOperationService = sendOperationService;
+    this.receiveOperationService = receiveOperationService;
+    this.tokenService = tokenService;
     this.logger = logger;
   }
 
+  /**
+   * Receive a token in one shot.
+   *
+   * For a multi-step receive flow (review fees/amounts before committing),
+   * use ReceiveApi.prepareReceive() and ReceiveApi.executeReceive().
+   */
   async receive(token: Token | string): Promise<void> {
-    return this.transactionService.receive(token);
+    return this.receiveOperationService.receive(token);
   }
 
   /**
@@ -177,7 +191,22 @@ export class WalletApi {
     this.logger?.info('Restore completed successfully', { mintUrl });
   }
 
-  async decodeToken(tokenString: string): Promise<Token> {
+  /**
+   * Decode a token string into a Token object.
+   * If mintUrl is provided, decodes token with mint keysets (supports all token formats).
+   * If no mintUrl, attempts to decode using wallet's known keysets (may fail for some token formats).
+   *
+   * Note: For reliable decoding of all token formats, provide a mintUrl.
+   *
+   * @param tokenString - The encoded token string to decode
+   * @param mintUrl - Optional mint URL to use for decoding (provides access to mint keysets for decoding)
+   * @returns The decoded Token or array of Proofs
+   */
+  async decodeToken(tokenString: string, mintUrl?: string): Promise<Token> {
+    if (mintUrl) {
+      return await this.tokenService.decodeToken(tokenString, mintUrl);
+    }
+
     const metadata = getTokenMetadata(tokenString);
     const wallet = await this.walletService.getWallet(metadata.mint);
     return wallet.decodeToken(tokenString);

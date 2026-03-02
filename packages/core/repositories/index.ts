@@ -15,6 +15,10 @@ import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
+import type {
+  ReceiveOperation,
+  ReceiveOperationState,
+} from '../operations/receive/ReceiveOperation';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
@@ -181,6 +185,29 @@ export interface MeltOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface ReceiveOperationRepository {
+  /** Create a new receive operation */
+  create(operation: ReceiveOperation): Promise<void>;
+
+  /** Update an existing receive operation */
+  update(operation: ReceiveOperation): Promise<void>;
+
+  /** Get a receive operation by ID */
+  getById(id: string): Promise<ReceiveOperation | null>;
+
+  /** Get all receive operations in a specific state */
+  getByState(state: ReceiveOperationState): Promise<ReceiveOperation[]>;
+
+  /** Get all pending operations (state in ['executing']) */
+  getPending(): Promise<ReceiveOperation[]>;
+
+  /** Get all operations for a specific mint */
+  getByMintUrl(mintUrl: string): Promise<ReceiveOperation[]>;
+
+  /** Delete a receive operation */
+  delete(id: string): Promise<void>;
+}
+
 interface RepositoriesBase {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
@@ -192,6 +219,7 @@ interface RepositoriesBase {
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
+  receiveOperationRepository: ReceiveOperationRepository;
 }
 
 export interface Repositories extends RepositoriesBase {
