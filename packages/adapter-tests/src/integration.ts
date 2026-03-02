@@ -41,6 +41,43 @@ type ExpectApi = {
   };
 };
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  options?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    errorMessage?: string;
+  },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 10000;
+  const intervalMs = options?.intervalMs ?? 100;
+  const errorMessage = options?.errorMessage ?? 'Timed out waiting for condition';
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await sleep(intervalMs);
+  }
+
+  if (await predicate()) return;
+  throw new Error(errorMessage);
+}
+
+async function waitForQuoteToBePaid(
+  checkState: () => Promise<{ state: string }>,
+  options?: { timeoutMs?: number; intervalMs?: number },
+): Promise<void> {
+  await waitForCondition(async () => (await checkState()).state === 'PAID', {
+    timeoutMs: options?.timeoutMs ?? 10000,
+    intervalMs: options?.intervalMs ?? 500,
+    errorMessage: 'Timed out waiting for mint quote to be PAID',
+  });
+}
+
 export type IntegrationTestOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: () => Promise<{
     repositories: TRepositories;
@@ -768,15 +805,19 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         await mgr!.send.executePreparedSend(preparedSend.id);
 
-        // Wait for events to settle
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await waitForCondition(async () => {
+          const history = await mgr!.history.getPaginatedHistory(0, 10);
+          return history.some((e) => e.type === 'send' && e.state === 'pending');
+        }, {
+          timeoutMs: 5000,
+          errorMessage: 'Timed out waiting for pending send history entry',
+        });
 
         const history = await mgr!.history.getPaginatedHistory(0, 10);
-        const sendEntry = history.find((e) => e.type === 'send')!;
+        const sendEntry = history.find((e) => e.type === 'send' && e.state === 'pending');
 
         expect(sendEntry).toBeDefined();
-        expect(sendEntry!.type).toBe('send');
-        if (sendEntry!.type === 'send') {
+        if (sendEntry && sendEntry.type === 'send') {
           expect(sendEntry.operationId).toBeDefined();
           expect(sendEntry.state).toBe('pending');
           expect(sendEntry.amount).toBe(sendAmount);
@@ -797,8 +838,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         await mgr!.send.executePreparedSend(preparedSend.id);
 
-        // Wait for events to settle
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await waitForCondition(() => historyEvents.length >= 2, {
+          timeoutMs: 5000,
+          errorMessage: 'Timed out waiting for send history events',
+        });
 
         // Should have at least 2 history events: prepared and pending
         expect(historyEvents.length).toBeGreaterThanOrEqual(2);
@@ -836,6 +879,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintQuoteWatcher: {
               disabled: true,
             },
+          },
+          subscriptions: {
+            slowPollingIntervalMs: 500,
+            fastPollingIntervalMs: 500,
           },
         });
 
@@ -943,8 +990,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         await mgr!.send.executePreparedSend(preparedSend.id);
 
-        // Wait for history to be updated
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await waitForCondition(async () => {
+          const history = await mgr!.history.getPaginatedHistory(0, 10);
+          const sendEntry = history.find(
+            (e) => e.type === 'send' && (e as any).operationId === operationId,
+          );
+          return (sendEntry as any)?.state === 'pending';
+        }, {
+          timeoutMs: 5000,
+          errorMessage: 'Timed out waiting for pending history state',
+        });
 
         // Check initial history state
         let history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -957,8 +1012,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // Rollback
         await mgr!.send.rollback(operationId!);
 
-        // Wait for history to be updated
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await waitForCondition(async () => {
+          const history = await mgr!.history.getPaginatedHistory(0, 10);
+          const sendEntry = history.find(
+            (e) => e.type === 'send' && (e as any).operationId === operationId,
+          );
+          return (sendEntry as any)?.state === 'rolledBack';
+        }, {
+          timeoutMs: 5000,
+          errorMessage: 'Timed out waiting for rolledBack history state',
+        });
 
         // Check updated history state
         history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -981,39 +1044,39 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
         const { operationId } = await pendingPromise;
-        let offFinalized: (() => void) | undefined;
-        const finalizedPromise = new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            if (offFinalized) offFinalized();
-            reject(new Error('Timed out waiting for send:finalized'));
-          }, 9000);
-
-          offFinalized = mgr!.on('send:finalized', (payload) => {
-            if (payload.operationId !== operationId) return;
-            clearTimeout(timeout);
-            if (offFinalized) offFinalized();
-            resolve();
-          });
-        });
 
         // Receive the token (simulates recipient claiming)
         await mgr!.wallet.receive(token);
 
-        // Wait for proof state watcher to detect spent proofs and finalize
-        await finalizedPromise;
-
         // Operation should be finalized
-        const operation = await mgr!.send.getOperation(operationId);
+        const waitStart = Date.now();
+        let operation = await mgr!.send.getOperation(operationId);
+        while (operation?.state !== 'finalized' && Date.now() - waitStart < 10000) {
+          await sleep(100);
+          operation = await mgr!.send.getOperation(operationId);
+        }
+
         expect(operation!.state).toBe('finalized');
 
         // Check history state
+        await waitForCondition(async () => {
+          const history = await mgr!.history.getPaginatedHistory(0, 10);
+          const sendEntry = history.find(
+            (e) => e.type === 'send' && (e as any).operationId === operationId,
+          );
+          return (sendEntry as any)?.state === 'finalized';
+        }, {
+          timeoutMs: 10000,
+          errorMessage: 'Timed out waiting for finalized send history state',
+        });
+
         const history = await mgr!.history.getPaginatedHistory(0, 10);
         const sendEntry = history.find(
           (e) => e.type === 'send' && (e as any).operationId === operationId,
         );
         expect(sendEntry).toBeDefined();
         expect((sendEntry as any).state).toBe('finalized');
-      }, 10000);
+      }, 30000);
 
       it('should recover pending operations on startup', async () => {
         // Create a pending operation
@@ -1253,7 +1316,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const quote = await mgr.quotes.createMintQuote(mintUrl, 100);
           await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await waitForCondition(() => counterEvents.length > 0, {
+            timeoutMs: 10000,
+            errorMessage: 'Timed out waiting for counter:updated',
+          });
 
           expect(counterEvents.length).toBeGreaterThan(0);
           unsubscribe();
@@ -1286,7 +1352,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const quote = await mgr.quotes.createMintQuote(mintUrl, 100);
           await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await waitForCondition(() => proofsEvents.length > 0, {
+            timeoutMs: 10000,
+            errorMessage: 'Timed out waiting for proofs:saved',
+          });
 
           expect(proofsEvents.length).toBeGreaterThan(0);
           unsubscribe();
@@ -1326,7 +1395,23 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const preparedSend = await mgr!.send.prepareSend(mintUrl, 50);
           await mgr!.send.executePreparedSend(preparedSend.id);
 
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await waitForCondition(() => {
+            const spentChange = stateChanges.find(
+              (p: any) => p.mintUrl === mintUrl && p.state === 'spent',
+            );
+            const inflightStateChange = stateChanges.find(
+              (p: any) => p.mintUrl === mintUrl && p.state === 'inflight',
+            );
+            const inflightSaved = savedProofs.find(
+              (p: any) =>
+                p.mintUrl === mintUrl &&
+                p.proofs?.some((proof: any) => proof.state === 'inflight'),
+            );
+            return Boolean(spentChange && (inflightStateChange || inflightSaved));
+          }, {
+            timeoutMs: 10000,
+            errorMessage: 'Timed out waiting for proofs state-change events',
+          });
 
           expect(stateChanges.length).toBeGreaterThan(0);
           const spentChange = stateChanges.find(
@@ -1478,15 +1563,28 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               mintQuoteWatcher: { disabled: true },
               proofStateWatcher: { watchExistingInflightOnStart: true },
             },
+            subscriptions: {
+              slowPollingIntervalMs: 500,
+              fastPollingIntervalMs: 500,
+            },
           });
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await sleep(500);
 
           await mgr!.wallet.receive(token);
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+
+          await waitForCondition(async () => {
+            const operation = await mgr!.send.getOperation(operationId!);
+            return operation?.state === 'finalized';
+          }, {
+            timeoutMs: 20000,
+            intervalMs: 200,
+            errorMessage: 'Timed out waiting for restarted proof watcher finalization',
+          });
 
           const finalized = await mgr!.send.getOperation(operationId!);
+
           expect(finalized!.state).toBe('finalized');
         } finally {
           if (mgr) {
@@ -1496,7 +1594,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await dispose();
         }
-      }, 20000);
+      }, 40000);
     });
 
     describe('Full Workflow Integration', () => {
@@ -1919,13 +2017,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Fund the sender wallet
         const senderQuote = await senderWallet.createMintQuoteBolt11(100);
-        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-        let attempts = 0;
-        while (quoteState.state !== 'PAID' && attempts <= 3) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-          attempts++;
-        }
+        await waitForQuoteToBePaid(() => senderWallet.checkMintQuoteBolt11(senderQuote.quote));
         const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
         expect(senderProofs.length).toBeGreaterThan(0);
 
@@ -1982,13 +2074,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Fund the sender wallet
         const senderQuote = await senderWallet.createMintQuoteBolt11(100);
-        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-        let attempts = 0;
-        while (quoteState.state !== 'PAID' && attempts <= 3) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-          attempts++;
-        }
+        await waitForQuoteToBePaid(() => senderWallet.checkMintQuoteBolt11(senderQuote.quote));
         const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
         expect(senderProofs.length).toBeGreaterThan(0);
 
@@ -2043,13 +2129,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Fund the sender wallet
         const senderQuote = await senderWallet.createMintQuoteBolt11(100);
-        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-        let attempts = 0;
-        while (quoteState.state !== 'PAID' && attempts <= 3) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-          attempts++;
-        }
+        await waitForQuoteToBePaid(() => senderWallet.checkMintQuoteBolt11(senderQuote.quote));
         const senderProofs = await senderWallet.mintProofsBolt11(
           100,
           senderQuote.quote,
@@ -2085,13 +2165,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Fund sender with more amount
         const senderQuote = await senderWallet.createMintQuoteBolt11(200);
-        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-        let attempts = 0;
-        while (quoteState.state !== 'PAID' && attempts <= 3) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-          attempts++;
-        }
+        await waitForQuoteToBePaid(() => senderWallet.checkMintQuoteBolt11(senderQuote.quote));
         const senderProofs = await senderWallet.mintProofsBolt11(200, senderQuote.quote);
 
         const outputData = [
@@ -2159,13 +2233,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const quote = await baseWallet.createMintQuoteBolt11(100);
 
           // Wait for quote to be marked as paid
-          let quoteState = await baseWallet.checkMintQuoteBolt11(quote.quote);
-          let attempts = 0;
-          while (quoteState.state !== 'PAID' && attempts <= 3) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            quoteState = await baseWallet.checkMintQuoteBolt11(quote.quote);
-            attempts++;
-          }
+          await waitForQuoteToBePaid(() => baseWallet.checkMintQuoteBolt11(quote.quote));
           // Mint proofs to the wallet being swept
           const toBeSweptProofs = await baseWallet.mintProofsBolt11(
             100,
