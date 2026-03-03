@@ -294,9 +294,6 @@ export class ProofStateWatcherService {
     if (!this.running) return;
     this.logger?.info('Bootstrapping inflight proof watchers');
 
-    await this.proofs.checkInflightProofs();
-    if (!this.running) return;
-
     const inflightProofs = await this.proofRepository.getInflightProofs();
     if (!this.running || inflightProofs.length === 0) return;
 
@@ -321,6 +318,13 @@ export class ProofStateWatcherService {
         });
       }
     }
+
+    if (!this.running) return;
+
+    // Re-check after subscriptions are established.
+    // This closes the race where a proof can be spent between startup and
+    // watcher registration, which would otherwise miss the mint notification.
+    await this.proofs.checkInflightProofs();
   }
 
   private async stopWatching(key: ProofKey): Promise<void> {

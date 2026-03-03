@@ -31,7 +31,10 @@ describe('ProofStateWatcherService', () => {
   });
 
   it('bootstraps inflight proofs on start by default', async () => {
-    const checkInflightProofs = mock(async () => {});
+    const callOrder: string[] = [];
+    const checkInflightProofs = mock(async () => {
+      callOrder.push('checkInflightProofs');
+    });
     const inflightProofs = [
       makeProof({ mintUrl: mintUrlA, secret: 'a1' }),
       makeProof({ mintUrl: mintUrlA, secret: 'a2' }),
@@ -39,9 +42,14 @@ describe('ProofStateWatcherService', () => {
       makeProof({ mintUrl: '', secret: 'invalid' }),
       makeProof({ mintUrl: mintUrlA, secret: '' }),
     ];
-    const getInflightProofs = mock(async () => inflightProofs);
+    const getInflightProofs = mock(async () => {
+      callOrder.push('getInflightProofs');
+      return inflightProofs;
+    });
     const watchProof: Mock<ProofStateWatcherService['watchProof']> = mock(
-      async (_mintUrl: string, _secrets: string[]) => {},
+      async (_mintUrl: string, _secrets: string[]) => {
+        callOrder.push('watchProof');
+      },
     );
 
     const proofService = {
@@ -71,6 +79,12 @@ describe('ProofStateWatcherService', () => {
     expect(checkInflightProofs).toHaveBeenCalledTimes(1);
     expect(getInflightProofs).toHaveBeenCalledTimes(1);
     expect(watchProof).toHaveBeenCalledTimes(2);
+    expect(callOrder).toEqual([
+      'getInflightProofs',
+      'watchProof',
+      'watchProof',
+      'checkInflightProofs',
+    ]);
     expect(watchProof.mock.calls[0]).toEqual([mintUrlA, ['a1', 'a2']]);
     expect(watchProof.mock.calls[1]).toEqual([mintUrlB, ['b1']]);
 
