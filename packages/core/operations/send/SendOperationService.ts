@@ -29,10 +29,6 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
   generateSubId,
-  mapProofToCoreProof,
-  serializeOutputData,
-  deserializeOutputData,
-  getSecretsFromSerializedOutputData,
 } from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
@@ -51,7 +47,7 @@ export class SendOperationService {
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly eventBus: EventBus<CoreEvents>;
-  private readonly handlerProvider?: SendHandlerProvider;
+  private readonly handlerProvider: SendHandlerProvider;
   private readonly logger?: Logger;
 
   /** In-memory lock to prevent concurrent operations on the same operation ID */
@@ -68,7 +64,7 @@ export class SendOperationService {
     mintService: MintService,
     walletService: WalletService,
     eventBus: EventBus<CoreEvents>,
-    handlerProvider?: SendHandlerProvider,
+    handlerProvider: SendHandlerProvider,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
   ) {
@@ -81,6 +77,17 @@ export class SendOperationService {
     this.handlerProvider = handlerProvider;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+  }
+
+  private buildDeps() {
+    return {
+      proofRepository: this.proofRepository,
+      proofService: this.proofService,
+      walletService: this.walletService,
+      mintService: this.mintService,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    };
   }
 
   /**
@@ -113,7 +120,10 @@ export class SendOperationService {
   async init<M extends SendMethod = 'default'>(
     mintUrl: string,
     amount: number,
-    options: CreateSendOperationOptions<M> = { method: 'default' as M, methodData: {} as SendMethodData<M> },
+    options: CreateSendOperationOptions<M> = {
+      method: 'default' as M,
+      methodData: {} as SendMethodData<M>,
+    },
   ): Promise<InitSendOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -128,7 +138,12 @@ export class SendOperationService {
     const operation = createSendOperation(id, mintUrl, amount, options);
 
     await this.sendOperationRepository.create(operation);
-    this.logger?.debug('Send operation created', { operationId: id, mintUrl, amount, method: options.method });
+    this.logger?.debug('Send operation created', {
+      operationId: id,
+      mintUrl,
+      amount,
+      method: options.method,
+    });
 
     return operation;
   }
@@ -349,10 +364,10 @@ export class SendOperationService {
 
   /**
    * Rollback an operation by reclaiming the proofs.
-   * Only works for operations in 'prepared', 'executing', or 'pending' state.
+   * Only works for operations in 'prepared' or 'pending' state.
    * Throws if the operation is already in progress.
    */
-  async rollback(operationId: string): Promise<void> {
+  async rollback(operationId: string, reason = 'Rolled back by user action'): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.sendOperationRepository.getById(operationId);
@@ -364,8 +379,8 @@ export class SendOperationService {
         operation.state === 'finalized' ||
         operation.state === 'rolled_back' ||
         operation.state === 'rolling_back' ||
-        operation.state === 'executing' ||
-        operation.state === 'init'
+        operation.state === 'init' ||
+        operation.state === 'executing'
       ) {
         throw new Error(`Cannot rollback operation in state ${operation.state}`);
       }
@@ -375,84 +390,31 @@ export class SendOperationService {
         throw new Error(`Operation ${operationId} is not in a rollbackable state`);
       }
 
-      const { mintUrl, inputProofSecrets } = operation;
+      const handler = this.handlerProvider.get(operation.method);
+      if (!handler.rollback) {
+        throw new Error(`Send operations of method ${operation.method} can not be rolled back`);
+      }
 
-      if (operation.state === 'prepared') {
-        // Simple case: just release the reserved proofs - no swap was done yet
-        await this.proofService.releaseProofs(mintUrl, inputProofSecrets);
-        this.logger?.info('Rolling back prepared/executing operation - released reserved proofs', {
-          operationId,
-        });
-      } else if (operation.state === 'pending') {
-        // Complex case: need to reclaim the send proofs by swapping them back.
-        // Mark as 'rolling_back' BEFORE doing the swap to prevent race condition with ProofStateWatcher.
-        // When we reclaim proofs via swap, the mint sends a SPENT notification which triggers
-        // the watcher to try to finalize. By updating state first, the watcher will see
-        // 'rolling_back' and skip finalization.
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+
+      let opForRollback: PreparedOrLaterOperation = operation;
+      if (operation.state === 'pending') {
         const rollingBack: RollingBackSendOperation = {
           ...operation,
           state: 'rolling_back',
           updatedAt: Date.now(),
         };
         await this.sendOperationRepository.update(rollingBack);
-
-        const sendSecrets = getSendProofSecrets(operation);
-
-        if (sendSecrets.length > 0) {
-          const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-
-          // Get the send proofs
-          const allProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
-          const sendProofs = allProofs.filter(
-            (p) => sendSecrets.includes(p.secret) && p.state === 'inflight',
-          );
-
-          if (sendProofs.length > 0) {
-            const totalAmount = sendProofs.reduce((acc, p) => acc + p.amount, 0);
-            const fee = wallet.getFeesForProofs(sendProofs);
-            const reclaimAmount = totalAmount - fee;
-
-            if (reclaimAmount > 0) {
-              // Use ProofService to create outputs for reclaim
-              const outputResult = await this.proofService.createOutputsAndIncrementCounters(
-                mintUrl,
-                { keep: reclaimAmount, send: 0 },
-              );
-
-              // Swap to reclaim
-              const keep = await wallet.receive({ mint: mintUrl, proofs: sendProofs, unit: wallet.unit }, undefined, { type: 'custom', data: outputResult.keep });
-
-              // Save reclaimed proofs
-              await this.proofService.saveProofs(
-                mintUrl,
-                mapProofToCoreProof(mintUrl, 'ready', keep),
-              );
-
-              // Mark send proofs as spent
-              await this.proofService.setProofState(
-                mintUrl,
-                sendProofs.map((p) => p.secret),
-                'spent',
-              );
-
-              this.logger?.info('Reclaimed proofs from pending operation', {
-                operationId,
-                reclaimedAmount: reclaimAmount,
-                proofCount: keep.length,
-              });
-            }
-          }
-        }
-
-        // Release any remaining reservations
-        await this.proofService.releaseProofs(mintUrl, inputProofSecrets);
-        const keepSecrets = getKeepProofSecrets(operation);
-        if (keepSecrets.length > 0) {
-          await this.proofService.releaseProofs(mintUrl, keepSecrets);
-        }
+        opForRollback = rollingBack;
       }
 
-      await this.markAsRolledBack(operation, 'Rolled back by user action');
+      await handler.rollback({
+        ...this.buildDeps(),
+        operation: opForRollback,
+        wallet,
+      });
+
+      await this.markAsRolledBack(opForRollback, reason);
     } finally {
       releaseLock();
     }
@@ -533,7 +495,7 @@ export class SendOperationService {
       for (const op of rollingBackOps) {
         this.logger?.warn(
           'Found operation stuck in rolling_back state. ' +
-          'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
+            'This indicates a crash during rollback. Manual recovery via seed restore may be needed.',
           {
             operationId: op.id,
             mintUrl: op.mintUrl,
@@ -597,54 +559,31 @@ export class SendOperationService {
 
   /**
    * Recover an executing operation.
-   * Determines if swap happened and recovers accordingly.
+   * Delegates to the handler for recovery logic.
    */
   private async recoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
-    // Case: Exact match - no mint interaction, always safe to rollback
-    if (!op.needsSwap) {
-      await this.proofService.releaseProofs(op.mintUrl, op.inputProofSecrets);
-      await this.markAsRolledBack(op, 'Recovered: no swap needed, operation never finalized');
+    const handler = this.handlerProvider.get(op.method);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+
+    const result = await handler.recoverExecuting({
+      ...this.buildDeps(),
+      operation: op,
+      wallet,
+    });
+
+    if (result.status === 'PENDING') {
+      await this.sendOperationRepository.update(result.pending);
+      await this.eventBus.emit('send:pending', {
+        mintUrl: result.pending.mintUrl,
+        operationId: result.pending.id,
+        operation: result.pending,
+        token: result.token,
+      });
+      this.logger?.info('Recovered executing operation as pending', { operationId: op.id });
       return;
     }
 
-    // Case: Swap required - need to check with mint
-    let inputStates: CashuProofState[];
-    try {
-      inputStates = await this.checkProofStatesWithMint(op.mintUrl, op.inputProofSecrets);
-    } catch (e) {
-      this.logger?.warn('Could not reach mint for recovery, will retry later', {
-        operationId: op.id,
-        mintUrl: op.mintUrl,
-      });
-      return; // Leave in executing state, retry on next startup
-    }
-
-    const allSpent = inputStates.every((s) => s.state === 'SPENT');
-
-    if (!allSpent) {
-      // Swap never happened - simple rollback
-      await this.proofService.releaseProofs(op.mintUrl, op.inputProofSecrets);
-      await this.markAsRolledBack(op, 'Recovered: swap never executed');
-    } else {
-      // Swap happened - check if proofs already saved, otherwise recover from OutputData
-      const existingProofs = await this.proofRepository.getProofsByOperationId(op.mintUrl, op.id);
-
-      // Check if output proofs exist by looking for proofs created by this operation
-      const outputSecrets = op.outputData
-        ? getSecretsFromSerializedOutputData(op.outputData)
-        : { keepSecrets: [], sendSecrets: [] };
-      const allOutputSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
-      const alreadySaved = existingProofs.some((p) => allOutputSecrets.includes(p.secret));
-
-      if (!alreadySaved && op.outputData) {
-        // Actually need to recover from mint
-        await this.recoverProofsFromSwap(op);
-      }
-
-      // Mark input proofs as spent (they were consumed by the swap)
-      await this.proofService.setProofState(op.mintUrl, op.inputProofSecrets, 'spent');
-      await this.markAsRolledBack(op, 'Recovered: swap succeeded but token never returned');
-    }
+    await this.markAsRolledBack(op, result.failed.error ?? 'Recovered: operation failed');
   }
 
   /**
@@ -665,55 +604,48 @@ export class SendOperationService {
   }
 
   /**
-   * Recover proofs from a completed swap using the mint's restore endpoint.
+   * Check a pending operation to see if it should be finalized.
    */
-  private async recoverProofsFromSwap(op: ExecutingSendOperation): Promise<void> {
-    if (!op.outputData) {
-      throw new Error('Cannot recover proofs without outputData');
-    }
+  async checkPendingOperation(op: PendingSendOperation): Promise<void> {
+    const handler = this.handlerProvider.get(op.method);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
 
-    const recoveredProofs = await this.proofService.recoverProofsFromOutputData(
-      op.mintUrl,
-      op.outputData,
-    );
+    const decision =
+      (await handler.checkPending?.({
+        ...this.buildDeps(),
+        operation: op,
+        wallet,
+      })) ?? (await this.defaultCheckPendingDecision(op));
 
-    if (recoveredProofs.length > 0) {
-      this.logger?.info('Recovered proofs from swap', {
+    if (decision === 'finalize') {
+      await this.finalize(op.id);
+      this.logger?.info('Send operation finalized during recovery', { operationId: op.id });
+    } else if (decision === 'rollback') {
+      await this.rollback(op.id, 'Rollback requested by handler');
+    } else {
+      this.logger?.debug('Pending operation token not yet claimed, leaving as pending', {
         operationId: op.id,
-        proofCount: recoveredProofs.length,
       });
     }
   }
 
-  /**
-   * Check a pending operation to see if it should be finalized.
-   */
-  async checkPendingOperation(op: PendingSendOperation): Promise<void> {
+  private async defaultCheckPendingDecision(
+    op: PendingSendOperation,
+  ): Promise<'finalize' | 'stay_pending'> {
     const sendSecrets = getSendProofSecrets(op);
 
     let sendStates: CashuProofState[];
     try {
       sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets);
-    } catch (e) {
+    } catch (_e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: op.id,
         mintUrl: op.mintUrl,
       });
-      return; // Leave in pending state, retry on next startup
+      return 'stay_pending';
     }
 
-    const allSpent = sendStates.every((s) => s.state === 'SPENT');
-
-    if (allSpent) {
-      // Recipient claimed - finalize
-      await this.finalize(op.id);
-      this.logger?.info('Send operation finalized during recovery', { operationId: op.id });
-    } else {
-      // Leave as pending - user can rollback manually if desired
-      this.logger?.debug('Pending operation token not yet claimed, leaving as pending', {
-        operationId: op.id,
-      });
-    }
+    return sendStates.every((s) => s.state === 'SPENT') ? 'finalize' : 'stay_pending';
   }
 
   /**
