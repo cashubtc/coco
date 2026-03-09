@@ -4,11 +4,7 @@
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "devDependencies": {
-    "@types/bun": "latest",
     "coco-cashu-adapter-tests": "1.1.2-rc.47",
-    "esbuild": "latest",
-    "tsdown": "0.20.1",
-    "typescript": "^5.9.2",
     "typescript-eslint": "^8.40.0"
   },
   "peerDependencies": {
