@@ -20,7 +20,7 @@ import {
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
-import type { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
+import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';

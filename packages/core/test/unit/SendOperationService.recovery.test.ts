@@ -1,5 +1,8 @@
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
+import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
+import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
+import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { EventBus } from '../../events/EventBus';
@@ -29,6 +32,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
   let walletService: WalletService;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
+  let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
 
   // Mock wallet with checkProofsStates
@@ -224,6 +228,11 @@ describe('SendOperationService - recoverPendingOperations', () => {
       error: mock(() => {}),
     } as Logger;
 
+    handlerProvider = new SendHandlerProvider({
+      default: new DefaultSendHandler(),
+      p2pk: new P2pkSendHandler(),
+    });
+
     service = new SendOperationService(
       sendOpRepo,
       proofRepo,
@@ -231,7 +240,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       mintService,
       walletService,
       eventBus,
-      undefined, // handlerProvider
+      handlerProvider,
       logger,
     );
   });
@@ -863,7 +872,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
         mintService,
         walletService,
         eventBus,
-        undefined, // handlerProvider
+        handlerProvider,
         logger,
       );
 

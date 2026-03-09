@@ -8,6 +8,7 @@ import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type { ProofRepository } from '../../repositories';
+import { ProofValidationError } from '../../models/Error';
 import type {
   InitSendOperation,
   PreparedSendOperation,
@@ -145,6 +146,7 @@ describe('P2pkSendHandler', () => {
         keep: [],
       })),
       getFeesForProofs: mock(() => 1),
+      getKeyset: mock(() => ({ id: keysetId, keys: { 1: 'pubkey' } })),
       send: mock(() =>
         Promise.resolve({
           keep: [makeProof('keep-1', 9)],
@@ -170,6 +172,16 @@ describe('P2pkSendHandler', () => {
 
     // Mock ProofService
     proofService = {
+      selectProofsToSend: mock(async (_mintUrl: string, amount: number, includeFees = true) => {
+        const proofs = await proofRepository.getAvailableProofs(mintUrl);
+        const totalAvailable = proofs.reduce((acc, proof) => acc + proof.amount, 0);
+        if (totalAvailable < amount) {
+          throw new ProofValidationError(
+            `Insufficient balance: need ${amount}, have ${totalAvailable}`,
+          );
+        }
+        return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+      }),
       reserveProofs: mock(() => Promise.resolve({ amount: 110 })),
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
@@ -355,7 +367,7 @@ describe('P2pkSendHandler', () => {
       // Selected amount (110) - amount (100) - fee (1) = 9 keep
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,
-        { keep: 9, send: 100 },
+        { keep: 9, send: 0 },
       );
     });
 
@@ -395,7 +407,7 @@ describe('P2pkSendHandler', () => {
 
   describe('execute', () => {
     describe('P2PK locked proof creation', () => {
-      it('should use p2pk output type with pubkey for send outputs', async () => {
+      it('should use prepared custom outputs for send outputs', async () => {
         const operation = makeExecutingOp('op-1');
         const inputProofs = [makeProof('input-1', 60), makeProof('input-2', 50)];
 
@@ -414,11 +426,11 @@ describe('P2pkSendHandler', () => {
         const ctx = buildExecuteContext(operation, inputProofs);
         await handler.execute(ctx);
 
-        // Verify P2PK output config was used
+        // Verify the prepared outputs were reused during execution
         expect(capturedOutputConfig).toBeDefined();
         expect(capturedOutputConfig!.send).toEqual({
-          type: 'p2pk',
-          options: { pubkey: testPubkey },
+          type: 'custom',
+          data: expect.any(Array),
         });
         expect(capturedOutputConfig!.keep).toEqual({
           type: 'custom',
@@ -449,8 +461,8 @@ describe('P2pkSendHandler', () => {
         await handler.execute(ctx);
 
         expect(capturedOutputConfig!.send).toEqual({
-          type: 'p2pk',
-          options: { pubkey: customPubkey },
+          type: 'custom',
+          data: expect.any(Array),
         });
       });
 
@@ -636,19 +648,16 @@ describe('P2pkSendHandler', () => {
     });
 
     describe('pending state rollback', () => {
-      it('should warn that P2PK tokens cannot be reclaimed', async () => {
+      it('should reject pending rollback because P2PK tokens cannot be reclaimed', async () => {
         const operation = makePendingOp('op-1');
         const ctx = buildRollbackContext(operation);
 
-        await handler.rollback(ctx);
-
-        expect(logger.warn).toHaveBeenCalledWith(
-          'P2PK tokens cannot be reclaimed - locked to recipient pubkey',
-          { operationId: 'op-1' },
+        await expect(handler.rollback(ctx)).rejects.toThrow(
+          'P2PK Send Operation in pending state can not be rolled back.',
         );
       });
 
-      it('should release input and keep proof reservations', async () => {
+      it('should not release reservations for pending rollback', async () => {
         const outputData = createMockOutputData(['keep-1'], ['send-1']);
         const operation = makePendingOp('op-1', {
           inputProofSecrets: ['input-1'],
@@ -656,12 +665,10 @@ describe('P2pkSendHandler', () => {
         });
 
         const ctx = buildRollbackContext(operation);
-        await handler.rollback(ctx);
-
-        // Should release input proofs
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1']);
-        // Should release keep proofs
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
+        await expect(handler.rollback(ctx)).rejects.toThrow(
+          'P2PK Send Operation in pending state can not be rolled back.',
+        );
+        expect(proofService.releaseProofs).not.toHaveBeenCalled();
       });
     });
   });

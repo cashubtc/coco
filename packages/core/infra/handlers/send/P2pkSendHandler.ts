@@ -258,7 +258,16 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     // P2PK always requires swap - check with mint
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
-    const inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    let inputStates;
+    try {
+      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    } catch (error) {
+      logger?.warn('Could not reach mint for recovery, will retry later', {
+        operationId: operation.id,
+        mintUrl: operation.mintUrl,
+      });
+      throw error;
+    }
     const allSpent = inputStates.every((s: { state: string }) => s.state === 'SPENT');
 
     if (!allSpent) {
