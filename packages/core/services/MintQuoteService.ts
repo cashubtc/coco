@@ -1,18 +1,17 @@
 import type { MintQuoteRepository } from '../repositories';
 import type { MintService } from './MintService';
 import type { WalletService } from './WalletService';
-import type { ProofService } from './ProofService';
 import type { MintQuoteBolt11Response, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
-import { mapProofToCoreProof } from '@core/utils.ts';
+import type { MintOperationService } from '@core/operations/mint';
 import { UnknownMintError } from '../models/Error';
 
 export class MintQuoteService {
   private readonly mintQuoteRepo: MintQuoteRepository;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
-  private readonly proofService: ProofService;
+  private mintOperationService: MintOperationService;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -20,14 +19,14 @@ export class MintQuoteService {
     mintQuoteRepo: MintQuoteRepository,
     mintService: MintService,
     walletService: WalletService,
-    proofService: ProofService,
+    mintOperationService: MintOperationService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.mintQuoteRepo = mintQuoteRepo;
     this.mintService = mintService;
     this.walletService = walletService;
-    this.proofService = proofService;
+    this.mintOperationService = mintOperationService;
     this.eventBus = eventBus;
     this.logger = logger;
   }
@@ -53,43 +52,7 @@ export class MintQuoteService {
   }
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
-    this.logger?.info('Redeeming mint quote', { mintUrl, quoteId });
-
-    const trusted = await this.mintService.isTrustedMint(mintUrl);
-    if (!trusted) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
-    }
-
-    try {
-      const quote = await this.mintQuoteRepo.getMintQuote(mintUrl, quoteId);
-      if (!quote) {
-        this.logger?.warn('Mint quote not found', { mintUrl, quoteId });
-        throw new Error('Quote not found');
-      }
-      if (!quote.amount) {
-        this.logger?.warn('Mint quote had undefined amount', { mintUrl, quoteId });
-        throw new Error('Quote amount undefined');
-      }
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-      const { keep } = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-        keep: quote.amount,
-        send: 0,
-      });
-      const proofs = await wallet.mintProofsBolt11(quote.amount, quote.quote, undefined, { type: 'custom', data: keep });
-      await this.eventBus.emit('mint-quote:redeemed', { mintUrl, quoteId, quote });
-      this.logger?.info('Mint quote redeemed, proofs minted', {
-        mintUrl,
-        quoteId,
-        amount: quote.amount,
-        proofs: proofs.length,
-      });
-      await this.setMintQuoteState(mintUrl, quoteId, 'ISSUED');
-      await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', proofs));
-      this.logger?.debug('Proofs saved to repository', { mintUrl, count: proofs.length });
-    } catch (err) {
-      this.logger?.error('Failed to redeem mint quote', { mintUrl, quoteId, err });
-      throw err;
-    }
+    await this.mintOperationService.redeem(mintUrl, quoteId);
   }
 
   async addExistingMintQuotes(

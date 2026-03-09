@@ -19,6 +19,7 @@ import type {
 } from '../services';
 import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { MeltOperationService } from '../operations/melt/MeltOperationService';
+import type { MintOperationService } from '../operations/mint/MintOperationService';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 
 export type ServiceKey = keyof ServiceMap;
@@ -39,6 +40,7 @@ export interface ServiceMap {
   sendOperationService: SendOperationService;
   receiveOperationService: ReceiveOperationService;
   meltOperationService: MeltOperationService;
+  mintOperationService: MintOperationService;
   paymentRequestService: PaymentRequestService;
   subscriptions: SubscriptionManager;
   eventBus: EventBus<CoreEvents>;

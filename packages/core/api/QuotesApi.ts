@@ -7,19 +7,23 @@ import type {
   PendingCheckResult,
   PreparedMeltOperation,
 } from '@core/operations/melt';
+import type { MintOperationService } from '@core/operations/mint';
 import type { MintQuoteService, MeltQuoteService } from '@core/services';
 
 export class QuotesApi {
   private mintQuoteService: MintQuoteService;
   private meltQuoteService: MeltQuoteService;
+  private mintOperationService: MintOperationService;
   private meltOperationService: MeltOperationService;
   constructor(
     mintQuoteService: MintQuoteService,
     meltQuoteService: MeltQuoteService,
+    mintOperationService: MintOperationService,
     meltOperationService: MeltOperationService,
   ) {
     this.mintQuoteService = mintQuoteService;
     this.meltQuoteService = meltQuoteService;
+    this.mintOperationService = mintOperationService;
     this.meltOperationService = meltOperationService;
   }
 
@@ -28,7 +32,7 @@ export class QuotesApi {
   }
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
-    return this.mintQuoteService.redeemMintQuote(mintUrl, quoteId);
+    await this.mintOperationService.redeem(mintUrl, quoteId);
   }
 
   /**
