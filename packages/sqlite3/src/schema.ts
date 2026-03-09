@@ -329,6 +329,31 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_receive_operations(mintUrl);
     `,
   },
+  {
+    id: '013_mint_operations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_mint_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'finalized', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        amount INTEGER,
+        outputDataJson TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_state
+        ON coco_cashu_mint_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint
+        ON coco_cashu_mint_operations(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint_quote
+        ON coco_cashu_mint_operations(mintUrl, quoteId);
+    `,
+  },
 ];
 
 // Export for testing

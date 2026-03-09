@@ -9,6 +9,7 @@ import type {
   MeltQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  MintOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
@@ -24,6 +25,7 @@ import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
+import { SqliteMintOperationRepository } from './repositories/MintOperationRepository.ts';
 import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
@@ -39,6 +41,7 @@ export class SqliteRepositories implements Repositories {
   readonly historyRepository: SqliteHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
+  readonly mintOperationRepository: MintOperationRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly db: SqliteDb;
 
@@ -54,6 +57,7 @@ export class SqliteRepositories implements Repositories {
     this.historyRepository = new SqliteHistoryRepository(this.db);
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
+    this.mintOperationRepository = new SqliteMintOperationRepository(this.db);
     this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
   }
 
@@ -74,6 +78,7 @@ export class SqliteRepositories implements Repositories {
         historyRepository: new SqliteHistoryRepository(txDb),
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
+        mintOperationRepository: new SqliteMintOperationRepository(txDb),
         receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
       };
 
@@ -97,6 +102,7 @@ export {
   SqliteHistoryRepository,
   SqliteSendOperationRepository,
   SqliteMeltOperationRepository,
+  SqliteMintOperationRepository,
   SqliteReceiveOperationRepository,
 };
 
