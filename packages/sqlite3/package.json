@@ -10,7 +10,6 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "coco-cashu-adapter-tests": "1.1.2-rc.47",
-    "tsdown": "0.20.1",
     "vitest": "^2.1.9"
   },
   "exports": {
