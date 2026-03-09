@@ -239,19 +239,8 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       logger?.info('Rolling back prepared P2PK operation - released reserved proofs', {
         operationId: operation.id,
       });
-    } else if (operation.state === 'pending' || operation.state === 'rolling_back') {
-      // P2PK tokens are locked to the recipient's pubkey
-      // We cannot reclaim them without the private key
-      // Just release reservations and mark as rolled back
-      await proofService.releaseProofs(mintUrl, inputProofSecrets);
-      const keepSecrets = getKeepProofSecrets(operation);
-      if (keepSecrets.length > 0) {
-        await proofService.releaseProofs(mintUrl, keepSecrets);
-      }
-
-      logger?.warn('P2PK tokens cannot be reclaimed - locked to recipient pubkey', {
-        operationId: operation.id,
-      });
+    } else {
+      throw new Error(`P2PK Send Operation in ${operation.state} state can not be rolled back.`);
     }
   }
 
