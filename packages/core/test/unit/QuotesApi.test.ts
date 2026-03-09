@@ -1,6 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { QuotesApi } from '../../api/QuotesApi.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
+import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { PendingCheckResult } from '../../operations/melt/MeltMethodHandler.ts';
 import type { PendingMeltOperation } from '../../operations/melt/MeltOperation.ts';
 import type { MintQuoteService } from '../../services/MintQuoteService.ts';
@@ -30,6 +31,9 @@ const makePendingOperation = (): PendingMeltOperation => ({
 const makeMocks = (operation: PendingMeltOperation) => {
   const mintQuoteService = {} as MintQuoteService;
   const meltQuoteService = {} as MeltQuoteService;
+  const mintOperationService = {
+    redeem: mock(async () => operation),
+  } as unknown as MintOperationService;
 
   const meltOperationService = {
     execute: mock(async () => operation),
@@ -37,23 +41,31 @@ const makeMocks = (operation: PendingMeltOperation) => {
     getOperationByQuote: mock(async () => operation),
   } as unknown as MeltOperationService;
 
-  return { mintQuoteService, meltQuoteService, meltOperationService };
+  return { mintQuoteService, meltQuoteService, mintOperationService, meltOperationService };
 };
 
 describe('QuotesApi', () => {
   let api: QuotesApi;
   let meltOperationService: MeltOperationService;
+  let mintOperationService: MintOperationService;
   let pendingOperation: PendingMeltOperation;
 
   beforeEach(() => {
     pendingOperation = makePendingOperation();
     const mocks = makeMocks(pendingOperation);
     meltOperationService = mocks.meltOperationService;
+    mintOperationService = mocks.mintOperationService;
     api = new QuotesApi(
       mocks.mintQuoteService,
       mocks.meltQuoteService,
+      mocks.mintOperationService,
       mocks.meltOperationService,
     );
+  });
+
+  it('redeemMintQuote forwards to mint operation saga', async () => {
+    await api.redeemMintQuote(mintUrl, quoteId);
+    expect(mintOperationService.redeem).toHaveBeenCalledWith(mintUrl, quoteId);
   });
 
   describe('executeMeltByQuote', () => {
