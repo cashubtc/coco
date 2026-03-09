@@ -23,6 +23,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
+import { NetworkError } from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -239,6 +240,41 @@ describe('MintOperationService', () => {
 
     const quote = await mintQuoteRepo.getMintQuote(mintUrl, quoteId);
     expect(quote?.state).toBe('PAID');
+  });
+
+  it('recoverExecutingOperation rolls back when proofs are not recoverable', async () => {
+    const op = makeExecutingOp('exec-3');
+    await operationRepo.create(op);
+
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([]);
+
+    await service.recoverExecutingOperation(op);
+
+    const stored = await operationRepo.getById(op.id);
+    expect(stored?.state).toBe('rolled_back');
+  });
+
+  it('redeem throws when executing operation remains unresolved after recovery', async () => {
+    const op = makeExecutingOp('exec-4');
+    await operationRepo.create(op);
+
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'STAY_EXECUTING' });
+
+    await expect(service.redeem(mintUrl, quoteId)).rejects.toThrow(NetworkError);
+  });
+
+  it('execute rolls back when already issued proofs cannot be restored', async () => {
+    const preparedOp = makePreparedOp('prepared-2');
+    await operationRepo.create(preparedOp);
+
+    (handler.execute as Mock<any>).mockResolvedValueOnce({ status: 'ALREADY_ISSUED' });
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([]);
+
+    await expect(service.execute(preparedOp.id)).rejects.toThrow();
+
+    const stored = await operationRepo.getById(preparedOp.id);
+    expect(stored?.state).toBe('rolled_back');
   });
 
   it('recoverPendingOperations cleans init operations and executes stale prepared ones', async () => {
