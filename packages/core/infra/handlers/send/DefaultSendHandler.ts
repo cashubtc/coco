@@ -19,6 +19,7 @@ import {
   mapProofToCoreProof,
   serializeOutputData,
   deserializeOutputData,
+  getSecretsFromSerializedOutputData,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -328,7 +329,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
    * Recover an executing operation that failed mid-execution.
    */
   async recoverExecuting(ctx: RecoverExecutingContext): Promise<ExecutionResult> {
-    const { operation, wallet, proofService, logger } = ctx;
+    const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // Case: Exact match - no mint interaction, always safe to rollback
     if (!operation.needsSwap) {
@@ -359,9 +360,19 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       return { status: 'FAILED', failed };
     }
 
-    // Swap happened - recover proofs from OutputData
+    // Swap happened - recover proofs from OutputData if they were not already saved
     if (operation.outputData) {
-      await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+      const existingProofs = await proofRepository.getProofsByOperationId(
+        operation.mintUrl,
+        operation.id,
+      );
+      const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
+      const allOutputSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
+      const alreadySaved = existingProofs.some((p: CoreProof) => allOutputSecrets.includes(p.secret));
+
+      if (!alreadySaved) {
+        await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+      }
     }
 
     // Mark input proofs as spent

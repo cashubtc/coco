@@ -15,7 +15,13 @@ import type {
 } from '../../../operations/send/SendOperation';
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
 import { ProofValidationError } from '../../../models/Error';
-import { mapProofToCoreProof, serializeOutputData, deserializeOutputData } from '../../../utils';
+import {
+  mapProofToCoreProof,
+  serializeOutputData,
+  deserializeOutputData,
+  getSecretsFromSerializedOutputData,
+} from '../../../utils';
+import type { CoreProof } from '../../../types';
 
 /**
  * P2PK send handler for sending tokens locked to a recipient's public key.
@@ -248,7 +254,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * Recover an executing operation that failed mid-execution.
    */
   async recoverExecuting(ctx: RecoverExecutingContext): Promise<ExecutionResult> {
-    const { operation, wallet, proofService, logger } = ctx;
+    const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // P2PK always requires swap - check with mint
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
@@ -267,10 +273,19 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       return { status: 'FAILED', failed };
     }
 
-    // Swap happened - recover keep proofs from OutputData
-    // Note: Send proofs are P2PK locked and cannot be recovered without the private key
+    // Swap happened - recover outputs from OutputData if they were not already saved
     if (operation.outputData) {
-      await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+      const existingProofs = await proofRepository.getProofsByOperationId(
+        operation.mintUrl,
+        operation.id,
+      );
+      const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
+      const allOutputSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
+      const alreadySaved = existingProofs.some((p: CoreProof) => allOutputSecrets.includes(p.secret));
+
+      if (!alreadySaved) {
+        await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+      }
     }
 
     // Mark input proofs as spent

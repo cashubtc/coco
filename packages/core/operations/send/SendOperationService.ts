@@ -395,6 +395,10 @@ export class SendOperationService {
         throw new Error(`Send operations of method ${operation.method} can not be rolled back`);
       }
 
+      if (operation.state === 'pending' && operation.method === 'p2pk') {
+        throw new Error('Cannot rollback pending P2PK send operation');
+      }
+
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
 
       let opForRollback: PreparedOrLaterOperation = operation;
