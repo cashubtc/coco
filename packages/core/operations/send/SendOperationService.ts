@@ -20,7 +20,7 @@ import {
   type CreateSendOperationOptions,
 } from './SendOperation';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
-import type { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
+import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -163,35 +163,46 @@ export class SendOperationService {
     }
 
     const releaseLock = await this.acquireOperationLock(operation.id);
-    const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
     try {
-      const handler = this.handlerProvider.get(operation.method);
-      if (!handler) {
-        throw new Error(`No handler registered for method: ${operation.method}`);
+      const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
+      let prepared: PreparedSendOperation;
+      try {
+        const handler = this.handlerProvider.get(operation.method);
+        if (!handler) {
+          throw new Error(`No handler registered for method: ${operation.method}`);
+        }
+
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+        const ctx = {
+          operation,
+          wallet,
+          proofRepository: this.proofRepository,
+          proofService: this.proofService,
+          walletService: this.walletService,
+          mintService: this.mintService,
+          eventBus: this.eventBus,
+          logger: this.logger,
+        };
+
+        prepared = await handler.prepare(ctx);
+        // Save the prepared operation to the repository
+        await this.sendOperationRepository.update(prepared);
+      } catch (e) {
+        // Attempt to clean up the init operation before re-throwing
+        await this.tryRecoverInitOperation(operation);
+        throw e;
+      } finally {
+        releaseMintLock();
       }
 
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
-      const ctx = {
-        operation,
-        wallet,
-        proofRepository: this.proofRepository,
-        proofService: this.proofService,
-        walletService: this.walletService,
-        mintService: this.mintService,
-        eventBus: this.eventBus,
-        logger: this.logger,
-      };
+      await this.eventBus.emit('send:prepared', {
+        mintUrl: prepared.mintUrl,
+        operationId: prepared.id,
+        operation: prepared,
+      });
 
-      const prepared = await handler.prepare(ctx);
-      // Save the prepared operation to the repository
-      await this.sendOperationRepository.update(prepared);
       return prepared;
-    } catch (e) {
-      // Attempt to clean up the init operation before re-throwing
-      await this.tryRecoverInitOperation(operation);
-      throw e;
     } finally {
-      releaseMintLock();
       releaseLock();
     }
   }
@@ -223,6 +234,8 @@ export class SendOperationService {
       };
       await this.sendOperationRepository.update(executing);
 
+      let pending: PendingSendOperation | null = null;
+      let token: Token | null = null;
       try {
         const handler = this.handlerProvider.get(operation.method);
         if (!handler) {
@@ -252,7 +265,8 @@ export class SendOperationService {
         if (result.status === 'PENDING') {
           // Save the pending operation to the repository
           await this.sendOperationRepository.update(result.pending);
-          return { operation: result.pending, token: result.token };
+          pending = result.pending;
+          token = result.token;
         } else {
           // Handler returned FAILED - save and throw
           await this.sendOperationRepository.update(result.failed);
@@ -263,6 +277,19 @@ export class SendOperationService {
         await this.tryRecoverExecutingOperation(executing);
         throw e;
       }
+
+      if (!pending || !token) {
+        throw new Error(`Send operation ${operation.id} did not produce a pending result`);
+      }
+
+      await this.eventBus.emit('send:pending', {
+        mintUrl: pending.mintUrl,
+        operationId: pending.id,
+        operation: pending,
+        token,
+      });
+
+      return { operation: pending, token };
     } finally {
       releaseLock();
     }

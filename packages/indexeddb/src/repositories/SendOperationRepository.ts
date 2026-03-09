@@ -7,6 +7,21 @@ import type {
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
+type LegacySendOperationRow = SendOperationRow & {
+  methodData?: SendOperation['methodData'];
+  methodDataJson?: string;
+};
+
+function parseMethodData(row: SendOperationRow): SendOperation['methodData'] {
+  const legacyRow = row as LegacySendOperationRow;
+
+  if (typeof legacyRow.methodDataJson === 'string') {
+    return JSON.parse(legacyRow.methodDataJson) as SendOperation['methodData'];
+  }
+
+  return legacyRow.methodData ?? {};
+}
+
 function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
@@ -16,7 +31,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
     method: row.method as SendMethod,
-    methodData: JSON.parse(row.methodDataJson),
+    methodData: parseMethodData(row),
   };
 
   if (row.state === 'init') {
@@ -164,4 +179,3 @@ export class IdbSendOperationRepository implements SendOperationRepository {
     });
   }
 }
-

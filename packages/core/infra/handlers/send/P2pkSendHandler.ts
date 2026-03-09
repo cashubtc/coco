@@ -33,7 +33,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * P2PK sends always require a swap to lock the proofs to the pubkey.
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofService, eventBus, logger } = ctx;
+    const { operation, wallet, proofService, logger } = ctx;
     const { mintUrl, amount } = operation;
 
     // Validate that we have a pubkey in methodData
@@ -99,13 +99,6 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       methodData: operation.methodData,
     };
 
-    // Emit prepared event
-    await eventBus.emit('send:prepared', {
-      mintUrl,
-      operationId: prepared.id,
-      operation: prepared,
-    });
-
     logger?.info('P2PK send operation prepared', {
       operationId: operation.id,
       fee,
@@ -120,7 +113,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * Execute the send operation by performing the swap with P2PK locking.
    */
   async execute(ctx: ExecuteContext): Promise<ExecutionResult> {
-    const { operation, wallet, reservedProofs, proofService, eventBus, logger } = ctx;
+    const { operation, wallet, reservedProofs, proofService, logger } = ctx;
     const { mintUrl, amount, inputProofSecrets } = operation;
 
     // Get the pubkey from methodData
@@ -184,14 +177,6 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       proofs: sendProofs,
       unit: wallet.unit,
     };
-
-    // Emit pending event
-    await eventBus.emit('send:pending', {
-      mintUrl,
-      operationId: pending.id,
-      operation: pending,
-      token,
-    });
 
     logger?.info('P2PK send operation executed', {
       operationId: operation.id,
@@ -258,7 +243,16 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     // P2PK always requires swap - check with mint
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
-    const inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    let inputStates;
+    try {
+      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    } catch (error) {
+      logger?.warn('Could not reach mint for recovery, will retry later', {
+        operationId: operation.id,
+        mintUrl: operation.mintUrl,
+      });
+      throw error;
+    }
     const allSpent = inputStates.every((s: { state: string }) => s.state === 'SPENT');
 
     if (!allSpent) {
@@ -279,12 +273,15 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
         operation.mintUrl,
         operation.id,
       );
-      const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
-      const allOutputSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
-      const alreadySaved = existingProofs.some((p: CoreProof) => allOutputSecrets.includes(p.secret));
+      const keepOutputData = {
+        keep: operation.outputData.keep,
+        send: [],
+      };
+      const keepSecrets = getSecretsFromSerializedOutputData(keepOutputData).keepSecrets;
+      const keepProofsAlreadySaved = existingProofs.some((p: CoreProof) => keepSecrets.includes(p.secret));
 
-      if (!alreadySaved) {
-        await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+      if (!keepProofsAlreadySaved && keepOutputData.keep.length > 0) {
+        await proofService.recoverProofsFromOutputData(operation.mintUrl, keepOutputData);
       }
     }
 

@@ -330,7 +330,14 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: '013_mint_operations',
+    id: '013_send_operations_method',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default';
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
+  {
+    id: '014_mint_operations',
     sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_mint_operations (
         id TEXT PRIMARY KEY,

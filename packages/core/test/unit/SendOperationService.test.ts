@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
+import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
+import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
+import { SendHandlerProvider } from '../../infra/handlers/send/SendHandlerProvider';
 import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { EventBus } from '../../events/EventBus';
@@ -21,6 +24,7 @@ describe('SendOperationService', () => {
   let walletService: WalletService;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
+  let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
 
   const makeProof = (secret: string, amount: number): CoreProof =>
@@ -104,6 +108,11 @@ describe('SendOperationService', () => {
       error: mock(() => {}),
     } as Logger;
 
+    handlerProvider = new SendHandlerProvider({
+      default: new DefaultSendHandler(),
+      p2pk: new P2pkSendHandler(),
+    });
+
     service = new SendOperationService(
       sendOpRepo,
       proofRepo,
@@ -111,6 +120,7 @@ describe('SendOperationService', () => {
       mintService,
       walletService,
       eventBus,
+      handlerProvider,
       logger,
     );
   });
@@ -154,5 +164,44 @@ describe('SendOperationService', () => {
     expect(firstPrepared.state).toBe('prepared');
     expect(secondPrepared.state).toBe('prepared');
     expect(secondResolved).toBe(true);
+  });
+
+  it('emits send:prepared after the prepared state is persisted', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, 100);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('send:prepared', async ({ operationId }) => {
+      persistedState = (await sendOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const preparedOp = await service.prepare(initOp);
+
+    expect(preparedOp.state).toBe('prepared');
+    expect(persistedState).toBe('prepared');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits send:pending after the pending state is persisted', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, 100);
+    const preparedOp = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('send:pending', async ({ operationId }) => {
+      persistedState = (await sendOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const result = await service.execute(preparedOp);
+
+    expect(result.operation.state).toBe('pending');
+    expect(persistedState).toBe('pending');
+    expect(lockedDuringEvent).toBe(true);
   });
 });

@@ -32,7 +32,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
    * Prepare the send operation by selecting proofs and creating outputs.
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofRepository, proofService, eventBus, logger } = ctx;
+    const { operation, wallet, proofRepository, proofService, logger } = ctx;
     const { mintUrl, amount } = operation;
 
     // Get available proofs (ready and not reserved by other operations)
@@ -116,13 +116,6 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       methodData: operation.methodData,
     };
 
-    // Emit prepared event
-    await eventBus.emit('send:prepared', {
-      mintUrl,
-      operationId: prepared.id,
-      operation: prepared,
-    });
-
     logger?.info('Send operation prepared', {
       operationId: operation.id,
       needsSwap,
@@ -137,7 +130,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
    * Execute the send operation by performing the swap and creating the token.
    */
   async execute(ctx: ExecuteContext): Promise<ExecutionResult> {
-    const { operation, wallet, reservedProofs, proofService, eventBus, logger } = ctx;
+    const { operation, wallet, reservedProofs, proofService, logger } = ctx;
     const { mintUrl, amount, needsSwap, inputProofSecrets } = operation;
 
     const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
@@ -209,14 +202,6 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       proofs: sendProofs,
       unit: wallet.unit,
     };
-
-    // Emit pending event
-    await eventBus.emit('send:pending', {
-      mintUrl,
-      operationId: pending.id,
-      operation: pending,
-      token,
-    });
 
     logger?.info('Send operation executed', {
       operationId: operation.id,
@@ -345,7 +330,16 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Case: Swap required - need to check with mint
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
-    const inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    let inputStates;
+    try {
+      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    } catch (error) {
+      logger?.warn('Could not reach mint for recovery, will retry later', {
+        operationId: operation.id,
+        mintUrl: operation.mintUrl,
+      });
+      throw error;
+    }
     const allSpent = inputStates.every((s: { state: string }) => s.state === 'SPENT');
 
     if (!allSpent) {
