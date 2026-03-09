@@ -51,6 +51,59 @@ export type IntegrationTestOptions<TRepositories extends Repositories = Reposito
   suiteName?: string;
 };
 
+type ManagerEventName = Parameters<Manager['on']>[0];
+
+type SendHistoryUpdatedPayload = {
+  entry: {
+    type: string;
+    state?: string;
+    operationId?: string;
+    amount?: number;
+    token?: Token;
+  };
+};
+
+const watcherTestSubscriptions = {
+  slowPollingIntervalMs: 50,
+  fastPollingIntervalMs: 50,
+};
+
+function waitForEvent<TPayload = unknown>(
+  manager: Manager,
+  event: ManagerEventName,
+  predicate?: (payload: TPayload) => boolean,
+): Promise<TPayload> {
+  return new Promise((resolve) => {
+    const off = manager.on(event, (payload) => {
+      const typedPayload = payload as TPayload;
+      if (predicate && !predicate(typedPayload)) {
+        return;
+      }
+      off();
+      resolve(typedPayload);
+    });
+  });
+}
+
+function waitForSendHistoryState(
+  manager: Manager,
+  state: string,
+  options?: { operationId?: string; amount?: number },
+): Promise<SendHistoryUpdatedPayload> {
+  return waitForEvent<SendHistoryUpdatedPayload>(manager, 'history:updated', (payload) => {
+    if (payload.entry.type !== 'send' || payload.entry.state !== state) {
+      return false;
+    }
+    if (options?.operationId && payload.entry.operationId !== options.operationId) {
+      return false;
+    }
+    if (options?.amount !== undefined && payload.entry.amount !== options.amount) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export async function runIntegrationTests<TRepositories extends Repositories = Repositories>(
   options: IntegrationTestOptions<TRepositories>,
   runner: IntegrationTestRunner,
@@ -765,14 +818,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should create send history entry with state when send operation is executed', async () => {
         const sendAmount = 20;
+        const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', { amount: sendAmount });
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
-
-        // Wait for events to settle
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        const { operation } = await mgr!.send.executePreparedSend(preparedSend.id);
+        await pendingHistoryPromise;
 
         const history = await mgr!.history.getPaginatedHistory(0, 10);
-        const sendEntry = history.find((e) => e.type === 'send')!;
+        const sendEntry = history.find(
+          (e) => e.type === 'send' && e.operationId === operation.id,
+        )!;
 
         expect(sendEntry).toBeDefined();
         expect(sendEntry!.type).toBe('send');
@@ -794,11 +848,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         const sendAmount = 15;
+        const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', { amount: sendAmount });
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         await mgr!.send.executePreparedSend(preparedSend.id);
-
-        // Wait for events to settle
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await pendingHistoryPromise;
 
         // Should have at least 2 history events: prepared and pending
         expect(historyEvents.length).toBeGreaterThanOrEqual(2);
@@ -837,6 +890,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               disabled: true,
             },
           },
+          subscriptions: watcherTestSubscriptions,
         });
 
         await mgr.mint.addMint(mintUrl, { trusted: true });
@@ -933,18 +987,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should update history state to rolledBack on rollback', async () => {
-        let operationId: string | undefined;
-
-        mgr!.once('send:pending', (payload) => {
-          operationId = payload.operationId;
-        });
-
         const sendAmount = 35;
+        const pendingPromise = waitForEvent<{ operationId: string }>(mgr!, 'send:pending');
+        const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', { amount: sendAmount });
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         await mgr!.send.executePreparedSend(preparedSend.id);
-
-        // Wait for history to be updated
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        const { operationId } = await pendingPromise;
+        await pendingHistoryPromise;
 
         // Check initial history state
         let history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -955,10 +1004,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect((sendEntry as any).state).toBe('pending');
 
         // Rollback
+        const rolledBackHistoryPromise = waitForSendHistoryState(mgr!, 'rolledBack', { operationId });
         await mgr!.send.rollback(operationId!);
-
-        // Wait for history to be updated
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await rolledBackHistoryPromise;
 
         // Check updated history state
         history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -970,37 +1018,26 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should finalize a pending send operation when proofs are spent', async () => {
-        const pendingPromise = new Promise<{ operationId: string }>((resolve) => {
-          mgr!.once('send:pending', (payload) => {
-            resolve({ operationId: payload.operationId });
-          });
-        });
+        const pendingPromise = waitForEvent<{ operationId: string }>(mgr!, 'send:pending');
 
         const sendAmount = 20;
         const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
         const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
 
         const { operationId } = await pendingPromise;
-        let offFinalized: (() => void) | undefined;
-        const finalizedPromise = new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            if (offFinalized) offFinalized();
-            reject(new Error('Timed out waiting for send:finalized'));
-          }, 9000);
-
-          offFinalized = mgr!.on('send:finalized', (payload) => {
-            if (payload.operationId !== operationId) return;
-            clearTimeout(timeout);
-            if (offFinalized) offFinalized();
-            resolve();
-          });
-        });
+        const finalizedPromise = waitForEvent<{ operationId: string }>(
+          mgr!,
+          'send:finalized',
+          (payload) => payload.operationId === operationId,
+        );
+        const finalizedHistoryPromise = waitForSendHistoryState(mgr!, 'finalized', { operationId });
 
         // Receive the token (simulates recipient claiming)
         await mgr!.wallet.receive(token);
 
         // Wait for proof state watcher to detect spent proofs and finalize
         await finalizedPromise;
+        await finalizedHistoryPromise;
 
         // Operation should be finalized
         const operation = await mgr!.send.getOperation(operationId);
@@ -1125,9 +1162,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // Receive the token to make proofs spent (so finalize can work)
         await mgr!.wallet.receive(token);
 
-        // Wait a bit for proof state detection
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
         // Start two finalizes concurrently - at most one should execute the main logic
         const finalize1 = mgr!.send.finalize(operationId!);
         const finalize2 = mgr!.send.finalize(operationId!);
@@ -1162,30 +1196,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(error.reason.message).toContain('already in progress');
       });
 
-      it('should report correct lock status via isOperationLocked', async () => {
+      it('should report unlocked state before and after executePreparedSend', async () => {
         // Prepare a send operation
         const prepared = await mgr!.send.prepareSend(mintUrl, 25);
 
         // Before execution starts, operation should not be locked
         expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
 
-        // Start a slow operation by doing execute in background
-        let executeStarted = false;
-        let executeFinished = false;
-
-        const executePromise = (async () => {
-          executeStarted = true;
-          await mgr!.send.executePreparedSend(prepared.id);
-          executeFinished = true;
-        })();
-
-        // Give a small delay for execute to start (though JS is single-threaded,
-        // the lock should be acquired synchronously at the start of execute)
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await mgr!.send.executePreparedSend(prepared.id);
 
         // After execute completes, operation should no longer be locked
-        await executePromise;
-        expect(executeFinished).toBe(true);
         expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
       });
 
@@ -1195,9 +1215,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Start recovery
         const recoveryPromise = mgr!.send.recoverPendingOperations();
-
-        // Give a small delay for recovery to acquire lock
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(mgr!.send.isRecoveryInProgress()).toBe(true);
 
         // After recovery completes, should no longer be in progress
         await recoveryPromise;
@@ -1253,8 +1271,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const quote = await mgr.quotes.createMintQuote(mintUrl, 100);
           await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
 
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
           expect(counterEvents.length).toBeGreaterThan(0);
           unsubscribe();
         } finally {
@@ -1285,8 +1301,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const quote = await mgr.quotes.createMintQuote(mintUrl, 100);
           await mgr.quotes.redeemMintQuote(mintUrl, quote.quote);
-
-          await new Promise((resolve) => setTimeout(resolve, 1000));
 
           expect(proofsEvents.length).toBeGreaterThan(0);
           unsubscribe();
@@ -1325,8 +1339,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const preparedSend = await mgr!.send.prepareSend(mintUrl, 50);
           await mgr!.send.executePreparedSend(preparedSend.id);
-
-          await new Promise((resolve) => setTimeout(resolve, 500));
 
           expect(stateChanges.length).toBeGreaterThan(0);
           const spentChange = stateChanges.find(
@@ -1444,6 +1456,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               mintQuoteWatcher: { disabled: true },
               proofStateWatcher: { disabled: true },
             },
+            subscriptions: watcherTestSubscriptions,
           });
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
@@ -1478,25 +1491,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               mintQuoteWatcher: { disabled: true },
               proofStateWatcher: { watchExistingInflightOnStart: true },
             },
+            subscriptions: watcherTestSubscriptions,
           });
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
-          await new Promise((resolve) => setTimeout(resolve, 500));
-
-          let offFinalized: (() => void) | undefined;
-          const finalizedPromise = new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              if (offFinalized) offFinalized();
-              reject(new Error('Timed out waiting for send:finalized'));
-            }, 9000);
-
-            offFinalized = mgr!.on('send:finalized', (payload) => {
-              if (payload.operationId !== operationId) return;
-              clearTimeout(timeout);
-              if (offFinalized) offFinalized();
-              resolve();
-            });
-          });
+          const finalizedPromise = waitForEvent<{ operationId: string }>(
+            mgr!,
+            'send:finalized',
+            (payload) => payload.operationId === operationId,
+          );
           await mgr!.wallet.receive(token);
           await finalizedPromise;
 
