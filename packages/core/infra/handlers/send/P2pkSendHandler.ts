@@ -1,4 +1,4 @@
-import type { Token, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -15,12 +15,7 @@ import type {
 } from '../../../operations/send/SendOperation';
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
 import { ProofValidationError } from '../../../models/Error';
-import {
-  mapProofToCoreProof,
-  serializeOutputData,
-  deserializeOutputData,
-} from '../../../utils';
-import type { CoreProof } from '../../../types';
+import { mapProofToCoreProof, serializeOutputData, deserializeOutputData } from '../../../utils';
 
 /**
  * P2PK send handler for sending tokens locked to a recipient's public key.
@@ -32,7 +27,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * P2PK sends always require a swap to lock the proofs to the pubkey.
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofRepository, proofService, eventBus, logger } = ctx;
+    const { operation, wallet, proofService, eventBus, logger } = ctx;
     const { mintUrl, amount } = operation;
 
     // Validate that we have a pubkey in methodData
@@ -41,34 +36,27 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       throw new ProofValidationError('P2PK send requires a pubkey in methodData');
     }
 
-    // Get available proofs (ready and not reserved by other operations)
-    const availableProofs = await proofRepository.getAvailableProofs(mintUrl);
-    const totalAvailable = availableProofs.reduce((acc: number, p: CoreProof) => acc + p.amount, 0);
-
-    if (totalAvailable < amount) {
-      throw new ProofValidationError(
-        `Insufficient balance: need ${amount}, have ${totalAvailable}`,
-      );
-    }
-
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
-    const selected = wallet.selectProofsToSend(availableProofs, amount, true);
-    const selectedProofs = selected.send;
-    const selectedAmount = selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-    const fee = wallet.getFeesForProofs(selectedProofs);
+    const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
+    const selectedAmount = selected.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+    const fee = wallet.getFeesForProofs(selected);
     const keepAmount = selectedAmount - amount - fee;
 
     // Use ProofService to create outputs and increment counters
     const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
       keep: keepAmount,
-      send: amount,
+      send: 0,
     });
+
+    const keyset = wallet.getKeyset();
+
+    const sendOT = OutputData.createP2PKData({ pubkey }, amount, keyset);
 
     // Serialize for storage
     const serializedOutputData = serializeOutputData({
       keep: outputResult.keep,
-      send: outputResult.send,
+      send: sendOT,
     });
 
     logger?.debug('P2PK send prepared', {
@@ -77,14 +65,14 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       fee,
       keepAmount,
       selectedAmount,
-      proofCount: selectedProofs.length,
+      proofCount: selected.length,
       keepOutputs: outputResult.keep.length,
-      sendOutputs: outputResult.send.length,
+      sendOutputs: sendOT.length,
       pubkey,
     });
 
     // Reserve the selected proofs
-    const inputSecrets = selectedProofs.map((p: Proof) => p.secret);
+    const inputSecrets = selected.map((p: Proof) => p.secret);
     await proofService.reserveProofs(mintUrl, inputSecrets, operation.id);
 
     // Build prepared operation
@@ -156,10 +144,8 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       pubkey,
     });
 
-    // Use P2PK type for send outputs, custom for keep outputs
-    // Note: P2PK type doesn't accept custom data - the wallet generates P2PK-locked outputs
     const outputConfig: OutputConfig = {
-      send: { type: 'p2pk', options: { pubkey } },
+      send: { type: 'custom', data: outputData.send },
       keep: { type: 'custom', data: outputData.keep },
     };
 
