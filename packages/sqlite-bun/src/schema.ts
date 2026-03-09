@@ -329,6 +329,13 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_receive_operations(mintUrl);
     `,
   },
+  {
+    id: '013_send_operations_method',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default';
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
 ];
 
 // Export for testing
