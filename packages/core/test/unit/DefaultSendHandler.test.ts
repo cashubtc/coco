@@ -316,6 +316,7 @@ describe('DefaultSendHandler', () => {
       expect(result.status).toBe('PENDING');
       if (result.status === 'PENDING') {
         expect(result.token?.proofs).toEqual([proof]);
+        expect(result.pending.token).toEqual(result.token);
       }
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['proof-100'], 'inflight');
       expect(proofService.saveProofs).not.toHaveBeenCalled();
@@ -339,6 +340,9 @@ describe('DefaultSendHandler', () => {
       const result = await handler.execute(buildExecuteContext(operation, inputProofs));
 
       expect(result.status).toBe('PENDING');
+      if (result.status === 'PENDING') {
+        expect(result.pending.token).toEqual(result.token);
+      }
       expect(capturedOutputConfig?.send).toEqual({ type: 'custom', data: expect.any(Array) });
       expect(capturedOutputConfig?.keep).toEqual({ type: 'custom', data: expect.any(Array) });
       expect(proofService.saveProofs).toHaveBeenCalledWith(
