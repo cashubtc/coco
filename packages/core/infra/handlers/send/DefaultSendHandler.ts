@@ -14,7 +14,6 @@ import type {
   RolledBackSendOperation,
 } from '../../../operations/send/SendOperation';
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
-import { ProofValidationError } from '../../../models/Error';
 import {
   mapProofToCoreProof,
   serializeOutputData,
@@ -32,31 +31,21 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
    * Prepare the send operation by selecting proofs and creating outputs.
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofRepository, proofService, logger } = ctx;
+    const { operation, wallet, proofService, logger } = ctx;
     const { mintUrl, amount } = operation;
 
-    // Get available proofs (ready and not reserved by other operations)
-    const availableProofs = await proofRepository.getAvailableProofs(mintUrl);
-    const totalAvailable = availableProofs.reduce((acc: number, p: CoreProof) => acc + p.amount, 0);
-
-    if (totalAvailable < amount) {
-      throw new ProofValidationError(
-        `Insufficient balance: need ${amount}, have ${totalAvailable}`,
-      );
-    }
-
     // Try exact match first (no swap needed)
-    const exactProofs = wallet.selectProofsToSend(availableProofs, amount, false);
-    const exactAmount = exactProofs.send.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-    const needsSwap = exactAmount !== amount || exactProofs.send.length === 0;
+    const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
+    const exactAmount = exactProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+    const needsSwap = exactAmount !== amount || exactProofs.length === 0;
 
     let selectedProofs: Proof[];
     let fee = 0;
     let serializedOutputData: PreparedSendOperation['outputData'];
 
-    if (!needsSwap && exactProofs.send.length > 0) {
+    if (!needsSwap && exactProofs.length > 0) {
       // Exact match - no swap needed, no OutputData
-      selectedProofs = exactProofs.send;
+      selectedProofs = exactProofs;
       logger?.debug('Exact match found for send', {
         operationId: operation.id,
         amount,
@@ -64,8 +53,9 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       });
     } else {
       // Need to swap - select proofs including fees
-      const selected = wallet.selectProofsToSend(availableProofs, amount, true);
-      selectedProofs = selected.send;
+
+      const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
+      selectedProofs = selected;
       const selectedAmount = selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
       fee = wallet.getFeesForProofs(selectedProofs);
       const keepAmount = selectedAmount - amount - fee;
@@ -362,7 +352,9 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       );
       const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
       const allOutputSecrets = [...outputSecrets.keepSecrets, ...outputSecrets.sendSecrets];
-      const alreadySaved = existingProofs.some((p: CoreProof) => allOutputSecrets.includes(p.secret));
+      const alreadySaved = existingProofs.some((p: CoreProof) =>
+        allOutputSecrets.includes(p.secret),
+      );
 
       if (!alreadySaved) {
         await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);

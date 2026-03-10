@@ -30,7 +30,7 @@ import type { Logger } from '../../logging/Logger';
 import {
   generateSubId,
 } from '../../utils';
-import { UnknownMintError, ProofValidationError } from '../../models/Error';
+import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 
@@ -236,6 +236,7 @@ export class SendOperationService {
 
       let pending: PendingSendOperation | null = null;
       let token: Token | null = null;
+      let failed: RolledBackSendOperation | null = null;
       try {
         const handler = this.handlerProvider.get(operation.method);
         if (!handler) {
@@ -268,14 +269,27 @@ export class SendOperationService {
           pending = result.pending;
           token = result.token ?? null;
         } else {
-          // Handler returned FAILED - save and throw
+          // Handler returned FAILED - persist the terminal result without re-running recovery
           await this.sendOperationRepository.update(result.failed);
-          throw new Error(result.failed.error || 'Handler execution failed');
+          await this.eventBus.emit('send:rolled-back', {
+            mintUrl: result.failed.mintUrl,
+            operationId: result.failed.id,
+            operation: result.failed,
+          });
+          failed = result.failed;
         }
       } catch (e) {
         // Attempt to recover the executing operation before re-throwing
         await this.tryRecoverExecutingOperation(executing);
         throw e;
+      }
+
+      if (failed) {
+        this.logger?.info('Send operation execution failed', {
+          operationId: failed.id,
+          error: failed.error,
+        });
+        throw new Error(failed.error || 'Handler execution failed');
       }
 
       if (!pending || !token) {
@@ -329,8 +343,38 @@ export class SendOperationService {
       return;
     }
 
-    const releaseLock = await this.acquireOperationLock(operationId);
+    let releaseLock: (() => void) | undefined;
     try {
+      try {
+        releaseLock = await this.acquireOperationLock(operationId);
+      } catch (error) {
+        if (!(error instanceof OperationInProgressError)) {
+          throw error;
+        }
+
+        await this.operationIdLock.waitForUnlock(operationId);
+
+        const latest = await this.sendOperationRepository.getById(operationId);
+        if (!latest) {
+          throw new Error(`Operation ${operationId} not found`);
+        }
+
+        if (latest.state === 'finalized') {
+          this.logger?.debug('Operation finalized while waiting for lock', { operationId });
+          return;
+        }
+
+        if (latest.state === 'rolled_back' || latest.state === 'rolling_back') {
+          this.logger?.debug('Operation rolled back while waiting for lock', {
+            operationId,
+            state: latest.state,
+          });
+          return;
+        }
+
+        releaseLock = await this.acquireOperationLock(operationId);
+      }
+
       // Re-fetch after acquiring lock to ensure state hasn't changed
       const operation = await this.sendOperationRepository.getById(operationId);
       if (!operation) {
@@ -385,7 +429,7 @@ export class SendOperationService {
 
       this.logger?.info('Send operation finalized', { operationId });
     } finally {
-      releaseLock();
+      releaseLock?.();
     }
   }
 
@@ -626,7 +670,16 @@ export class SendOperationService {
    */
   private async tryRecoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
     try {
-      await this.recoverExecutingOperation(op);
+      const latest = await this.sendOperationRepository.getById(op.id);
+      if (!latest || latest.state !== 'executing') {
+        this.logger?.debug('Skipping executing operation recovery because state changed', {
+          operationId: op.id,
+          state: latest?.state,
+        });
+        return;
+      }
+
+      await this.recoverExecutingOperation(latest);
       this.logger?.info('Recovered executing operation after failure', { operationId: op.id });
     } catch (recoveryError) {
       this.logger?.warn('Failed to recover executing operation, will retry on next startup', {
