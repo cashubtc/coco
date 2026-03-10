@@ -24,6 +24,7 @@ export type SendOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
+import type { Token } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 
@@ -87,6 +88,15 @@ interface PreparedData {
   outputData?: SerializedOutputData;
 }
 
+/**
+ * Token data available once a send has been executed.
+ * For P2PK sends, this is the canonical persisted token copy because the send
+ * proofs are intentionally not stored in the wallet proof repository.
+ */
+interface SendTokenData {
+  token?: Token;
+}
+
 // ============================================================================
 // State-specific Operation Types
 // ============================================================================
@@ -115,14 +125,14 @@ export interface ExecutingSendOperation extends SendOperationBase, PreparedData 
 /**
  * Pending state - token returned, awaiting confirmation that proofs are spent
  */
-export interface PendingSendOperation extends SendOperationBase, PreparedData {
+export interface PendingSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'pending';
 }
 
 /**
  * Finalized state - sent proofs confirmed spent, operation finalized
  */
-export interface FinalizedSendOperation extends SendOperationBase, PreparedData {
+export interface FinalizedSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'finalized';
 }
 
@@ -131,7 +141,7 @@ export interface FinalizedSendOperation extends SendOperationBase, PreparedData 
  * This is a transient state used to prevent race conditions with ProofStateWatcher.
  * Only used when rolling back from 'pending' state (which requires a reclaim swap).
  */
-export interface RollingBackSendOperation extends SendOperationBase, PreparedData {
+export interface RollingBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'rolling_back';
 }
 
@@ -139,7 +149,7 @@ export interface RollingBackSendOperation extends SendOperationBase, PreparedDat
  * Rolled back state - operation cancelled, proofs reclaimed
  * Can be rolled back from prepared, executing, or pending states
  */
-export interface RolledBackSendOperation extends SendOperationBase, PreparedData {
+export interface RolledBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'rolled_back';
 }
 

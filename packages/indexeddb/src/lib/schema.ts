@@ -333,8 +333,36 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         });
     });
 
+  // Version 13: Add tokenJson to send operations for persisted resurfacing.
+  db.version(13)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+id+state], state, mintUrl, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_send_operations')
+        .toCollection()
+        .modify((op: any) => {
+          if (!('tokenJson' in op)) {
+            op.tokenJson = null;
+          }
+        });
+    });
+
   // Version 11: Add mint operations store
-  db.version(13).stores({
+  db.version(14).stores({
     coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
     coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
     coco_cashu_counters: '&[mintUrl+keysetId]',

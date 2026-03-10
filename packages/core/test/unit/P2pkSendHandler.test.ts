@@ -496,12 +496,12 @@ describe('P2pkSendHandler', () => {
         const ctx = buildExecuteContext(operation, inputProofs);
         await handler.execute(ctx);
 
-        // Verify proofs were saved with correct states
         const keepProofs = savedProofs.filter((p) => p.state === 'ready');
         const sendProofs = savedProofs.filter((p) => p.state === 'inflight');
 
-        expect(keepProofs.length).toBeGreaterThanOrEqual(0);
-        expect(sendProofs.length).toBeGreaterThan(0);
+        expect(keepProofs).toHaveLength(1);
+        expect(sendProofs).toHaveLength(1);
+        expect(sendProofs[0]?.secret).toBe('send-1');
       });
 
       it('should mark input proofs as spent after swap', async () => {
@@ -539,9 +539,11 @@ describe('P2pkSendHandler', () => {
 
         expect(result.status).toBe('PENDING');
         if (result.status === 'PENDING') {
-          expect(result.token).toBeDefined();
-          expect(result.token.mint).toBe(mintUrl);
-          expect(result.token.proofs).toContain(p2pkLockedProof);
+          const { token } = result;
+          expect(token).toBeDefined();
+          expect(token?.mint).toBe(mintUrl);
+          expect(token?.proofs).toContain(p2pkLockedProof);
+          expect(result.pending.token).toEqual(token);
         }
       });
 
@@ -672,7 +674,7 @@ describe('P2pkSendHandler', () => {
     });
 
     describe('swap executed', () => {
-      it('should recover keep proofs from outputData when swap succeeded', async () => {
+      it('should recover keep proofs and resurface the token when swap succeeded', async () => {
         const outputData = createMockOutputData(['keep-1'], ['send-1']);
         const operation = makeExecutingOp('op-1', {
           inputProofSecrets: ['input-1'],
@@ -682,18 +684,58 @@ describe('P2pkSendHandler', () => {
         (mockWallet.checkProofsStates as Mock<any>).mockImplementation(() =>
           Promise.resolve([{ state: 'SPENT', Y: 'y1' }]),
         );
+        let savedProofs: any[] = [];
+        (proofService.saveProofs as Mock<any>).mockImplementation(
+          (_mintUrl: string, proofs: any[]) => {
+            savedProofs = [...savedProofs, ...proofs];
+            return Promise.resolve();
+          },
+        );
+        (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(
+          (_mintUrl: string, serializedOutputData: any, options?: any) => {
+            if (serializedOutputData.send.length > 0) {
+              expect(options).toEqual({ persistRecoveredProofs: false });
+              return Promise.resolve([makeProof('send-1', 100)]);
+            }
+            return Promise.resolve([]);
+          },
+        );
 
         const ctx = buildRecoverContext(operation);
         const result = await handler.recoverExecuting(ctx);
 
-        expect(result.status).toBe('FAILED');
+        expect(result.status).toBe('PENDING');
         expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
           mintUrl,
           {
             keep: outputData.keep,
             send: [],
           },
+          {
+            createdByOperationId: 'op-1',
+          },
         );
+        expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
+          mintUrl,
+          {
+            keep: [],
+            send: outputData.send,
+          },
+          {
+            persistRecoveredProofs: false,
+          },
+        );
+        if (result.status === 'PENDING') {
+          expect(result.token?.proofs).toEqual([makeProof('send-1', 100)]);
+          expect(result.pending.token).toEqual(result.token);
+        }
+        expect(savedProofs.filter((proof) => proof.secret === 'send-1')).toEqual([
+          expect.objectContaining({
+            secret: 'send-1',
+            state: 'inflight',
+            createdByOperationId: 'op-1',
+          }),
+        ]);
       });
 
       it('should mark input proofs as spent after recovery', async () => {
@@ -715,21 +757,23 @@ describe('P2pkSendHandler', () => {
         );
       });
 
-      it('should return FAILED with appropriate error message', async () => {
+      it('should return pending without a token when the reconstructed send proofs are already spent', async () => {
         const operation = makeExecutingOp('op-1');
 
-        (mockWallet.checkProofsStates as Mock<any>).mockImplementation(() =>
-          Promise.resolve([{ state: 'SPENT', Y: 'y1' }]),
+        (mockWallet.checkProofsStates as Mock<any>)
+          .mockImplementationOnce(() => Promise.resolve([{ state: 'SPENT', Y: 'y1' }]))
+          .mockImplementationOnce(() => Promise.resolve([{ state: 'SPENT', Y: 'y-send' }]));
+        (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(() =>
+          Promise.resolve([]),
         );
 
         const ctx = buildRecoverContext(operation);
         const result = await handler.recoverExecuting(ctx);
 
-        expect(result.status).toBe('FAILED');
-        if (result.status === 'FAILED') {
-          expect(result.failed.error).toBe(
-            'Recovered: P2PK swap succeeded but token never returned',
-          );
+        expect(result.status).toBe('PENDING');
+        if (result.status === 'PENDING') {
+          expect(result.token).toBeUndefined();
+          expect(result.pending.token).toBeUndefined();
         }
       });
     });
@@ -776,7 +820,7 @@ describe('P2pkSendHandler', () => {
 
       expect(result.status).toBe('PENDING');
       if (result.status === 'PENDING') {
-        expect(result.token.proofs).toHaveLength(2);
+        expect(result.token?.proofs).toHaveLength(2);
       }
     });
   });

@@ -150,7 +150,7 @@ export interface SendOperationRepository {
   /** Get all send operations in a specific state */
   getByState(state: SendOperationState): Promise<SendOperation[]>;
 
-  /** Get all pending operations (state in ['executing', 'pending']) */
+  /** Get all in-flight operations (state in ['executing', 'pending', 'rolling_back']) */
   getPending(): Promise<SendOperation[]>;
 
   /** Get all operations for a specific mint */

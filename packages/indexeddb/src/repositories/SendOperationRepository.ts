@@ -12,6 +12,15 @@ type LegacySendOperationRow = SendOperationRow & {
   methodDataJson?: string;
 };
 
+function parseToken(row: SendOperationRow): unknown {
+  return row.tokenJson ? JSON.parse(row.tokenJson) : undefined;
+}
+
+function serializeToken(operation: SendOperation): string | null {
+  const maybeTokenOperation = operation as SendOperation & { token?: unknown };
+  return maybeTokenOperation.token ? JSON.stringify(maybeTokenOperation.token) : null;
+}
+
 function parseMethodData(row: SendOperationRow): SendOperation['methodData'] {
   const legacyRow = row as LegacySendOperationRow;
 
@@ -53,13 +62,33 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     case 'executing':
       return { ...base, state: 'executing', ...preparedData };
     case 'pending':
-      return { ...base, state: 'pending', ...preparedData };
+      return {
+        ...base,
+        state: 'pending',
+        ...preparedData,
+        token: parseToken(row),
+      } as SendOperation;
     case 'finalized':
-      return { ...base, state: 'finalized', ...preparedData };
+      return {
+        ...base,
+        state: 'finalized',
+        ...preparedData,
+        token: parseToken(row),
+      } as SendOperation;
     case 'rolling_back':
-      return { ...base, state: 'rolling_back', ...preparedData };
+      return {
+        ...base,
+        state: 'rolling_back',
+        ...preparedData,
+        token: parseToken(row),
+      } as SendOperation;
     case 'rolled_back':
-      return { ...base, state: 'rolled_back', ...preparedData };
+      return {
+        ...base,
+        state: 'rolled_back',
+        ...preparedData,
+        token: parseToken(row),
+      } as SendOperation;
     default:
       throw new Error(`Unknown state: ${row.state}`);
   }
@@ -85,6 +114,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
       inputAmount: null,
       inputProofSecretsJson: null,
       outputDataJson: null,
+      tokenJson: null,
     };
   }
 
@@ -104,19 +134,21 @@ function operationToRow(op: SendOperation): SendOperationRow {
     inputAmount: op.inputAmount,
     inputProofSecretsJson: JSON.stringify(op.inputProofSecrets),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
+    tokenJson: serializeToken(op),
   };
 }
 
 export class IdbSendOperationRepository implements SendOperationRepository {
   private readonly db: IdbDb;
+  private readonly storeName = 'coco_cashu_send_operations';
 
   constructor(db: IdbDb) {
     this.db = db;
   }
 
   async create(operation: SendOperation): Promise<void> {
-    await this.db.runTransaction('rw', ['coco_cashu_send_operations'], async (tx) => {
-      const table = tx.table('coco_cashu_send_operations');
+    await this.db.runTransaction('rw', [this.storeName], async (tx) => {
+      const table = tx.table(this.storeName);
       const existing = await table.get(operation.id);
       if (existing) {
         throw new Error(`SendOperation with id ${operation.id} already exists`);
@@ -126,8 +158,8 @@ export class IdbSendOperationRepository implements SendOperationRepository {
   }
 
   async update(operation: SendOperation): Promise<void> {
-    await this.db.runTransaction('rw', ['coco_cashu_send_operations'], async (tx) => {
-      const table = tx.table('coco_cashu_send_operations');
+    await this.db.runTransaction('rw', [this.storeName], async (tx) => {
+      const table = tx.table(this.storeName);
       const existing = await table.get(operation.id);
       if (!existing) {
         throw new Error(`SendOperation with id ${operation.id} not found`);
@@ -139,42 +171,42 @@ export class IdbSendOperationRepository implements SendOperationRepository {
   }
 
   async getById(id: string): Promise<SendOperation | null> {
-    const row = (await (this.db as any)
-      .table('coco_cashu_send_operations')
-      .get(id)) as SendOperationRow | undefined;
+    const row = await this.db.runTransaction('r', [this.storeName], async (tx) => {
+      return (await tx.table(this.storeName).get(id)) as SendOperationRow | undefined;
+    });
     return row ? rowToOperation(row) : null;
   }
 
   async getByState(state: SendOperationState): Promise<SendOperation[]> {
-    const rows = (await (this.db as any)
-      .table('coco_cashu_send_operations')
-      .where('state')
-      .equals(state)
-      .toArray()) as SendOperationRow[];
+    const rows = await this.db.runTransaction('r', [this.storeName], async (tx) => {
+      return (await tx.table(this.storeName).where('state').equals(state).toArray()) as
+        SendOperationRow[];
+    });
     return rows.map(rowToOperation);
   }
 
   async getPending(): Promise<SendOperation[]> {
-    const rows = (await (this.db as any)
-      .table('coco_cashu_send_operations')
-      .where('state')
-      .anyOf(['executing', 'pending', 'rolling_back'])
-      .toArray()) as SendOperationRow[];
+    const rows = await this.db.runTransaction('r', [this.storeName], async (tx) => {
+      return (await tx
+        .table(this.storeName)
+        .where('state')
+        .anyOf(['executing', 'pending', 'rolling_back'])
+        .toArray()) as SendOperationRow[];
+    });
     return rows.map(rowToOperation);
   }
 
   async getByMintUrl(mintUrl: string): Promise<SendOperation[]> {
-    const rows = (await (this.db as any)
-      .table('coco_cashu_send_operations')
-      .where('mintUrl')
-      .equals(mintUrl)
-      .toArray()) as SendOperationRow[];
+    const rows = await this.db.runTransaction('r', [this.storeName], async (tx) => {
+      return (await tx.table(this.storeName).where('mintUrl').equals(mintUrl).toArray()) as
+        SendOperationRow[];
+    });
     return rows.map(rowToOperation);
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.runTransaction('rw', ['coco_cashu_send_operations'], async (tx) => {
-      const table = tx.table('coco_cashu_send_operations');
+    await this.db.runTransaction('rw', [this.storeName], async (tx) => {
+      const table = tx.table(this.storeName);
       await table.delete(id);
     });
   }

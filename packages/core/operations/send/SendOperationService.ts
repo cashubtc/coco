@@ -266,7 +266,7 @@ export class SendOperationService {
           // Save the pending operation to the repository
           await this.sendOperationRepository.update(result.pending);
           pending = result.pending;
-          token = result.token;
+          token = result.token ?? null;
         } else {
           // Handler returned FAILED - save and throw
           await this.sendOperationRepository.update(result.failed);
@@ -604,12 +604,14 @@ export class SendOperationService {
 
     if (result.status === 'PENDING') {
       await this.sendOperationRepository.update(result.pending);
-      await this.eventBus.emit('send:pending', {
-        mintUrl: result.pending.mintUrl,
-        operationId: result.pending.id,
-        operation: result.pending,
-        token: result.token,
-      });
+      if (result.token) {
+        await this.eventBus.emit('send:pending', {
+          mintUrl: result.pending.mintUrl,
+          operationId: result.pending.id,
+          operation: result.pending,
+          token: result.token,
+        });
+      }
       this.logger?.info('Recovered executing operation as pending', { operationId: op.id });
       return;
     }

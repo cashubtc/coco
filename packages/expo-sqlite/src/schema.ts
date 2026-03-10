@@ -337,7 +337,13 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: '013_mint_operations',
+    id: '014_send_operations_token',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN tokenJson TEXT;
+    `,
+  },
+  {
+    id: '015_mint_operations',
     sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_mint_operations (
         id TEXT PRIMARY KEY NOT NULL,

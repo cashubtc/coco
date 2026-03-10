@@ -153,29 +153,33 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const sendProofs = result.send;
     const keepProofs = result.keep;
 
-    // Save new proofs with correct states and operationId in a single call
+    // Persist keep proofs as ready and P2PK send proofs as inflight so the
+    // existing proof watcher/finalization flow can track them uniformly.
     const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
       createdByOperationId: operation.id,
     });
     const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
       createdByOperationId: operation.id,
     });
-    await proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
+    if (keepCoreProofs.length > 0 || sendCoreProofs.length > 0) {
+      await proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
+    }
 
     // Mark input proofs as spent (use proofService to emit events)
     await proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
+
+    const token: Token = {
+      mint: mintUrl,
+      proofs: sendProofs,
+      unit: wallet.unit,
+    };
 
     // Build pending operation
     const pending: PendingSendOperation = {
       ...operation,
       state: 'pending',
       updatedAt: Date.now(),
-    };
-
-    const token: Token = {
-      mint: mintUrl,
-      proofs: sendProofs,
-      unit: wallet.unit,
+      token,
     };
 
     logger?.info('P2PK send operation executed', {
@@ -267,36 +271,84 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       return { status: 'FAILED', failed };
     }
 
-    // Swap happened - recover outputs from OutputData if they were not already saved
-    if (operation.outputData) {
-      const existingProofs = await proofRepository.getProofsByOperationId(
-        operation.mintUrl,
-        operation.id,
-      );
-      const keepOutputData = {
-        keep: operation.outputData.keep,
-        send: [],
-      };
-      const keepSecrets = getSecretsFromSerializedOutputData(keepOutputData).keepSecrets;
-      const keepProofsAlreadySaved = existingProofs.some((p: CoreProof) => keepSecrets.includes(p.secret));
+    if (!operation.outputData) {
+      throw new Error('Missing output data for P2PK recovery after swap execution');
+    }
 
-      if (!keepProofsAlreadySaved && keepOutputData.keep.length > 0) {
-        await proofService.recoverProofsFromOutputData(operation.mintUrl, keepOutputData);
+    const existingProofs = await proofRepository.getProofsByOperationId(
+      operation.mintUrl,
+      operation.id,
+    );
+    const outputSecrets = getSecretsFromSerializedOutputData(operation.outputData);
+    const keepOutputData = {
+      keep: operation.outputData.keep,
+      send: [],
+    };
+
+    const existingKeepProofs = existingProofs.filter((p: CoreProof) =>
+      outputSecrets.keepSecrets.includes(p.secret),
+    );
+    if (existingKeepProofs.length === 0 && keepOutputData.keep.length > 0) {
+      await proofService.recoverProofsFromOutputData(operation.mintUrl, keepOutputData, {
+        createdByOperationId: operation.id,
+      });
+    }
+
+    let sendProofs: Proof[] = existingProofs.filter((p: CoreProof) =>
+      outputSecrets.sendSecrets.includes(p.secret),
+    );
+    if (sendProofs.length === 0 && operation.outputData.send.length > 0) {
+      const recoveredSendProofs = await proofService.recoverProofsFromOutputData(
+        operation.mintUrl,
+        {
+          keep: [],
+          send: operation.outputData.send,
+        },
+        {
+          persistRecoveredProofs: false,
+        },
+      );
+
+      if (recoveredSendProofs.length > 0) {
+        await proofService.saveProofs(
+          operation.mintUrl,
+          mapProofToCoreProof(operation.mintUrl, 'inflight', recoveredSendProofs, {
+            createdByOperationId: operation.id,
+          }),
+        );
       }
+      sendProofs = recoveredSendProofs;
     }
 
     // Mark input proofs as spent
     await proofService.setProofState(operation.mintUrl, operation.inputProofSecrets, 'spent');
 
-    const failed: RolledBackSendOperation = {
+    let token: Token | undefined;
+    if (sendProofs.length > 0) {
+      token = {
+        mint: operation.mintUrl,
+        proofs: sendProofs,
+        unit: wallet.unit,
+      };
+    } else if (outputSecrets.sendSecrets.length > 0) {
+      const sendStates = await wallet.checkProofsStates(
+        outputSecrets.sendSecrets.map((secret) => ({ secret })) as unknown as Proof[],
+      );
+      const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
+      if (!allSendProofsSpent) {
+        throw new Error('Recovered P2PK swap succeeded but token could not be reconstructed');
+      }
+    }
+
+    const pending: PendingSendOperation = {
       ...operation,
-      state: 'rolled_back',
+      state: 'pending',
       updatedAt: Date.now(),
-      error: 'Recovered: P2PK swap succeeded but token never returned',
+      token,
     };
 
     logger?.info('Recovered P2PK executing operation', { operationId: operation.id });
 
-    return { status: 'FAILED', failed };
+    return { status: 'PENDING', pending, token };
   }
 }
