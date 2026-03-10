@@ -57,6 +57,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
       return { ...base, state: 'pending', ...preparedData };
     case 'finalized':
       return { ...base, state: 'finalized', ...preparedData };
+    case 'rolling_back':
+      return { ...base, state: 'rolling_back', ...preparedData };
     case 'rolled_back':
       return { ...base, state: 'rolled_back', ...preparedData };
     default:
@@ -204,4 +206,3 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     await this.db.run('DELETE FROM coco_cashu_send_operations WHERE id = ?', [id]);
   }
 }
-
