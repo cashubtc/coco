@@ -336,6 +336,12 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_receive_operations(mintUrl);
     `,
   },
+  {
+    id: '014_send_operations_token',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN tokenJson TEXT;
+    `,
+  },
 ];
 
 // Export for testing

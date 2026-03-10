@@ -336,6 +336,12 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
     `,
   },
+  {
+    id: '014_send_operations_token',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN tokenJson TEXT;
+    `,
+  },
 ];
 
 // Export for testing

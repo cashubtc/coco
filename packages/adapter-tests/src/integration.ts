@@ -1904,12 +1904,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     describe('P2PK (Pay-to-Public-Key)', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
+      let repositories: Repositories | undefined;
 
       beforeEach(async () => {
-        const { repositories, dispose } = await createRepositories();
-        repositoriesDispose = dispose;
+        const created = await createRepositories();
+        repositories = created.repositories;
+        repositoriesDispose = created.dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          repo: created.repositories,
           seedGetter,
           logger,
         });
@@ -1926,6 +1928,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await repositoriesDispose();
           repositoriesDispose = undefined;
         }
+        repositories = undefined;
       });
       it('should receive token with P2PK locked proofs using added keypair', async () => {
         // Generate a keypair using the KeyRing API
@@ -2133,6 +2136,80 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const balanceFinal = await mgr!.wallet.getBalances();
         const amountFinal = balanceFinal[mintUrl] || 0;
         expect(amountFinal).toBeGreaterThan(amountAfter);
+      });
+
+      it('should persist pending P2PK send operations across restart and recover them', async () => {
+        const secretKey = crypto.getRandomValues(new Uint8Array(32));
+        const recipientKeypair = await mgr!.keyring.addKeyPair(secretKey);
+        const sendAmount = 30;
+
+        const preparedSend = await mgr!.send.prepareSendP2pk(
+          mintUrl,
+          sendAmount,
+          recipientKeypair.publicKeyHex,
+        );
+        const { operation, token } = await mgr!.send.executePreparedSend(preparedSend.id);
+
+        const pendingBeforeRestart = await mgr!.send.getOperation(operation.id);
+        expect(pendingBeforeRestart).toBeDefined();
+        expect(pendingBeforeRestart?.state).toBe('pending');
+        expect(pendingBeforeRestart?.method).toBe('p2pk');
+        expect((pendingBeforeRestart as { methodData: { pubkey: string } }).methodData.pubkey).toBe(
+          recipientKeypair.publicKeyHex,
+        );
+        const storedTokenBeforeRestart = pendingBeforeRestart as { token?: Token };
+        expect(storedTokenBeforeRestart.token).toBeDefined();
+        expect(storedTokenBeforeRestart.token?.proofs.length).toBeGreaterThan(0);
+
+        await mgr!.pauseSubscriptions();
+        await mgr!.dispose();
+        mgr = undefined;
+
+        mgr = await initializeCoco({
+          repo: repositories!,
+          seedGetter,
+          logger,
+          watchers: {
+            mintQuoteWatcher: { disabled: true },
+            proofStateWatcher: { disabled: true },
+          },
+        });
+
+        await mgr!.mint.addMint(mintUrl, { trusted: true });
+        await mgr!.keyring.addKeyPair(secretKey);
+
+        const pendingAfterRestart = await mgr!.send.getOperation(operation.id);
+        expect(pendingAfterRestart).toBeDefined();
+        expect(pendingAfterRestart?.state).toBe('pending');
+        expect(pendingAfterRestart?.method).toBe('p2pk');
+        expect((pendingAfterRestart as { methodData: { pubkey: string } }).methodData.pubkey).toBe(
+          recipientKeypair.publicKeyHex,
+        );
+
+        const recoveredToken = (pendingAfterRestart as { token?: Token }).token;
+        expect(recoveredToken).toBeDefined();
+        expect(recoveredToken?.proofs.length).toBeGreaterThan(0);
+        const parsedSecret: Secret = parseP2PKSecret(recoveredToken!.proofs[0]!.secret);
+        expect(parsedSecret[0]).toBe('P2PK');
+        expect(parsedSecret[1].data).toBe(recipientKeypair.publicKeyHex);
+
+        const pendingOperations = await mgr!.send.getPendingOperations();
+        const recoveredPending = pendingOperations.find((pending) => pending.id === operation.id);
+        expect(recoveredPending).toBeDefined();
+        expect(recoveredPending?.method).toBe('p2pk');
+
+        const finalizedPromise = waitForEvent<{ operationId: string }>(
+          mgr!,
+          'send:finalized',
+          (payload) => payload.operationId === operation.id,
+        );
+
+        await mgr!.wallet.receive(recoveredToken ?? token);
+        await mgr!.send.recoverPendingOperations();
+        await finalizedPromise;
+
+        const finalizedOperation = await mgr!.send.getOperation(operation.id);
+        expect(finalizedOperation?.state).toBe('finalized');
       });
 
       it('should handle multiple P2PK locked proofs in one token', async () => {

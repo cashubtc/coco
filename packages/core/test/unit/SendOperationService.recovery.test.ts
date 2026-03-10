@@ -166,7 +166,12 @@ describe('SendOperationService - recoverPendingOperations', () => {
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
       ),
-      recoverProofsFromOutputData: mock(async (mintUrl: string, serializedOutputData: any) => {
+      recoverProofsFromOutputData: mock(
+        async (
+          mintUrl: string,
+          serializedOutputData: any,
+          options?: { persistRecoveredProofs?: boolean },
+        ) => {
         // Deserialize output data and call wallet restore
         const allOutputs = [...serializedOutputData.keep, ...serializedOutputData.send];
         if (allOutputs.length === 0) return [];
@@ -193,13 +198,14 @@ describe('SendOperationService - recoverPendingOperations', () => {
           }
         }
 
-        // Save recovered proofs (already mocked)
-        if (recoveredProofs.length > 0) {
+        // Save recovered proofs (already mocked) unless explicitly disabled.
+        if (recoveredProofs.length > 0 && options?.persistRecoveredProofs !== false) {
           await proofService.saveProofs(mintUrl, recoveredProofs);
         }
 
         return recoveredProofs;
-      }),
+      },
+      ),
     } as unknown as ProofService;
 
     // Mock MintService
@@ -559,6 +565,81 @@ describe('SendOperationService - recoverPendingOperations', () => {
       expect(sendProof.id).toBe(keysetId);
       expect(sendProof.mintUrl).toBe(mintUrl);
       expect(sendProof.state).toBe('ready');
+    });
+  });
+
+  // ============================================================================
+  // 6b. executing State Recovery - P2PK Send Resurfacing
+  // ============================================================================
+
+  describe('executing state - P2PK swap succeeded, token resurfaced', () => {
+    it('should resurface the token during recovery and persist send proofs as inflight', async () => {
+      const outputData = createMockOutputData(['keep-secret'], ['send-secret']);
+      const executingOp = makeExecutingOp('exec-p2pk-1', {
+        method: 'p2pk',
+        methodData: { pubkey: '02' + '11'.repeat(32) },
+        inputProofSecrets: ['input-1'],
+        outputData,
+      });
+      await sendOpRepo.create(executingOp);
+
+      await proofRepo.saveProofs(mintUrl, [makeProof('input-1', { usedByOperationId: 'exec-p2pk-1' })]);
+
+      mockCheckProofsStates.mockImplementation(() =>
+        Promise.resolve([{ state: 'SPENT', Y: 'y1' } as CashuProofState]),
+      );
+
+      mockMintRestore.mockImplementation((req: { outputs: any[] }) => {
+        if (req.outputs[0]?.B_ === 'B_keep_keep-secret') {
+          return Promise.resolve({
+            outputs: [{ B_: 'B_keep_keep-secret', amount: 10 }],
+            signatures: [{ C_: 'C_keep', amount: 10, id: keysetId }],
+          });
+        }
+
+        return Promise.resolve({
+          outputs: [{ B_: 'B_send_send-secret', amount: 20 }],
+          signatures: [{ C_: 'C_send', amount: 20, id: keysetId }],
+        });
+      });
+
+      const savedProofBatches: any[][] = [];
+      (proofService.saveProofs as Mock<any>).mockImplementation(async (_mintUrl: string, proofs: any[]) => {
+        savedProofBatches.push(proofs);
+      });
+
+      const pendingEvents: Array<{ operationId: string; token: any }> = [];
+      eventBus.on('send:pending', (event) => void pendingEvents.push(event));
+
+      await service.recoverPendingOperations();
+
+      const op = await sendOpRepo.getById('exec-p2pk-1');
+      expect(op?.state).toBe('finalized');
+      const token = op && 'token' in op ? op.token : undefined;
+      expect(token?.mint).toBe(mintUrl);
+      expect(token?.proofs).toEqual([
+        expect.objectContaining({
+          id: keysetId,
+          amount: 20,
+          secret: 'send-secret',
+          C: 'C_send',
+        }),
+      ]);
+
+      expect(pendingEvents).toHaveLength(1);
+      expect(pendingEvents[0]?.operationId).toBe('exec-p2pk-1');
+      expect(pendingEvents[0]?.token.proofs[0]?.secret).toBe('send-secret');
+
+      const savedSecrets = savedProofBatches.flat().map((proof) => proof.secret);
+      expect(savedSecrets).toContain('keep-secret');
+      expect(savedSecrets).toContain('send-secret');
+      expect(savedProofBatches.flat()).toContainEqual(
+        expect.objectContaining({
+          secret: 'send-secret',
+          state: 'inflight',
+          createdByOperationId: 'exec-p2pk-1',
+        }),
+      );
     });
   });
 

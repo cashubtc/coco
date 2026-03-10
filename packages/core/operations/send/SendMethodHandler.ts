@@ -83,7 +83,7 @@ export type ExecutionResult =
   | {
       status: 'PENDING';
       pending: PendingSendOperation;
-      token: Token;
+      token?: Token;
     }
   | {
       status: 'FAILED';

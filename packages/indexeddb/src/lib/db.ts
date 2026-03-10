@@ -183,6 +183,7 @@ export interface SendOperationRow {
   inputAmount?: number | null;
   inputProofSecretsJson?: string | null;
   outputDataJson?: string | null;
+  tokenJson?: string | null;
 }
 
 export interface ReceiveOperationRow {
