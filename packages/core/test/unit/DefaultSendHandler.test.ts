@@ -165,6 +165,10 @@ describe('DefaultSendHandler', () => {
     } as unknown as ProofRepository;
 
     proofService = {
+      selectProofsToSend: mock(async (selectedMintUrl: string, amount: number, includeFees = true) => {
+        const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
+        return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+      }),
       reserveProofs: mock(() => Promise.resolve({ amount: 100 })),
       releaseProofs: mock(() => Promise.resolve()),
       createOutputsAndIncrementCounters: mock(() =>
