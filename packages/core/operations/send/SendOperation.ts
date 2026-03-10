@@ -24,7 +24,9 @@ export type SendOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
+import type { Token } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import type { SendMethod, SendMethodData } from './SendMethodHandler';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -33,7 +35,7 @@ import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '.
 /**
  * Base fields present in all send operations
  */
-interface SendOperationBase {
+interface SendOperationBase<M extends SendMethod = SendMethod> {
   /** Unique identifier for this operation */
   id: string;
 
@@ -42,6 +44,12 @@ interface SendOperationBase {
 
   /** The amount requested to send (before fees) */
   amount: number;
+
+  /** The send method (e.g., 'default', 'p2pk') */
+  method: M;
+
+  /** Method-specific data */
+  methodData: SendMethodData<M>;
 
   /** Timestamp when the operation was created */
   createdAt: number;
@@ -80,6 +88,15 @@ interface PreparedData {
   outputData?: SerializedOutputData;
 }
 
+/**
+ * Token data available once a send has been executed.
+ * For P2PK sends, this is the canonical persisted token copy because the send
+ * proofs are intentionally not stored in the wallet proof repository.
+ */
+interface SendTokenData {
+  token?: Token;
+}
+
 // ============================================================================
 // State-specific Operation Types
 // ============================================================================
@@ -108,14 +125,14 @@ export interface ExecutingSendOperation extends SendOperationBase, PreparedData 
 /**
  * Pending state - token returned, awaiting confirmation that proofs are spent
  */
-export interface PendingSendOperation extends SendOperationBase, PreparedData {
+export interface PendingSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'pending';
 }
 
 /**
  * Finalized state - sent proofs confirmed spent, operation finalized
  */
-export interface FinalizedSendOperation extends SendOperationBase, PreparedData {
+export interface FinalizedSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'finalized';
 }
 
@@ -124,7 +141,7 @@ export interface FinalizedSendOperation extends SendOperationBase, PreparedData 
  * This is a transient state used to prevent race conditions with ProofStateWatcher.
  * Only used when rolling back from 'pending' state (which requires a reclaim swap).
  */
-export interface RollingBackSendOperation extends SendOperationBase, PreparedData {
+export interface RollingBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'rolling_back';
 }
 
@@ -132,7 +149,7 @@ export interface RollingBackSendOperation extends SendOperationBase, PreparedDat
  * Rolled back state - operation cancelled, proofs reclaimed
  * Can be rolled back from prepared, executing, or pending states
  */
-export interface RolledBackSendOperation extends SendOperationBase, PreparedData {
+export interface RolledBackSendOperation extends SendOperationBase, PreparedData, SendTokenData {
   state: 'rolled_back';
 }
 
@@ -260,13 +277,19 @@ export function getKeepProofSecrets(op: PreparedOrLaterOperation): string[] {
 // Factory Function
 // ============================================================================
 
+export interface CreateSendOperationOptions<M extends SendMethod = SendMethod> {
+  method: M;
+  methodData: SendMethodData<M>;
+}
+
 /**
  * Creates a new SendOperation in init state
  */
-export function createSendOperation(
+export function createSendOperation<M extends SendMethod = SendMethod>(
   id: string,
   mintUrl: string,
   amount: number,
+  options: CreateSendOperationOptions<M>,
 ): InitSendOperation {
   const now = Date.now();
   return {
@@ -274,6 +297,8 @@ export function createSendOperation(
     state: 'init',
     mintUrl,
     amount,
+    method: options.method,
+    methodData: options.methodData,
     createdAt: now,
     updatedAt: now,
   };

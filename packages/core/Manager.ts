@@ -35,6 +35,9 @@ import {
   MintRequestProvider,
   MeltBolt11Handler,
   MeltHandlerProvider,
+  SendHandlerProvider,
+  DefaultSendHandler,
+  P2pkSendHandler,
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
@@ -668,6 +671,10 @@ export class Manager {
     const mintScopedLock = new MintScopedLock();
 
     const sendOperationLogger = this.getChildLogger('SendOperationService');
+    const sendHandlerProvider = new SendHandlerProvider({
+      default: new DefaultSendHandler(),
+      p2pk: new P2pkSendHandler(),
+    });
     const sendOperationService = new SendOperationService(
       repositories.sendOperationRepository,
       repositories.proofRepository,
@@ -675,6 +682,7 @@ export class Manager {
       mintService,
       walletService,
       this.eventBus,
+      sendHandlerProvider,
       sendOperationLogger,
       mintScopedLock,
     );
