@@ -180,17 +180,18 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       await proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
     }
 
+    const token: Token = {
+      mint: mintUrl,
+      proofs: sendProofs,
+      unit: wallet.unit,
+    };
+
     // Build pending operation
     const pending: PendingSendOperation = {
       ...operation,
       state: 'pending',
       updatedAt: Date.now(),
-    };
-
-    const token: Token = {
-      mint: mintUrl,
-      proofs: sendProofs,
-      unit: wallet.unit,
+      token,
     };
 
     logger?.info('Send operation executed', {
