@@ -371,20 +371,6 @@ describe('P2pkSendHandler', () => {
       );
     });
 
-    it('should emit send:prepared event', async () => {
-      const events: any[] = [];
-      eventBus.on('send:prepared', (e) => void events.push(e));
-
-      const operation = makeInitOp('op-1');
-      const ctx = buildPrepareContext(operation);
-
-      await handler.prepare(ctx);
-
-      expect(events.length).toBe(1);
-      expect(events[0].operationId).toBe('op-1');
-      expect(events[0].operation.state).toBe('prepared');
-    });
-
     it('should log preparation with pubkey', async () => {
       const operation = makeInitOp('op-1');
       const ctx = buildPrepareContext(operation);
@@ -559,20 +545,6 @@ describe('P2pkSendHandler', () => {
         }
       });
 
-      it('should emit send:pending event with token', async () => {
-        const events: any[] = [];
-        eventBus.on('send:pending', (e) => void events.push(e));
-
-        const operation = makeExecutingOp('op-1');
-        const inputProofs = [makeProof('input-1', 60), makeProof('input-2', 50)];
-
-        const ctx = buildExecuteContext(operation, inputProofs);
-        await handler.execute(ctx);
-
-        expect(events.length).toBe(1);
-        expect(events[0].operationId).toBe('op-1');
-        expect(events[0].token).toBeDefined();
-      });
     });
 
     describe('error handling', () => {
@@ -717,7 +689,10 @@ describe('P2pkSendHandler', () => {
         expect(result.status).toBe('FAILED');
         expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
           mintUrl,
-          outputData,
+          {
+            keep: outputData.keep,
+            send: [],
+          },
         );
       });
 

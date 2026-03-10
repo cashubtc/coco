@@ -165,4 +165,43 @@ describe('SendOperationService', () => {
     expect(secondPrepared.state).toBe('prepared');
     expect(secondResolved).toBe(true);
   });
+
+  it('emits send:prepared after the prepared state is persisted', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, 100);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('send:prepared', async ({ operationId }) => {
+      persistedState = (await sendOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const preparedOp = await service.prepare(initOp);
+
+    expect(preparedOp.state).toBe('prepared');
+    expect(persistedState).toBe('prepared');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits send:pending after the pending state is persisted', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, 100);
+    const preparedOp = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('send:pending', async ({ operationId }) => {
+      persistedState = (await sendOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const result = await service.execute(preparedOp);
+
+    expect(result.operation.state).toBe('pending');
+    expect(persistedState).toBe('pending');
+    expect(lockedDuringEvent).toBe(true);
+  });
 });
