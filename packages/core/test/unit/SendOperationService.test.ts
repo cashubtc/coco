@@ -348,4 +348,65 @@ describe('SendOperationService', () => {
     const persisted = await sendOpRepo.getById(pendingOp.id);
     expect(persisted?.state).toBe('finalized');
   });
+
+  it('delegates finalization side effects to the send method handler before persisting', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-custom-finalize',
+      state: 'pending',
+      mintUrl,
+      amount: 100,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: false,
+      fee: 0,
+      inputAmount: 100,
+      inputProofSecrets: ['proof-1'],
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+
+    let persistedStateDuringFinalize: string | undefined;
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async (ctx) => ({
+        ...ctx.operation,
+        state: 'prepared',
+        updatedAt: Date.now(),
+        needsSwap: false,
+        fee: 0,
+        inputAmount: ctx.operation.amount,
+        inputProofSecrets: [],
+      })),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      finalize: mock(async ({ operation }) => {
+        persistedStateDuringFinalize = (await sendOpRepo.getById(operation.id))?.state;
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    await service.finalize(pendingOp.id);
+
+    expect(customHandler.finalize).toHaveBeenCalledTimes(1);
+    expect(persistedStateDuringFinalize).toBe('pending');
+    expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
 });

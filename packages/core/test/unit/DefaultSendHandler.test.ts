@@ -361,18 +361,12 @@ describe('DefaultSendHandler', () => {
   });
 
   describe('finalize', () => {
-    it('releases input, send, and keep reservations and emits finalized', async () => {
-      const events: Array<{ operationId: string; operation: { state: string } }> = [];
-      eventBus.on('send:finalized', (event) => void events.push(event));
-
+    it('releases input, send, and keep reservations', async () => {
       await handler.finalize(buildFinalizeContext(makePendingOp('op-finalize')));
 
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['send-1']);
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
-      expect(events).toHaveLength(1);
-      expect(events[0]?.operationId).toBe('op-finalize');
-      expect(events[0]?.operation.state).toBe('finalized');
     });
   });
 
