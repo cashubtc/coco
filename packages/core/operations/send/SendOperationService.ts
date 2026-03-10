@@ -15,7 +15,6 @@ import {
   createSendOperation,
   hasPreparedData,
   getSendProofSecrets,
-  getKeepProofSecrets,
   isTerminalOperation,
   type CreateSendOperationOptions,
 } from './SendOperation';
@@ -401,25 +400,18 @@ export class SendOperationService {
       // TypeScript knows operation is PendingSendOperation
       const pendingOp = operation as PendingSendOperation;
 
+      const handler = this.handlerProvider.get(pendingOp.method);
+      await handler.finalize?.({
+        ...this.buildDeps(),
+        operation: pendingOp,
+      });
+
       const finalized: FinalizedSendOperation = {
         ...pendingOp,
         state: 'finalized',
         updatedAt: Date.now(),
       };
       await this.sendOperationRepository.update(finalized);
-
-      // Release proof reservations (they're already spent)
-      // Derive secrets from operation data
-      const sendSecrets = getSendProofSecrets(pendingOp);
-      const keepSecrets = getKeepProofSecrets(pendingOp);
-
-      await this.proofService.releaseProofs(pendingOp.mintUrl, pendingOp.inputProofSecrets);
-      if (sendSecrets.length > 0) {
-        await this.proofService.releaseProofs(pendingOp.mintUrl, sendSecrets);
-      }
-      if (keepSecrets.length > 0) {
-        await this.proofService.releaseProofs(pendingOp.mintUrl, keepSecrets);
-      }
 
       await this.eventBus.emit('send:finalized', {
         mintUrl: pendingOp.mintUrl,

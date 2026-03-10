@@ -585,18 +585,14 @@ describe('P2pkSendHandler', () => {
       );
     });
 
-    it('should emit send:finalized event', async () => {
-      const events: any[] = [];
-      eventBus.on('send:finalized', (e) => void events.push(e));
-
+    it('should release send and keep proof reservations when present', async () => {
       const operation = makePendingOp('op-1');
       const ctx = buildFinalizeContext(operation);
 
       await handler.finalize(ctx);
 
-      expect(events.length).toBe(1);
-      expect(events[0].operationId).toBe('op-1');
-      expect(events[0].operation.state).toBe('finalized');
+      expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['send-1']);
+      expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
     });
   });
 

@@ -196,7 +196,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * Finalize the send operation after proofs are confirmed spent.
    */
   async finalize(ctx: FinalizeContext): Promise<void> {
-    const { operation, proofService, eventBus, logger } = ctx;
+    const { operation, proofService } = ctx;
 
     // Release proof reservations (they're already spent)
     const sendSecrets = getSendProofSecrets(operation);
@@ -210,13 +210,6 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       await proofService.releaseProofs(operation.mintUrl, keepSecrets);
     }
 
-    await eventBus.emit('send:finalized', {
-      mintUrl: operation.mintUrl,
-      operationId: operation.id,
-      operation: { ...operation, state: 'finalized', updatedAt: Date.now() },
-    });
-
-    logger?.info('P2PK send operation finalized', { operationId: operation.id });
   }
 
   /**
