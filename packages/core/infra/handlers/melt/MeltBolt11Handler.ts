@@ -39,7 +39,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    *
    * This method:
    * 1. Creates a melt quote from the mint for the lightning invoice
-   * 2. Selects proofs to cover the quote amount + fee reserve
+   * 2. Selects proofs to cover the quote amount + fee reserve with input fees
    * 3. Determines if a pre-swap is needed (when selected amount >> required)
    * 4. Reserves the input proofs for this operation
    * 5. Creates blank outputs for receiving change
@@ -64,7 +64,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       totalAmount,
     });
 
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, false);
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = sumProofs(selectedProofs);
     const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
 

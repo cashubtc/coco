@@ -348,6 +348,28 @@ describe('MeltBolt11Handler', () => {
           ['input-1', 'input-2'],
           'op-1',
         );
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
+      });
+
+      it('should select enough proofs to cover melt input fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(
+          (_mintUrl: string, _amount: number, includeFees: boolean) =>
+            Promise.resolve(
+              includeFees
+                ? [makeProof('input-1', 60), makeProof('input-2', 50), makeProof('input-3', 1)]
+                : [makeProof('input-1', 60), makeProof('input-2', 50)],
+            ),
+        );
+
+        const result = await handler.prepare(ctx);
+
+        expect(result.needsSwap).toBe(false);
+        expect(result.inputAmount).toBe(111);
+        expect(result.inputProofSecrets).toEqual(['input-1', 'input-2', 'input-3']);
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
       });
 
       it('should create blank outputs for change', async () => {
@@ -372,11 +394,8 @@ describe('MeltBolt11Handler', () => {
         const ctx = buildPrepareContext(operation);
 
         // Total required = 110, threshold = 110 * 1.1 = 121
-        // First call returns proofs that exceed threshold (130 >= 121)
-        // Second call (with fees) returns same
-        let callCount = 0;
+        // Both fee-aware selections return proofs that exceed threshold (130 >= 121)
         (proofService.selectProofsToSend as Mock<any>).mockImplementation(() => {
-          callCount++;
           return Promise.resolve([makeProof('input-1', 80), makeProof('input-2', 50)]);
         });
 
@@ -386,6 +405,16 @@ describe('MeltBolt11Handler', () => {
         expect(result.swap_fee).toBe(1); // From mocked getFeesForProofs
         expect(result.swapOutputData).toBeDefined();
         expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalled();
+        expect((proofService.selectProofsToSend as Mock<any>).mock.calls[0]).toEqual([
+          mintUrl,
+          110,
+          true,
+        ]);
+        expect((proofService.selectProofsToSend as Mock<any>).mock.calls[1]).toEqual([
+          mintUrl,
+          110,
+          true,
+        ]);
       });
 
       it('should reserve proofs for swap operation', async () => {
