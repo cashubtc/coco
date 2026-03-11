@@ -17,7 +17,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
-import type { Keyset } from '@core/models/Keyset.ts';
+import type { Keyset, KeysetKeypairs } from '@core/models/Keyset.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -640,7 +640,7 @@ export class ProofService {
         this.logger?.warn('Failed to create change proof', { reason, index: i });
         return [];
       }
-      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs })];
+      return [output.toProof(sig, { id: keyset.id, keys: toCashuKeys(keyset.keypairs) })];
     });
 
     if (proofs.length === 0) {
@@ -779,12 +779,12 @@ function splitAmount(value: number, keys: Keys): number[] {
   // Denomination fill for the remaining value
   const sortedKeyAmounts = Object.keys(keys)
     .map((key) => Number(key))
+    .filter((amount) => Number.isSafeInteger(amount) && amount > 0)
     .sort((a, b) => b - a);
   if (!sortedKeyAmounts || sortedKeyAmounts.length === 0) {
     throw new Error('Cannot split amount, keyset is inactive or contains no keys');
   }
   for (const amt of sortedKeyAmounts) {
-    if (amt <= 0) continue;
     // Calculate how many of amt fit into remaining value
     const requireCount = Math.floor(value / amt);
     // Add them to the split and reduce the target value by added amounts
@@ -798,4 +798,8 @@ function splitAmount(value: number, keys: Keys): number[] {
   }
 
   return split;
+}
+
+function toCashuKeys(keypairs: KeysetKeypairs): Keys {
+  return keypairs as Keys;
 }

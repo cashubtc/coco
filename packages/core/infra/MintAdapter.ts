@@ -1,6 +1,7 @@
 import {
   Mint,
   type CheckStatePayload,
+  type Keys,
   OutputData,
   type Proof,
   type MeltQuoteBolt11Response,
@@ -9,6 +10,7 @@ import {
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
+import type { KeysetKeypairs } from '../models/Keyset.ts';
 
 /**
  * Adapter for making HTTP requests to Cashu mints.
@@ -34,13 +36,13 @@ export class MintAdapter {
     return await cashuMint.getKeySets();
   }
 
-  async fetchKeysForId(mintUrl: string, id: string): Promise<Record<number, string>> {
+  async fetchKeysForId(mintUrl: string, id: string): Promise<KeysetKeypairs> {
     const cashuMint = this.getCashuMint(mintUrl);
     const { keysets } = await cashuMint.getKeys(id);
     if (keysets.length !== 1 || !keysets[0]) {
       throw new Error(`Expected 1 keyset for ${id}, got ${keysets.length}`);
     }
-    return keysets[0].keys;
+    return keysets[0].keys as KeysetKeypairs;
   }
 
   private getCashuMint(mintUrl: string): Mint {
@@ -64,7 +66,10 @@ export class MintAdapter {
   }
 
   // Check current state of a bolt11 melt quote (returns only state)
-  async checkMeltQuoteState(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt11Response['state']> {
+  async checkMeltQuoteState(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<MeltQuoteBolt11Response['state']> {
     const res = await this.checkMeltQuote(mintUrl, quoteId);
     return res.state;
   }

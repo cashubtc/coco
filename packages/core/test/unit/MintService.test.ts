@@ -42,10 +42,10 @@ describe('MintService', () => {
   ];
 
   const mockKeys = {
-    1: 'key-1',
-    2: 'key-2',
-    4: 'key-4',
-    8: 'key-8',
+    '1': 'key-1',
+    '2': 'key-2',
+    '4': 'key-4',
+    '8': 'key-8',
   };
 
   beforeEach(() => {
@@ -349,6 +349,23 @@ describe('MintService', () => {
 
       expect(result.keysets.length).toBeGreaterThan(0);
       expect(result.keysets[0]?.id).toBe('keyset-1');
+    });
+
+    it('should preserve large denomination keys as strings', async () => {
+      const largeDenomination = '9007199254740993';
+      const mockAdapter = (service as any).mintAdapter;
+      mockAdapter.fetchKeysForId = mock(() =>
+        Promise.resolve({
+          [largeDenomination]: 'large-key',
+          '1': 'small-key',
+        }),
+      );
+
+      await service.addMintByUrl(testMintUrl);
+
+      const stored = await keysetRepo.getKeysetById(testMintUrl, 'keyset-1');
+      expect(stored?.keypairs[largeDenomination]).toBe('large-key');
+      expect(Object.keys(stored?.keypairs ?? {})).toContain(largeDenomination);
     });
 
     it('should update trust status when re-adding with trusted=true', async () => {
