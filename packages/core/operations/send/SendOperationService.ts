@@ -818,4 +818,12 @@ export class SendOperationService {
   async getPendingOperations(): Promise<SendOperation[]> {
     return this.sendOperationRepository.getPending();
   }
+
+  /**
+   * Get all prepared operations.
+   */
+  async getPreparedOperations(): Promise<PreparedSendOperation[]> {
+    const ops = await this.sendOperationRepository.getByState('prepared');
+    return ops.filter((op): op is PreparedSendOperation => op.state === 'prepared');
+  }
 }

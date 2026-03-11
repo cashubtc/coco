@@ -59,7 +59,7 @@ export class WalletApi {
    * Receive a token in one shot.
    *
    * For a multi-step receive flow (review fees/amounts before committing),
-   * use ReceiveApi.prepareReceive() and ReceiveApi.executeReceive().
+   * use `manager.ops.receive.prepare()` and `manager.ops.receive.execute()`.
    */
   async receive(token: Token | string): Promise<void> {
     return this.receiveOperationService.receive(token);
@@ -68,7 +68,8 @@ export class WalletApi {
   /**
    * Send tokens from a mint.
    *
-   * @deprecated Use `SendApi.prepareSend()` and SendApi.executePreparedSend() instead.
+   * @deprecated Use `manager.ops.send.prepare()` and `manager.ops.send.execute()` instead.
+   * This alias will be removed in a future release.
    *
    * @param mintUrl - The mint URL to send from
    * @param amount - The amount to send

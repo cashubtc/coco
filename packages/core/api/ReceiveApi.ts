@@ -15,13 +15,16 @@ import type { ReceiveOperationService } from '../operations/receive/ReceiveOpera
  * - Inspect or recover pending/executing operations
  */
 export class ReceiveApi {
-  private readonly receiveOperationService: ReceiveOperationService;
+  protected readonly receiveOperationService: ReceiveOperationService;
 
   constructor(receiveOperationService: ReceiveOperationService) {
     this.receiveOperationService = receiveOperationService;
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.prepare()` instead.
+   * This alias will be removed in a future release.
+   *
    * Prepare a receive operation without executing it.
    * Decodes the token, validates it, and calculates fees.
    *
@@ -37,6 +40,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.execute()` instead.
+   * This alias will be removed in a future release.
+   *
    * Execute a prepared receive operation.
    * Call this after `prepareReceive()` to complete the receive.
    *
@@ -59,6 +65,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.get()` instead.
+   * This alias will be removed in a future release.
+   *
    * Get a receive operation by its ID.
    */
   async getOperation(operationId: string): Promise<ReceiveOperation | null> {
@@ -66,6 +75,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.listInFlight()` instead.
+   * This alias will be removed in a future release.
+   *
    * Get all pending receive operations.
    * Pending operations are in 'executing' state.
    */
@@ -74,6 +86,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.finalize()` instead.
+   * This alias will be removed in a future release.
+   *
    * Finalize an executing receive operation by operationId.
    * This marks the operation as completed after proofs are confirmed saved.
    */
@@ -82,6 +97,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.recovery.run()` instead.
+   * This alias will be removed in a future release.
+   *
    * Recover all pending operations.
    * Should be called during application initialization.
    */
@@ -90,6 +108,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.cancel()` instead.
+   * This alias will be removed in a future release.
+   *
    * Rollback (abort) a prepared receive operation.
    * Only works for operations in 'init' or 'prepared' state.
    */
@@ -98,6 +119,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.refresh()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check an executing operation and finalize it if it should be finalized.
    */
   async checkExecutingOperation(operationId: string): Promise<void> {
@@ -116,6 +140,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.diagnostics.isLocked()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check if a specific operation is currently locked (in progress).
    * Useful for UI to disable buttons while an operation is executing.
    */
@@ -124,6 +151,9 @@ export class ReceiveApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.receive.recovery.inProgress()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check if recovery is currently in progress.
    * Useful to prevent multiple recovery calls.
    */

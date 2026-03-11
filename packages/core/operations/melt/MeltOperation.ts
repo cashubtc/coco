@@ -23,6 +23,7 @@ export type MeltOperationState =
   | 'prepared'
   | 'executing'
   | 'pending'
+  | 'failed'
   | 'finalized'
   | 'rolling_back'
   | 'rolled_back';
