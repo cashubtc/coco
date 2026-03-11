@@ -190,6 +190,9 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 - `receive(token: Token | string): Promise<void>`
 - `getBalances(): Promise<{ [mintUrl: string]: number }>`
+- `getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown>`
+- `getBalancesBreakdown(): Promise<BalancesBreakdownByMint>`
+- `getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint>`
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
 - `processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest>`
@@ -335,7 +338,7 @@ From the package root:
 - `Manager`, `initializeCoco`, `CocoConfig`
 - Repository interfaces and memory implementations under `repositories/memory`
 - Models under `models`
-- Types: `CoreProof`, `ProofState`
+- Types: `CoreProof`, `ProofState`, `BalanceBreakdown`, `BalancesBreakdownByMint`
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
 - Subscription infra: `SubscriptionManager`, `WsConnectionManager`, `WebSocketLike`, `WebSocketFactory`, `SubscriptionCallback`, `SubscriptionKind`

@@ -4,6 +4,14 @@ export type MintInfo = Awaited<ReturnType<Mint['getInfo']>>;
 
 export type ProofState = 'inflight' | 'ready' | 'spent';
 
+export interface BalanceBreakdown {
+  ready: number;
+  reserved: number;
+  total: number;
+}
+
+export type BalancesBreakdownByMint = { [mintUrl: string]: BalanceBreakdown };
+
 export interface CoreProof extends Proof {
   mintUrl: string;
   state: ProofState;
