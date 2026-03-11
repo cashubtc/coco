@@ -342,6 +342,13 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_send_operations ADD COLUMN tokenJson TEXT;
     `,
   },
+  {
+    id: '015_reset_keysets_for_string_denoms',
+    sql: `
+      DELETE FROM coco_cashu_keysets;
+      UPDATE coco_cashu_mints SET updatedAt = 0;
+    `,
+  },
 ];
 
 // Export for testing
