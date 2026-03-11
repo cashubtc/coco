@@ -22,4 +22,6 @@ features:
     details: Coco works in the browser, NodeJS or React Native
   - title: Batteries Included
     details: Coco brings everything you need to build a Cashu wallet. Without the complexity
+  - title: Lifecycle APIs
+    details: Use `manager.ops.send`, `manager.ops.receive`, and `manager.ops.melt` for recoverable operation workflows
 ---

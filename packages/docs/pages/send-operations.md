@@ -34,13 +34,15 @@ init ──► prepared ──► executing ──► pending ──► complete
 
 ## Using the Send API
 
+`coco.ops.send` is the canonical send workflow API. `coco.send` exposes the same object today, but it is deprecated and will be removed in a future release.
+
 ### Prepare → Execute Flow
 
 The recommended flow separates preparation from execution, allowing you to show fees before committing:
 
 ```ts
 // Step 1: Prepare (reserves proofs, calculates fee)
-const prepared = await coco.send.prepareSend(mintUrl, 100);
+const prepared = await coco.ops.send.prepare({ mintUrl, amount: 100 });
 
 // Show user the fee
 console.log('Fee:', prepared.fee, 'sats');
@@ -48,7 +50,7 @@ console.log('Total input:', prepared.inputAmount, 'sats');
 console.log('Requires swap:', prepared.needsSwap);
 
 // Step 2: User confirms → Execute
-const { operation, token } = await coco.send.executePreparedSend(prepared.id);
+const { operation, token } = await coco.ops.send.execute(prepared.id);
 
 // Step 3: Share token with recipient
 shareToken(token);
@@ -59,10 +61,10 @@ shareToken(token);
 If the user decides not to proceed after seeing the fee:
 
 ```ts
-const prepared = await coco.send.prepareSend(mintUrl, 100);
+const prepared = await coco.ops.send.prepare({ mintUrl, amount: 100 });
 
 // User cancels
-await coco.send.rollback(prepared.id);
+await coco.ops.send.cancel(prepared.id);
 // Proofs are released and available again
 ```
 
@@ -72,11 +74,11 @@ After executing a send, if the recipient never claims the token:
 
 ```ts
 // Get the operation (from history or stored operationId)
-const operation = await coco.send.getOperation(operationId);
+const operation = await coco.ops.send.get(operationId);
 
 if (operation?.state === 'pending') {
   // Reclaim the proofs
-  await coco.send.rollback(operationId);
+  await coco.ops.send.reclaim(operationId);
 }
 ```
 
@@ -87,7 +89,7 @@ if (operation?.state === 'pending') {
 ### Get a Specific Operation
 
 ```ts
-const operation = await coco.send.getOperation(operationId);
+const operation = await coco.ops.send.get(operationId);
 
 if (operation) {
   console.log('State:', operation.state);
@@ -99,7 +101,7 @@ if (operation) {
 ### List Pending Operations
 
 ```ts
-const pending = await coco.send.getPendingOperations();
+const pending = await coco.ops.send.listInFlight();
 
 for (const op of pending) {
   console.log(`${op.id}: ${op.amount} sats (${op.state})`);
@@ -128,7 +130,7 @@ On startup, Coco automatically recovers pending operations:
 ```ts
 // This is called automatically by initializeCoco()
 // If using Manager directly, call it manually:
-await coco.send.recoverPendingOperations();
+await coco.ops.send.recovery.run();
 ```
 
 ### Recovery Behavior by State
@@ -188,7 +190,7 @@ for (const entry of history) {
 
     // For pending sends, you can rollback using the operationId
     if (entry.state === 'pending') {
-      // await coco.send.rollback(entry.operationId);
+      // await coco.ops.send.reclaim(entry.operationId);
     }
   }
 }
@@ -198,12 +200,11 @@ for (const entry of history) {
 
 ### Always Handle Prepared Operations
 
-If a user closes your app after `prepareSend()` but before executing or rolling back, the proofs remain reserved. Handle this on next launch:
+If a user closes your app after `prepare()` but before executing or cancelling, the proofs remain reserved. Handle this on next launch:
 
 ```ts
 // On app start
-const pending = await coco.send.getPendingOperations();
-const prepared = pending.filter((op) => op.state === 'prepared');
+const prepared = await coco.ops.send.listPrepared();
 
 if (prepared.length > 0) {
   // Either resume or clean up
@@ -213,7 +214,7 @@ if (prepared.length > 0) {
 
     // Option 2: Auto-rollback stale operations
     if (Date.now() - op.createdAt > 24 * 60 * 60 * 1000) {
-      await coco.send.rollback(op.id);
+      await coco.ops.send.cancel(op.id);
     }
   }
 }
@@ -224,8 +225,8 @@ if (prepared.length > 0) {
 When displaying a pending send to users, store the `operationId` so you can rollback later:
 
 ```ts
-const prepared = await coco.send.prepareSend(mintUrl, amount);
-const { operation, token } = await coco.send.executePreparedSend(prepared.id);
+const prepared = await coco.ops.send.prepare({ mintUrl, amount });
+const { operation, token } = await coco.ops.send.execute(prepared.id);
 
 // Store for later rollback capability
 savePendingSend({
@@ -240,14 +241,14 @@ savePendingSend({
 Prepare and execute can fail if the mint is unreachable. To ensure cleanup on failure:
 
 ```ts
-const prepared = await coco.send.prepareSend(mintUrl, amount);
+const prepared = await coco.ops.send.prepare({ mintUrl, amount });
 
 try {
-  const result = await coco.send.executePreparedSend(prepared.id);
+  const result = await coco.ops.send.execute(prepared.id);
   return result;
 } catch (error) {
   // Execute failed, rollback to release reserved proofs
-  await coco.send.rollback(prepared.id);
+  await coco.ops.send.cancel(prepared.id);
   throw error;
 }
 ```

@@ -8,6 +8,9 @@ await coco.enableProofStateWatcher();
 await coco.enableMintQuoteWatcher();
 ```
 
+`initializeCoco()` also recovers pending `coco.ops.send`, `coco.ops.receive`, and `coco.ops.melt`
+operations during startup, so most apps do not need to trigger recovery manually.
+
 To disable them during initialization with `initializeCoco()`:
 
 ```ts

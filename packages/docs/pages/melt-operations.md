@@ -11,29 +11,32 @@ The melt operation saga provides:
 - **Fee Transparency**: Fee reserve and swap fee are known up front
 - **Pending Tracking**: Pending melts can be checked and finalized later
 
-## API Surface (Quotes API)
+## API Surface (`coco.ops.melt`)
 
-The public API is exposed through `coco.quotes`:
+The canonical API is exposed through `coco.ops.melt`:
 
-- `prepareMeltBolt11(mintUrl, invoice)` creates a melt quote and prepares the operation
-- `executeMelt(operationId)` executes the prepared operation
-- `executeMeltByQuote(mintUrl, quoteId)` resumes execution using a quote id
-- `checkPendingMelt(operationId)` checks a pending melt and finalizes or rolls back
-- `checkPendingMeltByQuote(mintUrl, quoteId)` checks a pending melt using a quote id
+- `prepare({ mintUrl, method: 'bolt11', methodData: { invoice } })` creates a melt quote and prepares the operation
+- `execute(operationOrId)` executes the prepared operation
+- `getByQuote(mintUrl, quoteId)` resolves an operation from a persisted quote id
+- `refresh(operationId)` checks a pending melt and returns the latest operation state
+- `cancel(operationId)` cancels a prepared melt
+- `reclaim(operationId)` reclaims a pending melt when rollback is allowed
+
+The older melt workflow methods on `coco.quotes` remain available as deprecated aliases.
 
 ## Operation States
 
 Melt operations progress through the following states:
 
-| State          | Description                                            |
-| -------------- | ------------------------------------------------------ |
-| `init`         | Operation created, nothing reserved yet                |
-| `prepared`     | Proofs reserved, fees calculated, ready to execute     |
-| `executing`    | Swap/melt in progress                                  |
-| `pending`      | Melt started, waiting for quote to settle              |
-| `finalized`    | Melt succeeded, change claimed, operation finalized    |
-| `rolling_back` | Rollback in progress (reclaim swap being executed)     |
-| `rolled_back`  | Operation cancelled, proofs reclaimed                  |
+| State          | Description                                         |
+| -------------- | --------------------------------------------------- |
+| `init`         | Operation created, nothing reserved yet             |
+| `prepared`     | Proofs reserved, fees calculated, ready to execute  |
+| `executing`    | Swap/melt in progress                               |
+| `pending`      | Melt started, waiting for quote to settle           |
+| `finalized`    | Melt succeeded, change claimed, operation finalized |
+| `rolling_back` | Rollback in progress (reclaim swap being executed)  |
+| `rolled_back`  | Operation cancelled, proofs reclaimed               |
 
 ```
 init ──► prepared ──► executing ──► pending ──► finalized
@@ -52,7 +55,11 @@ init ──► prepared ──► executing ──► pending ──► finalize
 Preparation creates the quote and reserves proofs before any funds move:
 
 ```ts
-const prepared = await coco.quotes.prepareMeltBolt11(mintUrl, invoice);
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  methodData: { invoice },
+});
 
 console.log('Quote:', prepared.quoteId);
 console.log('Amount:', prepared.amount);
@@ -77,7 +84,7 @@ Execution moves the operation to `executing` before contacting the mint. It then
 3. Updates the operation based on the mint response
 
 ```ts
-const result = await coco.quotes.executeMelt(prepared.id);
+const result = await coco.ops.melt.execute(prepared.id);
 
 if (result.state === 'finalized') {
   console.log('Invoice paid');
@@ -97,16 +104,16 @@ If the mint returns `PAID`, the operation is finalized immediately. If the mint 
 Pending operations should be checked until they finalize or roll back:
 
 ```ts
-const decision = await coco.quotes.checkPendingMelt(operationId);
+const operation = await coco.ops.melt.refresh(operationId);
 
-if (decision === 'finalize') {
+if (operation.state === 'finalized') {
   console.log('Melt finalized');
-} else if (decision === 'rollback') {
+} else if (operation.state === 'rolled_back') {
   console.log('Melt rolled back');
 }
 ```
 
-`checkPendingMelt` queries the mint for the quote state and decides whether to finalize, stay pending, or rollback.
+`refresh` queries the mint for the quote state when the operation is pending, performs any needed finalize or rollback work, and returns the latest stored operation.
 
 When it returns `finalize`, fetch the stored operation to inspect settlement amounts:
 
