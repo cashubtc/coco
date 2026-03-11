@@ -710,6 +710,14 @@ export class ReceiveOperationService {
   }
 
   /**
+   * Get all prepared operations.
+   */
+  async getPreparedOperations(): Promise<PreparedReceiveOperation[]> {
+    const ops = await this.receiveOperationRepository.getByState('prepared');
+    return ops.filter((op): op is PreparedReceiveOperation => op.state === 'prepared');
+  }
+
+  /**
    * Rollback a receive operation.
    * Only allowed for operations in 'init' or 'prepared' state.
    */

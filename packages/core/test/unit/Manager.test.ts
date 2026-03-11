@@ -54,6 +54,9 @@ describe('initializeCoco', () => {
       const manager = await initializeCoco(baseConfig);
 
       expect(manager['logger']).toBeInstanceOf(NullLogger);
+      expect(manager.ops.send).toBe(manager.send);
+      expect(manager.ops.receive).toBe(manager.receive);
+      expect(manager.ops.melt).toBeDefined();
 
       await manager.disableMintQuoteWatcher();
       await manager.disableProofStateWatcher();

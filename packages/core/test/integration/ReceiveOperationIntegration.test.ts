@@ -66,8 +66,8 @@ describe('ReceiveOperationService integration', () => {
     const quote = await sender.quotes.createMintQuote(mintUrl, 50);
     await sender.quotes.redeemMintQuote(mintUrl, quote.quote);
 
-    const preparedSend = await sender.send.prepareSend(mintUrl, 30);
-    const { token } = await sender.send.executePreparedSend(preparedSend.id);
+    const preparedSend = await sender.ops.send.prepare({ mintUrl, amount: 30 });
+    const { token } = await sender.ops.send.execute(preparedSend.id);
 
     const receiveService = (receiver as any).receiveOperationService as ReceiveOperationService;
     const receiveRepo = (receiver as any).receiveOperationRepository as ReceiveOperationRepository;

@@ -17,13 +17,16 @@ import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHa
  * - Recover pending operations on startup
  */
 export class SendApi {
-  private readonly sendOperationService: SendOperationService;
+  protected readonly sendOperationService: SendOperationService;
 
   constructor(sendOperationService: SendOperationService) {
     this.sendOperationService = sendOperationService;
   }
 
   /**
+   * @deprecated Use `manager.ops.send.prepare()` instead.
+   * This alias will be removed in a future release.
+   *
    * Prepare a send operation without executing it.
    * This reserves the proofs and calculates the fee.
    *
@@ -45,6 +48,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.prepare({ mintUrl, amount, target: { type: 'p2pk', pubkey } })` instead.
+   * This alias will be removed in a future release.
+   *
    * Prepare a P2PK (Pay-to-Public-Key) send operation.
    * Creates tokens that are locked to a specific public key and can only be
    * redeemed by the holder of the corresponding private key.
@@ -71,6 +77,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.execute()` instead.
+   * This alias will be removed in a future release.
+   *
    * Execute a prepared send operation.
    * Call this after `prepareSend()` to complete the send.
    *
@@ -94,6 +103,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.get()` instead.
+   * This alias will be removed in a future release.
+   *
    * Get a send operation by its ID.
    */
   async getOperation(operationId: string): Promise<SendOperation | null> {
@@ -101,6 +113,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.listInFlight()` instead.
+   * This alias will be removed in a future release.
+   *
    * Get all pending send operations.
    * Pending operations are in 'executing' or 'pending' state.
    */
@@ -109,6 +124,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.finalize()` instead.
+   * This alias will be removed in a future release.
+   *
    * Finalize a send operation by operationId.
    * This marks the operation as completed after proofs are confirmed spent.
    */
@@ -117,6 +135,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.cancel()` for prepared operations or `manager.ops.send.reclaim()` for pending operations instead.
+   * This alias will be removed in a future release.
+   *
    * Rollback a send operation by operationId.
    * Reclaims proofs and cancels the operation.
    */
@@ -125,6 +146,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.recovery.run()` instead.
+   * This alias will be removed in a future release.
+   *
    * Recover all pending operations.
    * Should be called during application initialization.
    */
@@ -133,6 +157,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.refresh()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check a pending operation and finalize it if it should be finalized.
    */
   async checkPendingOperation(operationId: string): Promise<void> {
@@ -147,6 +174,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.diagnostics.isLocked()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check if a specific operation is currently locked (in progress).
    * Useful for UI to disable buttons while an operation is executing.
    */
@@ -155,6 +185,9 @@ export class SendApi {
   }
 
   /**
+   * @deprecated Use `manager.ops.send.recovery.inProgress()` instead.
+   * This alias will be removed in a future release.
+   *
    * Check if recovery is currently in progress.
    * Useful to prevent multiple recovery calls.
    */
