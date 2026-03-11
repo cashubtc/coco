@@ -35,7 +35,7 @@ When sending tokens, a swap may be required if you don't have exact change. Swap
 
 ```ts
 // 1. Prepare the send (reserves proofs, calculates fee)
-const prepared = await coco.send.prepareSend('https://mint.url', 100);
+const prepared = await coco.ops.send.prepare({ mintUrl: 'https://mint.url', amount: 100 });
 
 console.log('Fee:', prepared.fee);
 console.log('Needs swap:', prepared.needsSwap);
@@ -43,13 +43,15 @@ console.log('Input amount:', prepared.inputAmount);
 
 // 2. Let user confirm, then execute
 if (userConfirmed) {
-  const { token } = await coco.send.executePreparedSend(prepared.id);
+  const { token } = await coco.ops.send.execute(prepared.id);
   console.log('Token to share:', token);
 } else {
   // Cancel the operation
-  await coco.send.rollback(prepared.id);
+  await coco.ops.send.cancel(prepared.id);
 }
 ```
+
+`coco.send` and `coco.receive` still exist as deprecated aliases, but `coco.ops.send` and `coco.ops.receive` are now the canonical workflow APIs.
 
 ### Understanding Fees
 
@@ -64,7 +66,7 @@ After sending, the token enters a "pending" state until the recipient claims it:
 
 ```ts
 // Get pending send operations
-const pending = await coco.send.getPendingOperations();
+const pending = await coco.ops.send.listInFlight();
 
 for (const op of pending) {
   console.log(`Operation ${op.id}: ${op.amount} sats, state: ${op.state}`);
@@ -76,8 +78,8 @@ for (const op of pending) {
 If the recipient never claims the token, you can reclaim it:
 
 ```ts
-// Rollback reclaims the proofs (minus any fees for the reclaim swap)
-await coco.send.rollback(operationId);
+// Reclaim reclaims the proofs (minus any fees for the reclaim swap)
+await coco.ops.send.reclaim(operationId);
 ```
 
 ### Finalizing Claimed Tokens
@@ -85,20 +87,21 @@ await coco.send.rollback(operationId);
 When proofs are confirmed spent (recipient claimed), the operation can be finalized:
 
 ```ts
-await coco.send.finalize(operationId);
+await coco.ops.send.finalize(operationId);
 ```
 
 > **Note:** With [ProofStateWatcher](../pages/watchers-processors.md) enabled, finalization happens automatically when the mint reports proofs as spent.
 
 ## Paying Lightning Invoices (Melt)
 
-Use melt operations to pay BOLT11 invoices via the Quotes API:
+Use melt operations to pay BOLT11 invoices via `coco.ops.melt`:
 
-- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>`
-- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>`
-- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>`
-- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>`
-- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>`
+- `prepare({ mintUrl, method: 'bolt11', methodData: { invoice } }): Promise<PreparedMeltOperation>`
+- `execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
+- `getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null>`
+- `refresh(operationId: string): Promise<MeltOperation>`
+
+The older melt workflow methods on `coco.quotes` are still available as deprecated aliases.
 
 Finalized melt operations include `changeAmount` and `effectiveFee` when that settlement data is available.
 
@@ -133,20 +136,20 @@ coco.on('send:rolled-back', ({ operationId }) => {
 ```ts
 async function sendWithConfirmation(mintUrl: string, amount: number) {
   // Prepare and show fee
-  const prepared = await coco.send.prepareSend(mintUrl, amount);
+  const prepared = await coco.ops.send.prepare({ mintUrl, amount });
 
   if (prepared.needsSwap) {
     console.log(`This send requires a swap. Fee: ${prepared.fee} sats`);
     const proceed = await askUserConfirmation();
 
     if (!proceed) {
-      await coco.send.rollback(prepared.id);
+      await coco.ops.send.cancel(prepared.id);
       return null;
     }
   }
 
   // Execute the send
-  const { token } = await coco.send.executePreparedSend(prepared.id);
+  const { token } = await coco.ops.send.execute(prepared.id);
 
   return token;
 }
@@ -165,8 +168,8 @@ if (token) {
 import { UnknownMintError, ProofValidationError } from 'coco-cashu-core';
 
 try {
-  const prepared = await coco.send.prepareSend(mintUrl, amount);
-  const { token } = await coco.send.executePreparedSend(prepared.id);
+  const prepared = await coco.ops.send.prepare({ mintUrl, amount });
+  const { token } = await coco.ops.send.execute(prepared.id);
 } catch (error) {
   if (error instanceof UnknownMintError) {
     console.error('Mint is not trusted');

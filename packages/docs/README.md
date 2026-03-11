@@ -1,15 +1,27 @@
-# docs
+# Docs
 
-To install dependencies:
+VitePress documentation site for Coco.
+
+## Install
 
 ```bash
 bun install
 ```
 
-To run:
+## Develop
 
 ```bash
-bun run index.ts
+bun run docs:dev
 ```
 
-This project was created using `bun init` in bun v1.2.18. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+## Build
+
+```bash
+bun run docs:build
+```
+
+## Preview
+
+```bash
+bun run docs:preview
+```

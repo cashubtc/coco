@@ -2,6 +2,9 @@
 
 The `coco-cashu-react` package provides React providers and hooks around a Coco `Manager` so UI code can access balance, mints, history, and send/receive flows.
 
+In the core manager API, the canonical lifecycle surface now lives under `manager.ops.*`. The
+React hooks keep their existing ergonomic names while building on the same underlying workflows.
+
 ## Installation
 
 ```sh

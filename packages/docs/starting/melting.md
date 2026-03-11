@@ -7,14 +7,18 @@ Melting converts Cashu proofs back into sats by paying a Lightning invoice throu
 ```ts
 await coco.mint.addMint(mintUrl, { trusted: true });
 
-const prepared = await coco.quotes.prepareMeltBolt11(mintUrl, invoice);
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  methodData: { invoice },
+});
 
 console.log('Quote:', prepared.quoteId);
 console.log('Amount:', prepared.amount);
 console.log('Fee reserve:', prepared.fee_reserve);
 console.log('Needs swap:', prepared.needsSwap);
 
-const result = await coco.quotes.executeMelt(prepared.id);
+const result = await coco.ops.melt.execute(prepared.id);
 
 if (result.state === 'finalized') {
   console.log('Change returned:', result.changeAmount);
@@ -22,26 +26,25 @@ if (result.state === 'finalized') {
 }
 
 if (result.state === 'pending') {
-  const decision = await coco.quotes.checkPendingMelt(result.id);
-  console.log('Pending decision:', decision);
-
-  if (decision === 'finalize') {
-    const finalized = await coco.quotes.getMeltOperation(result.id);
-    console.log('Finalized settlement:', finalized);
-  }
+  const refreshed = await coco.ops.melt.refresh(result.id);
+  console.log('Updated state:', refreshed.state);
 }
 ```
 
-`prepareMeltBolt11` creates the melt quote, reserves proofs, and calculates any swap fees. `executeMelt` pays the invoice immediately when possible or returns a `pending` operation that you can check later.
+`coco.ops.melt.prepare()` creates the melt quote, reserves proofs, and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
 ## Resume by quote
 
 ```ts
-const result = await coco.quotes.executeMeltByQuote(mintUrl, quoteId);
+const operation = await coco.ops.melt.getByQuote(mintUrl, quoteId);
+
+if (operation) {
+  const result = await coco.ops.melt.execute(operation.id);
+}
 ```
 
-Use this when you only persisted the quote id (for example after a restart).
+Use this when you only persisted the quote id (for example after a restart). The older `coco.quotes` melt workflow helpers are deprecated aliases.
 
 > For the full saga walkthrough, see [Melt Operations](../pages/melt-operations.md).
