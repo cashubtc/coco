@@ -41,7 +41,16 @@ import {
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi, ReceiveApi } from './api';
+import {
+  MintApi,
+  WalletApi,
+  QuotesApi,
+  HistoryApi,
+  KeyRingApi,
+  SendApi,
+  ReceiveApi,
+  PaymentRequestsApi,
+} from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
@@ -175,6 +184,7 @@ export class Manager {
   readonly history: HistoryApi;
   readonly send: SendApi;
   readonly receive: ReceiveApi;
+  readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
@@ -268,6 +278,7 @@ export class Manager {
     this.history = apis.history;
     this.send = apis.send;
     this.receive = apis.receive;
+    this.paymentRequests = apis.paymentRequests;
 
     // Point ext to pluginHost's extensions storage
     this.ext = this.pluginHost.getExtensions() as PluginExtensions;
@@ -762,6 +773,7 @@ export class Manager {
     history: HistoryApi;
     send: SendApi;
     receive: ReceiveApi;
+    paymentRequests: PaymentRequestsApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -788,6 +800,7 @@ export class Manager {
     const history = new HistoryApi(this.historyService);
     const send = new SendApi(this.sendOperationService);
     const receive = new ReceiveApi(this.receiveOperationService);
-    return { mint, wallet, quotes, keyring, subscription, history, send, receive };
+    const paymentRequests = new PaymentRequestsApi(this.paymentRequestService);
+    return { mint, wallet, quotes, keyring, subscription, history, send, receive, paymentRequests };
   }
 }
