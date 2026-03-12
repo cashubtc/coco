@@ -28,7 +28,7 @@ import {
   UnknownMintError,
 } from '../../models/Error';
 import type { MintAdapter } from '../../infra';
-import type { MintHandlerProvider } from '../../infra/handlers';
+import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 
