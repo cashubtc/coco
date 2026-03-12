@@ -252,10 +252,16 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `getBalances(): Promise<{ [mintUrl: string]: number }>`
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
-- `processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest>`
-- `preparePaymentRequestTransaction(mintUrl: string, request: ParsedPaymentRequest, amount?: number): Promise<PaymentRequestTransaction>`
-- `handleInbandPaymentRequest(transaction: PaymentRequestTransaction, inbandHandler: (token: Token) => Promise<void>): Promise<void>`
-- `handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response>`
+- `processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest>` (deprecated)
+- `preparePaymentRequestTransaction(mintUrl: string, request: ParsedPaymentRequest, amount?: number): Promise<PaymentRequestTransaction>` (deprecated)
+- `handleInbandPaymentRequest(transaction: PaymentRequestTransaction, inbandHandler: (token: Token) => Promise<void>): Promise<void>` (deprecated)
+- `handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response>` (deprecated)
+
+### PaymentRequestsApi
+
+- `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
+- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: number }): Promise<PreparedPaymentRequest>`
+- `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 
 ### QuotesApi
 
