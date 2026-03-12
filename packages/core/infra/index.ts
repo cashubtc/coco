@@ -10,3 +10,4 @@ export * from './HybridTransport';
 export * from './SubscriptionProtocol';
 export * from './handlers/melt';
 export * from './handlers/send';
+export * from './handlers/mint';
