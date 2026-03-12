@@ -5,6 +5,7 @@ import { getUnixTimeSeconds } from '../lib/db.ts';
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethodData = MeltOperation['methodData'];
+type MeltSettlementData = { changeAmount?: number; effectiveFee?: number };
 
 const preparedStates: MeltOperationState[] = [
   'prepared',
@@ -46,11 +47,21 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     swapOutputData: row.swapOutputDataJson ? JSON.parse(row.swapOutputDataJson) : undefined,
   };
 
-  return {
+  const operation = {
     ...base,
     state: row.state,
     ...preparedData,
-  } as MeltOperation;
+  };
+
+  if (row.state === 'finalized') {
+    return {
+      ...operation,
+      changeAmount: row.changeAmount ?? undefined,
+      effectiveFee: row.effectiveFee ?? undefined,
+    } as MeltOperation;
+  }
+
+  return operation as MeltOperation;
 };
 
 const operationToRow = (operation: MeltOperation): MeltOperationRow => {
@@ -84,6 +95,8 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     };
   }
 
+  const settlement = operation as MeltSettlementData;
+
   return {
     id: operation.id,
     mintUrl: operation.mintUrl,
@@ -102,6 +115,8 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     inputProofSecretsJson: JSON.stringify(operation.inputProofSecrets),
     changeOutputDataJson: JSON.stringify(operation.changeOutputData),
     swapOutputDataJson: operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
+    changeAmount: operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
+    effectiveFee: operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
   };
 };
 

@@ -349,6 +349,13 @@ const MIGRATIONS: readonly Migration[] = [
       UPDATE coco_cashu_mints SET updatedAt = 0;
     `,
   },
+  {
+    id: '016_melt_settlement_amounts',
+    sql: `
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN changeAmount INTEGER;
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN effectiveFee INTEGER;
+    `,
+  },
 ];
 
 // Export for testing
