@@ -10,7 +10,6 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
-import type { KeysetKeypairs } from '../models/Keyset.ts';
 
 interface CachedWallet {
   wallet: Wallet;
@@ -130,7 +129,7 @@ export class WalletService {
       unit: keyset.unit,
       active: keyset.active,
       input_fee_ppk: keyset.feePpk,
-      keys: toCashuKeys(keyset.keypairs),
+      keys: keyset.keypairs as Keys,
     }));
 
     const cache: KeyChainCache = {
@@ -159,8 +158,4 @@ export class WalletService {
     this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
     return wallet;
   }
-}
-
-function toCashuKeys(keypairs: KeysetKeypairs): Keys {
-  return keypairs as Keys;
 }

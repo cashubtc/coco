@@ -17,7 +17,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
-import type { Keyset, KeysetKeypairs } from '@core/models/Keyset.ts';
+import type { Keyset } from '@core/models/Keyset.ts';
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -640,7 +640,7 @@ export class ProofService {
         this.logger?.warn('Failed to create change proof', { reason, index: i });
         return [];
       }
-      return [output.toProof(sig, { id: keyset.id, keys: toCashuKeys(keyset.keypairs) })];
+      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs as Keys })];
     });
 
     if (proofs.length === 0) {
@@ -798,8 +798,4 @@ function splitAmount(value: number, keys: Keys): number[] {
   }
 
   return split;
-}
-
-function toCashuKeys(keypairs: KeysetKeypairs): Keys {
-  return keypairs as Keys;
 }
