@@ -16,13 +16,25 @@ console.log('Needs swap:', prepared.needsSwap);
 
 const result = await coco.quotes.executeMelt(prepared.id);
 
+if (result.state === 'finalized') {
+  console.log('Change returned:', result.changeAmount);
+  console.log('Effective fee:', result.effectiveFee);
+}
+
 if (result.state === 'pending') {
   const decision = await coco.quotes.checkPendingMelt(result.id);
   console.log('Pending decision:', decision);
+
+  if (decision === 'finalize') {
+    const finalized = await coco.quotes.getMeltOperation(result.id);
+    console.log('Finalized settlement:', finalized);
+  }
 }
 ```
 
 `prepareMeltBolt11` creates the melt quote, reserves proofs, and calculates any swap fees. `executeMelt` pays the invoice immediately when possible or returns a `pending` operation that you can check later.
+
+For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
 ## Resume by quote
 
