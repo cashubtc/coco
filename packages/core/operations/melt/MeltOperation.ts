@@ -134,16 +134,18 @@ export interface FinalizedMeltOperation extends MeltOperationBase, PreparedData 
    * Total amount returned as change by the mint.
    * This is the sum of change proofs received from the melt operation.
    * May be 0 if no change was returned.
+   * May be undefined for legacy operations finalized before settlement tracking was added.
    */
-  changeAmount: number;
+  changeAmount?: number;
 
   /**
    * Actual fee impact after settlement.
    * Calculated as: inputAmount - amount - changeAmount
    * (total input proofs value - melt amount - change returned)
    * This represents the actual cost paid for the melt, which may differ from fee_reserve.
+   * May be undefined for legacy operations finalized before settlement tracking was added.
    */
-  effectiveFee: number;
+  effectiveFee?: number;
 }
 
 /**

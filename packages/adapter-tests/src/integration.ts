@@ -752,6 +752,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(operationAfterExecute).toBeDefined();
         expect(operationAfterExecute!.state).toBe(executed!.state);
 
+        if (executed?.state === 'finalized') {
+          const settlement = executed as { changeAmount?: number; effectiveFee?: number };
+          expect(settlement.changeAmount).toBeDefined();
+          expect(settlement.effectiveFee).toBeDefined();
+          expect(operationAfterExecute?.state).toBe('finalized');
+          expect((operationAfterExecute as any).changeAmount).toBe(settlement.changeAmount);
+          expect((operationAfterExecute as any).effectiveFee).toBe(settlement.effectiveFee);
+        }
+
         if (executed?.state === 'pending') {
           let pendingResult = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, prepared.quoteId);
           expect(pendingResult).toBeDefined();
@@ -772,6 +781,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           if (pendingResult === 'finalize') {
             expect(operationAfterRetry!.state).toBe('finalized');
+            expect((operationAfterRetry as any).changeAmount).toBeDefined();
+            expect((operationAfterRetry as any).effectiveFee).toBeDefined();
           } else if (pendingResult === 'rollback') {
             expect(operationAfterRetry!.state).toBe('rolled_back');
           } else {

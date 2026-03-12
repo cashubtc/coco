@@ -302,7 +302,6 @@ export class MeltOperationService {
       }
       if (operation.state === 'finalized') {
         this.logger?.debug('Operation already finalized', { operationId });
-        // Return settlement amounts if already finalized
         const finalizedOp = operation as FinalizedMeltOperation;
         return {
           changeAmount: finalizedOp.changeAmount,
@@ -313,7 +312,7 @@ export class MeltOperationService {
         this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
           operationId,
         });
-        return { changeAmount: 0, effectiveFee: 0 };
+        return { changeAmount: undefined, effectiveFee: undefined };
       }
 
       if (operation.state !== 'pending') {
@@ -331,8 +330,8 @@ export class MeltOperationService {
         ...pendingOp,
         state: 'finalized',
         updatedAt: Date.now(),
-        changeAmount: finalizeResult?.changeAmount ?? 0,
-        effectiveFee: finalizeResult?.effectiveFee ?? pendingOp.fee_reserve,
+        changeAmount: finalizeResult?.changeAmount,
+        effectiveFee: finalizeResult?.effectiveFee,
       };
 
       await this.meltOperationRepository.update(finalized);

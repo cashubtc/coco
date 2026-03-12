@@ -77,12 +77,14 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
 
 /**
  * Data returned from the finalize method containing settlement information.
+ * Values may be unavailable when reading legacy finalized operations that were
+ * stored before settlement tracking was introduced.
  */
 export interface FinalizeResult {
   /** Total amount returned as change by the mint */
-  changeAmount: number;
+  changeAmount?: number;
   /** Actual fee impact after settlement */
-  effectiveFee: number;
+  effectiveFee?: number;
 }
 
 export interface RollbackContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {

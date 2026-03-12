@@ -17,6 +17,7 @@ import type {
   ExecutingMeltOperation,
   PendingMeltOperation,
   FinalizedMeltOperation,
+  RolledBackMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import type {
   MeltMethodHandler,
@@ -111,6 +112,21 @@ describe('MeltOperationService', () => {
     state: 'finalized',
     changeAmount: 0,
     effectiveFee: 1,
+    ...overrides,
+  });
+
+  const makeLegacyFinalizedOp = (id: string): FinalizedMeltOperation => ({
+    ...makePreparedOp(id),
+    state: 'finalized',
+  });
+
+  const makeRolledBackOp = (
+    id: string,
+    overrides?: Partial<RolledBackMeltOperation>,
+  ): RolledBackMeltOperation => ({
+    ...makePreparedOp(id),
+    state: 'rolled_back',
+    error: 'Rolled back',
     ...overrides,
   });
 
@@ -312,9 +328,16 @@ describe('MeltOperationService', () => {
       const result = await service.execute('op-4');
 
       expect(result.state).toBe('finalized');
+      if (result.state === 'finalized') {
+        expect(result.changeAmount).toBe(0);
+        expect(result.effectiveFee).toBe(1);
+      }
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-4');
       expect(stored?.state).toBe('finalized');
+      const finalizedOp = stored as FinalizedMeltOperation;
+      expect(finalizedOp.changeAmount).toBe(0);
+      expect(finalizedOp.effectiveFee).toBe(1);
     });
 
     it('moves to pending on PENDING response', async () => {
@@ -379,8 +402,25 @@ describe('MeltOperationService', () => {
       const result = await service.finalize('op-8');
 
       expect(handler.finalize).not.toHaveBeenCalled();
-      // Returns the existing settlement amounts
       expect(result).toEqual({ changeAmount: 0, effectiveFee: 1 });
+    });
+
+    it('returns undefined settlement amounts for legacy finalized operations', async () => {
+      await meltOperationRepository.create(makeLegacyFinalizedOp('op-legacy'));
+
+      const result = await service.finalize('op-legacy');
+
+      expect(handler.finalize).not.toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
+    });
+
+    it('returns undefined settlement amounts for rolled back operations', async () => {
+      await meltOperationRepository.create(makeRolledBackOp('op-rolled-back'));
+
+      const result = await service.finalize('op-rolled-back');
+
+      expect(handler.finalize).not.toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
     });
   });
 
