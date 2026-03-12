@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
+import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 
@@ -48,6 +49,16 @@ describe('initializeCoco', () => {
       });
 
       expect(initSpy).toHaveBeenCalled();
+    });
+
+    it('should expose the dedicated payment requests api', async () => {
+      const manager = await initializeCoco(baseConfig);
+
+      expect(manager.paymentRequests).toBeInstanceOf(PaymentRequestsApi);
+
+      await manager.disableMintQuoteWatcher();
+      await manager.disableProofStateWatcher();
+      await manager.disableMintQuoteProcessor();
     });
 
     it('should use NullLogger by default', async () => {

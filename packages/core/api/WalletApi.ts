@@ -1,9 +1,4 @@
-import {
-  getEncodedToken,
-  getTokenMetadata,
-  type PaymentRequest,
-  type Token,
-} from '@cashu/cashu-ts';
+import { getEncodedToken, getTokenMetadata, type Token } from '@cashu/cashu-ts';
 import type {
   MintService,
   WalletService,
@@ -83,10 +78,10 @@ export class WalletApi {
     return this.proofService.getBalances();
   }
 
-  // Payment Request methods
-
   /**
    * Parse and validate a payment request string.
+   *
+   * @deprecated Use `manager.paymentRequests.parse()` instead.
    */
   async processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest> {
     return this.paymentRequestService.processPaymentRequest(paymentRequest);
@@ -94,6 +89,9 @@ export class WalletApi {
 
   /**
    * Prepare a payment request transaction.
+   *
+   * @deprecated Use `manager.paymentRequests.prepare()` instead.
+   *
    * @param mintUrl - The mint to send from
    * @param request - The parsed payment request
    * @param amount - Optional amount (required if not specified in request)
@@ -109,10 +107,11 @@ export class WalletApi {
 
   /**
    * Handle an inband payment request by sending tokens and calling the handler.
-   * @param mintUrl - The mint to send from
-   * @param request - The prepared payment request (from readPaymentRequest)
+   *
+   * @deprecated Use `manager.paymentRequests.execute()` instead.
+   *
+   * @param transaction - The prepared payment request transaction
    * @param inbandHandler - Callback to deliver the token (e.g., display QR, send via NFC)
-   * @param amount - Optional amount (required if not specified in request)
    */
   async handleInbandPaymentRequest(
     transaction: PaymentRequestTransaction,
@@ -123,9 +122,10 @@ export class WalletApi {
 
   /**
    * Handle an HTTP payment request by sending tokens to the specified URL.
-   * @param mintUrl - The mint to send from
-   * @param request - The prepared payment request (from readPaymentRequest)
-   * @param amount - Optional amount (required if not specified in request)
+   *
+   * @deprecated Use `manager.paymentRequests.execute()` instead.
+   *
+   * @param transaction - The prepared payment request transaction
    * @returns The HTTP response from the payment endpoint
    */
   async handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response> {

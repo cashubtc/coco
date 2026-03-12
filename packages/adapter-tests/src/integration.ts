@@ -2525,12 +2525,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
 
         expect(parsed.transport.type).toBe('inband');
         expect(parsed.amount).toBe(50);
-        expect(parsed.requiredMints).toContain(mintUrl);
-        expect(parsed.matchingMints).toContain(mintUrl);
+        expect(parsed.allowedMints).toContain(mintUrl);
+        expect(parsed.payableMints).toContain(mintUrl);
       });
 
       it('should process an HTTP POST payment request', async () => {
@@ -2545,7 +2545,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
 
         expect(parsed.transport.type).toBe('http');
         if (parsed.transport.type === 'http') {
@@ -2564,7 +2564,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
 
         expect(parsed.transport.type).toBe('inband');
         expect(parsed.amount).toBe(undefined);
@@ -2574,7 +2574,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pr = new PaymentRequest([], 'inband-with-amount', 30, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
         expect(parsed.transport.type).toBe('inband');
 
         const balanceBefore = await mgr!.wallet.getBalances();
@@ -2582,10 +2582,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         let receivedToken: Token | undefined;
         if (parsed.transport.type === 'inband') {
-          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
-          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
-            receivedToken = token;
-          });
+          const transaction = await mgr!.paymentRequests.prepare(parsed, { mintUrl });
+          const result = await mgr!.paymentRequests.execute(transaction);
+          if (result.type === 'inband') {
+            receivedToken = result.token;
+          }
         }
 
         expect(receivedToken).toBeDefined();
@@ -2611,20 +2612,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
         expect(parsed.transport.type).toBe('inband');
         expect(parsed.amount).toBe(undefined);
 
         let receivedToken: Token | undefined;
         if (parsed.transport.type === 'inband') {
-          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(
+          const transaction = await mgr!.paymentRequests.prepare(parsed, {
             mintUrl,
-            parsed,
-            25, // amount as parameter
-          );
-          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
-            receivedToken = token;
+            amount: 25,
           });
+          const result = await mgr!.paymentRequests.execute(transaction);
+          if (result.type === 'inband') {
+            receivedToken = result.token;
+          }
         }
 
         expect(receivedToken).toBeDefined();
@@ -2645,16 +2646,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
 
-        expect(parsed.matchingMints).toHaveLength(0);
-        expect(parsed.requiredMints).toHaveLength(1);
-        expect(parsed.requiredMints).toContain(otherMintUrl);
+        expect(parsed.payableMints).toHaveLength(0);
+        expect(parsed.allowedMints).toHaveLength(1);
+        expect(parsed.allowedMints).toContain(otherMintUrl);
 
         if (parsed.transport.type === 'inband') {
-          await expect(
-            mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed),
-          ).rejects.toThrow();
+          await expect(mgr!.paymentRequests.prepare(parsed, { mintUrl })).rejects.toThrow();
         }
       });
 
@@ -2662,13 +2661,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pr = new PaymentRequest([], 'no-amount-request', undefined, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
 
         if (parsed.transport.type === 'inband') {
           // Not providing amount when request doesn't have one should throw
-          await expect(
-            mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed),
-          ).rejects.toThrow();
+          await expect(mgr!.paymentRequests.prepare(parsed, { mintUrl })).rejects.toThrow();
         }
       });
 
@@ -2682,7 +2679,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        await expect(mgr!.wallet.processPaymentRequest(encoded)).rejects.toThrow();
+        await expect(mgr!.paymentRequests.parse(encoded)).rejects.toThrow();
       });
 
       it('should complete full payment request flow with token reuse', async () => {
@@ -2691,16 +2688,17 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const encoded = pr.toEncodedRequest();
 
         // Process the payment request
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
         expect(parsed.transport.type).toBe('inband');
 
         // Prepare and handle the payment request
         let sentToken: Token | undefined;
         if (parsed.transport.type === 'inband') {
-          const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
-          await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
-            sentToken = token;
-          });
+          const transaction = await mgr!.paymentRequests.prepare(parsed, { mintUrl });
+          const result = await mgr!.paymentRequests.execute(transaction);
+          if (result.type === 'inband') {
+            sentToken = result.token;
+          }
         }
 
         expect(sentToken).toBeDefined();
@@ -2712,6 +2710,21 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         // Balance should increase after receiving
         expect((balanceAfter[mintUrl] || 0) - (balanceBefore[mintUrl] || 0)).toBeGreaterThan(0);
+      });
+
+      it('should keep supporting legacy wallet payment request wrappers', async () => {
+        const pr = new PaymentRequest([], 'legacy-wallet-api', 20, 'sat', [mintUrl]);
+        const encoded = pr.toEncodedRequest();
+
+        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
+        const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
+
+        let receivedToken: Token | undefined;
+        await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
+          receivedToken = token;
+        });
+
+        expect(receivedToken).toBeDefined();
       });
     });
   });

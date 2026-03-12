@@ -58,6 +58,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  PaymentRequestsApi,
 } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
@@ -208,6 +209,7 @@ export class Manager {
    * This alias will be removed in a future release.
    */
   readonly receive: ReceiveOpsApi;
+  readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
@@ -309,6 +311,7 @@ export class Manager {
     this.send = apis.send;
     this.auth = apis.auth;
     this.receive = apis.receive;
+    this.paymentRequests = apis.paymentRequests;
 
     // Point ext to pluginHost's extensions storage
     this.ext = this.pluginHost.getExtensions() as PluginExtensions;
@@ -931,6 +934,7 @@ export class Manager {
     auth: AuthApi;
     send: SendOpsApi;
     receive: ReceiveOpsApi;
+    paymentRequests: PaymentRequestsApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -960,6 +964,19 @@ export class Manager {
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
     const auth = new AuthApi(this.authService);
-    return { mint, wallet, quotes, keyring, subscription, history, ops, auth, send, receive };
+    const paymentRequests = new PaymentRequestsApi(this.paymentRequestService);
+    return {
+      mint,
+      wallet,
+      quotes,
+      keyring,
+      subscription,
+      history,
+      ops,
+      auth,
+      send,
+      receive,
+      paymentRequests,
+    };
   }
 }
