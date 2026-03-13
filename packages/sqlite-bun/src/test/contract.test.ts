@@ -6,7 +6,8 @@ import {
   createDummyKeyset,
   createDummyProof,
 } from 'coco-cashu-adapter-tests';
-import { SqliteRepositories as Repositories } from '../index.ts';
+import { getStorageRepositories, withStorageTransaction } from 'coco-cashu-core/adapter';
+import { SqliteStorage } from '../index.ts';
 
 function createDeferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -20,7 +21,7 @@ function createDeferred<T = void>() {
 
 async function createRepositories() {
   const database = new Database(':memory:');
-  const repositories = new Repositories({ database });
+  const repositories = new SqliteStorage({ database });
   await repositories.init();
   return {
     repositories,
@@ -41,15 +42,16 @@ describe('sqlite-bun adapter transactions', () => {
   it('commits across repositories', async () => {
     const { repositories, dispose } = await createRepositories();
     try {
-      await repositories.withTransaction(async (tx) => {
+      const repoSet = getStorageRepositories(repositories);
+      await withStorageTransaction(repositories, async (tx) => {
         await tx.mintRepository.addOrUpdateMint(createDummyMint());
         await tx.keysetRepository.addKeyset(createDummyKeyset());
         await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
       });
 
-      const mints = await repositories.mintRepository.getAllMints();
+      const mints = await repoSet.mintRepository.getAllMints();
       expect(mints.length).toBe(1);
-      const proofs = await repositories.proofRepository.getAllReadyProofs();
+      const proofs = await repoSet.proofRepository.getAllReadyProofs();
       expect(proofs.length).toBe(1);
     } finally {
       await dispose();
@@ -61,7 +63,7 @@ describe('sqlite-bun adapter transactions', () => {
     try {
       let didThrow = false;
       try {
-        await repositories.withTransaction(async (tx) => {
+        await withStorageTransaction(repositories, async (tx) => {
           await tx.mintRepository.addOrUpdateMint(createDummyMint());
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
           throw new Error('boom');
@@ -71,9 +73,10 @@ describe('sqlite-bun adapter transactions', () => {
       }
       expect(didThrow).toBe(true);
 
-      const mints = await repositories.mintRepository.getAllMints();
+      const repoSet = getStorageRepositories(repositories);
+      const mints = await repoSet.mintRepository.getAllMints();
       expect(mints.length).toBe(0);
-      const proofs = await repositories.proofRepository.getAllReadyProofs();
+      const proofs = await repoSet.proofRepository.getAllReadyProofs();
       expect(proofs.length).toBe(0);
     } finally {
       await dispose();
@@ -90,7 +93,7 @@ describe('sqlite-bun adapter transactions', () => {
       const mintA = { ...createDummyMint(), mintUrl: 'https://mint-a.test' };
       const mintB = { ...createDummyMint(), mintUrl: 'https://mint-b.test' };
 
-      const firstPromise = repositories.withTransaction(async (tx) => {
+      const firstPromise = withStorageTransaction(repositories, async (tx) => {
         await tx.mintRepository.addOrUpdateMint(mintA);
         firstEntered.resolve();
         await releaseFirst.promise;
@@ -98,7 +101,7 @@ describe('sqlite-bun adapter transactions', () => {
 
       await firstEntered.promise;
 
-      const secondPromise = repositories.withTransaction(async (tx) => {
+      const secondPromise = withStorageTransaction(repositories, async (tx) => {
         secondStarted.resolve();
         await tx.mintRepository.addOrUpdateMint(mintB);
       });
@@ -116,7 +119,7 @@ describe('sqlite-bun adapter transactions', () => {
 
       await Promise.all([firstPromise, secondPromise]);
 
-      const mints = await repositories.mintRepository.getAllMints();
+      const mints = await getStorageRepositories(repositories).mintRepository.getAllMints();
       expect(mints).toHaveLength(2);
       expect(mints.map((m) => m.mintUrl).sort()).toEqual([
         'https://mint-a.test',

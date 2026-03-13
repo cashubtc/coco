@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
 import type { PendingSendOperation, RollingBackSendOperation } from 'coco-cashu-core';
-import { SqliteRepositories } from '../index.ts';
+import { getStorageRepositories } from 'coco-cashu-core/adapter';
+import { SqliteStorage } from '../index.ts';
 
 function makeRollingBackOperation(): RollingBackSendOperation {
   return {
@@ -52,11 +53,11 @@ function makePendingP2pkOperation(): PendingSendOperation {
 
 describe('SqliteSendOperationRepository', () => {
   let database: Database;
-  let repositories: SqliteRepositories;
+  let repositories: SqliteStorage;
 
   beforeEach(async () => {
     database = new Database(':memory:');
-    repositories = new SqliteRepositories({ database });
+    repositories = new SqliteStorage({ database });
     await repositories.init();
   });
 
@@ -66,21 +67,23 @@ describe('SqliteSendOperationRepository', () => {
 
   it('loads rolling_back operations from repository read methods', async () => {
     const operation = makeRollingBackOperation();
+    const repoSet = getStorageRepositories(repositories);
 
-    await repositories.sendOperationRepository.create(operation);
+    await repoSet.sendOperationRepository.create(operation);
 
-    expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(operation);
-    expect(await repositories.sendOperationRepository.getByState('rolling_back')).toEqual([
+    expect(await repoSet.sendOperationRepository.getById(operation.id)).toEqual(operation);
+    expect(await repoSet.sendOperationRepository.getByState('rolling_back')).toEqual([
       operation,
     ]);
-    expect(await repositories.sendOperationRepository.getPending()).toEqual([operation]);
+    expect(await repoSet.sendOperationRepository.getPending()).toEqual([operation]);
   });
 
   it('round-trips persisted tokens for pending P2PK operations', async () => {
     const operation = makePendingP2pkOperation();
+    const repoSet = getStorageRepositories(repositories);
 
-    await repositories.sendOperationRepository.create(operation);
+    await repoSet.sendOperationRepository.create(operation);
 
-    expect(await repositories.sendOperationRepository.getById(operation.id)).toEqual(operation);
+    expect(await repoSet.sendOperationRepository.getById(operation.id)).toEqual(operation);
   });
 });
