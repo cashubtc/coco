@@ -5,6 +5,7 @@ type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['get
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethod = MeltOperation['method'];
 type MeltMethodData = MeltOperation['methodData'];
+type MeltSettlementData = { changeAmount?: number; effectiveFee?: number };
 
 interface MeltOperationRow {
   id: string;
@@ -24,6 +25,8 @@ interface MeltOperationRow {
   inputProofSecretsJson: string | null;
   changeOutputDataJson: string | null;
   swapOutputDataJson: string | null;
+  changeAmount: number | null;
+  effectiveFee: number | null;
 }
 
 const preparedStates: MeltOperationState[] = [
@@ -66,11 +69,21 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     swapOutputData: row.swapOutputDataJson ? JSON.parse(row.swapOutputDataJson) : undefined,
   };
 
-  return {
+  const operation = {
     ...base,
     state: row.state,
     ...preparedData,
-  } as MeltOperation;
+  };
+
+  if (row.state === 'finalized') {
+    return {
+      ...operation,
+      changeAmount: row.changeAmount ?? undefined,
+      effectiveFee: row.effectiveFee ?? undefined,
+    } as MeltOperation;
+  }
+
+  return operation as MeltOperation;
 };
 
 const operationToParams = (operation: MeltOperation): unknown[] => {
@@ -97,8 +110,14 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
       null,
       null,
       null,
+      null,
+      null,
     ];
   }
+
+  const settlement = operation as MeltSettlementData;
+  const changeAmount = operation.state === 'finalized' ? settlement.changeAmount ?? null : null;
+  const effectiveFee = operation.state === 'finalized' ? settlement.effectiveFee ?? null : null;
 
   return [
     operation.id,
@@ -118,6 +137,8 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     JSON.stringify(operation.inputProofSecrets),
     JSON.stringify(operation.changeOutputData),
     operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
+    changeAmount,
+    effectiveFee,
   ];
 };
 
@@ -144,8 +165,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-        (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -182,10 +203,12 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
       return;
     }
 
+    const settlement = operation as MeltSettlementData;
+
     await this.db.run(
       `UPDATE coco_cashu_melt_operations
-       SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?
-       WHERE id = ?`,
+        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?
+        WHERE id = ?`,
       [
         operation.state,
         updatedAtSeconds,
@@ -201,6 +224,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
         JSON.stringify(operation.inputProofSecrets),
         JSON.stringify(operation.changeOutputData),
         operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
+        operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
+        operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
         operation.id,
       ],
     );

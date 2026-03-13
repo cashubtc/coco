@@ -217,4 +217,6 @@ export interface MeltOperationRow {
   inputProofSecretsJson?: string | null;
   changeOutputDataJson?: string | null;
   swapOutputDataJson?: string | null;
+  changeAmount?: number | null;
+  effectiveFee?: number | null;
 }
