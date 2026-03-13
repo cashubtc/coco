@@ -6,13 +6,13 @@ import { NullLogger } from '../../logging';
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
   let seedGetter: () => Promise<Uint8Array>;
-  let baseConfig: Pick<CocoConfig, 'repo' | 'seedGetter'>;
+  let baseConfig: Pick<CocoConfig, 'storage' | 'seedGetter'>;
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
     seedGetter = async () => new Uint8Array(32);
     baseConfig = {
-      repo: repositories,
+      storage: repositories,
       seedGetter,
     };
   });
@@ -44,7 +44,7 @@ describe('initializeCoco', () => {
 
       await initializeCoco({
         ...baseConfig,
-        repo: mockRepo,
+        storage: mockRepo,
       });
 
       expect(initSpy).toHaveBeenCalled();

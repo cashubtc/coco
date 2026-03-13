@@ -11,12 +11,17 @@ npm install coco-cashu-sqlite-bun
 ## Usage
 
 ```typescript
-import { SqliteRepositories } from 'coco-cashu-sqlite-bun';
+import { SqliteStorage } from 'coco-cashu-sqlite-bun';
+import { initializeCoco } from 'coco-cashu-core';
 import { Database } from 'bun:sqlite';
 
 const database = new Database(':memory:');
-const repositories = new SqliteRepositories({ database });
-await repositories.init();
+const storage = new SqliteStorage({ database });
+
+const coco = await initializeCoco({
+  storage,
+  seedGetter,
+});
 ```
 
 ## Differences from coco-cashu-sqlite3

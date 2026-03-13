@@ -1,17 +1,10 @@
 import type {
-  Repositories,
-  MintRepository,
-  KeysetRepository,
-  KeyRingRepository,
-  CounterRepository,
-  ProofRepository,
-  MintQuoteRepository,
-  MeltQuoteRepository,
-  SendOperationRepository,
-  MeltOperationRepository,
-  ReceiveOperationRepository,
+  InternalStorageAdapter,
+  RepositorySet,
   RepositoryTransactionScope,
-} from 'coco-cashu-core';
+  StorageAccess,
+} from 'coco-cashu-core/adapter';
+import { createInternalStorageAdapter, STORAGE_ACCESS } from 'coco-cashu-core/adapter';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
@@ -26,78 +19,52 @@ import { SqliteSendOperationRepository } from './repositories/SendOperationRepos
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 
-export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
+export interface SqliteStorageOptions extends SqliteDbOptions {}
 
-export class SqliteRepositories implements Repositories {
-  readonly mintRepository: MintRepository;
-  readonly keyRingRepository: KeyRingRepository;
-  readonly counterRepository: CounterRepository;
-  readonly keysetRepository: KeysetRepository;
-  readonly proofRepository: ProofRepository;
-  readonly mintQuoteRepository: MintQuoteRepository;
-  readonly meltQuoteRepository: MeltQuoteRepository;
-  readonly historyRepository: SqliteHistoryRepository;
-  readonly sendOperationRepository: SendOperationRepository;
-  readonly meltOperationRepository: MeltOperationRepository;
-  readonly receiveOperationRepository: ReceiveOperationRepository;
+export type SqliteRepositoriesOptions = SqliteStorageOptions;
+
+function createRepositories(db: SqliteDb): RepositorySet {
+  return {
+    mintRepository: new SqliteMintRepository(db),
+    keyRingRepository: new SqliteKeyRingRepository(db),
+    counterRepository: new SqliteCounterRepository(db),
+    keysetRepository: new SqliteKeysetRepository(db),
+    proofRepository: new SqliteProofRepository(db),
+    mintQuoteRepository: new SqliteMintQuoteRepository(db),
+    meltQuoteRepository: new SqliteMeltQuoteRepository(db),
+    historyRepository: new SqliteHistoryRepository(db),
+    sendOperationRepository: new SqliteSendOperationRepository(db),
+    meltOperationRepository: new SqliteMeltOperationRepository(db),
+    receiveOperationRepository: new SqliteReceiveOperationRepository(db),
+  };
+}
+
+export class SqliteStorage implements InternalStorageAdapter {
   readonly db: SqliteDb;
+  readonly #adapter: InternalStorageAdapter;
 
-  constructor(options: SqliteRepositoriesOptions) {
+  constructor(options: SqliteStorageOptions) {
     this.db = new SqliteDb(options);
-    this.mintRepository = new SqliteMintRepository(this.db);
-    this.keyRingRepository = new SqliteKeyRingRepository(this.db);
-    this.counterRepository = new SqliteCounterRepository(this.db);
-    this.keysetRepository = new SqliteKeysetRepository(this.db);
-    this.proofRepository = new SqliteProofRepository(this.db);
-    this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
-    this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
-    this.historyRepository = new SqliteHistoryRepository(this.db);
-    this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
-    this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
-    this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
+    this.#adapter = createInternalStorageAdapter({
+      init: async () => ensureSchema(this.db),
+      repositories: createRepositories(this.db),
+      withTransaction: async <T>(fn: (repos: RepositoryTransactionScope) => Promise<T>) => {
+        return this.db.transaction(async (txDb) => fn(createRepositories(txDb)));
+      },
+    });
   }
 
   async init(): Promise<void> {
-    await ensureSchema(this.db);
+    await this.#adapter.init();
   }
 
-  async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return this.db.transaction(async (txDb) => {
-      const scopedRepositories: RepositoryTransactionScope = {
-        mintRepository: new SqliteMintRepository(txDb),
-        keyRingRepository: new SqliteKeyRingRepository(txDb),
-        counterRepository: new SqliteCounterRepository(txDb),
-        keysetRepository: new SqliteKeysetRepository(txDb),
-        proofRepository: new SqliteProofRepository(txDb),
-        mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
-        meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
-        historyRepository: new SqliteHistoryRepository(txDb),
-        sendOperationRepository: new SqliteSendOperationRepository(txDb),
-        meltOperationRepository: new SqliteMeltOperationRepository(txDb),
-        receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
-      };
-
-      return fn(scopedRepositories);
-    });
+  [STORAGE_ACCESS](): StorageAccess {
+    return this.#adapter[STORAGE_ACCESS]();
   }
 }
 
-export {
-  SqliteDb,
-  ensureSchema,
-  ensureSchemaUpTo,
-  MIGRATIONS,
-  SqliteMintRepository,
-  SqliteKeyRingRepository,
-  SqliteKeysetRepository,
-  SqliteCounterRepository,
-  SqliteProofRepository,
-  SqliteMintQuoteRepository,
-  SqliteMeltQuoteRepository,
-  SqliteHistoryRepository,
-  SqliteSendOperationRepository,
-  SqliteMeltOperationRepository,
-  SqliteReceiveOperationRepository,
-};
+export { SqliteStorage as SqliteRepositories };
+
+export { SqliteDb, ensureSchema, ensureSchemaUpTo, MIGRATIONS };
 
 export type { Migration };

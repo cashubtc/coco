@@ -7,9 +7,10 @@ Coco is a TypeScript library that simplifies the development of Cashu applicatio
 To get started all you got to do is create a Coco `Manager` instance. This instance will be your entry-point to your Coco Cashu wallet.
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
+import { initializeCoco, MemoryStorage } from 'coco-cashu-core';
 
-const coco = await initializeCoco({ repo, seedGetter });
+const storage = new MemoryStorage();
+const coco = await initializeCoco({ storage, seedGetter });
 
 // After initialization you can start to use your coco wallet
 const balances = await coco.wallet.getBalances();
@@ -20,14 +21,15 @@ const balances = await coco.wallet.getBalances();
 In order to work properly coco requires you to supply a BIP39 conforming seed. Coco will never persist that seed, so you need to supply it via a `seedGetter` function. This function is expected to be passed when instantiating coco and will be called automatically when coco needs the key to derive new secrets from it
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
+import { initializeCoco, MemoryStorage } from 'coco-cashu-core';
 
 async function seedGetter(): Uint8Array {
   // add your implementation here
   // e.g. reading a mnemonic from SecureStorage and converting it to a BIP-39 seed
 }
 
-const coco = await initializeCoco({ seedGetter });
+const storage = new MemoryStorage();
+const coco = await initializeCoco({ storage, seedGetter });
 
 // Before receiving tokens, you need to add and trust the mint
 await coco.mint.addMint('https://mint.url', { trusted: true });
@@ -46,9 +48,9 @@ By default coco uses an in-memory store that will be lost as soon as the process
 import { initializeCoco } from 'coco-cashu-core';
 import { IndexedDbRespositories } from 'coco-cashu-indexeddb';
 
-const repo = new IndexedDbRepositories({ name: 'coco' });
+const storage = new IndexedDbRepositories({ name: 'coco' });
 const coco = await initializeCoco({
-  repo,
+  storage,
 });
 
 // Add and trust a mint before performing wallet operations

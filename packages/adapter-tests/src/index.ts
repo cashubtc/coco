@@ -1,12 +1,13 @@
-import type { Mint, Keyset, CoreProof, Repositories, MeltOperation } from 'coco-cashu-core';
+import type { Mint, Keyset, CoreProof, MeltOperation, CocoStorage } from 'coco-cashu-core';
+import { getStorageRepositories, withStorageTransaction } from 'coco-cashu-core/adapter';
 
-type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
-  repositories: TRepositories;
+type TransactionFactory<TStorage extends CocoStorage = CocoStorage> = () => Promise<{
+  repositories: TStorage;
   dispose(): Promise<void>;
 }>;
 
-type ContractOptions<TRepositories extends Repositories = Repositories> = {
-  createRepositories: TransactionFactory<TRepositories>;
+type ContractOptions<TStorage extends CocoStorage = CocoStorage> = {
+  createRepositories: TransactionFactory<TStorage>;
 };
 
 export async function runRepositoryTransactionContract(
@@ -17,10 +18,10 @@ export async function runRepositoryTransactionContract(
 
   describe('repository transactions contract', () => {
     it('commits all repositories together', async () => {
-      const { repositories, dispose } = await options.createRepositories();
+      const { repositories: storage, dispose } = await options.createRepositories();
       try {
         let committed = false;
-        await repositories.withTransaction(async (tx) => {
+        await withStorageTransaction(storage, async (tx) => {
           await tx.mintRepository.addOrUpdateMint(createDummyMint());
           await tx.keysetRepository.addKeyset(createDummyKeyset());
           await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
@@ -29,6 +30,7 @@ export async function runRepositoryTransactionContract(
         });
 
         expect(committed).toBe(true);
+        const repositories = getStorageRepositories(storage);
         const stored = await repositories.proofRepository.getAllReadyProofs();
         expect(stored.length).toBeGreaterThan(0);
         const operation = await repositories.meltOperationRepository.getById('melt-op');
@@ -39,15 +41,16 @@ export async function runRepositoryTransactionContract(
     });
 
     it('rolls back commits on error', async () => {
-      const { repositories, dispose } = await options.createRepositories();
+      const { repositories: storage, dispose } = await options.createRepositories();
       try {
         await expectThrows(async () => {
-          await repositories.withTransaction(async (tx) => {
+          await withStorageTransaction(storage, async (tx) => {
             await tx.mintRepository.addOrUpdateMint(createDummyMint());
             throw new Error('boom');
           });
         }, expect);
 
+        const repositories = getStorageRepositories(storage);
         const mints = await repositories.mintRepository.getAllMints();
         expect(mints.length).toBe(0);
       } finally {

@@ -1,10 +1,6 @@
-import type {
-  Repositories,
-  MintQuoteRepository,
-  SendOperationRepository,
-  MeltOperationRepository,
-  ReceiveOperationRepository,
-} from './repositories';
+import type { RepositorySet } from './repositories';
+import type { CocoStorage } from './storage/index.ts';
+import { getStorageRepositories } from './storage/adapter.ts';
 import {
   CounterService,
   MintService,
@@ -50,8 +46,8 @@ import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
  * Configuration options for initializing the Coco Cashu manager
  */
 export interface CocoConfig {
-  /** Repository implementations for data persistence */
-  repo: Repositories;
+  /** Storage implementation for data persistence */
+  storage: CocoStorage;
   /** Function that returns the wallet seed as Uint8Array */
   seedGetter: () => Promise<Uint8Array>;
   /** Optional logger instance (defaults to NullLogger) */
@@ -117,13 +113,13 @@ export interface CocoConfig {
 
 /**
  * Initializes and configures a new Coco Cashu manager instance
- * @param config - Configuration options including repositories, seed, and optional features
+ * @param config - Configuration options including storage, seed, and optional features
  * @returns A fully initialized Manager instance
  */
 export async function initializeCoco(config: CocoConfig): Promise<Manager> {
-  await config.repo.init();
+  await config.storage.init();
   const coco = new Manager(
-    config.repo,
+    config.storage,
     config.seedGetter,
     config.logger,
     config.webSocketFactory,
@@ -187,7 +183,6 @@ export class Manager {
   private mintQuoteService: MintQuoteService;
   private mintQuoteWatcher?: MintQuoteWatcherService;
   private mintQuoteProcessor?: MintQuoteProcessor;
-  private mintQuoteRepository: MintQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
   private meltQuoteService: MeltQuoteService;
   private historyService: HistoryService;
@@ -197,12 +192,8 @@ export class Manager {
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private sendOperationService: SendOperationService;
-  private sendOperationRepository: SendOperationRepository;
   private meltOperationService: MeltOperationService;
-  private meltOperationRepository: MeltOperationRepository;
   private receiveOperationService: ReceiveOperationService;
-  private receiveOperationRepository: ReceiveOperationRepository;
-  private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
   private originalWatcherConfig: CocoConfig['watchers'];
@@ -210,7 +201,7 @@ export class Manager {
   private readonly mintRequestProvider: MintRequestProvider;
   private readonly mintAdapter: MintAdapter;
   constructor(
-    repositories: Repositories,
+    storage: CocoStorage,
     seedGetter: () => Promise<Uint8Array>,
     logger?: Logger,
     webSocketFactory?: WebSocketFactory,
@@ -237,6 +228,7 @@ export class Manager {
     if (plugins && plugins.length > 0) {
       for (const p of plugins) this.pluginHost.use(p);
     }
+    const repositories = getStorageRepositories(storage);
     const core = this.buildCoreServices(repositories, seedGetter);
     this.mintService = core.mintService;
     this.walletService = core.walletService;
@@ -246,19 +238,14 @@ export class Manager {
     this.seedService = core.seedService;
     this.counterService = core.counterService;
     this.mintQuoteService = core.mintQuoteService;
-    this.mintQuoteRepository = core.mintQuoteRepository;
     this.meltQuoteService = core.meltQuoteService;
     this.historyService = core.historyService;
     this.transactionService = core.transactionService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
     this.tokenService = core.tokenService;
-    this.sendOperationRepository = core.sendOperationRepository;
     this.receiveOperationService = core.receiveOperationService;
-    this.receiveOperationRepository = core.receiveOperationRepository;
     this.meltOperationService = core.meltOperationService;
-    this.meltOperationRepository = core.meltOperationRepository;
-    this.proofRepository = repositories.proofRepository;
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -374,7 +361,6 @@ export class Manager {
       ? this.logger.child({ module: 'MintQuoteWatcherService' })
       : this.logger;
     this.mintQuoteWatcher = new MintQuoteWatcherService(
-      this.mintQuoteRepository,
       this.subscriptions,
       this.mintService,
       this.mintQuoteService,
@@ -433,7 +419,6 @@ export class Manager {
       this.subscriptions,
       this.mintService,
       this.proofService,
-      this.proofRepository,
       this.eventBus,
       watcherLogger,
       { watchExistingInflightOnStart: options?.watchExistingInflightOnStart ?? true },
@@ -557,7 +542,7 @@ export class Manager {
   }
 
   private buildCoreServices(
-    repositories: Repositories,
+    repositories: RepositorySet,
     seedGetter: () => Promise<Uint8Array>,
   ): {
     mintService: MintService;
@@ -569,17 +554,13 @@ export class Manager {
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
     mintQuoteService: MintQuoteService;
-    mintQuoteRepository: MintQuoteRepository;
     meltQuoteService: MeltQuoteService;
     historyService: HistoryService;
     transactionService: TransactionService;
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
-    sendOperationRepository: SendOperationRepository;
     receiveOperationService: ReceiveOperationService;
-    receiveOperationRepository: ReceiveOperationRepository;
     meltOperationService: MeltOperationService;
-    meltOperationRepository: MeltOperationRepository;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -642,7 +623,6 @@ export class Manager {
       mintQuoteLogger,
     );
     const mintQuoteService = quotesService;
-    const mintQuoteRepository = repositories.mintQuoteRepository;
 
     const meltQuoteService = new MeltQuoteService(
       mintService,
@@ -686,7 +666,6 @@ export class Manager {
       sendOperationLogger,
       mintScopedLock,
     );
-    const sendOperationRepository = repositories.sendOperationRepository;
 
     const tokenService = new TokenService(mintService, tokenLogger);
 
@@ -702,7 +681,6 @@ export class Manager {
       this.eventBus,
       receiveOperationLogger,
     );
-    const receiveOperationRepository = repositories.receiveOperationRepository;
 
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({
@@ -720,7 +698,6 @@ export class Manager {
       meltOperationLogger,
       mintScopedLock,
     );
-    const meltOperationRepository = repositories.meltOperationRepository;
 
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
@@ -739,17 +716,13 @@ export class Manager {
       walletRestoreService,
       keyRingService,
       mintQuoteService,
-      mintQuoteRepository,
       meltQuoteService,
       historyService,
       transactionService,
       paymentRequestService,
       sendOperationService,
-      sendOperationRepository,
       receiveOperationService,
-      receiveOperationRepository,
       meltOperationService,
-      meltOperationRepository,
     };
   }
 

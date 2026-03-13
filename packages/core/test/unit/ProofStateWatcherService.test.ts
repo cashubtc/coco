@@ -5,7 +5,6 @@ import { ProofStateWatcherService } from '../../services/watchers/ProofStateWatc
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
-import type { ProofRepository } from '../../repositories/index.ts';
 import type { CoreProof } from '../../types.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 
@@ -46,10 +45,8 @@ describe('ProofStateWatcherService', () => {
 
     const proofService = {
       checkInflightProofs,
-    } as unknown as ProofService;
-    const proofRepository = {
       getInflightProofs,
-    } as unknown as ProofRepository;
+    } as unknown as ProofService;
     const subs = {} as SubscriptionManager;
     const mintService = {
       isTrustedMint: mock(async () => true),
@@ -59,7 +56,6 @@ describe('ProofStateWatcherService', () => {
       subs,
       mintService,
       proofService,
-      proofRepository,
       bus,
       new NullLogger(),
     );
@@ -86,10 +82,8 @@ describe('ProofStateWatcherService', () => {
 
     const proofService = {
       checkInflightProofs,
-    } as unknown as ProofService;
-    const proofRepository = {
       getInflightProofs,
-    } as unknown as ProofRepository;
+    } as unknown as ProofService;
     const subs = {} as SubscriptionManager;
     const mintService = {
       isTrustedMint: mock(async () => true),
@@ -99,7 +93,6 @@ describe('ProofStateWatcherService', () => {
       subs,
       mintService,
       proofService,
-      proofRepository,
       bus,
       new NullLogger(),
       { watchExistingInflightOnStart: false },

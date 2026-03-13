@@ -13,7 +13,7 @@ describe('Pause/Resume Integration Test', () => {
   beforeEach(async () => {
     const repositories = new MemoryRepositories();
     manager = await initializeCoco({
-      repo: repositories,
+      storage: repositories,
       seedGetter,
       logger: new NullLogger(),
       // Use faster intervals for testing
@@ -152,7 +152,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create new manager with some watchers disabled
     const repositories = new MemoryRepositories();
     manager = await initializeCoco({
-      repo: repositories,
+      storage: repositories,
       seedGetter,
       logger: new NullLogger(),
       watchers: {

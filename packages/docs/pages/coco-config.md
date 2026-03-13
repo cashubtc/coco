@@ -4,7 +4,7 @@ Coco can be configured using a configuration object `CocoConfig`
 
 ```ts
 export interface CocoConfig {
-  repo: Repositories;
+  storage: CocoStorage;
   seedGetter: () => Promise<Uint8Array>;
   logger?: Logger;
   webSocketFactory?: WebSocketFactory;
@@ -30,7 +30,7 @@ export interface CocoConfig {
 }
 ```
 
-- repo: A storage adapter that satisfies the `Repositories` interface. See [Storage Adapters](./storage-adapters.md) for more information
+- storage: A storage adapter that satisfies the `CocoStorage` contract. See [Storage Adapters](./storage-adapters.md) for more information
 - seedGetter: An asynchronous function that returns a BIP-39 conforming seed as `Uint8Array`. See [BIP-39](./bip39.md) for more information.
 - logger (optional): An implementation of the Logger interface that Coco will use to log
 - webSocketFactory (optional): A factory function that should return a `WebSocketLike` instance that will be used by Coco to establish websocket connections. If the global `WebSocket` is not present and `webSocketFactory` is undefined coco will fallback to polling.
