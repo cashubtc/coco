@@ -1,6 +1,6 @@
 import type {
-  Repositories,
   RepositoryTransactionScope,
+  RepositorySet,
   MintRepository,
   KeysetRepository,
   KeyRingRepository,
@@ -13,6 +13,11 @@ import type {
   MeltOperationRepository,
   ReceiveOperationRepository,
 } from '..';
+import {
+  STORAGE_ACCESS,
+  type InternalStorageAdapter,
+  type StorageAccess,
+} from '../../storage/adapter.ts';
 import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
 import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
@@ -25,7 +30,7 @@ import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 
-export class MemoryRepositories implements Repositories {
+export class MemoryRepositories implements RepositorySet, InternalStorageAdapter {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
@@ -58,5 +63,13 @@ export class MemoryRepositories implements Repositories {
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     return fn(this);
+  }
+
+  [STORAGE_ACCESS](): StorageAccess {
+    return {
+      repositories: this,
+      withTransaction: async <T>(fn: (repos: RepositoryTransactionScope) => Promise<T>) =>
+        this.withTransaction(fn),
+    };
   }
 }

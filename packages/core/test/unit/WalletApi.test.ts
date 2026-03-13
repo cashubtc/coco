@@ -13,7 +13,8 @@ import { UnknownMintError } from '../../models/Error';
 import { getEncodedToken, OutputData } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
-import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
+import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository.ts';
 import { TokenService } from '../../services/TokenService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 

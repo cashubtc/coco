@@ -1,6 +1,5 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
-import type { MintQuoteRepository } from '../../repositories';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
 import type { MintQuoteService } from '../MintQuoteService';
@@ -18,7 +17,6 @@ export interface MintQuoteWatcherOptions {
 }
 
 export class MintQuoteWatcherService {
-  private readonly repo: MintQuoteRepository;
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
   private readonly quotes: MintQuoteService;
@@ -33,7 +31,6 @@ export class MintQuoteWatcherService {
   private offUntrusted?: () => void;
 
   constructor(
-    repo: MintQuoteRepository,
     subs: SubscriptionManager,
     mintService: MintService,
     quotes: MintQuoteService,
@@ -41,7 +38,6 @@ export class MintQuoteWatcherService {
     logger?: Logger,
     options: MintQuoteWatcherOptions = { watchExistingPendingOnStart: true },
   ) {
-    this.repo = repo;
     this.subs = subs;
     this.mintService = mintService;
     this.quotes = quotes;
@@ -97,7 +93,7 @@ export class MintQuoteWatcherService {
     if (this.options.watchExistingPendingOnStart) {
       // Also watch any quotes that are not ISSUED yet (only for trusted mints)
       try {
-        const pending = await this.repo.getPendingMintQuotes();
+        const pending = await this.quotes.getPendingMintQuotes();
         const byMint = new Map<string, string[]>();
         for (const q of pending) {
           let arr = byMint.get(q.mintUrl);

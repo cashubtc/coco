@@ -479,6 +479,14 @@ export class ProofService {
     return this.proofRepository.getProofsByKeysetId(mintUrl, keysetId);
   }
 
+  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
+    return this.proofRepository.getInflightProofs(mintUrls);
+  }
+
+  async getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null> {
+    return this.proofRepository.getProofBySecret(mintUrl, secret);
+  }
+
   async hasProofsForKeyset(mintUrl: string, keysetId: string): Promise<boolean> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');

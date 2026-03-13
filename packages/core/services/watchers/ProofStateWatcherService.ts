@@ -5,7 +5,6 @@ import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
 import { getSendProofSecrets, hasPreparedData } from '../../operations/send/SendOperation';
-import type { ProofRepository } from '../../repositories';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
@@ -31,7 +30,6 @@ export class ProofStateWatcherService {
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
   private readonly proofs: ProofService;
-  private readonly proofRepository: ProofRepository;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: ProofStateWatcherOptions;
@@ -48,7 +46,6 @@ export class ProofStateWatcherService {
     subs: SubscriptionManager,
     mintService: MintService,
     proofs: ProofService,
-    proofRepository: ProofRepository,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options: ProofStateWatcherOptions = { watchExistingInflightOnStart: true },
@@ -56,7 +53,6 @@ export class ProofStateWatcherService {
     this.subs = subs;
     this.mintService = mintService;
     this.proofs = proofs;
-    this.proofRepository = proofRepository;
     this.bus = bus;
     this.logger = logger;
     this.options = options;
@@ -297,7 +293,7 @@ export class ProofStateWatcherService {
     await this.proofs.checkInflightProofs();
     if (!this.running) return;
 
-    const inflightProofs = await this.proofRepository.getInflightProofs();
+    const inflightProofs = await this.proofs.getInflightProofs();
     if (!this.running || inflightProofs.length === 0) return;
 
     const byMint = new Map<string, string[]>();
@@ -368,7 +364,7 @@ export class ProofStateWatcherService {
 
     try {
       // Look up the specific proof that was just spent
-      const spentProof = await this.proofRepository.getProofBySecret(mintUrl, secret);
+      const spentProof = await this.proofs.getProofBySecret(mintUrl, secret);
       // Check both usedByOperationId (for exact match sends) and createdByOperationId (for swap sends)
       const operationId = spentProof?.usedByOperationId || spentProof?.createdByOperationId;
       if (!operationId) return;
@@ -386,7 +382,7 @@ export class ProofStateWatcherService {
       // Check state of all send proofs
       let allSpent = true;
       for (const sendSecret of sendProofSecrets) {
-        const proof = await this.proofRepository.getProofBySecret(mintUrl, sendSecret);
+        const proof = await this.proofs.getProofBySecret(mintUrl, sendSecret);
         if (!proof || proof.state !== 'spent') {
           allSpent = false;
           break;

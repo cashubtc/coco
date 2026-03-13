@@ -1,4 +1,5 @@
-import { initializeCoco, type Repositories } from 'coco-cashu-core';
+import { initializeCoco, type CocoStorage } from 'coco-cashu-core';
+import { getStorageRepositories } from 'coco-cashu-core/adapter';
 
 /**
  * Test runner interface for migration tests.
@@ -31,13 +32,13 @@ type MigrationExpectApi = {
  * Options for running migration tests.
  * Each adapter provides its specific implementations.
  */
-export type MigrationTestOptions<TRepositories extends Repositories = Repositories> = {
+export type MigrationTestOptions<TStorage extends CocoStorage = CocoStorage> = {
   /**
    * Create fresh repositories with ALL migrations applied.
    * Used for creating realistic test data via Core API.
    */
   createRepositories: () => Promise<{
-    repositories: TRepositories;
+    repositories: TStorage;
     dispose: () => Promise<void>;
   }>;
 
@@ -49,7 +50,7 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
    * For IndexedDB, stopBeforeId is the version number as a string like '8'.
    */
   createRepositoriesAtMigration: (stopBeforeId: string) => Promise<{
-    repositories: TRepositories;
+    repositories: TStorage;
     dispose: () => Promise<void>;
     /**
      * Run remaining migrations (from stopBeforeId onwards).
@@ -113,8 +114,8 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
  * }, { describe, it, expect, beforeEach, afterEach });
  * ```
  */
-export function runMigrationTests<TRepositories extends Repositories = Repositories>(
-  options: MigrationTestOptions<TRepositories>,
+export function runMigrationTests<TStorage extends CocoStorage = CocoStorage>(
+  options: MigrationTestOptions<TStorage>,
   runner: MigrationTestRunner,
 ): void {
   const { describe, it, expect, beforeEach, afterEach } = runner;
@@ -140,17 +141,18 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
         const { repositories, dispose } = await createRepositories();
 
         try {
+          const repoSet = getStorageRepositories(repositories);
           const seedGetter = createSeedGetter();
 
           const mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
           });
 
           const testMintUrl = 'https://migration-test.mint';
 
           // Add a mint
-          await repositories.mintRepository.addOrUpdateMint({
+          await repoSet.mintRepository.addOrUpdateMint({
             mintUrl: testMintUrl,
             name: 'Migration Test Mint',
             mintInfo: {
@@ -166,7 +168,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           });
 
           // Add keyset
-          await repositories.keysetRepository.addKeyset({
+          await repoSet.keysetRepository.addKeyset({
             mintUrl: testMintUrl,
             id: 'test-keyset-001',
             unit: 'sat',
@@ -176,7 +178,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           });
 
           // Add proofs (user's money!)
-          await repositories.proofRepository.saveProofs(testMintUrl, [
+          await repoSet.proofRepository.saveProofs(testMintUrl, [
             {
               id: 'test-keyset-001',
               amount: 100,
@@ -196,14 +198,13 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           ]);
 
           // Add counter
-          await repositories.counterRepository.setCounter(testMintUrl, 'test-keyset-001', 10);
+          await repoSet.counterRepository.setCounter(testMintUrl, 'test-keyset-001', 10);
 
           // Record state before
-          const mintsBefore = await repositories.mintRepository.getAllMints();
-          const keysetsBefore =
-            await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
-          const proofsBefore = await repositories.proofRepository.getAllReadyProofs();
-          const counterBefore = await repositories.counterRepository.getCounter(
+          const mintsBefore = await repoSet.mintRepository.getAllMints();
+          const keysetsBefore = await repoSet.keysetRepository.getKeysetsByMintUrl(testMintUrl);
+          const proofsBefore = await repoSet.proofRepository.getAllReadyProofs();
+          const counterBefore = await repoSet.counterRepository.getCounter(
             testMintUrl,
             'test-keyset-001',
           );
@@ -212,15 +213,15 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
 
           // Re-initialize (simulates app restart after update)
           const mgr2 = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
           });
 
           // Verify ALL data survived
-          const mintsAfter = await repositories.mintRepository.getAllMints();
-          const keysetsAfter = await repositories.keysetRepository.getKeysetsByMintUrl(testMintUrl);
-          const proofsAfter = await repositories.proofRepository.getAllReadyProofs();
-          const counterAfter = await repositories.counterRepository.getCounter(
+          const mintsAfter = await repoSet.mintRepository.getAllMints();
+          const keysetsAfter = await repoSet.keysetRepository.getKeysetsByMintUrl(testMintUrl);
+          const proofsAfter = await repoSet.proofRepository.getAllReadyProofs();
+          const counterAfter = await repoSet.counterRepository.getCounter(
             testMintUrl,
             'test-keyset-001',
           );

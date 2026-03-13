@@ -1,5 +1,6 @@
-import type { Repositories, Manager, Logger } from 'coco-cashu-core';
+import type { CocoStorage, Manager, Logger, ProofRepository } from 'coco-cashu-core';
 import { initializeCoco, getEncodedToken, ConsoleLogger } from 'coco-cashu-core';
+import { getStorageRepositories } from 'coco-cashu-core/adapter';
 import {
   Mint,
   Wallet,
@@ -44,9 +45,9 @@ type ExpectApi = {
   };
 };
 
-export type IntegrationTestOptions<TRepositories extends Repositories = Repositories> = {
+export type IntegrationTestOptions<TStorage extends CocoStorage = CocoStorage> = {
   createRepositories: () => Promise<{
-    repositories: TRepositories;
+    repositories: TStorage;
     dispose(): Promise<void>;
   }>;
   mintUrl: string;
@@ -107,8 +108,8 @@ function waitForSendHistoryState(
   });
 }
 
-export async function runIntegrationTests<TRepositories extends Repositories = Repositories>(
-  options: IntegrationTestOptions<TRepositories>,
+export async function runIntegrationTests<TStorage extends CocoStorage = CocoStorage>(
+  options: IntegrationTestOptions<TStorage>,
   runner: IntegrationTestRunner,
 ): Promise<void> {
   const { describe, it, beforeEach, afterEach, expect } = runner;
@@ -140,7 +141,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -176,7 +177,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -203,7 +204,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -237,7 +238,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
             processors: {
@@ -307,7 +308,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
             processors: {
@@ -347,7 +348,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
         });
@@ -555,7 +556,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
           watchers: {
@@ -583,7 +584,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         await mgr!.wallet.receive(token);
 
-        const proofRepository = (mgr as any).proofRepository as Repositories['proofRepository'];
+        const proofRepository = (mgr as any).proofRepository as ProofRepository;
         const proofService = (mgr as any).proofService as {
           checkInflightProofs: () => Promise<void>;
         };
@@ -606,14 +607,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     describe('Melt Quote Workflow', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
-      let repositories: Repositories | undefined;
+      let repositories: CocoStorage | undefined;
+
+      const adapterRepositories = () => getStorageRepositories(repositories!);
 
       beforeEach(async () => {
         const created = await createRepositories();
         repositories = created.repositories;
         repositoriesDispose = created.dispose;
         mgr = await initializeCoco({
-          repo: created.repositories,
+          storage: created.repositories,
           seedGetter,
           logger,
         });
@@ -645,7 +648,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(meltQuote.quote).toBeDefined();
         expect(meltQuote.amount).toBeGreaterThan(0);
 
-        const stored = await repositories!.meltQuoteRepository.getMeltQuote(
+        const stored = await adapterRepositories().meltQuoteRepository.getMeltQuote(
           mintUrl,
           meltQuote.quote,
         );
@@ -713,7 +716,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         await Promise.all([paidEventPromise, stateChangedEventPromise]);
 
-        const storedQuote = await repositories!.meltQuoteRepository.getMeltQuote(
+        const storedQuote = await adapterRepositories().meltQuoteRepository.getMeltQuote(
           mintUrl,
           meltQuote.quote,
         );
@@ -733,7 +736,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         expect(prepared.quoteId).toBeDefined();
 
-        const stored = await repositories!.meltOperationRepository.getByQuoteId(
+        const stored = await adapterRepositories().meltOperationRepository.getByQuoteId(
           mintUrl,
           prepared.quoteId,
         );
@@ -746,7 +749,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(executed?.mintUrl).toBe(mintUrl);
         expect(executed?.quoteId).toBe(prepared.quoteId);
 
-        const operationAfterExecute = await repositories!.meltOperationRepository.getById(
+        const operationAfterExecute = await adapterRepositories().meltOperationRepository.getById(
           executed!.id,
         );
         expect(operationAfterExecute).toBeDefined();
@@ -756,7 +759,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           let pendingResult = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, prepared.quoteId);
           expect(pendingResult).toBeDefined();
 
-          const operationAfterCheck = await repositories!.meltOperationRepository.getById(
+          const operationAfterCheck = await adapterRepositories().meltOperationRepository.getById(
             executed!.id,
           );
           expect(operationAfterCheck).toBeDefined();
@@ -765,7 +768,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             pendingResult = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, prepared.quoteId);
           }
 
-          const operationAfterRetry = await repositories!.meltOperationRepository.getById(
+          const operationAfterRetry = await adapterRepositories().meltOperationRepository.getById(
             executed!.id,
           );
           expect(operationAfterRetry).toBeDefined();
@@ -796,7 +799,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
         });
@@ -885,7 +888,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
           watchers: {
@@ -1085,7 +1088,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
           watchers: {
@@ -1259,7 +1262,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1290,7 +1293,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1321,7 +1324,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1379,7 +1382,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
             watchers: {
@@ -1423,7 +1426,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1452,7 +1455,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
             watchers: {
@@ -1487,7 +1490,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           mgr = undefined;
 
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
             watchers: {
@@ -1524,7 +1527,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1579,7 +1582,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1604,7 +1607,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1629,7 +1632,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1652,7 +1655,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1679,7 +1682,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1701,7 +1704,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1732,7 +1735,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1776,7 +1779,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         try {
           // First manager generates keypairs
           const mgr1 = await initializeCoco({
-            repo: repo1,
+            storage: repo1,
             seedGetter: sharedSeedGetter,
             logger,
           });
@@ -1789,7 +1792,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           // Second manager with same seed generates keypairs
           const mgr2 = await initializeCoco({
-            repo: repo2,
+            storage: repo2,
             seedGetter: sharedSeedGetter,
             logger,
           });
@@ -1813,7 +1816,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -1857,7 +1860,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         try {
           // First manager: generate a keypair to discover what the first derived key will be
           const mgr1 = await initializeCoco({
-            repo: repo1,
+            storage: repo1,
             seedGetter: sharedSeedGetter,
             logger,
           });
@@ -1870,7 +1873,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           // Second manager: add the key first (without derivation index), then generate
           const mgr2 = await initializeCoco({
-            repo: repo2,
+            storage: repo2,
             seedGetter: sharedSeedGetter,
             logger,
           });
@@ -1904,14 +1907,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
     describe('P2PK (Pay-to-Public-Key)', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;
-      let repositories: Repositories | undefined;
+      let repositories: CocoStorage | undefined;
 
       beforeEach(async () => {
         const created = await createRepositories();
         repositories = created.repositories;
         repositoriesDispose = created.dispose;
         mgr = await initializeCoco({
-          repo: created.repositories,
+          storage: created.repositories,
           seedGetter,
           logger,
         });
@@ -2166,7 +2169,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         mgr = undefined;
 
         mgr = await initializeCoco({
-          repo: repositories!,
+          storage: repositories!,
           seedGetter,
           logger,
           watchers: {
@@ -2282,7 +2285,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
-            repo: repositories,
+            storage: repositories,
             seedGetter,
             logger,
           });
@@ -2366,7 +2369,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const { repositories, dispose } = await createRepositories();
         repositoriesDispose = dispose;
         mgr = await initializeCoco({
-          repo: repositories,
+          storage: repositories,
           seedGetter,
           logger,
         });

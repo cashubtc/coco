@@ -208,7 +208,7 @@ export interface ReceiveOperationRepository {
   delete(id: string): Promise<void>;
 }
 
-interface RepositoriesBase {
+export interface RepositorySet {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
@@ -222,11 +222,6 @@ interface RepositoriesBase {
   receiveOperationRepository: ReceiveOperationRepository;
 }
 
-export interface Repositories extends RepositoriesBase {
-  init(): Promise<void>;
-  withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
-}
+export type Repositories = RepositorySet;
 
-export type RepositoryTransactionScope = RepositoriesBase;
-
-export * from './memory';
+export type RepositoryTransactionScope = RepositorySet;

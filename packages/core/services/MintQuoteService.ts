@@ -1,4 +1,5 @@
 import type { MintQuoteRepository } from '../repositories';
+import type { MintQuote } from '../models/MintQuote';
 import type { MintService } from './MintService';
 import type { WalletService } from './WalletService';
 import type { ProofService } from './ProofService';
@@ -200,5 +201,9 @@ export class MintQuoteService {
       this.logger?.error('Failed to requeue PAID mint quotes', { mintUrl, err });
     }
     return { requeued };
+  }
+
+  async getPendingMintQuotes(): Promise<MintQuote[]> {
+    return this.mintQuoteRepo.getPendingMintQuotes();
   }
 }

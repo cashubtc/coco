@@ -36,13 +36,13 @@ describe('ReceiveOperationService integration', () => {
     };
 
     sender = await initializeCoco({
-      repo: senderRepos,
+      storage: senderRepos,
       seedGetter: makeSeedGetter(),
       ...baseConfig,
     });
 
     receiver = await initializeCoco({
-      repo: receiverRepos,
+      storage: receiverRepos,
       seedGetter: makeSeedGetter(),
       ...baseConfig,
     });
