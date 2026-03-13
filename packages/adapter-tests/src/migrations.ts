@@ -85,8 +85,8 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
 
   /**
    * The migration ID/version that adds derivationPath to keypairs.
-   * For SQL adapters: '012_keypair_derivation_path'
-   * For IndexedDB: '10'
+   * For SQL adapters: '016_keypair_derivation_path'
+   * For IndexedDB: '15'
    */
   keypairDerivationPathMigration?: string;
 
