@@ -64,4 +64,5 @@ Use TypeScript for type checking and `tsdown` to build packages. See `packages/c
 
 ## Contributing
 
-Please see `CONTRIBUTING.md` for workflow, coding standards, and release notes.
+Please see `CONTRIBUTING.md` for contributor workflow, testing commands, changesets,
+and scoped conventional commit message guidance.
