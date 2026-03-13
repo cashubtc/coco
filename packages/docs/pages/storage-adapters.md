@@ -3,10 +3,10 @@
 Coco is built in a platform agnostic way. As we can not assume anything about the presence of a certain storage API (e.g. IndexedDB), coco exposes a storage interface that needs to be satisfied when instantiating.
 
 ```ts
-const repo = new ExpoSqliteRepositories({ database: db }); // Implements the Repositories interface
-await repo.init(); // Ensures schema and applies migrations
+const storage = new ExpoSqliteRepositories({ database: db });
+await storage.init(); // Ensures schema and applies migrations
 const coco = await initializeCoco({
-  repo, // <-- pass the storage implementation
+  storage,
   seedGetter,
   // other params
 });
@@ -30,9 +30,9 @@ Usage:
 import { initializeCoco } from 'coco-cashu-core';
 import { IndexedDbRepositories } from 'coco-cashu-indexeddb';
 
-const repo = new IndexedDbRepositories({ name: 'your-db-name' });
+const storage = new IndexedDbRepositories({ name: 'your-db-name' });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
@@ -57,9 +57,9 @@ import { openDatabaseAsync } from 'expo-sqlite';
 // First we create an expo-sqlite client
 const db = await openDatabaseAsync('coco-demo.db');
 // Then we pass it to our storage implementation
-const repo = new ExpoSqliteRepositories({ database: db });
+const storage = new ExpoSqliteRepositories({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
@@ -83,9 +83,9 @@ import { Database } from 'sqlite3';
 // First we create a sqlite3 client
 const db = new Database('./test.db');
 // Then we pass it to our storage implementation
-const repo = new SqliteRepositories({ database: db });
+const storage = new SqliteRepositories({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```
@@ -110,9 +110,9 @@ import { Database } from 'bun:sqlite';
 // First we create a bun:sqlite client
 const db = new Database('./test.db');
 // Then we pass it to our storage implementation
-const repo = new SqliteRepositories({ database: db });
+const storage = new SqliteRepositories({ database: db });
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
 });
 ```

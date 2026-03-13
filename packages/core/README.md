@@ -47,16 +47,16 @@ bun install
 ## Quick start
 
 ```ts
-import { initializeCoco, MemoryRepositories, ConsoleLogger } from 'coco-cashu-core';
+import { initializeCoco, MemoryStorage, ConsoleLogger } from 'coco-cashu-core';
 
 // Provide a deterministic 64-byte seed for wallet key derivation
 const seedGetter = async () => seed;
 
-const repos = new MemoryRepositories();
+const storage = new MemoryStorage();
 const logger = new ConsoleLogger('example', { level: 'info' });
 
 const manager = await initializeCoco({
-  repo: repos,
+  storage,
   seedGetter,
   logger,
 });
@@ -110,7 +110,7 @@ await manager.disableProofStateWatcher();
 
 `initializeCoco` sets up repositories, plugins, watchers, and processors for you. You can configure it via `CocoConfig`:
 
-- `repo`: `Repositories` implementation (required)
+- `storage`: `CocoStorage` implementation (required)
 - `seedGetter`: async seed provider (required)
 - `logger`: optional logger (defaults to `NullLogger`)
 - `webSocketFactory`: optional WebSocket factory

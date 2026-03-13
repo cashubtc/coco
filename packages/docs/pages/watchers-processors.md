@@ -12,7 +12,7 @@ To disable them during initialization with `initializeCoco()`:
 
 ```ts
 const coco = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   watchers: {
     mintQuoteWatcher: { disabled: true },

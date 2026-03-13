@@ -42,7 +42,7 @@ Pass plugins to `initializeCoco()` via the `plugins` config option:
 import { initializeCoco } from 'coco-cashu-core';
 
 const manager = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   plugins: [myPlugin],
 });
@@ -114,7 +114,7 @@ After initialization, access the extension via `manager.ext`:
 
 ```ts
 const manager = await initializeCoco({
-  repo,
+  storage,
   seedGetter,
   plugins: [myPlugin],
 });

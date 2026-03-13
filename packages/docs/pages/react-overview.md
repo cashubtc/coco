@@ -26,7 +26,7 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void initializeCoco({ repo, seedGetter })
+    void initializeCoco({ storage, seedGetter })
       .then((instance) => {
         if (!cancelled) setManager(instance);
       })

@@ -41,15 +41,15 @@ export function cachedSeedGetter() {
 
 ### Persistence
 
-We are going to use sqlite3 to persist our wallet data. Coco expects a repository implementation when instantiating. The `coco-cashu-sqlite3` package helps us bridge sqlite3 to coco
+We are going to use sqlite3 to persist our wallet data. Coco expects a storage adapter when instantiating. The `coco-cashu-sqlite3` package helps us bridge sqlite3 to coco
 
 ```ts
-// repo.ts
+// storage.ts
 import { SqliteRepositories } from 'coco-cashu-sqlite3';
 import { Database } from 'sqlite3';
 
 const db = new Database('./coco.db');
-export const repo = new SqliteRepositories({ database: db });
+export const storage = new SqliteRepositories({ database: db });
 ```
 
 ### Websockets
@@ -70,12 +70,12 @@ Now that we have all the parts prepared we can bring them together and instantia
 
 ```ts
 import { initializeCoco } from 'coco-cashu-core';
-import { repo } from './repo.ts';
+import { storage } from './storage.ts';
 import { websocketFactory } from './websocket.ts';
 import { cachedSeedGetter } from './seedgetter.ts';
 
 export const coco = await initializeCoco({
-  repo: repo,
+  storage,
   seedGetter: cachedSeedGetter(),
   websocketFactory: websocketFactory,
 });
