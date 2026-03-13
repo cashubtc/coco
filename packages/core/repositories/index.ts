@@ -15,6 +15,7 @@ import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
+import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -185,6 +186,32 @@ export interface MeltOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface MintOperationRepository {
+  /** Create a new mint operation */
+  create(operation: MintOperation): Promise<void>;
+
+  /** Update an existing mint operation */
+  update(operation: MintOperation): Promise<void>;
+
+  /** Get a mint operation by ID */
+  getById(id: string): Promise<MintOperation | null>;
+
+  /** Get all mint operations in a specific state */
+  getByState(state: MintOperationState): Promise<MintOperation[]>;
+
+  /** Get all pending operations (state in ['executing']) */
+  getPending(): Promise<MintOperation[]>;
+
+  /** Get all operations for a specific mint */
+  getByMintUrl(mintUrl: string): Promise<MintOperation[]>;
+
+  /** Get all operations for a mint/quote pair */
+  getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]>;
+
+  /** Delete a mint operation */
+  delete(id: string): Promise<void>;
+}
+
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
   create(operation: ReceiveOperation): Promise<void>;
@@ -219,6 +246,7 @@ interface RepositoriesBase {
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
+  mintOperationRepository: MintOperationRepository;
   receiveOperationRepository: ReceiveOperationRepository;
 }
 

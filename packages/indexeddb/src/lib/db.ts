@@ -220,3 +220,17 @@ export interface MeltOperationRow {
   changeAmount?: number | null;
   effectiveFee?: number | null;
 }
+
+export interface MintOperationRow {
+  id: string;
+  mintUrl: string;
+  quoteId: string;
+  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  method: string;
+  methodDataJson: string;
+  amount?: number | null;
+  outputDataJson?: string | null;
+}

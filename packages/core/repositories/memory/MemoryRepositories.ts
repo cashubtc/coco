@@ -11,6 +11,7 @@ import type {
   HistoryRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  MintOperationRepository,
   ReceiveOperationRepository,
 } from '..';
 import { MemoryMintRepository } from './MemoryMintRepository';
@@ -23,6 +24,7 @@ import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
 import { MemoryHistoryRepository } from './MemoryHistoryRepository';
 import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
+import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 
 export class MemoryRepositories implements Repositories {
@@ -36,6 +38,7 @@ export class MemoryRepositories implements Repositories {
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
+  mintOperationRepository: MintOperationRepository;
   receiveOperationRepository: ReceiveOperationRepository;
 
   constructor() {
@@ -49,6 +52,7 @@ export class MemoryRepositories implements Repositories {
     this.historyRepository = new MemoryHistoryRepository();
     this.sendOperationRepository = new MemorySendOperationRepository();
     this.meltOperationRepository = new MemoryMeltOperationRepository();
+    this.mintOperationRepository = new MemoryMintOperationRepository();
     this.receiveOperationRepository = new MemoryReceiveOperationRepository();
   }
 

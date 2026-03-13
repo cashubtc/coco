@@ -356,6 +356,31 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_melt_operations ADD COLUMN effectiveFee INTEGER;
     `,
   },
+  {
+    id: '017_mint_operations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_mint_operations (
+        id TEXT PRIMARY KEY NOT NULL,
+        mintUrl TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'finalized', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        amount INTEGER,
+        outputDataJson TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_state
+        ON coco_cashu_mint_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint
+        ON coco_cashu_mint_operations(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint_quote
+        ON coco_cashu_mint_operations(mintUrl, quoteId);
+    `,
+  },
 ];
 
 // Export for testing
