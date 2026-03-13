@@ -1,4 +1,11 @@
-import { Mint, Wallet, type MintKeys, type MintKeyset, type KeyChainCache } from '@cashu/cashu-ts';
+import {
+  Mint,
+  Wallet,
+  type Keys,
+  type MintKeys,
+  type MintKeyset,
+  type KeyChainCache,
+} from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
@@ -122,7 +129,7 @@ export class WalletService {
       unit: keyset.unit,
       active: keyset.active,
       input_fee_ppk: keyset.feePpk,
-      keys: keyset.keypairs,
+      keys: keyset.keypairs as Keys,
     }));
 
     const cache: KeyChainCache = {
