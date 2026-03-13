@@ -2,7 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
 import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair } from '@core/models/Keypair';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { SeedService } from '@core/services/SeedService.ts';
@@ -29,7 +29,7 @@ export class KeyRingService {
     const nextDerivationIndex = lastDerivationIndex + 1;
     const seed = await this.seedService.getSeed();
     const hdKey = HDKey.fromMasterSeed(seed);
-    const derivationPath = `m/129373'/10'/0'/0'/${nextDerivationIndex}`;
+    const derivationPath = `m/129372'/10'/0'/0'/${nextDerivationIndex}`;
     const { privateKey: secretKey } = hdKey.derive(derivationPath);
     if (!secretKey) {
       throw new Error('Failed to derive secret key');
@@ -39,6 +39,7 @@ export class KeyRingService {
       publicKeyHex,
       secretKey,
       derivationIndex: nextDerivationIndex,
+      derivationPath,
     });
     this.logger?.debug('New key pair generated', { publicKeyHex });
     if (options?.dumpSecretKey) {
@@ -102,11 +103,10 @@ export class KeyRingService {
 
   /**
    * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
-   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
+   * Note: secp256k1.getPublicKey() returns a 33-byte compressed public key by default.
    */
   private getPublicKeyHex(secretKey: Uint8Array): string {
-    const publicKey = schnorr.getPublicKey(secretKey);
-    return '02' + bytesToHex(publicKey);
+    const publicKey = secp256k1.getPublicKey(secretKey);
+    return bytesToHex(publicKey);
   }
 }
