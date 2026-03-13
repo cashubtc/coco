@@ -41,7 +41,17 @@ import {
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
-import { MintApi, WalletApi, QuotesApi, HistoryApi, KeyRingApi, SendApi, ReceiveApi } from './api';
+import {
+  MintApi,
+  WalletApi,
+  QuotesApi,
+  HistoryApi,
+  KeyRingApi,
+  OpsApi,
+  SendOpsApi,
+  ReceiveOpsApi,
+  MeltOpsApi,
+} from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
@@ -155,13 +165,13 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   }
 
   // Recover any pending send operations from previous session
-  await coco.recoverPendingSendOperations();
+  await coco.ops.send.recovery.run();
 
   // Recover any pending melt operations from previous session
-  await coco.recoverPendingMeltOperations();
+  await coco.ops.melt.recovery.run();
 
   // Recover any pending receive operations from previous session
-  await coco.recoverPendingReceiveOperations();
+  await coco.ops.receive.recovery.run();
 
   return coco;
 }
@@ -173,8 +183,17 @@ export class Manager {
   readonly keyring: KeyRingApi;
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
-  readonly send: SendApi;
-  readonly receive: ReceiveApi;
+  readonly ops: OpsApi;
+  /**
+   * @deprecated Use `manager.ops.send` instead.
+   * This alias will be removed in a future release.
+   */
+  readonly send: SendOpsApi;
+  /**
+   * @deprecated Use `manager.ops.receive` instead.
+   * This alias will be removed in a future release.
+   */
+  readonly receive: ReceiveOpsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
   private walletService: WalletService;
@@ -266,6 +285,7 @@ export class Manager {
     this.keyring = apis.keyring;
     this.subscription = apis.subscription;
     this.history = apis.history;
+    this.ops = apis.ops;
     this.send = apis.send;
     this.receive = apis.receive;
 
@@ -448,16 +468,28 @@ export class Manager {
     this.proofStateWatcher = undefined;
   }
 
+  /**
+   * @deprecated Use `manager.ops.send.recovery.run()` instead.
+   * This alias will be removed in a future release.
+   */
   async recoverPendingSendOperations(): Promise<void> {
-    await this.sendOperationService.recoverPendingOperations();
+    await this.ops.send.recovery.run();
   }
 
+  /**
+   * @deprecated Use `manager.ops.melt.recovery.run()` instead.
+   * This alias will be removed in a future release.
+   */
   async recoverPendingMeltOperations(): Promise<void> {
-    await this.meltOperationService.recoverPendingOperations();
+    await this.ops.melt.recovery.run();
   }
 
+  /**
+   * @deprecated Use `manager.ops.receive.recovery.run()` instead.
+   * This alias will be removed in a future release.
+   */
   async recoverPendingReceiveOperations(): Promise<void> {
-    await this.receiveOperationService.recoverPendingOperations();
+    await this.ops.receive.recovery.run();
   }
 
   async pauseSubscriptions(): Promise<void> {
@@ -760,8 +792,9 @@ export class Manager {
     keyring: KeyRingApi;
     subscription: SubscriptionApi;
     history: HistoryApi;
-    send: SendApi;
-    receive: ReceiveApi;
+    ops: OpsApi;
+    send: SendOpsApi;
+    receive: ReceiveOpsApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
     const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
@@ -786,8 +819,10 @@ export class Manager {
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
-    const send = new SendApi(this.sendOperationService);
-    const receive = new ReceiveApi(this.receiveOperationService);
-    return { mint, wallet, quotes, keyring, subscription, history, send, receive };
+    const send = new SendOpsApi(this.sendOperationService);
+    const receive = new ReceiveOpsApi(this.receiveOperationService);
+    const melt = new MeltOpsApi(this.meltOperationService);
+    const ops = new OpsApi(send, receive, melt);
+    return { mint, wallet, quotes, keyring, subscription, history, ops, send, receive };
   }
 }

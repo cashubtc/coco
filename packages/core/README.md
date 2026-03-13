@@ -6,7 +6,7 @@ Modular, storage-agnostic core for working with Cashu mints and wallets.
 
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
-- **High-level APIs**: `MintApi`, `WalletApi`, `QuotesApi`, and `SubscriptionApi` for common flows.
+- **High-level APIs**: `MintApi`, `WalletApi`, `QuotesApi`, `SubscriptionApi`, and `manager.ops.*` for common flows.
 - **Background watchers**: Optional services to track quote/payment and proof states.
 
 ## Install
@@ -156,10 +156,12 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `mint: MintApi`
 - `wallet: WalletApi`
 - `quotes: QuotesApi`
+- `ops: OpsApi`
 - `subscription: SubscriptionApi`
 - `history: HistoryApi`
 - `keyring: KeyRingApi`
-- `send: SendApi`
+- `send: SendOpsApi` (deprecated alias of `manager.ops.send`)
+- `receive: ReceiveOpsApi` (deprecated alias of `manager.ops.receive`)
 - `ext: PluginExtensions`
 - `on/once/off` for `CoreEvents`
 - `enableMintQuoteWatcher(options?: { watchExistingPendingOnStart?: boolean }): Promise<void>`
@@ -171,10 +173,51 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `disableProofStateWatcher(): Promise<void>`
 - `pauseSubscriptions(): Promise<void>`
 - `resumeSubscriptions(): Promise<void>`
-- `recoverPendingSendOperations(): Promise<void>`
+- `recoverPendingSendOperations(): Promise<void>` (deprecated)
+- `recoverPendingReceiveOperations(): Promise<void>` (deprecated)
+- `recoverPendingMeltOperations(): Promise<void>` (deprecated)
 - `use(plugin: Plugin): void`
 - `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
+
+### OpsApi
+
+- `send.prepare({ mintUrl, amount, target? }): Promise<PreparedSendOperation>`
+- `send.execute(operationOrId): Promise<{ operation: PendingSendOperation; token: Token }>`
+- `send.get(operationId): Promise<SendOperation | null>`
+- `send.listPrepared(): Promise<PreparedSendOperation[]>`
+- `send.listInFlight(): Promise<SendOperation[]>`
+- `send.refresh(operationId): Promise<SendOperation>`
+- `send.cancel(operationId): Promise<void>`
+- `send.reclaim(operationId): Promise<void>`
+- `send.finalize(operationId): Promise<void>`
+- `send.recovery.run(): Promise<void>`
+- `send.recovery.inProgress(): boolean`
+- `send.diagnostics.isLocked(operationId): boolean`
+- `receive.prepare({ token }): Promise<PreparedReceiveOperation>`
+- `receive.execute(operationOrId): Promise<FinalizedReceiveOperation>`
+- `receive.get(operationId): Promise<ReceiveOperation | null>`
+- `receive.listPrepared(): Promise<PreparedReceiveOperation[]>`
+- `receive.listInFlight(): Promise<ReceiveOperation[]>`
+- `receive.refresh(operationId): Promise<ReceiveOperation>`
+- `receive.cancel(operationId): Promise<void>`
+- `receive.finalize(operationId): Promise<void>`
+- `receive.recovery.run(): Promise<void>`
+- `receive.recovery.inProgress(): boolean`
+- `receive.diagnostics.isLocked(operationId): boolean`
+- `melt.prepare({ mintUrl, method, methodData }): Promise<PreparedMeltOperation>`
+- `melt.execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
+- `melt.get(operationId): Promise<MeltOperation | null>`
+- `melt.getByQuote(mintUrl, quoteId): Promise<MeltOperation | null>`
+- `melt.listPrepared(): Promise<PreparedMeltOperation[]>`
+- `melt.listInFlight(): Promise<MeltOperation[]>`
+- `melt.refresh(operationId): Promise<MeltOperation>`
+- `melt.cancel(operationId): Promise<void>`
+- `melt.reclaim(operationId): Promise<void>`
+- `melt.finalize(operationId): Promise<void>`
+- `melt.recovery.run(): Promise<void>`
+- `melt.recovery.inProgress(): boolean`
+- `melt.diagnostics.isLocked(operationId): boolean`
 
 ### MintApi
 
@@ -201,11 +244,11 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 - `createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteResponse>`
 - `redeemMintQuote(mintUrl: string, quoteId: string): Promise<void>`
-- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>`
-- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>`
-- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>`
-- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>`
-- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>`
+- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>` (deprecated)
+- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>` (deprecated)
+- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>` (deprecated)
+- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>` (deprecated)
+- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>` (deprecated)
 - `addMintQuote(mintUrl: string, quotes: MintQuoteResponse[]): Promise<{ added: string[]; skipped: string[] }>`
 - `requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }>`
 

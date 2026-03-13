@@ -28,7 +28,7 @@ const prepared = await prepareSend(mintUrl, 100);
 const { operation, token } = await executePreparedSend(prepared.id);
 ```
 
-`send()` is still available but deprecated. Use `prepareSend()` followed by `executePreparedSend()` for better control and fee transparency.
+`send()` is still available but deprecated. In core manager code, prefer `manager.ops.send.prepare()` followed by `manager.ops.send.execute()`.
 
 ## useReceive
 

@@ -15,6 +15,10 @@ const coco = await initializeCoco({ repo, seedGetter });
 const balances = await coco.wallet.getBalances();
 ```
 
+For lifecycle-oriented operation flows, use `coco.ops.send`, `coco.ops.receive`, and
+`coco.ops.melt`. The older `coco.send` and `coco.receive` properties still exist as deprecated
+aliases.
+
 ## BIP-39 Seed
 
 In order to work properly coco requires you to supply a BIP39 conforming seed. Coco will never persist that seed, so you need to supply it via a `seedGetter` function. This function is expected to be passed when instantiating coco and will be called automatically when coco needs the key to derive new secrets from it
