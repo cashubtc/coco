@@ -6,12 +6,14 @@
   ],
   "devDependencies": {
     "@types/bun": "1.3.10",
+    "prettier": "3.8.1",
     "tsdown": "0.20.1",
     "typescript": "5.9.3",
     "vitepress": "2.0.0-alpha.15"
   },
   "overrides": {
     "@types/bun": "1.3.10",
+    "prettier": "3.8.1",
     "tsdown": "0.20.1",
     "typescript": "5.9.3",
     "vitepress": "2.0.0-alpha.15"
@@ -25,6 +27,8 @@
     "typecheck": "bun run --filter='coco-cashu-core' typecheck && bun run --filter='coco-cashu-adapter-tests' typecheck && bun run --filter='coco-cashu-indexeddb' typecheck && bun run --filter='coco-cashu-expo-sqlite' typecheck && bun run --filter='coco-cashu-sqlite3' typecheck && bun run --filter='coco-cashu-sqlite-bun' typecheck && bun run --filter='coco-cashu-react' typecheck",
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
-    "docs:preview": "vitepress preview packages/docs"
+    "docs:preview": "vitepress preview packages/docs",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check"
   }
 }
