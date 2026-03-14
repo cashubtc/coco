@@ -1,7 +1,20 @@
-import type { Database } from 'better-sqlite3';
+export interface DatabaseLike {
+  exec(sql: string, cb: (err: Error | null) => void): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  run(
+    sql: string,
+    params: any[],
+    cb: (this: { lastID: number; changes: number }, err: Error | null) => void,
+  ): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  get(sql: string, params: any[], cb: (err: Error | null, row: any) => void): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  all(sql: string, params: any[], cb: (err: Error | null, rows: any[]) => void): void;
+  close(cb: (err: Error | null) => void): void;
+}
 
 export interface SqliteDbOptions {
-  database: Database;
+  database: DatabaseLike;
 }
 
 /**
@@ -9,8 +22,8 @@ export interface SqliteDbOptions {
  * All instances created from the same root share this state to coordinate transactions.
  */
 interface SqliteDbRootState {
-  /** The underlying better-sqlite3 Database instance */
-  readonly db: Database;
+  /** The underlying sqlite3 Database instance */
+  readonly db: DatabaseLike;
   /** Promise chain used to serialize concurrent transactions */
   transactionQueue: Promise<void>;
   /** Unique identifier for the currently active transaction scope (null if no transaction) */
@@ -20,7 +33,7 @@ interface SqliteDbRootState {
 }
 
 /**
- * Wrapper around better-sqlite3.Database providing async/await API and transaction management.
+ * Wrapper around sqlite3.Database providing async/await API and transaction management.
  *
  * Transaction behavior:
  * - Nested transactions within the same scope are "rolled up" - they reuse the parent transaction
@@ -52,28 +65,51 @@ export class SqliteDb {
     }
   }
 
-  get raw(): Database {
+  get raw(): DatabaseLike {
     return this.root.db;
   }
 
-  async exec(sql: string): Promise<void> {
-    this.root.db.exec(sql);
+  exec(sql: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.root.db.exec(sql, (err: Error | null) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
   }
 
-  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
-    const result = this.root.db.prepare(sql).run(params);
-    return {
-      lastID: Number(result.lastInsertRowid),
-      changes: result.changes,
-    };
+  run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    return new Promise((resolve, reject) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.root.db as any).run(
+        sql,
+        params,
+        function (this: { lastID: number; changes: number }, err: Error | null) {
+          if (err) return reject(err);
+          resolve({ lastID: this.lastID, changes: this.changes });
+        },
+      );
+    });
   }
 
-  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
-    return this.root.db.prepare(sql).get(params) as T | undefined;
+  get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+    return new Promise((resolve, reject) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.root.db as any).get(sql, params, (err: Error | null, row: T | undefined) => {
+        if (err) return reject(err);
+        resolve(row);
+      });
+    });
   }
 
-  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
-    return this.root.db.prepare(sql).all(params) as T[];
+  all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+    return new Promise((resolve, reject) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.root.db as any).all(sql, params, (err: Error | null, rows: T[]) => {
+        if (err) return reject(err);
+        resolve(rows);
+      });
+    });
   }
 
   /**
@@ -117,7 +153,7 @@ export class SqliteDb {
     }
 
     // NEW TRANSACTION: Create a unique scope token and scoped instance
-    const scopeToken = Symbol('better-sqlite3-transaction');
+    const scopeToken = Symbol('sqlite3-transaction');
     const scopedDb = new SqliteDb(root, scopeToken);
 
     // TRANSACTION QUEUE SETUP:
@@ -166,8 +202,13 @@ export class SqliteDb {
     }
   }
 
-  async close(): Promise<void> {
-    this.root.db.close();
+  close(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.root.db.close((err: Error | null) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
   }
 }
 

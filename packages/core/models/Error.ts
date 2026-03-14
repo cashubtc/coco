@@ -115,3 +115,20 @@ export class OperationInProgressError extends Error {
     this.operationId = operationId;
   }
 }
+
+export class AuthSessionError extends Error {
+  readonly mintUrl: string;
+  constructor(mintUrl: string, message?: string, cause?: unknown) {
+    super(message ?? `Auth session error for mint ${mintUrl}`);
+    this.name = 'AuthSessionError';
+    this.mintUrl = mintUrl;
+    (this as unknown as {cause?: unknown}).cause = cause;
+  }
+}
+
+export class AuthSessionExpiredError extends AuthSessionError {
+  constructor(mintUrl: string) {
+    super(mintUrl, `Auth session expired for mint ${mintUrl}`);
+    this.name = `AuthSessionExpiredError`;
+  }
+}

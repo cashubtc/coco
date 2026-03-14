@@ -8,6 +8,7 @@ export type MintRequestFn = <T>(options: {
   endpoint: string;
   requestBody?: Record<string, unknown>;
   headers?: Record<string, string>;
+  method?: string;
 }) => Promise<T>;
 
 export interface MintRequestProviderOptions {

@@ -202,3 +202,12 @@ export interface MeltOperationRow {
   changeOutputDataJson?: string | null;
   swapOutputDataJson?: string | null;
 }
+
+export interface AuthSessionRow {
+  mintUrl: string;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number;
+  scope: string | null;
+  batPoolJson: string | null;
+}
