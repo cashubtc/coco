@@ -1,14 +1,14 @@
 import {
   AuthManager,
   Mint,
-  type OIDCAuth,
   type AuthProvider,
+  type OIDCAuth,
   type TokenResponse,
 } from '@cashu/cashu-ts';
-import type { AuthSessionService } from '@core/services';
-import type { AuthSession } from '@core/models';
 import type { MintAdapter } from '@core/infra/MintAdapter';
 import type { Logger } from '@core/logging';
+import type { AuthSession } from '@core/models';
+import type { AuthSessionService } from '@core/services';
 import { normalizeMintUrl } from '@core/utils';
 
 /**
@@ -158,6 +158,9 @@ export class AuthApi {
     this.managers.set(mintUrl, auth);
     this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
     this.logger?.info('Auth session restored', { mintUrl, expired });
+    
+    await this.authSessionService.emitUpdated(mintUrl);
+    
     return true;
   }
 

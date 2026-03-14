@@ -1,8 +1,8 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { AuthApi } from '../../api/AuthApi.ts';
-import type { AuthSessionService } from '../../services/AuthSessionService.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { AuthSession } from '../../models/AuthSession.ts';
+import type { AuthSessionService } from '../../services/AuthSessionService.ts';
 
 const mintUrl = 'https://mint.test';
 const normalizedUrl = 'https://mint.test';
@@ -27,6 +27,7 @@ function makeMocks() {
     deleteSession: mock(async () => {}),
     getValidSession: mock(async () => fakeSession),
     getSession: mock(async () => fakeSession),
+    emitUpdated: mock(async () => {}),
     hasSession: mock(async () => true),
   } as unknown as AuthSessionService;
 
