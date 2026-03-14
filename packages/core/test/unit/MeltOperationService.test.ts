@@ -8,7 +8,7 @@ import type { ProofService } from '../../services/ProofService.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { Logger } from '../../logging/Logger.ts';
-import type { MeltHandlerProvider } from '../../infra/handlers/index.ts';
+import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { CoreProof } from '../../types.ts';
 import type {
@@ -17,10 +17,12 @@ import type {
   ExecutingMeltOperation,
   PendingMeltOperation,
   FinalizedMeltOperation,
+  RolledBackMeltOperation,
 } from '../../operations/melt/MeltOperation.ts';
 import type {
   MeltMethodHandler,
   PendingCheckResult,
+  FinalizeResult,
 } from '../../operations/melt/MeltMethodHandler.ts';
 import {
   UnknownMintError,
@@ -102,6 +104,32 @@ describe('MeltOperationService', () => {
     ...overrides,
   });
 
+  const makeFinalizedOp = (
+    id: string,
+    overrides?: Partial<FinalizedMeltOperation>,
+  ): FinalizedMeltOperation => ({
+    ...makePreparedOp(id),
+    state: 'finalized',
+    changeAmount: 0,
+    effectiveFee: 1,
+    ...overrides,
+  });
+
+  const makeLegacyFinalizedOp = (id: string): FinalizedMeltOperation => ({
+    ...makePreparedOp(id),
+    state: 'finalized',
+  });
+
+  const makeRolledBackOp = (
+    id: string,
+    overrides?: Partial<RolledBackMeltOperation>,
+  ): RolledBackMeltOperation => ({
+    ...makePreparedOp(id),
+    state: 'rolled_back',
+    error: 'Rolled back',
+    ...overrides,
+  });
+
   beforeEach(() => {
     meltOperationRepository = new MemoryMeltOperationRepository();
     proofRepository = new MemoryProofRepository();
@@ -117,12 +145,13 @@ describe('MeltOperationService', () => {
       ),
       execute: mock(async ({ operation }) => ({
         status: 'PAID',
-        finalized: {
-          ...operation,
-          state: 'finalized',
-        } as FinalizedMeltOperation,
+        finalized: makeFinalizedOp(operation.id, {
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          methodData: operation.methodData,
+        }),
       })),
-      finalize: mock(async () => {}),
+      finalize: mock(async () => ({ changeAmount: 0, effectiveFee: 1 } as FinalizeResult)),
       rollback: mock(async () => {}),
       checkPending: mock(async () => 'stay_pending' as PendingCheckResult),
       recoverExecuting: mock(async ({ operation }) => ({
@@ -241,6 +270,48 @@ describe('MeltOperationService', () => {
       releasePrepare!();
       await first;
     });
+
+    it('serializes prepare calls for the same mint', async () => {
+      const firstOp = makeInitOp('op-12');
+      const secondOp = makeInitOp('op-13');
+      await meltOperationRepository.create(firstOp);
+      await meltOperationRepository.create(secondOp);
+
+      let releaseFirstPrepare: () => void;
+      const firstPrepareBlocked = new Promise<void>((resolve) => {
+        releaseFirstPrepare = resolve;
+      });
+      (handler.prepare as Mock<any>).mockImplementation(async ({ operation }: { operation: any }) => {
+        if (operation.id === 'op-12') {
+          await firstPrepareBlocked;
+        }
+        return makePreparedOp(operation.id, {
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          methodData: operation.methodData,
+        });
+      });
+
+      const first = service.prepare('op-12');
+      await Promise.resolve();
+
+      let secondResolved = false;
+      const second = service.prepare('op-13').then((operation) => {
+        secondResolved = true;
+        return operation;
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(secondResolved).toBe(false);
+
+      releaseFirstPrepare!();
+
+      const [firstPrepared, secondPrepared] = await Promise.all([first, second]);
+      expect(firstPrepared.state).toBe('prepared');
+      expect(secondPrepared.state).toBe('prepared');
+      expect(secondResolved).toBe(true);
+    });
   });
 
   describe('execute', () => {
@@ -257,9 +328,16 @@ describe('MeltOperationService', () => {
       const result = await service.execute('op-4');
 
       expect(result.state).toBe('finalized');
+      if (result.state === 'finalized') {
+        expect(result.changeAmount).toBe(0);
+        expect(result.effectiveFee).toBe(1);
+      }
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-4');
       expect(stored?.state).toBe('finalized');
+      const finalizedOp = stored as FinalizedMeltOperation;
+      expect(finalizedOp.changeAmount).toBe(0);
+      expect(finalizedOp.effectiveFee).toBe(1);
     });
 
     it('moves to pending on PENDING response', async () => {
@@ -297,31 +375,52 @@ describe('MeltOperationService', () => {
   });
 
   describe('finalize', () => {
-    it('finalizes pending operation and emits event', async () => {
+    it('finalizes pending operation and emits event with settlement amounts', async () => {
       const pending = makePendingOp('op-7');
       await meltOperationRepository.create(pending);
 
       const events: any[] = [];
       eventBus.on('melt-op:finalized', (payload) => void events.push(payload));
 
-      await service.finalize('op-7');
+      const result = await service.finalize('op-7');
 
       expect(handler.finalize).toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: 0, effectiveFee: 1 });
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-7');
       expect(stored?.state).toBe('finalized');
+      // Verify the finalized operation has the settlement amounts
+      const finalizedOp = stored as FinalizedMeltOperation;
+      expect(finalizedOp.changeAmount).toBe(0);
+      expect(finalizedOp.effectiveFee).toBe(1);
     });
 
     it('returns early if already finalized', async () => {
-      const finalized = {
-        ...makePreparedOp('op-8'),
-        state: 'finalized' as const,
-      };
+      const finalized = makeFinalizedOp('op-8');
       await meltOperationRepository.create(finalized);
 
-      await service.finalize('op-8');
+      const result = await service.finalize('op-8');
 
       expect(handler.finalize).not.toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: 0, effectiveFee: 1 });
+    });
+
+    it('returns undefined settlement amounts for legacy finalized operations', async () => {
+      await meltOperationRepository.create(makeLegacyFinalizedOp('op-legacy'));
+
+      const result = await service.finalize('op-legacy');
+
+      expect(handler.finalize).not.toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
+    });
+
+    it('returns undefined settlement amounts for rolled back operations', async () => {
+      await meltOperationRepository.create(makeRolledBackOp('op-rolled-back'));
+
+      const result = await service.finalize('op-rolled-back');
+
+      expect(handler.finalize).not.toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
     });
   });
 

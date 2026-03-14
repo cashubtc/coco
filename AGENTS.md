@@ -7,6 +7,11 @@ Guidance for agentic coding in this repo.
 - If you are in a feature worktree, the project root is the worktree root (paths may differ).
 - When planning in a feature worktree, use `FEATURE_TODO.md` in the worktree root to track plan and progress. If you are building and this file is present, check whether it should be updated.
 
+## Git and commits
+- Prefer Conventional Commit style messages.
+- Prefer scoped commit and PR titles when the affected package or area is clear (for example `fix(core): ...` or `feat(react): ...`).
+- Use unscoped titles for repo-wide changes when a single package scope would be misleading.
+
 ## Repository layout
 - packages/core: core TS library (services, models, repositories, tests).
 - packages/react: React hooks/providers for core (Vite build, ESLint).

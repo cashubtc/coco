@@ -8,11 +8,9 @@
     "README.md"
   ],
   "devDependencies": {
-    "@types/bun": "latest",
     "@vitest/browser": "^3.2.4",
     "coco-cashu-adapter-tests": "1.1.2-rc.47",
     "playwright": "^1.52.0",
-    "tsdown": "0.20.1",
     "vitest": "^3.2.4"
   },
   "exports": {

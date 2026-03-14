@@ -22,10 +22,12 @@ import { generateSubId } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
-  OperationInProgressError,
 } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
-import type { MeltHandlerProvider } from '../../infra/handlers';
+import type { MeltHandlerProvider } from '../../infra/handlers/melt';
+import type { FinalizeResult } from './MeltMethodHandler';
+import { MintScopedLock } from '../MintScopedLock';
+import { OperationIdLock } from '../OperationIdLock';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -42,8 +44,9 @@ export class MeltOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  private readonly operationLocks: Map<string, Promise<void>> = new Map();
+  private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
+  private readonly mintScopedLock: MintScopedLock;
 
   constructor(
     handlerProvider: MeltHandlerProvider,
@@ -55,6 +58,7 @@ export class MeltOperationService {
     mintAdapter: MintAdapter,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
+    mintScopedLock?: MintScopedLock,
   ) {
     this.handlerProvider = handlerProvider;
     this.meltOperationRepository = meltOperationRepository;
@@ -65,6 +69,7 @@ export class MeltOperationService {
     this.mintAdapter = mintAdapter;
     this.eventBus = eventBus;
     this.logger = logger;
+    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
   }
 
   private buildDeps() {
@@ -80,26 +85,11 @@ export class MeltOperationService {
   }
 
   private async acquireOperationLock(operationId: string): Promise<() => void> {
-    const existingLock = this.operationLocks.get(operationId);
-    if (existingLock) {
-      throw new OperationInProgressError(operationId);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-
-    this.operationLocks.set(operationId, lockPromise);
-
-    return () => {
-      this.operationLocks.delete(operationId);
-      releaseLock!();
-    };
+    return this.operationIdLock.acquire(operationId);
   }
 
   isOperationLocked(operationId: string): boolean {
-    return this.operationLocks.has(operationId);
+    return this.operationIdLock.isLocked(operationId);
   }
 
   isRecoveryInProgress(): boolean {
@@ -155,6 +145,7 @@ export class MeltOperationService {
       }
 
       const initOp = operation as InitMeltOperation;
+      const releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
 
       try {
         const handler = this.handlerProvider.get(initOp.method);
@@ -188,6 +179,8 @@ export class MeltOperationService {
         // Attempt to clean up the init operation before re-throwing
         await this.tryRecoverInitOperation(initOp);
         throw e;
+      } finally {
+        releaseMintLock();
       }
     } finally {
       releaseLock();
@@ -300,7 +293,7 @@ export class MeltOperationService {
     }
   }
 
-  async finalize(operationId: string): Promise<void> {
+  async finalize(operationId: string): Promise<FinalizeResult> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
@@ -309,13 +302,17 @@ export class MeltOperationService {
       }
       if (operation.state === 'finalized') {
         this.logger?.debug('Operation already finalized', { operationId });
-        return;
+        const finalizedOp = operation as FinalizedMeltOperation;
+        return {
+          changeAmount: finalizedOp.changeAmount,
+          effectiveFee: finalizedOp.effectiveFee,
+        };
       }
       if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
         this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
           operationId,
         });
-        return;
+        return { changeAmount: undefined, effectiveFee: undefined };
       }
 
       if (operation.state !== 'pending') {
@@ -324,7 +321,7 @@ export class MeltOperationService {
 
       const pendingOp = operation as PendingMeltOperation;
       const handler = this.handlerProvider.get(pendingOp.method);
-      await handler.finalize?.({
+      const finalizeResult = await handler.finalize?.({
         ...this.buildDeps(),
         operation: pendingOp,
       });
@@ -333,6 +330,8 @@ export class MeltOperationService {
         ...pendingOp,
         state: 'finalized',
         updatedAt: Date.now(),
+        changeAmount: finalizeResult?.changeAmount,
+        effectiveFee: finalizeResult?.effectiveFee,
       };
 
       await this.meltOperationRepository.update(finalized);
@@ -342,7 +341,16 @@ export class MeltOperationService {
         operation: finalized,
       });
 
-      this.logger?.info('Melt operation finalized', { operationId });
+      this.logger?.info('Melt operation finalized', {
+        operationId,
+        changeAmount: finalized.changeAmount,
+        effectiveFee: finalized.effectiveFee,
+      });
+
+      return {
+        changeAmount: finalized.changeAmount,
+        effectiveFee: finalized.effectiveFee,
+      };
     } finally {
       releaseLock();
     }

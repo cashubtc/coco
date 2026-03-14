@@ -10,11 +10,16 @@ import type { Keypair } from '@core/models/Keypair';
 import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
+import type {
+  ReceiveOperation,
+  ReceiveOperationState,
+} from '../operations/receive/ReceiveOperation';
 import type { Counter } from '../models/Counter';
 import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
+
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;
@@ -144,7 +149,7 @@ export interface SendOperationRepository {
   /** Get all send operations in a specific state */
   getByState(state: SendOperationState): Promise<SendOperation[]>;
 
-  /** Get all pending operations (state in ['executing', 'pending']) */
+  /** Get all in-flight operations (state in ['executing', 'pending', 'rolling_back']) */
   getPending(): Promise<SendOperation[]>;
 
   /** Get all operations for a specific mint */
@@ -188,6 +193,30 @@ export interface AuthSessionRepository {
 
   getAllSessions(): Promise<AuthSession[]>;
 }
+
+export interface ReceiveOperationRepository {
+  /** Create a new receive operation */
+  create(operation: ReceiveOperation): Promise<void>;
+
+  /** Update an existing receive operation */
+  update(operation: ReceiveOperation): Promise<void>;
+
+  /** Get a receive operation by ID */
+  getById(id: string): Promise<ReceiveOperation | null>;
+
+  /** Get all receive operations in a specific state */
+  getByState(state: ReceiveOperationState): Promise<ReceiveOperation[]>;
+
+  /** Get all pending operations (state in ['executing']) */
+  getPending(): Promise<ReceiveOperation[]>;
+
+  /** Get all operations for a specific mint */
+  getByMintUrl(mintUrl: string): Promise<ReceiveOperation[]>;
+
+  /** Delete a receive operation */
+  delete(id: string): Promise<void>;
+}
+
 interface RepositoriesBase {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
@@ -200,6 +229,7 @@ interface RepositoriesBase {
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
+  receiveOperationRepository: ReceiveOperationRepository;
 }
 
 export interface Repositories extends RepositoriesBase {

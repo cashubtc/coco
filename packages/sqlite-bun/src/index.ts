@@ -10,6 +10,7 @@ import type {
   SendOperationRepository,
   MeltOperationRepository,
   AuthSessionRepository,
+  ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
@@ -25,6 +26,7 @@ import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
+import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -40,6 +42,7 @@ export class SqliteRepositories implements Repositories {
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
+  readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -55,6 +58,7 @@ export class SqliteRepositories implements Repositories {
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
     this.authSessionRepository = new SqliteAuthSessionRepository(this.db);
+    this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -75,6 +79,7 @@ export class SqliteRepositories implements Repositories {
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
         authSessionRepository: new SqliteAuthSessionRepository(txDb),
+        receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -98,6 +103,7 @@ export {
   SqliteSendOperationRepository,
   SqliteMeltOperationRepository,
   SqliteAuthSessionRepository,
+  SqliteReceiveOperationRepository,
 };
 
 export type { Migration };

@@ -429,6 +429,7 @@ export class ProofService {
   /**
    * Select proofs to send for a given amount.
    * Uses the wallet's proof selection algorithm to choose optimal denominations.
+   * Only available proofs are considered (ready and not reserved by another operation).
    *
    * @param mintUrl - The mint URL to select proofs from
    * @param amount - The amount to send
@@ -441,7 +442,7 @@ export class ProofService {
     amount: number,
     includeFees: boolean = true,
   ): Promise<Proof[]> {
-    const proofs = await this.getReadyProofs(mintUrl);
+    const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');
@@ -639,7 +640,7 @@ export class ProofService {
         this.logger?.warn('Failed to create change proof', { reason, index: i });
         return [];
       }
-      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs })];
+      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs as Keys })];
     });
 
     if (proofs.length === 0) {
@@ -671,11 +672,13 @@ export class ProofService {
    *
    * @param mintUrl - The mint URL
    * @param serializedOutputData - The serialized output data containing secrets and blinding factors
+   * @param options - Optional metadata to attach to recovered proofs
    * @returns The recovered proofs (only unspent ones)
    */
   async recoverProofsFromOutputData(
     mintUrl: string,
     serializedOutputData: SerializedOutputData,
+    options?: { createdByOperationId?: string; persistRecoveredProofs?: boolean },
   ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -737,14 +740,21 @@ export class ProofService {
       return [];
     }
 
-    // Save only unspent proofs
-    await this.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', unspentProofs));
+    if (options?.persistRecoveredProofs !== false) {
+      await this.saveProofs(
+        mintUrl,
+        mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
+          createdByOperationId: options?.createdByOperationId,
+        }),
+      );
+    }
 
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,
       totalRestored: restoredProofs.length,
       unspentCount: unspentProofs.length,
       spentCount: restoredProofs.length - unspentProofs.length,
+      persisted: options?.persistRecoveredProofs !== false,
     });
 
     return unspentProofs;
@@ -769,12 +779,12 @@ function splitAmount(value: number, keys: Keys): number[] {
   // Denomination fill for the remaining value
   const sortedKeyAmounts = Object.keys(keys)
     .map((key) => Number(key))
+    .filter((amount) => Number.isSafeInteger(amount) && amount > 0)
     .sort((a, b) => b - a);
   if (!sortedKeyAmounts || sortedKeyAmounts.length === 0) {
     throw new Error('Cannot split amount, keyset is inactive or contains no keys');
   }
   for (const amt of sortedKeyAmounts) {
-    if (amt <= 0) continue;
     // Calculate how many of amt fit into remaining value
     const requireCount = Math.floor(value / amt);
     // Add them to the split and reduce the target value by added amounts

@@ -176,10 +176,26 @@ export interface SendOperationRow {
   createdAt: number;
   updatedAt: number;
   error?: string | null;
+  method: string;
+  methodDataJson: string;
   needsSwap?: number | null;
   fee?: number | null;
   inputAmount?: number | null;
   inputProofSecretsJson?: string | null;
+  outputDataJson?: string | null;
+  tokenJson?: string | null;
+}
+
+export interface ReceiveOperationRow {
+  id: string;
+  mintUrl: string;
+  amount: number;
+  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  fee?: number | null;
+  inputProofsJson?: string | null;
   outputDataJson?: string | null;
 }
 
@@ -201,6 +217,8 @@ export interface MeltOperationRow {
   inputProofSecretsJson?: string | null;
   changeOutputDataJson?: string | null;
   swapOutputDataJson?: string | null;
+  changeAmount?: number | null;
+  effectiveFee?: number | null;
 }
 
 export interface AuthSessionRow {

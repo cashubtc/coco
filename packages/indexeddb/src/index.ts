@@ -10,6 +10,7 @@ import type {
   SendOperationRepository,
   MeltOperationRepository,
   AuthSessionRepository,
+  ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
@@ -25,6 +26,7 @@ import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { IdbMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { IdbAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
+import { IdbReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -40,6 +42,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
+  readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -56,6 +59,7 @@ export class IndexedDbRepositories implements Repositories {
     this.sendOperationRepository = new IdbSendOperationRepository(this.db);
     this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
     this.authSessionRepository = new IdbAuthSessionRepository(this.db);
+    this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -84,6 +88,7 @@ export class IndexedDbRepositories implements Repositories {
         sendOperationRepository: new IdbSendOperationRepository(scopedDb),
         meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
         authSessionRepository: new IdbAuthSessionRepository(scopedDb),
+        receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -104,4 +109,5 @@ export {
   IdbSendOperationRepository,
   IdbMeltOperationRepository,
   IdbAuthSessionRepository,
+  IdbReceiveOperationRepository,
 };

@@ -100,6 +100,8 @@ Use melt operations to pay BOLT11 invoices via the Quotes API:
 - `checkPendingMelt(operationId: string): Promise<PendingCheckResult>`
 - `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>`
 
+Finalized melt operations include `changeAmount` and `effectiveFee` when that settlement data is available.
+
 ## Events
 
 Listen for send lifecycle events:

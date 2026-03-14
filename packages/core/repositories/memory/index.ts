@@ -10,4 +10,6 @@ export * from './MemoryMintRepository';
 export * from './MemoryProofRepository';
 export * from './MemoryRepositories';
 export * from './MemorySendOperationRepository';
+export * from './MemoryMeltOperationRepository';
+export * from './MemoryReceiveOperationRepository';
 

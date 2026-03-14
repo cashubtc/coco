@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { MeltBolt11Handler } from '../../infra/handlers/MeltBolt11Handler';
+import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { ProofService } from '../../services/ProofService';
@@ -25,7 +25,7 @@ import type {
   RecoverExecutingContext,
 } from '../../operations/melt/MeltMethodHandler';
 import type { Wallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
-import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/MeltBolt11Handler.utils';
+import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
 
 describe('MeltBolt11Handler', () => {
   const mintUrl = 'https://mint.test';
@@ -80,6 +80,23 @@ describe('MeltBolt11Handler', () => {
       blindingFactor: 'abcdef1234567890',
       secret: Buffer.from(secret).toString('hex'),
     })),
+  });
+
+  const createSwapOutputDataWithAmounts = (keepAmount: number, sendAmount: number) => ({
+    keep: [
+      {
+        blindedMessage: { amount: keepAmount, id: keysetId, B_: 'B_keep_amount' },
+        blindingFactor: '1234567890abcdef',
+        secret: Buffer.from('keep-amount').toString('hex'),
+      },
+    ],
+    send: [
+      {
+        blindedMessage: { amount: sendAmount, id: keysetId, B_: 'B_send_amount' },
+        blindingFactor: 'abcdef1234567890',
+        secret: Buffer.from('send-amount').toString('hex'),
+      },
+    ],
   });
 
   const makeInitOp = (
@@ -348,6 +365,28 @@ describe('MeltBolt11Handler', () => {
           ['input-1', 'input-2'],
           'op-1',
         );
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
+      });
+
+      it('should select enough proofs to cover melt input fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(
+          (_mintUrl: string, _amount: number, includeFees: boolean) =>
+            Promise.resolve(
+              includeFees
+                ? [makeProof('input-1', 60), makeProof('input-2', 50), makeProof('input-3', 1)]
+                : [makeProof('input-1', 60), makeProof('input-2', 50)],
+            ),
+        );
+
+        const result = await handler.prepare(ctx);
+
+        expect(result.needsSwap).toBe(false);
+        expect(result.inputAmount).toBe(111);
+        expect(result.inputProofSecrets).toEqual(['input-1', 'input-2', 'input-3']);
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
       });
 
       it('should create blank outputs for change', async () => {
@@ -372,11 +411,8 @@ describe('MeltBolt11Handler', () => {
         const ctx = buildPrepareContext(operation);
 
         // Total required = 110, threshold = 110 * 1.1 = 121
-        // First call returns proofs that exceed threshold (130 >= 121)
-        // Second call (with fees) returns same
-        let callCount = 0;
+        // Both fee-aware selections return proofs that exceed threshold (130 >= 121)
         (proofService.selectProofsToSend as Mock<any>).mockImplementation(() => {
-          callCount++;
           return Promise.resolve([makeProof('input-1', 80), makeProof('input-2', 50)]);
         });
 
@@ -386,6 +422,16 @@ describe('MeltBolt11Handler', () => {
         expect(result.swap_fee).toBe(1); // From mocked getFeesForProofs
         expect(result.swapOutputData).toBeDefined();
         expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalled();
+        expect((proofService.selectProofsToSend as Mock<any>).mock.calls[0]).toEqual([
+          mintUrl,
+          110,
+          true,
+        ]);
+        expect((proofService.selectProofsToSend as Mock<any>).mock.calls[1]).toEqual([
+          mintUrl,
+          110,
+          true,
+        ]);
       });
 
       it('should reserve proofs for swap operation', async () => {
@@ -428,6 +474,10 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.execute(ctx);
 
         expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(0);
+          expect(result.finalized.effectiveFee).toBe(10);
+        }
         expect(proofService.setProofState).toHaveBeenCalledWith(
           mintUrl,
           ['input-1', 'input-2'],
@@ -486,7 +536,7 @@ describe('MeltBolt11Handler', () => {
 
     describe('swap-then-melt execution', () => {
       it('should execute swap before melt', async () => {
-        const swapOutputData = createMockOutputData(['keep-1'], ['send-1']);
+        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
           inputProofSecrets: ['input-1'],
@@ -515,7 +565,7 @@ describe('MeltBolt11Handler', () => {
       });
 
       it('should use swap send proofs for melt', async () => {
-        const swapOutputData = createMockOutputData(['keep-1'], ['send-1']);
+        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
           inputProofSecrets: ['input-1'],
@@ -542,6 +592,34 @@ describe('MeltBolt11Handler', () => {
         // Melt should receive swap send proofs (from mock wallet.swap)
         expect(meltProofs).toHaveLength(1);
         expect(meltProofs[0]!.secret).toBe('send-1');
+      });
+
+      it('should calculate effectiveFee from swapped melt inputs only', async () => {
+        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+        const operation = makeExecutingOp('op-1', {
+          needsSwap: true,
+          amount: 55,
+          inputAmount: 200,
+          inputProofSecrets: ['input-1'],
+          swapOutputData,
+        });
+
+        const inputProofs = [makeProof('input-1', 200)];
+        (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
+          Promise.resolve(inputProofs),
+        );
+        (mintAdapter.customMeltBolt11 as Mock<any>).mockImplementation(() =>
+          Promise.resolve({ state: 'PAID', change: [] }),
+        );
+
+        const ctx = buildExecuteContext(operation, inputProofs);
+        const result = await handler.execute(ctx);
+
+        expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(0);
+          expect(result.finalized.effectiveFee).toBe(5);
+        }
       });
 
       it('should throw if swap output data is missing', async () => {
@@ -584,9 +662,14 @@ describe('MeltBolt11Handler', () => {
         );
 
         const ctx = buildExecuteContext(operation, inputProofs);
-        await handler.execute(ctx);
+        const result = await handler.execute(ctx);
 
         expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
+        expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(10);
+          expect(result.finalized.effectiveFee).toBe(0);
+        }
       });
     });
   });
@@ -610,11 +693,12 @@ describe('MeltBolt11Handler', () => {
       );
 
       const ctx = buildFinalizeContext(operation);
-      await handler.finalize(ctx);
+      const result = await handler.finalize(ctx);
 
       expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, 'quote-123');
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
+      expect(result).toEqual({ changeAmount: 5, effectiveFee: 5 });
     });
 
     it('should throw if quote is not PAID', async () => {
@@ -631,7 +715,7 @@ describe('MeltBolt11Handler', () => {
     });
 
     it('should mark swap send proofs as spent for swap-then-melt', async () => {
-      const swapOutputData = createMockOutputData(['keep-1'], ['send-1']);
+      const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
       const operation = makePendingOp('op-1', {
         needsSwap: true,
         inputProofSecrets: ['input-1'],
@@ -646,7 +730,27 @@ describe('MeltBolt11Handler', () => {
       await handler.finalize(ctx);
 
       // Should mark swap send proofs as spent (derived from swapOutputData)
-      expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['send-1'], 'spent');
+      expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['send-amount'], 'spent');
+    });
+
+    it('should calculate finalize effectiveFee from swapped melt inputs only', async () => {
+      const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+      const operation = makePendingOp('op-1', {
+        needsSwap: true,
+        amount: 55,
+        inputAmount: 200,
+        inputProofSecrets: ['input-1'],
+        swapOutputData,
+      });
+
+      (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+        Promise.resolve({ state: 'PAID', change: [] }),
+      );
+
+      const ctx = buildFinalizeContext(operation);
+      const result = await handler.finalize(ctx);
+
+      expect(result).toEqual({ changeAmount: 0, effectiveFee: 5 });
     });
   });
 
@@ -764,6 +868,10 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(0);
+          expect(result.finalized.effectiveFee).toBe(10);
+        }
         expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       });
 
@@ -784,9 +892,41 @@ describe('MeltBolt11Handler', () => {
         );
 
         const ctx = buildRecoverContext(operation);
-        await handler.recoverExecuting(ctx);
+        const result = await handler.recoverExecuting(ctx);
 
         expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
+        expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(5);
+          expect(result.finalized.effectiveFee).toBe(5);
+        }
+      });
+
+      it('should calculate recovery effectiveFee from swapped melt inputs only', async () => {
+        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+        const operation = makeExecutingOp('op-1', {
+          needsSwap: true,
+          amount: 55,
+          inputAmount: 200,
+          inputProofSecrets: ['input-1'],
+          swapOutputData,
+        });
+
+        (mintAdapter.checkMeltQuoteState as Mock<any>).mockImplementation(() =>
+          Promise.resolve('PAID'),
+        );
+        (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+          Promise.resolve({ state: 'PAID', change: [] }),
+        );
+
+        const ctx = buildRecoverContext(operation);
+        const result = await handler.recoverExecuting(ctx);
+
+        expect(result.status).toBe('PAID');
+        if (result.status === 'PAID') {
+          expect(result.finalized.changeAmount).toBe(0);
+          expect(result.finalized.effectiveFee).toBe(5);
+        }
       });
     });
 

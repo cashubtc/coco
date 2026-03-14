@@ -4,11 +4,7 @@
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "devDependencies": {
-    "@types/bun": "latest",
     "coco-cashu-adapter-tests": "1.1.2-rc.47",
-    "esbuild": "latest",
-    "tsdown": "0.20.1",
-    "typescript": "^5.9.2",
     "typescript-eslint": "^8.40.0"
   },
   "peerDependencies": {
@@ -37,7 +33,7 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@cashu/cashu-ts": "3.3.0",
+    "@cashu/cashu-ts": "^3.5.0",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip32": "^2.0.1"

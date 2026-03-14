@@ -6,6 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE_PORT=3338
 
+# Platform flag (arm64 hosts need linux/amd64 for mintd image)
+case "$(uname -m)" in
+arm64|aarch64) PLATFORM_FLAG=(--platform=linux/amd64) ;;
+*) PLATFORM_FLAG=() ;;
+esac
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,7 +39,7 @@ log_test() {
 is_browser_test_package() {
     local package_dir=$1
     local package_json="$package_dir/package.json"
-    
+
     if [ -f "$package_json" ]; then
         if grep -q '"test:browser"' "$package_json" 2>/dev/null; then
             return 0
@@ -80,15 +86,15 @@ start_mint_container() {
     local port=$2
     local container_name="cdk-mint-${package_name}"
     local mint_url="http://localhost:${port}"
-    
+
     log_info "Starting mint container for $package_name on port $port..."
-    
+
     # Stop and remove existing container if it exists
     docker stop "$container_name" 2>/dev/null || true
     docker rm "$container_name" 2>/dev/null || true
-    
+
     # Start new container
-    docker run -d \
+    docker run -d "${PLATFORM_FLAG[@]}" \
         -p "${port}:3338" \
         --name "$container_name" \
         -e CDK_MINTD_DATABASE=sqlite \
@@ -99,19 +105,19 @@ start_mint_container() {
         -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
         -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
         -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
-        cashubtc/mintd:0.13
-    
+        cashubtc/mintd:0.15.1
+
     # Wait for mint to be ready
     log_info "Waiting for mint to be ready..."
     MAX_ATTEMPTS=30
     ATTEMPT=0
-    
+
     while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
         if curl -f -s "${mint_url}/v1/info" > /dev/null 2>&1; then
             log_info "Mint is ready!"
             return 0
         fi
-        
+
         ATTEMPT=$((ATTEMPT + 1))
         if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
             log_error "Mint failed to start after $MAX_ATTEMPTS attempts"
@@ -119,7 +125,7 @@ start_mint_container() {
             docker logs "$container_name"
             return 1
         fi
-        
+
         sleep 1
     done
 }
@@ -128,7 +134,7 @@ start_mint_container() {
 stop_mint_container() {
     local package_name=$1
     local container_name="cdk-mint-${package_name}"
-    
+
     log_info "Stopping mint container for $package_name..."
     docker stop "$container_name" 2>/dev/null || true
     docker rm "$container_name" 2>/dev/null || true
@@ -142,30 +148,30 @@ run_test() {
     local log_level="${4:-}"
     local test_file
     local mint_url="http://localhost:${port}"
-    
+
     # Find the test file for this package
     test_file=$(discover_integration_tests | grep "^${package_name}|" | cut -d'|' -f2)
-    
+
     if [ -z "$test_file" ]; then
         log_error "No integration test found for package: $package_name"
         echo ""
         list_tests
         return 1
     fi
-    
+
     if [ ! -f "$test_file" ]; then
         log_error "Test file not found: $test_file"
         return 1
     fi
-    
+
     # Start mint container for this test
     if ! start_mint_container "$package_name" "$port"; then
         return 1
     fi
-    
+
     # Extract package directory from test file path
     local package_dir=$(dirname "$test_file" | sed 's|/src/test||')
-    
+
     log_test "Running integration tests for: $package_name"
     if [ -n "$test_pattern" ]; then
         log_test "Filtering tests matching: $test_pattern"
@@ -174,14 +180,14 @@ run_test() {
         log_test "Log level: $log_level"
     fi
     cd "$package_dir"
-    
+
     # Run the test
     local test_result=0
-    
+
     # Check if this is a browser test package
     if is_browser_test_package "$package_dir"; then
         log_test "Using browser test runner (Vitest + Playwright)"
-        
+
         # Set environment variables for Vitest (uses VITE_ prefix)
         export VITE_MINT_URL="$mint_url"
         if [ -n "$log_level" ]; then
@@ -189,13 +195,13 @@ run_test() {
         else
             unset VITE_TEST_LOG_LEVEL
         fi
-        
+
         if [ -n "$test_pattern" ]; then
             bun run test:browser -- --testNamePattern="$test_pattern" || test_result=$?
         else
             bun run test:browser || test_result=$?
         fi
-        
+
         unset VITE_MINT_URL
         unset VITE_TEST_LOG_LEVEL
     else
@@ -206,20 +212,20 @@ run_test() {
         else
             unset TEST_LOG_LEVEL
         fi
-        
+
         if [ -n "$test_pattern" ]; then
             bun run test -- -t "$test_pattern" "$test_file" || test_result=$?
         else
             bun run test -- "$test_file" || test_result=$?
         fi
-        
+
         unset MINT_URL
         unset TEST_LOG_LEVEL
     fi
-    
+
     # Stop the mint container
     stop_mint_container "$package_name"
-    
+
     return $test_result
 }
 
@@ -229,21 +235,21 @@ run_all_tests() {
     local log_level="${2:-}"
     local tests
     tests=$(discover_integration_tests)
-    
+
     if [ -z "$tests" ]; then
         log_error "No integration tests found"
         exit 1
     fi
-    
+
     local failed=0
     local total=0
     local temp_file
     local port=$BASE_PORT
-    
+
     # Create temp file to store results (avoids subshell variable issues)
     temp_file=$(mktemp)
     echo "$tests" > "$temp_file"
-    
+
     while IFS='|' read -r package test_file; do
         [ -z "$package" ] && continue
         total=$((total + 1))
@@ -263,9 +269,9 @@ run_all_tests() {
         port=$((port + 1))
         echo ""
     done < "$temp_file"
-    
+
     rm -f "$temp_file"
-    
+
     if [ $failed -eq 0 ]; then
         log_info "All tests completed successfully!"
         return 0
@@ -395,7 +401,7 @@ bun run build
 # Check if any browser tests will be run and install Playwright if needed
 check_and_install_playwright() {
     local needs_playwright=false
-    
+
     if [ "$COMMAND" = "all" ]; then
         # Check all packages for browser tests
         discover_integration_tests | while IFS='|' read -r package test_file; do

@@ -211,14 +211,11 @@ export class MintService {
         } else {
           try {
             const keysRes = await this.mintAdapter.fetchKeysForId(mint.mintUrl, ks.id);
-            const keypairs = Object.fromEntries(
-              Object.entries(keysRes).map(([k, v]) => [Number(k), v]),
-            ) as Record<number, string>;
             return this.keysetRepo.addKeyset({
               mintUrl: mint.mintUrl,
               id: ks.id,
               unit: ks.unit,
-              keypairs,
+              keypairs: keysRes,
               active: ks.active,
               feePpk: ks.input_fee_ppk || 0,
             });

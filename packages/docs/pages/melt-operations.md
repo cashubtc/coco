@@ -81,6 +81,8 @@ const result = await coco.quotes.executeMelt(prepared.id);
 
 if (result.state === 'finalized') {
   console.log('Invoice paid');
+  console.log('Change returned:', result.changeAmount);
+  console.log('Effective fee:', result.effectiveFee);
 }
 
 if (result.state === 'pending') {
@@ -105,6 +107,23 @@ if (decision === 'finalize') {
 ```
 
 `checkPendingMelt` queries the mint for the quote state and decides whether to finalize, stay pending, or rollback.
+
+When it returns `finalize`, fetch the stored operation to inspect settlement amounts:
+
+```ts
+const decision = await coco.quotes.checkPendingMelt(operationId);
+
+if (decision === 'finalize') {
+  const operation = await coco.quotes.getMeltOperation(operationId);
+
+  if (operation?.state === 'finalized') {
+    console.log('Change returned:', operation.changeAmount);
+    console.log('Effective fee:', operation.effectiveFee);
+  }
+}
+```
+
+`changeAmount` and `effectiveFee` are recorded for newly finalized melt operations. Older finalized melt records created before settlement tracking was added may not have those values.
 
 ## Rollback Behavior
 
@@ -136,7 +155,7 @@ coco.on('melt-op:pending', ({ operationId, operation }) => {
 });
 
 coco.on('melt-op:finalized', ({ operationId, operation }) => {
-  console.log('Melt finalized');
+  console.log('Melt finalized', operation.changeAmount, operation.effectiveFee);
 });
 
 coco.on('melt-op:rolled-back', ({ operationId, operation }) => {

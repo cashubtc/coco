@@ -10,8 +10,12 @@ import type { SendOperationService } from '../../operations/send/SendOperationSe
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
-import { getEncodedToken } from '@cashu/cashu-ts';
+import { getEncodedToken, OutputData } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
+import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
+import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
+import { TokenService } from '../../services/TokenService';
+import type { MintAdapter } from '../../infra/MintAdapter';
 
 describe('WalletApi - Trust Enforcement', () => {
   let walletApi: WalletApi;
@@ -23,16 +27,37 @@ describe('WalletApi - Trust Enforcement', () => {
   let transactionService: TransactionService;
   let paymentRequestService: PaymentRequestService;
   let eventBus: EventBus<CoreEvents>;
+  let proofReceiveRepo: MemoryProofRepository;
+  let receiveOpRepo: MemoryReceiveOperationRepository;
+  let receiveOperationService: ReceiveOperationService;
+  let tokenService: TokenService;
+  let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
+  const keysetId = 'keyset-1';
   const testProofs: Proof[] = [
     {
-      id: 'keyset-1',
+      id: keysetId,
       amount: 10,
       secret: 'secret-1',
       C: 'C-1',
     } as Proof,
   ];
+
+  const makeOutputData = (secrets: string[]): OutputData[] =>
+    secrets.map(
+      (secret) =>
+        new OutputData(
+          { amount: 10, id: keysetId, B_: `B_${secret}` },
+          BigInt(1),
+          new TextEncoder().encode(secret),
+        ),
+    );
+
+  const createMockMintAdapter = (): MintAdapter =>
+    ({
+      checkProofStates: mock(() => Promise.resolve([])),
+    }) as unknown as MintAdapter;
 
   beforeEach(() => {
     eventBus = new EventBus<CoreEvents>();
@@ -70,7 +95,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockProofService = {
       createOutputsAndIncrementCounters: mock(async () => ({
-        keep: [{ amount: 10, id: 'keyset-1' }],
+        keep: makeOutputData(['out-1', 'out-2']),
         send: [],
       })),
       saveProofs: mock(async () => {}),
@@ -95,6 +120,22 @@ describe('WalletApi - Trust Enforcement', () => {
       mockProofService,
     );
 
+    receiveOpRepo = new MemoryReceiveOperationRepository();
+    proofReceiveRepo = new MemoryProofRepository();
+    tokenService = new TokenService(mockMintService);
+    mintAdapter = createMockMintAdapter();
+
+    receiveOperationService = new ReceiveOperationService(
+      receiveOpRepo,
+      proofReceiveRepo,
+      mockProofService,
+      mockMintService,
+      mockWalletService,
+      mintAdapter,
+      tokenService,
+      eventBus,
+    );
+
     walletApi = new WalletApi(
       mockMintService,
       mockWalletService,
@@ -103,6 +144,8 @@ describe('WalletApi - Trust Enforcement', () => {
       transactionService,
       paymentRequestService,
       mockSendOperationService as SendOperationService,
+      receiveOperationService,
+      tokenService,
     );
   });
 

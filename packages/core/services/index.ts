@@ -12,3 +12,4 @@ export * from './TransactionService';
 export * from './WalletRestoreService';
 export * from './WalletService';
 export * from './watchers';
+export * from './TokenService';

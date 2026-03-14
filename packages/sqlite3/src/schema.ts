@@ -308,7 +308,56 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: '012_auth_sessions',
+    id: '012_send_operations_method',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default';
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
+    `,
+  },
+  {
+    id: '013_receive_operations',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'finalized', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        fee INTEGER,
+        inputProofsJson TEXT NOT NULL,
+        outputDataJson TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_state
+        ON coco_cashu_receive_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_mint
+        ON coco_cashu_receive_operations(mintUrl);
+    `,
+  },
+  {
+    id: '014_send_operations_token',
+    sql: `
+      ALTER TABLE coco_cashu_send_operations ADD COLUMN tokenJson TEXT;
+    `,
+  },
+  {
+    id: '015_reset_keysets_for_string_denoms',
+    sql: `
+      DELETE FROM coco_cashu_keysets;
+      UPDATE coco_cashu_mints SET updatedAt = 0;
+    `,
+  },
+  {
+    id: '016_melt_settlement_amounts',
+    sql: `
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN changeAmount INTEGER;
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN effectiveFee INTEGER;
+    `,
+  },
+  {
+    id: '017_auth_sessions',
     sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_auth_sessions (
         mintUrl      TEXT PRIMARY KEY NOT NULL,

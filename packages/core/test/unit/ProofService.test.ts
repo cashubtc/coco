@@ -22,7 +22,7 @@ describe('ProofService', () => {
 
   // Minimal wallet service stub with only used methods
   let walletService: {
-    getWalletWithActiveKeysetId: (mintUrl: string) => Promise<{ keys: { id: string } }>;
+    getWalletWithActiveKeysetId: (mintUrl: string) => Promise<any>;
     getWallet: (
       mintUrl: string,
     ) => Promise<{ selectProofsToSend: (proofs: any[], amount: number) => { send: any[] } }>;
@@ -179,6 +179,91 @@ describe('ProofService', () => {
 
       const finalCounter = await counterRepo.getCounter(mintUrl, keysetId);
       expect(finalCounter?.counter).toBe(6);
+    });
+  });
+
+  describe('calculateSendAmountWithFees', () => {
+    it('ignores denominations above MAX_SAFE_INTEGER when splitting', async () => {
+      walletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              getFeesForKeyset: () => 0,
+            },
+            keysetId,
+            keys: {
+              id: keysetId,
+              keys: {
+                '1': 'key-1',
+                '2': 'key-2',
+                '9007199254740993': 'key-too-large',
+              },
+            },
+          };
+        },
+        async getWallet() {
+          return {
+            selectProofsToSend(proofs: any[]) {
+              return { send: proofs.slice(0, 1) };
+            },
+          };
+        },
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await expect(service.calculateSendAmountWithFees(mintUrl, 3)).resolves.toBe(3);
+    });
+
+    it('throws when all available denominations exceed MAX_SAFE_INTEGER', async () => {
+      walletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              getFeesForKeyset: () => 0,
+            },
+            keysetId,
+            keys: {
+              id: keysetId,
+              keys: {
+                '9007199254740992': 'key-a',
+                '9007199254740993': 'key-b',
+              },
+            },
+          };
+        },
+        async getWallet() {
+          return {
+            selectProofsToSend(proofs: any[]) {
+              return { send: proofs.slice(0, 1) };
+            },
+          };
+        },
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await expect(service.calculateSendAmountWithFees(mintUrl, 1)).rejects.toThrow(
+        'Cannot split amount, keyset is inactive or contains no keys',
+      );
     });
   });
 
@@ -509,6 +594,27 @@ describe('ProofService', () => {
       ]);
 
       await expect(service.selectProofsToSend(mintUrl, 100)).rejects.toThrow(ProofValidationError);
+    });
+
+    it('ignores proofs that are already reserved by another operation', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'available-1', id: 'k1', amount: 50 }),
+        makeProof({ secret: 'reserved-1', id: 'k1', amount: 100, usedByOperationId: 'op-1' }),
+      ]);
+
+      const selected = await service.selectProofsToSend(mintUrl, 40);
+      expect(selected.map((p) => p.secret)).toEqual(['available-1']);
     });
 
     it('delegates to wallet.selectProofsToSend and returns selected proofs', async () => {

@@ -2,6 +2,7 @@ import type {
   SendOperationRepository,
   SendOperation,
   SendOperationState,
+  SendMethod,
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
@@ -13,11 +14,23 @@ interface SendOperationRow {
   createdAt: number;
   updatedAt: number;
   error: string | null;
+  method: string;
+  methodDataJson: string;
   needsSwap: number | null;
   fee: number | null;
   inputAmount: number | null;
   inputProofSecretsJson: string | null;
   outputDataJson: string | null;
+  tokenJson: string | null;
+}
+
+function parseToken(tokenJson: string | null): unknown {
+  return tokenJson ? JSON.parse(tokenJson) : undefined;
+}
+
+function serializeToken(operation: SendOperation): string | null {
+  const maybeTokenOperation = operation as SendOperation & { token?: unknown };
+  return maybeTokenOperation.token ? JSON.stringify(maybeTokenOperation.token) : null;
 }
 
 function rowToOperation(row: SendOperationRow): SendOperation {
@@ -28,6 +41,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    method: row.method as SendMethod,
+    methodData: JSON.parse(row.methodDataJson),
   };
 
   if (row.state === 'init') {
@@ -49,11 +64,33 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     case 'executing':
       return { ...base, state: 'executing', ...preparedData };
     case 'pending':
-      return { ...base, state: 'pending', ...preparedData };
+      return {
+        ...base,
+        state: 'pending',
+        ...preparedData,
+        token: parseToken(row.tokenJson),
+      } as SendOperation;
     case 'finalized':
-      return { ...base, state: 'finalized', ...preparedData };
+      return {
+        ...base,
+        state: 'finalized',
+        ...preparedData,
+        token: parseToken(row.tokenJson),
+      } as SendOperation;
+    case 'rolling_back':
+      return {
+        ...base,
+        state: 'rolling_back',
+        ...preparedData,
+        token: parseToken(row.tokenJson),
+      } as SendOperation;
     case 'rolled_back':
-      return { ...base, state: 'rolled_back', ...preparedData };
+      return {
+        ...base,
+        state: 'rolled_back',
+        ...preparedData,
+        token: parseToken(row.tokenJson),
+      } as SendOperation;
     default:
       throw new Error(`Unknown state: ${row.state}`);
   }
@@ -72,11 +109,14 @@ function operationToParams(op: SendOperation): unknown[] {
       createdAtSeconds,
       updatedAtSeconds,
       op.error ?? null,
+      op.method,
+      JSON.stringify(op.methodData),
       null, // needsSwap
       null, // fee
       null, // inputAmount
       null, // inputProofSecretsJson
       null, // outputDataJson
+      null, // tokenJson
     ];
   }
 
@@ -89,11 +129,14 @@ function operationToParams(op: SendOperation): unknown[] {
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
+    op.method,
+    JSON.stringify(op.methodData),
     op.needsSwap ? 1 : 0,
     op.fee,
     op.inputAmount,
     JSON.stringify(op.inputProofSecrets),
     op.outputData ? JSON.stringify(op.outputData) : null,
+    serializeToken(op),
   ];
 }
 
@@ -116,8 +159,8 @@ export class ExpoSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, state, createdAt, updatedAt, error, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, amount, state, createdAt, updatedAt, error, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -143,7 +186,7 @@ export class ExpoSendOperationRepository implements SendOperationRepository {
     } else {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?
+         SET state = ?, updatedAt = ?, error = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -154,6 +197,7 @@ export class ExpoSendOperationRepository implements SendOperationRepository {
           operation.inputAmount,
           JSON.stringify(operation.inputProofSecrets),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
+          serializeToken(operation),
           operation.id,
         ],
       );
@@ -195,4 +239,3 @@ export class ExpoSendOperationRepository implements SendOperationRepository {
     await this.db.run('DELETE FROM coco_cashu_send_operations WHERE id = ?', [id]);
   }
 }
-
