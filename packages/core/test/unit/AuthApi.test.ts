@@ -26,6 +26,7 @@ function makeMocks() {
     saveSession: mock(async () => fakeSession),
     deleteSession: mock(async () => {}),
     getValidSession: mock(async () => fakeSession),
+    getSession: mock(async () => fakeSession),
     hasSession: mock(async () => true),
   } as unknown as AuthSessionService;
 
@@ -118,12 +119,10 @@ describe('AuthApi', () => {
   });
 
   describe('restore', () => {
-    it('returns false when no valid session exists', async () => {
+    it('returns false when no session exists', async () => {
       const mocks = makeMocks();
-      (mocks.authSessionService.getValidSession as ReturnType<typeof mock>).mockImplementation(
-        async () => {
-          throw new Error('No session');
-        },
+      (mocks.authSessionService.getSession as ReturnType<typeof mock>).mockImplementation(
+        async () => null,
       );
       const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
 
@@ -152,7 +151,7 @@ describe('AuthApi', () => {
         batPool: fakeBatPool,
       };
       const mocks = makeMocks();
-      (mocks.authSessionService.getValidSession as ReturnType<typeof mock>).mockImplementation(
+      (mocks.authSessionService.getSession as ReturnType<typeof mock>).mockImplementation(
         async () => sessionWithPool,
       );
       const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
@@ -172,6 +171,35 @@ describe('AuthApi', () => {
       const provider = api.getAuthProvider(mintUrl);
       expect(provider).toBeDefined();
       expect((provider as any).poolSize).toBe(0);
+    });
+
+    it('returns false when session is expired without refreshToken', async () => {
+      const mocks = makeMocks();
+      (mocks.authSessionService.getSession as ReturnType<typeof mock>).mockImplementation(
+        async () => expiredSession,
+      );
+      const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
+
+      const result = await testApi.restore(mintUrl);
+      expect(result).toBe(false);
+      expect(mocks.mintAdapter.setAuthProvider).not.toHaveBeenCalled();
+    });
+
+    it('attempts restore for expired session with refreshToken (falls back on OIDC failure)', async () => {
+      const expiredWithRefresh: AuthSession = {
+        ...expiredSession,
+        refreshToken: 'refresh-xyz',
+      };
+      const mocks = makeMocks();
+      (mocks.authSessionService.getSession as ReturnType<typeof mock>).mockImplementation(
+        async () => expiredWithRefresh,
+      );
+      const testApi = new AuthApi(mocks.authSessionService, mocks.mintAdapter);
+
+      // In unit tests, attachOIDC fails (no real mint) → expired + OIDC failure = false
+      // In production with a real mint, attachOIDC succeeds and restore returns true
+      const result = await testApi.restore(mintUrl);
+      expect(result).toBe(false);
     });
   });
 

@@ -117,15 +117,22 @@ export class AuthApi {
    * Restore a persisted auth session and wire the AuthProvider.
    *
    * Call this on app startup for each mint that has a stored session.
-   * Returns true if a valid session was found and restored.
+   * Returns true if a session was found and restored.
+   *
+   * If the CAT is expired but a refreshToken exists, OIDC is attached
+   * so cashu-ts can automatically refresh the CAT on the next request.
    */
   async restore(mintUrl: string): Promise<boolean> {
     mintUrl = normalizeMintUrl(mintUrl);
 
-    let session: AuthSession;
-    try {
-      session = await this.authSessionService.getValidSession(mintUrl);
-    } catch {
+    const session = await this.authSessionService.getSession(mintUrl);
+    if (!session) return false;
+
+    const now = Math.floor(Date.now() / 1000);
+    const expired = session.expiresAt <= now;
+
+    if (expired && !session.refreshToken) {
+      this.logger?.info('Auth session expired without refresh token, skipping restore', { mintUrl });
       return false;
     }
 
@@ -144,12 +151,13 @@ export class AuthApi {
           mintUrl,
           cause: err instanceof Error ? err.message : String(err),
         });
+        if (expired) return false;
       }
     }
 
     this.managers.set(mintUrl, auth);
     this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
-    this.logger?.info('Auth session restored', { mintUrl });
+    this.logger?.info('Auth session restored', { mintUrl, expired });
     return true;
   }
 

@@ -76,6 +76,12 @@ export class AuthSessionService {
     this.logger?.info('Auth session deleted', { mintUrl });
   }
 
+  /** Get session without expiry check; returns null if missing. */
+  async getSession(mintUrl: string): Promise<AuthSession | null> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    return this.repo.getSession(mintUrl);
+  }
+
   /** Check whether a valid (non-expired) session exists for the given mint. */
   async hasSession(mintUrl: string): Promise<boolean> {
     try {
