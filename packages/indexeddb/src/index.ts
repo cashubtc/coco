@@ -9,6 +9,7 @@ import type {
   MeltQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
+  AuthSessionRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from 'coco-cashu-core';
@@ -24,6 +25,7 @@ import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { IdbMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
+import { IdbAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { IdbReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
@@ -39,6 +41,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly historyRepository: IdbHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
+  readonly authSessionRepository: AuthSessionRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly db: IdbDb;
   private initialized = false;
@@ -55,6 +58,7 @@ export class IndexedDbRepositories implements Repositories {
     this.historyRepository = new IdbHistoryRepository(this.db);
     this.sendOperationRepository = new IdbSendOperationRepository(this.db);
     this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
+    this.authSessionRepository = new IdbAuthSessionRepository(this.db);
     this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
   }
 
@@ -83,6 +87,7 @@ export class IndexedDbRepositories implements Repositories {
         historyRepository: new IdbHistoryRepository(scopedDb),
         sendOperationRepository: new IdbSendOperationRepository(scopedDb),
         meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
+        authSessionRepository: new IdbAuthSessionRepository(scopedDb),
         receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
       };
       return fn(scopedRepositories);
@@ -103,5 +108,6 @@ export {
   IdbHistoryRepository,
   IdbSendOperationRepository,
   IdbMeltOperationRepository,
+  IdbAuthSessionRepository,
   IdbReceiveOperationRepository,
 };

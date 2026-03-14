@@ -356,6 +356,19 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_melt_operations ADD COLUMN effectiveFee INTEGER;
     `,
   },
+  {
+    id: '017_auth_sessions',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_auth_sessions (
+        mintUrl      TEXT PRIMARY KEY NOT NULL,
+        accessToken  TEXT NOT NULL,
+        refreshToken TEXT,
+        expiresAt    INTEGER NOT NULL,
+        scope        TEXT,
+        batPoolJson  TEXT
+      );
+    `,
+  },
 ];
 
 // Export for testing

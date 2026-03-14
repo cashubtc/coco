@@ -1,0 +1,31 @@
+services:
+  keycloak:
+    container_name: coco-keycloak
+    image: quay.io/keycloak/keycloak:25.0.0
+    command: start-dev --import-realm --hostname http://keycloak:8080
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./cashu-realm.json:/opt/keycloak/data/import/cashu-realm.json:ro
+
+  mint:
+    container_name: coco-auth-mint
+    image: cashubtc/mintd:0.15.2-test-static-4
+    command: >
+      sh -c "
+        echo 'Waiting for Keycloak...' &&
+        until wget -qO- http://keycloak:8080/realms/cashu/.well-known/openid-configuration > /dev/null 2>&1; do
+          sleep 2;
+        done &&
+        echo 'Keycloak ready, starting mint...' &&
+        cdk-mintd -c /config/config.toml
+      "
+    depends_on:
+      - keycloak
+    volumes:
+      - ./cdk-config.toml:/config/config.toml:ro
+    ports:
+      - '3339:3338'

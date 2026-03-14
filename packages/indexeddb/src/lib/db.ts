@@ -220,3 +220,12 @@ export interface MeltOperationRow {
   changeAmount?: number | null;
   effectiveFee?: number | null;
 }
+
+export interface AuthSessionRow {
+  mintUrl: string;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number;
+  scope: string | null;
+  batPoolJson: string | null;
+}

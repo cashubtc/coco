@@ -5,4 +5,5 @@ export * from './KeyRingApi.ts';
 export * from './SubscriptionApi.ts';
 export * from './HistoryApi.ts';
 export * from './SendApi.ts';
+export * from './AuthApi.ts';
 export * from './ReceiveApi.ts';

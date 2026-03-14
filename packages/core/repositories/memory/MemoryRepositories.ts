@@ -1,28 +1,31 @@
 import type {
+  AuthSessionRepository,
+  CounterRepository,
+  HistoryRepository,
+  KeyRingRepository,
+  KeysetRepository,
+  MeltOperationRepository,
+  MeltQuoteRepository,
+  MintQuoteRepository,
+  MintRepository,
+  ProofRepository,
   Repositories,
   RepositoryTransactionScope,
-  MintRepository,
-  KeysetRepository,
-  KeyRingRepository,
-  CounterRepository,
-  ProofRepository,
-  MintQuoteRepository,
-  MeltQuoteRepository,
-  HistoryRepository,
   SendOperationRepository,
   MeltOperationRepository,
   ReceiveOperationRepository,
 } from '..';
-import { MemoryMintRepository } from './MemoryMintRepository';
-import { MemoryKeysetRepository } from './MemoryKeysetRepository';
-import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
+import { MemoryAuthSessionRepository } from './MemoryAuthSessionRepository';
 import { MemoryCounterRepository } from './MemoryCounterRepository';
-import { MemoryProofRepository } from './MemoryProofRepository';
-import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
-import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
 import { MemoryHistoryRepository } from './MemoryHistoryRepository';
-import { MemorySendOperationRepository } from './MemorySendOperationRepository';
+import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
+import { MemoryKeysetRepository } from './MemoryKeysetRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
+import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
+import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
+import { MemoryMintRepository } from './MemoryMintRepository';
+import { MemoryProofRepository } from './MemoryProofRepository';
+import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 
 export class MemoryRepositories implements Repositories {
@@ -36,6 +39,7 @@ export class MemoryRepositories implements Repositories {
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
+  authSessionRepository: AuthSessionRepository;
   receiveOperationRepository: ReceiveOperationRepository;
 
   constructor() {
@@ -49,6 +53,7 @@ export class MemoryRepositories implements Repositories {
     this.historyRepository = new MemoryHistoryRepository();
     this.sendOperationRepository = new MemorySendOperationRepository();
     this.meltOperationRepository = new MemoryMeltOperationRepository();
+    this.authSessionRepository = new MemoryAuthSessionRepository();
     this.receiveOperationRepository = new MemoryReceiveOperationRepository();
   }
 

@@ -1,9 +1,4 @@
-import type { Mint } from '../models/Mint';
-import type { Keyset } from '../models/Keyset';
-import type { Counter } from '../models/Counter';
-import type { CoreProof, ProofState } from '../types';
-import type { MintQuote } from '@core/models/MintQuote';
-import type { MeltQuote } from '@core/models/MeltQuote';
+import type { AuthSession } from '@core/models/AuthSession';
 import type {
   HistoryEntry,
   MeltHistoryEntry,
@@ -11,14 +6,19 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
-import type { MeltQuoteState, MintQuoteState } from '@cashu/cashu-ts';
 import type { Keypair } from '@core/models/Keypair';
-import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
+import type { MeltQuote } from '@core/models/MeltQuote';
+import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../operations/receive/ReceiveOperation';
+import type { Counter } from '../models/Counter';
+import type { Keyset } from '../models/Keyset';
+import type { Mint } from '../models/Mint';
+import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
+import type { CoreProof, ProofState } from '../types';
 
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
@@ -184,6 +184,15 @@ export interface MeltOperationRepository {
   /** Delete a melt operation */
   delete(id: string): Promise<void>;
 }
+export interface AuthSessionRepository {
+  getSession(mintUrl: string): Promise<AuthSession | null>;
+
+  saveSession(session: AuthSession): Promise<void>;
+
+  deleteSession(mintUrl: string): Promise<void>;
+
+  getAllSessions(): Promise<AuthSession[]>;
+}
 
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
@@ -219,6 +228,7 @@ interface RepositoriesBase {
   historyRepository: HistoryRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
+  authSessionRepository: AuthSessionRepository;
   receiveOperationRepository: ReceiveOperationRepository;
 }
 

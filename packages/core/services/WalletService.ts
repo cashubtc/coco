@@ -5,6 +5,7 @@ import {
   type MintKeys,
   type MintKeyset,
   type KeyChainCache,
+  type AuthProvider,
 } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
@@ -27,17 +28,20 @@ export class WalletService {
   private inFlight: Map<string, Promise<Wallet>> = new Map();
   private readonly logger?: Logger;
   private readonly requestProvider: MintRequestProvider;
+  private readonly authProviderGetter?: (mintUrl: string) => AuthProvider | undefined;
 
   constructor(
     mintService: MintService,
     seedService: SeedService,
     requestProvider: MintRequestProvider,
     logger?: Logger,
+    authProviderGetter?: (mintUrl: string) => AuthProvider | undefined,
   ) {
     this.mintService = mintService;
     this.seedService = seedService;
     this.requestProvider = requestProvider;
     this.logger = logger;
+    this.authProviderGetter = authProviderGetter;
   }
 
   async getWallet(mintUrl: string): Promise<Wallet> {
@@ -141,7 +145,8 @@ export class WalletService {
     const seed = await this.seedService.getSeed();
 
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
+    const authProvider = this.authProviderGetter?.(mintUrl);
+    const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn, authProvider }), {
       unit: DEFAULT_UNIT,
       // @ts-ignore
       logger:

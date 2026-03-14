@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   runRepositoryTransactionContract,
+  runAuthSessionRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -86,6 +87,11 @@ runRepositoryTransactionContract(
   {
     createRepositories,
   },
+  { describe, it, expect },
+);
+
+runAuthSessionRepositoryContract(
+  { createRepositories },
   { describe, it, expect },
 );
 

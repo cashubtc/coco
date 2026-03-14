@@ -1,6 +1,3 @@
-import type { Mint } from '../models/Mint';
-import type { Keyset } from '../models/Keyset';
-import type { Counter } from '../models/Counter';
 import type {
   MeltQuoteBolt11Response,
   MeltQuoteState,
@@ -8,10 +5,13 @@ import type {
   MintQuoteState,
   Token,
 } from '@cashu/cashu-ts';
-import type { CoreProof, ProofState } from '../types';
-import type { HistoryEntry } from '../models/History';
-import type { SendOperation } from '../operations/send/SendOperation';
 import type { MeltOperation } from '@core/operations/melt';
+import type { Counter } from '../models/Counter';
+import type { HistoryEntry } from '../models/History';
+import type { Keyset } from '../models/Keyset';
+import type { Mint } from '../models/Mint';
+import type { SendOperation } from '../operations/send/SendOperation';
+import type { CoreProof, ProofState } from '../types';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -59,4 +59,7 @@ export interface CoreEvents {
   'melt-op:rolled-back': { mintUrl: string; operationId: string; operation: MeltOperation };
   'subscriptions:paused': void;
   'subscriptions:resumed': void;
+  'auth-session:updated': { mintUrl: string };
+  'auth-session:deleted': { mintUrl: string };
+  'auth-session:expired': { mintUrl: string };
 }

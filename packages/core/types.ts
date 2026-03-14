@@ -20,3 +20,4 @@ export interface CoreProof extends Proof {
    */
   createdByOperationId?: string;
 }
+
