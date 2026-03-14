@@ -211,12 +211,19 @@ export class AuthApi {
   private async attachOIDC(mintUrl: string, auth: AuthManager): Promise<OIDCAuth> {
     const mint = new Mint(mintUrl, { authProvider: auth });
     const oidc = await mint.oidcAuth({
-      onTokens: (t: TokenResponse) => {
+      onTokens: async (t: TokenResponse) => {
         auth.setCAT(t.access_token);
         if (t.access_token) {
+          // OAuth refresh may omit refresh_token (RFC 6749 §6) —
+          // preserve the existing one so restore() can re-attach OIDC.
+          let refreshToken = t.refresh_token;
+          if (!refreshToken) {
+            const existing = await this.authSessionService.getSession(mintUrl);
+            refreshToken = existing?.refreshToken;
+          }
           this.saveSessionWithPool(mintUrl, auth, {
             access_token: t.access_token,
-            refresh_token: t.refresh_token,
+            refresh_token: refreshToken,
             expires_in: t.expires_in,
           }).catch((err) => {
             this.logger?.error('Failed to persist session in onTokens', {
