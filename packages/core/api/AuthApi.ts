@@ -21,6 +21,8 @@ import { normalizeMintUrl } from '@core/utils';
 export class AuthApi {
   /** Per-mint AuthManager (always present after login/restore). */
   private readonly managers = new Map<string, AuthManager>();
+  /** Per-mint PersistingProvider wrapper (returned by getAuthProvider). */
+  private readonly providers = new Map<string, AuthProvider>();
   /** Per-mint OIDCAuth (present when refresh_token is available). */
   private readonly oidcClients = new Map<string, OIDCAuth>();
 
@@ -64,7 +66,9 @@ export class AuthApi {
         });
         this.managers.set(mintUrl, auth);
         this.oidcClients.set(mintUrl, oidc);
-        this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
+        const provider = this.createPersistingProvider(mintUrl, auth);
+        this.providers.set(mintUrl, provider);
+        this.mintAdapter.setAuthProvider(mintUrl, provider);
         this.logger?.info('Auth session established', { mintUrl });
         return tokens;
       },
@@ -104,7 +108,9 @@ export class AuthApi {
     const session = await this.saveSessionWithPool(mintUrl, auth, tokens);
 
     this.managers.set(mintUrl, auth);
-    this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
+    const provider = this.createPersistingProvider(mintUrl, auth);
+    this.providers.set(mintUrl, provider);
+    this.mintAdapter.setAuthProvider(mintUrl, provider);
     this.logger?.info('Auth login completed', { mintUrl });
     return session;
   }
@@ -156,7 +162,9 @@ export class AuthApi {
     }
 
     this.managers.set(mintUrl, auth);
-    this.mintAdapter.setAuthProvider(mintUrl, this.createPersistingProvider(mintUrl, auth));
+    const provider = this.createPersistingProvider(mintUrl, auth);
+    this.providers.set(mintUrl, provider);
+    this.mintAdapter.setAuthProvider(mintUrl, provider);
     this.logger?.info('Auth session restored', { mintUrl, expired });
     
     await this.authSessionService.emitUpdated(mintUrl);
@@ -173,6 +181,7 @@ export class AuthApi {
     mintUrl = normalizeMintUrl(mintUrl);
     await this.authSessionService.deleteSession(mintUrl);
     this.managers.delete(mintUrl);
+    this.providers.delete(mintUrl);
     this.oidcClients.delete(mintUrl);
     this.mintAdapter.clearAuthProvider(mintUrl);
     this.logger?.info('Auth logout completed', { mintUrl });
@@ -199,7 +208,7 @@ export class AuthApi {
   /** Get the AuthProvider for a mint, or undefined if not authenticated. */
   getAuthProvider(mintUrl: string): AuthProvider | undefined {
     mintUrl = normalizeMintUrl(mintUrl);
-    return this.managers.get(mintUrl);
+    return this.providers.get(mintUrl);
   }
 
   // ---------------------------------------------------------------------------

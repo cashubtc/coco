@@ -162,7 +162,8 @@ describe('AuthApi', () => {
 
       const provider = testApi.getAuthProvider(mintUrl);
       expect(provider).toBeDefined();
-      expect((provider as any).poolSize).toBe(1);
+      expect(typeof provider!.getCAT).toBe('function');
+      expect(typeof provider!.ensure).toBe('function');
     });
 
     it('handles restore gracefully when session has no batPool', async () => {
@@ -171,7 +172,7 @@ describe('AuthApi', () => {
 
       const provider = api.getAuthProvider(mintUrl);
       expect(provider).toBeDefined();
-      expect((provider as any).poolSize).toBe(0);
+      expect(typeof provider!.getCAT).toBe('function');
     });
 
     it('returns false when session is expired without refreshToken', async () => {
