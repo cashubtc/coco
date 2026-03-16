@@ -12,7 +12,6 @@ import type {
   Repositories,
   RepositoryTransactionScope,
   SendOperationRepository,
-  MeltOperationRepository,
   ReceiveOperationRepository,
 } from '..';
 import { MemoryAuthSessionRepository } from './MemoryAuthSessionRepository';

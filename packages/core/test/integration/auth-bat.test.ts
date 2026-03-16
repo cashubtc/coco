@@ -51,7 +51,11 @@ async function acquireTokens(): Promise<{
     const body = await res.text();
     throw new Error(`Keycloak token request failed (${res.status}): ${body}`);
   }
-  return res.json();
+  return res.json() as Promise<{
+    access_token: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>;
 }
 
 /**
