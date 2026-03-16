@@ -10,6 +10,20 @@ import { MeltOpsApi } from '../../api/MeltOpsApi.ts';
 
 const mintUrl = 'https://mint.test';
 
+type Assert<T extends true> = T;
+type PrepareMeltInput = Parameters<MeltOpsApi['prepare']>[0];
+type PrepareMeltMethod = PrepareMeltInput['method'];
+type _AssertOnlyBolt11 = Assert<Exclude<PrepareMeltMethod, 'bolt11'> extends never ? true : false>;
+type CustomPrepareMeltInput = Parameters<MeltOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
+type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['method'] ? true : false>;
+
+const supportedPrepareInput: PrepareMeltInput = {
+  mintUrl,
+  method: 'bolt11',
+  methodData: { invoice: 'lnbc1test' },
+};
+void supportedPrepareInput;
+
 const makePreparedOperation = (): PreparedMeltOperation => ({
   id: 'op-1',
   state: 'prepared',
@@ -61,11 +75,7 @@ describe('MeltOpsApi', () => {
   });
 
   it('prepare creates and prepares a melt operation', async () => {
-    const result = await api.prepare({
-      mintUrl,
-      method: 'bolt11',
-      methodData: { invoice: 'lnbc1test' },
-    });
+    const result = await api.prepare(supportedPrepareInput);
 
     expect(meltOperationService.init).toHaveBeenCalledWith(mintUrl, 'bolt11', {
       invoice: 'lnbc1test',

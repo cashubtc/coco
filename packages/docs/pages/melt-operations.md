@@ -172,5 +172,5 @@ coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
 
 ## Implementation Notes
 
-- Method-specific behavior (bolt11, bolt12, onchain) is delegated to `MeltMethodHandler`
+- Built-in `manager.ops.melt` support currently covers `bolt11`; additional methods require wiring another `MeltMethodHandler`
 - Operations are locked per id; concurrent calls throw `OperationInProgressError`

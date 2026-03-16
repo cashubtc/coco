@@ -4,10 +4,17 @@ import type {
   PendingMeltOperation,
   PreparedMeltOperation,
 } from '@core/operations/melt';
-import type { MeltMethod, MeltMethodData, MeltOperationService } from '@core/operations/melt';
+import type {
+  MeltMethod,
+  MeltMethodData,
+  MeltOperationService,
+} from '@core/operations/melt';
 
-export type PrepareMeltInput = {
-  [M in MeltMethod]: {
+/** Melt methods supported by the default `Manager` wiring. */
+export type DefaultSupportedMeltMethod = 'bolt11';
+
+export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
+  [M in TSupported]: {
     /** Mint that will execute the melt. */
     mintUrl: string;
     /** Melt method to prepare, for example `bolt11`. */
@@ -15,7 +22,7 @@ export type PrepareMeltInput = {
     /** Method-specific payload required for the selected melt method. */
     methodData: MeltMethodData<M>;
   };
-}[MeltMethod];
+}[TSupported];
 
 export interface MeltRecoveryApi {
   /** Runs the startup-style recovery sweep for melt operations. */
@@ -36,7 +43,7 @@ export interface MeltDiagnosticsApi {
  * execute it, inspect or refresh its state, and recover or roll it back when
  * allowed by the underlying method.
  */
-export class MeltOpsApi {
+export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
   /** Recovery helpers for melt operations. */
   readonly recovery: MeltRecoveryApi = {
     run: async () => this.meltOperationService.recoverPendingOperations(),
@@ -56,7 +63,7 @@ export class MeltOpsApi {
    * Use this to inspect the generated operation and any quote-related data
    * before committing to the external payment.
    */
-  async prepare(input: PrepareMeltInput): Promise<PreparedMeltOperation> {
+  async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
     const initOperation = await this.meltOperationService.init(
       input.mintUrl,
       input.method,

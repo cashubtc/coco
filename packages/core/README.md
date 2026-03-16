@@ -205,7 +205,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `receive.recovery.run(): Promise<void>`
 - `receive.recovery.inProgress(): boolean`
 - `receive.diagnostics.isLocked(operationId): boolean`
-- `melt.prepare({ mintUrl, method, methodData }): Promise<PreparedMeltOperation>`
+- `melt.prepare({ mintUrl, method: 'bolt11', methodData: { invoice } }): Promise<PreparedMeltOperation>`
 - `melt.execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
 - `melt.get(operationId): Promise<MeltOperation | null>`
 - `melt.getByQuote(mintUrl, quoteId): Promise<MeltOperation | null>`
