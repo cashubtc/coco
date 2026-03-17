@@ -1,3 +1,4 @@
+export * from './AuthService';
 export * from './AuthSessionService';
 export * from './CounterService';
 export * from './HistoryService';

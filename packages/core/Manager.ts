@@ -22,6 +22,7 @@ import {
   TransactionService,
   PaymentRequestService,
   AuthSessionService,
+  AuthService,
   TokenService,
 } from './services';
 import { SendOperationService } from './operations/send/SendOperationService';
@@ -199,6 +200,7 @@ export class Manager {
   private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private authSessionService: AuthSessionService;
+  private authService: AuthService;
   private sendOperationService: SendOperationService;
   private sendOperationRepository: SendOperationRepository;
   private meltOperationService: MeltOperationService;
@@ -262,6 +264,7 @@ export class Manager {
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
     this.authSessionService = core.authSessionService;
+    this.authService = core.authService;
     this.proofRepository = repositories.proofRepository;
     const apis = this.buildApis();
     this.mint = apis.mint;
@@ -593,6 +596,7 @@ export class Manager {
     meltOperationService: MeltOperationService;
     meltOperationRepository: MeltOperationRepository;
     authSessionService: AuthSessionService;
+    authService: AuthService;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -750,6 +754,9 @@ export class Manager {
       authSessionLogger,
     );
 
+    const authServiceLogger = this.getChildLogger('AuthService');
+    const authService = new AuthService(authSessionService, this.mintAdapter, authServiceLogger);
+
     return {
       mintService,
       seedService,
@@ -772,6 +779,7 @@ export class Manager {
       meltOperationService,
       meltOperationRepository,
       authSessionService,
+      authService,
     };
   }
 
@@ -810,8 +818,7 @@ export class Manager {
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
     const send = new SendApi(this.sendOperationService);
-    const authApiLogger = this.getChildLogger('AuthApi');
-    const auth = new AuthApi(this.authSessionService, this.mintAdapter, authApiLogger);
+    const auth = new AuthApi(this.authService);
     const receive = new ReceiveApi(this.receiveOperationService);
     return { mint, wallet, quotes, keyring, subscription, history, send, auth, receive };
   }
