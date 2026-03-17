@@ -218,4 +218,21 @@ describe('AuthService', () => {
       expect(typeof provider!.getBlindAuthToken).toBe('function');
     });
   });
+
+  describe('getPoolSize', () => {
+    it('returns 0 for unknown mint', () => {
+      expect(service.getPoolSize('https://unknown.test')).toBe(0);
+    });
+
+    it('returns 0 after login (pool starts empty)', async () => {
+      await service.login(mintUrl, { access_token: 'test' });
+      expect(service.getPoolSize(mintUrl)).toBe(0);
+    });
+
+    it('returns 0 after logout', async () => {
+      await service.login(mintUrl, { access_token: 'test' });
+      await service.logout(mintUrl);
+      expect(service.getPoolSize(mintUrl)).toBe(0);
+    });
+  });
 });

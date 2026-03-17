@@ -46,4 +46,8 @@ export class AuthApi {
   getAuthProvider(mintUrl: string): AuthProvider | undefined {
     return this.authService.getAuthProvider(mintUrl);
   }
+
+  getPoolSize(mintUrl: string): number {
+    return this.authService.getPoolSize(mintUrl);
+  }
 }

@@ -14,7 +14,8 @@
  *   ./scripts/auth_mint/test-auth-integration.sh
  */
 import { describe, it, expect, beforeAll } from 'bun:test';
-import { AuthManager } from '@cashu/cashu-ts';
+import type { AuthProvider } from '@cashu/cashu-ts';
+// poolSize is verified via mgr.auth.getPoolSize() — not via AuthManager cast
 import { initializeCoco, type Manager } from '../../Manager';
 import { MemoryRepositories } from '../../repositories/memory';
 
@@ -94,24 +95,24 @@ describe('Auth BAT (automated — password grant)', () => {
   });
 
   it('T1: CAT-protected endpoint succeeds without consuming BATs', async () => {
-    const provider = mgr.auth.getAuthProvider(mintUrl) as AuthManager;
+    const provider = mgr.auth.getAuthProvider(mintUrl) as AuthProvider;
     expect(provider).toBeDefined();
-    expect(provider.poolSize).toBe(0);
+    expect(mgr.auth.getPoolSize(mintUrl)).toBe(0);
 
     const quote = await mgr.quotes.createMintQuote(mintUrl, 1);
     expect(quote).toBeDefined();
     expect(quote.quote).toBeDefined();
 
-    expect(provider.poolSize).toBe(0);
+    expect(mgr.auth.getPoolSize(mintUrl)).toBe(0);
   });
 
   it('T2: ensure() mints BATs via CAT and populates pool', async () => {
-    const provider = mgr.auth.getAuthProvider(mintUrl) as AuthManager;
+    const provider = mgr.auth.getAuthProvider(mintUrl) as AuthProvider;
     expect(provider).toBeDefined();
-    expect(provider.poolSize).toBe(0);
+    expect(mgr.auth.getPoolSize(mintUrl)).toBe(0);
 
     await provider.ensure!(3);
-    expect(provider.poolSize).toBeGreaterThanOrEqual(3);
+    expect(mgr.auth.getPoolSize(mintUrl)).toBeGreaterThanOrEqual(3);
   });
 
   it('T3: session restore → CAT works, BAT re-mintable', async () => {
@@ -130,7 +131,7 @@ describe('Auth BAT (automated — password grant)', () => {
     const restored = await mgr2.auth.restore(mintUrl);
     expect(restored).toBe(true);
 
-    const provider2 = mgr2.auth.getAuthProvider(mintUrl) as AuthManager;
+    const provider2 = mgr2.auth.getAuthProvider(mintUrl) as AuthProvider;
     expect(provider2).toBeDefined();
 
     const quote = await mgr2.quotes.createMintQuote(mintUrl, 1);
@@ -138,6 +139,6 @@ describe('Auth BAT (automated — password grant)', () => {
     expect(quote.quote).toBeDefined();
 
     await provider2.ensure!(2);
-    expect(provider2.poolSize).toBeGreaterThanOrEqual(2);
+    expect(mgr2.auth.getPoolSize(mintUrl)).toBeGreaterThanOrEqual(2);
   });
 });

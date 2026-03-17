@@ -211,6 +211,12 @@ export class AuthService {
     return this.providers.get(mintUrl);
   }
 
+  /** Get the current BAT pool size for a mint, or 0 if not authenticated. */
+  getPoolSize(mintUrl: string): number {
+    mintUrl = normalizeMintUrl(mintUrl);
+    return this.managers.get(mintUrl)?.poolSize ?? 0;
+  }
+
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------

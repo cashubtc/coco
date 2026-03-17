@@ -22,6 +22,7 @@ function makeAuthService() {
     getSession: mock(async () => fakeSession),
     hasSession: mock(async () => true),
     getAuthProvider: mock(() => undefined),
+    getPoolSize: mock(() => 5),
   } as unknown as AuthService;
 }
 
@@ -73,5 +74,11 @@ describe('AuthApi', () => {
   it('delegates getAuthProvider to AuthService', () => {
     api.getAuthProvider(mintUrl);
     expect(authService.getAuthProvider).toHaveBeenCalledWith(mintUrl);
+  });
+
+  it('delegates getPoolSize to AuthService', () => {
+    const result = api.getPoolSize(mintUrl);
+    expect(result).toBe(5);
+    expect(authService.getPoolSize).toHaveBeenCalledWith(mintUrl);
   });
 });
