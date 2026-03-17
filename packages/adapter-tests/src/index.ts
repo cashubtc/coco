@@ -140,7 +140,7 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
   return {
     mintUrl: 'https://mint.test',
     accessToken: 'access-token-123',
-    expiresAt: Date.now() + 3600_000,
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
   };
 }
