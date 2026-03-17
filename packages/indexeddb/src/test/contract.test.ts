@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
+  runProofRepositoryContract,
 } from 'coco-cashu-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -25,6 +26,11 @@ runRepositoryTransactionContract(
 );
 
 runAuthSessionRepositoryContract(
+  { createRepositories },
+  { describe, it, expect },
+);
+
+runProofRepositoryContract(
   { createRepositories },
   { describe, it, expect },
 );

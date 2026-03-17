@@ -158,6 +158,25 @@ export class MemoryProofRepository implements ProofRepository {
     return proof ? { ...proof } : null;
   }
 
+  async getProofsBySecrets(mintUrl: string, secrets: string[]): Promise<CoreProof[]> {
+    if (!secrets || secrets.length === 0) {
+      return [];
+    }
+
+    const map = this.getMintMap(mintUrl);
+    const uniqueSecrets = Array.from(new Set(secrets));
+    const proofs: CoreProof[] = [];
+
+    for (const secret of uniqueSecrets) {
+      const proof = map.get(secret);
+      if (proof) {
+        proofs.push({ ...proof });
+      }
+    }
+
+    return proofs;
+  }
+
   async getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
     const results: CoreProof[] = [];

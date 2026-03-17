@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
+  runProofRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -91,6 +92,11 @@ runRepositoryTransactionContract(
 );
 
 runAuthSessionRepositoryContract(
+  { createRepositories },
+  { describe, it, expect },
+);
+
+runProofRepositoryContract(
   { createRepositories },
   { describe, it, expect },
 );

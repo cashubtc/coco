@@ -286,6 +286,19 @@ export class ReceiveOperationService {
       }),
     );
 
+    const inputSecrets = executing.inputProofs.map((proof) => proof.secret);
+    const existingInputProofs = await this.proofRepository.getProofsBySecrets(
+      executing.mintUrl,
+      inputSecrets,
+    );
+    const locallyInflightSecrets = existingInputProofs
+      .filter((proof) => proof.state === 'inflight')
+      .map((proof) => proof.secret);
+
+    if (locallyInflightSecrets.length > 0) {
+      await this.proofService.setProofState(executing.mintUrl, locallyInflightSecrets, 'spent');
+    }
+
     return await this.markAsFinalized(executing);
   }
 
@@ -674,14 +687,8 @@ export class ReceiveOperationService {
     const outputSecrets = getOutputProofSecrets(op);
     if (outputSecrets.length === 0) return false;
 
-    for (const secret of outputSecrets) {
-      const existing = await this.proofRepository.getProofBySecret(op.mintUrl, secret);
-      if (!existing) {
-        return false;
-      }
-    }
-
-    return true;
+    const existingProofs = await this.proofRepository.getProofsBySecrets(op.mintUrl, outputSecrets);
+    return existingProofs.length === new Set(outputSecrets).size;
   }
 
   /** Extract and normalize mint URL from token, with validation. */

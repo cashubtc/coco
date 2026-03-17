@@ -7,6 +7,7 @@ import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
 import type { CoreProof } from '../../types.ts';
+import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 
 describe('ProofStateWatcherService', () => {
@@ -112,6 +113,109 @@ describe('ProofStateWatcherService', () => {
     expect(checkInflightProofs).not.toHaveBeenCalled();
     expect(getInflightProofs).not.toHaveBeenCalled();
     expect(watchProof).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('finalizes a pending send operation when the batched send proofs are all spent', async () => {
+    const getProofBySecret = mock(async () =>
+      makeProof({ secret: 'spent-1', state: 'spent', usedByOperationId: 'send-op-1' }),
+    );
+    const getProofsBySecrets = mock(async () => [
+      makeProof({ secret: 'spent-1', state: 'spent' }),
+      makeProof({ secret: 'spent-2', state: 'spent' }),
+    ]);
+    const finalize = mock(async () => {});
+    const getOperation = mock(async () => ({
+      id: 'send-op-1',
+      state: 'pending',
+      mintUrl: mintUrlA,
+      amount: 2,
+      method: 'default',
+      methodData: {},
+      needsSwap: false,
+      fee: 0,
+      inputAmount: 2,
+      inputProofSecrets: ['spent-1', 'spent-2'],
+      createdAt: 0,
+      updatedAt: 0,
+    }));
+
+    const watcher = new ProofStateWatcherService(
+      {} as SubscriptionManager,
+      {} as MintService,
+      {} as ProofService,
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      bus,
+      new NullLogger(),
+      { watchExistingInflightOnStart: false },
+    );
+    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+
+    await watcher.start();
+    await bus.emit('proofs:state-changed', {
+      mintUrl: mintUrlA,
+      secrets: ['spent-1'],
+      state: 'spent',
+    });
+
+    expect(getProofBySecret).toHaveBeenCalledTimes(1);
+    expect(getProofBySecret).toHaveBeenCalledWith(mintUrlA, 'spent-1');
+    expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
+    expect(getProofsBySecrets).toHaveBeenCalledWith(mintUrlA, ['spent-1', 'spent-2']);
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalledWith('send-op-1');
+
+    await watcher.stop();
+  });
+
+  it('does not finalize a pending send operation when the batched lookup is missing a proof', async () => {
+    const getProofBySecret = mock(async () =>
+      makeProof({ secret: 'spent-1', state: 'spent', usedByOperationId: 'send-op-1' }),
+    );
+    const getProofsBySecrets = mock(async () => [makeProof({ secret: 'spent-1', state: 'spent' })]);
+    const finalize = mock(async () => {});
+    const getOperation = mock(async () => ({
+      id: 'send-op-1',
+      state: 'pending',
+      mintUrl: mintUrlA,
+      amount: 2,
+      method: 'default',
+      methodData: {},
+      needsSwap: false,
+      fee: 0,
+      inputAmount: 2,
+      inputProofSecrets: ['spent-1', 'spent-2'],
+      createdAt: 0,
+      updatedAt: 0,
+    }));
+
+    const watcher = new ProofStateWatcherService(
+      {} as SubscriptionManager,
+      {} as MintService,
+      {} as ProofService,
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      bus,
+      new NullLogger(),
+      { watchExistingInflightOnStart: false },
+    );
+    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+
+    await watcher.start();
+    await bus.emit('proofs:state-changed', {
+      mintUrl: mintUrlA,
+      secrets: ['spent-1'],
+      state: 'spent',
+    });
+
+    expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
+    expect(finalize).not.toHaveBeenCalled();
 
     await watcher.stop();
   });

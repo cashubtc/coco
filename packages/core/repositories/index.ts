@@ -80,6 +80,11 @@ export interface ProofRepository {
   getProofBySecret(mintUrl: string, secret: string): Promise<CoreProof | null>;
 
   /**
+   * Get proofs matching a batch of secrets for a mint.
+   */
+  getProofsBySecrets(mintUrl: string, secrets: string[]): Promise<CoreProof[]>;
+
+  /**
    * Get proofs associated with a specific operation (as input or output).
    */
   getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]>;

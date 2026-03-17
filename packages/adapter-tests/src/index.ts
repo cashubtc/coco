@@ -113,7 +113,7 @@ export function createDummyKeyset(): Keyset {
   };
 }
 
-export function createDummyProof(): CoreProof {
+export function createDummyProof(overrides?: Partial<CoreProof>): CoreProof {
   return {
     id: 'proof-id',
     amount: 1,
@@ -121,6 +121,7 @@ export function createDummyProof(): CoreProof {
     C: 'C',
     mintUrl: 'https://mint.test',
     state: 'ready',
+    ...overrides,
   } satisfies CoreProof;
 }
 
@@ -248,6 +249,118 @@ export async function runAuthSessionRepositoryContract(
         expect(result!.scope).toBe('read write');
         expect(result!.batPool).toBeDefined();
         expect(result!.batPool!).toHaveLength(2);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runProofRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('ProofRepository contract', () => {
+    it('returns matches for a mint', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({ secret: 'secret-1' }),
+          createDummyProof({ secret: 'secret-2', C: 'C2' }),
+        ]);
+
+        const proofs = await repositories.proofRepository.getProofsBySecrets('https://mint.test', [
+          'secret-1',
+          'secret-2',
+        ]);
+
+        expect(proofs).toHaveLength(2);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('ignores missing secrets', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({ secret: 'secret-1' }),
+        ]);
+
+        const proofs = await repositories.proofRepository.getProofsBySecrets('https://mint.test', [
+          'secret-1',
+          'missing-secret',
+        ]);
+
+        expect(proofs).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not return proofs from another mint', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({ secret: 'shared-secret' }),
+        ]);
+        await repositories.proofRepository.saveProofs('https://other-mint.test', [
+          createDummyProof({ mintUrl: 'https://other-mint.test', secret: 'shared-secret' }),
+        ]);
+
+        const proofs = await repositories.proofRepository.getProofsBySecrets('https://mint.test', [
+          'shared-secret',
+        ]);
+
+        expect(proofs).toHaveLength(1);
+        expect(proofs[0]?.mintUrl).toBe('https://mint.test');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not duplicate returned proofs for repeated secrets', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({ secret: 'secret-1' }),
+        ]);
+
+        const proofs = await repositories.proofRepository.getProofsBySecrets('https://mint.test', [
+          'secret-1',
+          'secret-1',
+          'secret-1',
+        ]);
+
+        expect(proofs).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('returns large secret batches without hitting adapter query limits', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const secrets = Array.from({ length: 1100 }, (_, index) => `secret-${index}`);
+        await repositories.proofRepository.saveProofs(
+          'https://mint.test',
+          secrets.map((secret, index) =>
+            createDummyProof({
+              secret,
+              C: `C-${index}`,
+            }),
+          ),
+        );
+
+        const proofs = await repositories.proofRepository.getProofsBySecrets(
+          'https://mint.test',
+          secrets,
+        );
+
+        expect(proofs).toHaveLength(secrets.length);
+        expect(new Set(proofs.map((proof) => proof.secret)).size).toBe(secrets.length);
       } finally {
         await dispose();
       }

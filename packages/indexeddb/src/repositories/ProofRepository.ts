@@ -205,6 +205,21 @@ export class IdbProofRepository implements ProofRepository {
     return row ? rowToProof(row) : null;
   }
 
+  async getProofsBySecrets(mintUrl: string, secrets: string[]): Promise<CoreProof[]> {
+    if (!secrets || secrets.length === 0) {
+      return [];
+    }
+
+    const uniqueSecrets = Array.from(new Set(secrets));
+    const keys = uniqueSecrets.map((secret) => [mintUrl, secret] as [string, string]);
+    const rows = (await (this.db as any).table('coco_cashu_proofs').bulkGet(keys)) as Array<
+      | ProofRow
+      | undefined
+    >;
+
+    return rows.filter((row): row is ProofRow => row !== undefined).map(rowToProof);
+  }
+
   async getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]> {
     // Note: IndexedDB doesn't support OR queries easily, so we do two queries
     const byUsed = (await (this.db as any)

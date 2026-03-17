@@ -383,15 +383,10 @@ export class ProofStateWatcherService {
       const sendProofSecrets = getSendProofSecrets(operation);
       if (sendProofSecrets.length === 0) return;
 
-      // Check state of all send proofs
-      let allSpent = true;
-      for (const sendSecret of sendProofSecrets) {
-        const proof = await this.proofRepository.getProofBySecret(mintUrl, sendSecret);
-        if (!proof || proof.state !== 'spent') {
-          allSpent = false;
-          break;
-        }
-      }
+      const sendProofs = await this.proofRepository.getProofsBySecrets(mintUrl, sendProofSecrets);
+      const expectedProofCount = new Set(sendProofSecrets).size;
+      const allSpent =
+        sendProofs.length === expectedProofCount && sendProofs.every((proof) => proof.state === 'spent');
 
       if (allSpent) {
         this.logger?.info('All send proofs spent, finalizing operation', { operationId });

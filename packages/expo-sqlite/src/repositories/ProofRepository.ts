@@ -14,6 +14,8 @@ interface ProofRow {
   createdByOperationId: string | null;
 }
 
+const MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE = 900;
+
 function rowToProof(r: ProofRow): CoreProof {
   const base = {
     id: r.id,
@@ -206,6 +208,33 @@ export class ExpoProofRepository implements ProofRepository {
       [mintUrl, secret],
     );
     return row ? rowToProof(row) : null;
+  }
+
+  async getProofsBySecrets(mintUrl: string, secrets: string[]): Promise<CoreProof[]> {
+    if (!secrets || secrets.length === 0) {
+      return [];
+    }
+
+    const uniqueSecrets = Array.from(new Set(secrets));
+    const proofsBySecret = new Map<string, CoreProof>();
+
+    for (let i = 0; i < uniqueSecrets.length; i += MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE) {
+      const secretBatch = uniqueSecrets.slice(i, i + MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE);
+      const placeholders = secretBatch.map(() => '?').join(', ');
+      const rows = await this.db.all<ProofRow>(
+        `SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId FROM coco_cashu_proofs WHERE mintUrl = ? AND secret IN (${placeholders})`,
+        [mintUrl, ...secretBatch],
+      );
+
+      for (const row of rows) {
+        proofsBySecret.set(row.secret, rowToProof(row));
+      }
+    }
+
+    return uniqueSecrets.flatMap((secret) => {
+      const proof = proofsBySecret.get(secret);
+      return proof ? [proof] : [];
+    });
   }
 
   async getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]> {
