@@ -6,7 +6,7 @@ import type { WalletService } from './WalletService';
 import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
-import { mapProofToCoreProof } from '@core/utils';
+import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils';
 import { UnknownMintError } from '../models/Error';
 
 export class MeltQuoteService {
@@ -38,6 +38,7 @@ export class MeltQuoteService {
       this.logger?.warn('Invalid parameter: mintUrl is required for createMeltQuote');
       throw new Error('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!invoice || !invoice.trim()) {
       this.logger?.warn('Invalid parameter: invoice is required for createMeltQuote', {
         mintUrl,
@@ -68,6 +69,7 @@ export class MeltQuoteService {
       this.logger?.warn('Invalid parameter: mintUrl is required for payMeltQuote');
       throw new Error('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!quoteId || !quoteId.trim()) {
       this.logger?.warn('Invalid parameter: quoteId is required for payMeltQuote', { mintUrl });
       throw new Error('quoteId is required');
@@ -205,6 +207,7 @@ export class MeltQuoteService {
     quoteId: string,
     state: MeltQuoteState,
   ): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('Setting melt quote state', { mintUrl, quoteId, state });
     await this.meltQuoteRepo.setMeltQuoteState(mintUrl, quoteId, state);
     await this.eventBus.emit('melt-quote:state-changed', { mintUrl, quoteId, state });

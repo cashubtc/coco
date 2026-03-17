@@ -12,6 +12,7 @@ import {
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 import type { KeysetKeypairs } from '../models/Keyset.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 /**
  * Adapter for making HTTP requests to Cashu mints.
@@ -30,17 +31,20 @@ export class MintAdapter {
 
   /** Register an AuthProvider for a mint (NUT-21/22). Invalidates the cached Mint instance. */
   setAuthProvider(mintUrl: string, provider: AuthProvider): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.authProviders.set(mintUrl, provider);
     delete this.cashuMints[mintUrl];
   }
 
   /** Get the AuthProvider for a mint (if registered). */
   getAuthProvider(mintUrl: string): AuthProvider | undefined {
+    mintUrl = normalizeMintUrl(mintUrl);
     return this.authProviders.get(mintUrl);
   }
 
   /** Remove the AuthProvider for a mint. Invalidates the cached Mint instance. */
   clearAuthProvider(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.authProviders.delete(mintUrl);
     delete this.cashuMints[mintUrl];
   }
@@ -65,12 +69,13 @@ export class MintAdapter {
   }
 
   private getCashuMint(mintUrl: string): Mint {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!this.cashuMints[mintUrl]) {
       const requestFn = this.requestProvider.getRequestFn(mintUrl);
       const authProvider = this.authProviders.get(mintUrl);
       this.cashuMints[mintUrl] = new Mint(mintUrl, { customRequest: requestFn, authProvider });
     }
-    return this.cashuMints[mintUrl];
+    return this.cashuMints[mintUrl]!;
   }
 
   // Check current state of a bolt11 mint quote

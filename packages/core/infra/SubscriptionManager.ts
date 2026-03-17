@@ -4,7 +4,7 @@ import type { RealTimeTransport } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
-import { generateSubId } from '../utils.ts';
+import { generateSubId, normalizeMintUrl } from '../utils.ts';
 
 import type {
   WsRequest,
@@ -79,6 +79,7 @@ export class SubscriptionManager {
    * Falls back to pure PollingTransport only when no wsFactory is provided.
    */
   private getTransport(mintUrl: string): RealTimeTransport {
+    mintUrl = normalizeMintUrl(mintUrl);
     const injected = this.transportByMint.get('*');
     if (injected) return injected;
     let t = this.transportByMint.get(mintUrl);
@@ -110,6 +111,7 @@ export class SubscriptionManager {
   }
 
   private getNextId(mintUrl: string): number {
+    mintUrl = normalizeMintUrl(mintUrl);
     const current = this.nextIdByMint.get(mintUrl) ?? 0;
     const next = current + 1;
     this.nextIdByMint.set(mintUrl, next);
@@ -117,6 +119,7 @@ export class SubscriptionManager {
   }
 
   private ensureMessageListener(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (this.messageHandlerByMint.has(mintUrl)) return;
     const handler = (evt: any) => {
       try {
@@ -224,6 +227,7 @@ export class SubscriptionManager {
     filters: string[],
     onNotification?: SubscriptionCallback<TPayload>,
   ): Promise<{ subId: string; unsubscribe: UnsubscribeHandler }> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!filters || filters.length === 0) {
       throw new Error('filters must be a non-empty array');
     }
@@ -354,6 +358,7 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('SubscriptionManager: unsubscribe called', {
       mintUrl,
       subId,
@@ -401,6 +406,7 @@ export class SubscriptionManager {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Closing all subscriptions for mint', { mintUrl });
 
     // Get all subscriptions for this mint
@@ -430,6 +436,7 @@ export class SubscriptionManager {
   }
 
   private reSubscribeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     const set = this.activeByMint.get(mintUrl);
     if (!set || set.size === 0) return;
     // Re-send subscribe requests with the same subId/filters/kind

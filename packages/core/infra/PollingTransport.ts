@@ -7,6 +7,7 @@ import type {
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -57,6 +58,7 @@ export class PollingTransport implements RealTimeTransport {
     event: 'open' | 'message' | 'error' | 'close',
     handler: (evt: any) => void,
   ): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     let map = this.listenersByMint.get(mintUrl);
     if (!map) {
       map = new Map();
@@ -86,6 +88,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   send(mintUrl: string, req: WsRequest): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (req.method === 'subscribe') {
       const params = req.params as SubscribeParams;
       const subId = params.subId;
@@ -222,6 +225,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.schedByMint.delete(mintUrl);
     this.listenersByMint.delete(mintUrl);
     this.proofQueueByMint.delete(mintUrl);
@@ -249,6 +253,7 @@ export class PollingTransport implements RealTimeTransport {
    * If not set, the default interval from constructor options is used.
    */
   setIntervalForMint(mintUrl: string, intervalMs: number): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.intervalByMint.set(mintUrl, intervalMs);
   }
 
@@ -256,10 +261,12 @@ export class PollingTransport implements RealTimeTransport {
    * Get the polling interval for a mint (per-mint or default).
    */
   private getIntervalForMint(mintUrl: string): number {
+    mintUrl = normalizeMintUrl(mintUrl);
     return this.intervalByMint.get(mintUrl) ?? this.options.intervalMs;
   }
 
   private ensureScheduler(mintUrl: string): MintScheduler {
+    mintUrl = normalizeMintUrl(mintUrl);
     let s = this.schedByMint.get(mintUrl);
     if (!s) {
       s = { nextAllowedAt: 0, queue: [], running: false, hasProofBatchTask: false };
@@ -274,6 +281,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   private async maybeRun(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (this.paused) return;
     const s = this.ensureScheduler(mintUrl);
     if (s.running) return;
@@ -311,6 +319,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   private async performTask(mintUrl: string, task: Task): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (task.kind === 'proof_state' && task.batch) {
       const yToSubs = this.yToSubsByMint.get(mintUrl) ?? new Map<string, Set<string>>();
       const queue = this.proofQueueByMint.get(mintUrl) ?? [];
@@ -375,6 +384,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   private emit(mintUrl: string, event: 'open' | 'message' | 'error' | 'close', evt: any): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     const map = this.listenersByMint.get(mintUrl);
     const set = map?.get(event);
     if (!set) return;

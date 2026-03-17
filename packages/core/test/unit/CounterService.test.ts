@@ -65,6 +65,16 @@ describe('CounterService', () => {
     expect(final?.counter).toBe(3);
   });
 
+  it('normalizes equivalent mint URL variants to the same counter', async () => {
+    await service.incrementCounter('https://MINT.TEST:443/', keysetId, 2);
+
+    const counter = await service.getCounter('https://mint.test/', keysetId);
+    const fromRepo = await repo.getCounter('https://mint.test', keysetId);
+
+    expect(counter.counter).toBe(2);
+    expect(fromRepo?.counter).toBe(2);
+  });
+
   it('rejects negative increment values', async () => {
     await expect(service.incrementCounter(mintUrl, keysetId, -1)).rejects.toThrow(
       'n must be a non-negative integer',

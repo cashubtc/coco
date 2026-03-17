@@ -6,11 +6,12 @@ import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
 import { getSendProofSecrets, hasPreparedData } from '../../operations/send/SendOperation';
 import type { ProofRepository } from '../../repositories';
-import { buildYHexMapsForSecrets } from '../../utils.ts';
+import { buildYHexMapsForSecrets, normalizeMintUrl } from '../../utils.ts';
 
 type ProofKey = string; // `${mintUrl}::${secret}`
 
 function toKey(mintUrl: string, secret: string): ProofKey {
+  mintUrl = normalizeMintUrl(mintUrl);
   return `${mintUrl}::${secret}`;
 }
 
@@ -212,6 +213,7 @@ export class ProofStateWatcherService {
   }
 
   async watchProof(mintUrl: string, secrets: string[]): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!this.running) return;
 
     // Only watch proofs for trusted mints
@@ -336,6 +338,7 @@ export class ProofStateWatcherService {
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Stopping all proof watchers for mint', { mintUrl });
     const prefix = `${mintUrl}::`;
     const keysToStop: ProofKey[] = [];
@@ -364,6 +367,7 @@ export class ProofStateWatcherService {
    * Check if a spent proof is part of a send operation and finalize it if all send proofs are spent.
    */
   private async tryFinalizeSendOperation(mintUrl: string, secret: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!this.sendOperationService) return;
 
     try {

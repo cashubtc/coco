@@ -5,10 +5,12 @@ import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/Subscr
 import type { MintQuoteResponse } from '@cashu/cashu-ts';
 import type { MintQuoteService } from '../MintQuoteService';
 import type { MintService } from '../MintService';
+import { normalizeMintUrl } from '@core/utils.ts';
 
 type QuoteKey = string; // `${mintUrl}::${quoteId}`
 
 function toKey(mintUrl: string, quoteId: string): QuoteKey {
+  mintUrl = normalizeMintUrl(mintUrl);
   return `${mintUrl}::${quoteId}`;
 }
 
@@ -182,6 +184,7 @@ export class MintQuoteWatcherService {
   }
 
   async watchQuote(mintUrl: string, quoteOrQuotes: string | string[]): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!this.running) return;
 
     // Only watch quotes for trusted mints
@@ -274,6 +277,7 @@ export class MintQuoteWatcherService {
   }
 
   async stopWatchingMint(mintUrl: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Stopping all quote watchers for mint', { mintUrl });
     const prefix = `${mintUrl}::`;
     const keysToStop: QuoteKey[] = [];

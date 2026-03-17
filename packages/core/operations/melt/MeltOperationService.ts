@@ -18,7 +18,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId } from '../../utils';
+import { generateSubId, normalizeMintUrl } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -101,6 +101,7 @@ export class MeltOperationService {
     method: MeltMethod,
     methodData: MeltMethodData,
   ): Promise<InitMeltOperation> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -682,6 +683,7 @@ export class MeltOperationService {
   }
 
   async getOperationByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
     const matching = operations.filter((operation) => hasPreparedData(operation));
 

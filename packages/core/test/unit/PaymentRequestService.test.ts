@@ -96,6 +96,17 @@ describe('PaymentRequestService', () => {
       expect(result.matchingMints).toContain(testMintUrl);
     });
 
+    it('normalizes required mint URLs from the request', async () => {
+      const pr = new PaymentRequest([], 'request-id-normalized', 100, 'sat', [
+        'https://MINT.TEST:443/',
+      ]);
+
+      const result = await service.processPaymentRequest(pr.toEncodedRequest());
+
+      expect(result.requiredMints).toEqual([testMintUrl]);
+      expect(result.matchingMints).toEqual([testMintUrl]);
+    });
+
     it('should decode an HTTP POST payment request', async () => {
       const pr = new PaymentRequest(
         [{ type: PaymentRequestTransportType.POST, target: testHttpTarget }],
@@ -248,6 +259,20 @@ describe('PaymentRequestService', () => {
       };
 
       await service.preparePaymentRequestTransaction(testMintUrl, request);
+
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 100);
+    });
+
+    it('accepts equivalent mint URL variants in the allowed mints list', async () => {
+      const request = {
+        paymentRequest: new PaymentRequest([], 'test-id', 100, 'sat', ['https://MINT.TEST:443/']),
+        matchingMints: [testMintUrl],
+        requiredMints: ['https://MINT.TEST:443/'],
+        amount: 100,
+        transport: { type: 'inband' as const },
+      };
+
+      await service.preparePaymentRequestTransaction('https://mint.test/', request);
 
       expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 100);
     });

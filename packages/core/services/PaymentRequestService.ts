@@ -1,6 +1,7 @@
 import type { Logger } from '@core/logging';
 import { PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
 import { PaymentRequestError } from '../models/Error';
+import { normalizeMintUrl } from '../utils.ts';
 import type { ProofService } from '../services';
 import type { PreparedSendOperation, SendOperationService } from '../operations/send';
 
@@ -47,7 +48,9 @@ export class PaymentRequestService {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const matchingMints = await this.findMatchingMints(decodedPaymentRequest);
-    const requiredMints = decodedPaymentRequest.mints ?? [];
+    const requiredMints = (decodedPaymentRequest.mints ?? []).map((mintUrl) =>
+      normalizeMintUrl(mintUrl),
+    );
     return {
       paymentRequest: decodedPaymentRequest,
       matchingMints,
@@ -69,6 +72,7 @@ export class PaymentRequestService {
     request: ParsedPaymentRequest,
     amount?: number,
   ): Promise<PaymentRequestTransaction> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.validateMint(mintUrl, request.requiredMints);
     const finalAmount = this.validateAmount(request, amount);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
@@ -145,9 +149,11 @@ export class PaymentRequestService {
   }
 
   private validateMint(mintUrl: string, mints?: string[]): void {
-    if (mints && mints.length > 0 && !mints.includes(mintUrl)) {
+    mintUrl = normalizeMintUrl(mintUrl);
+    const normalizedMints = mints?.map((candidate) => normalizeMintUrl(candidate));
+    if (normalizedMints && normalizedMints.length > 0 && !normalizedMints.includes(mintUrl)) {
       throw new PaymentRequestError(
-        `Mint ${mintUrl} is not in the allowed mints list: ${mints.join(', ')}`,
+        `Mint ${mintUrl} is not in the allowed mints list: ${normalizedMints.join(', ')}`,
       );
     }
   }
@@ -172,7 +178,7 @@ export class PaymentRequestService {
   private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
     const balances = await this.proofService.getTrustedBalances();
     const amount = paymentRequest.amount ?? 0;
-    const mintRequirement = paymentRequest.mints;
+    const mintRequirement = paymentRequest.mints?.map((mintUrl) => normalizeMintUrl(mintUrl));
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {
       if (balance >= amount && (!mintRequirement || mintRequirement.includes(mintUrl))) {

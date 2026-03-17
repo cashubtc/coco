@@ -5,7 +5,7 @@ import type { ProofService } from './ProofService';
 import type { MintQuoteBolt11Response, MintQuoteState } from '@cashu/cashu-ts';
 import type { CoreEvents, EventBus } from '@core/events';
 import type { Logger } from '../logging/Logger.ts';
-import { mapProofToCoreProof } from '@core/utils.ts';
+import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils.ts';
 import { UnknownMintError } from '../models/Error';
 
 export class MintQuoteService {
@@ -33,6 +33,7 @@ export class MintQuoteService {
   }
 
   async createMintQuote(mintUrl: string, amount: number): Promise<MintQuoteBolt11Response> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Creating mint quote', { mintUrl, amount });
 
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -53,6 +54,7 @@ export class MintQuoteService {
   }
 
   async redeemMintQuote(mintUrl: string, quoteId: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Redeeming mint quote', { mintUrl, quoteId });
 
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -96,6 +98,7 @@ export class MintQuoteService {
     mintUrl: string,
     quotes: MintQuoteBolt11Response[],
   ): Promise<{ added: string[]; skipped: string[] }> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Adding existing mint quotes', { mintUrl, count: quotes.length });
 
     const added: string[] = [];
@@ -151,6 +154,7 @@ export class MintQuoteService {
     quoteId: string,
     state: MintQuoteState,
   ): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Updating mint quote state from remote', { mintUrl, quoteId, state });
     await this.setMintQuoteState(mintUrl, quoteId, state);
   }
@@ -160,6 +164,7 @@ export class MintQuoteService {
     quoteId: string,
     state: MintQuoteState,
   ): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('Setting mint quote state', { mintUrl, quoteId, state });
     await this.mintQuoteRepo.setMintQuoteState(mintUrl, quoteId, state);
     await this.eventBus.emit('mint-quote:state-changed', { mintUrl, quoteId, state });
@@ -172,6 +177,7 @@ export class MintQuoteService {
    * Emits `mint-quote:requeue` for each PAID quote so the processor can enqueue them.
    */
   async requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }> {
+    mintUrl = mintUrl ? normalizeMintUrl(mintUrl) : undefined;
     const requeued: string[] = [];
     try {
       const pending = await this.mintQuoteRepo.getPendingMintQuotes();

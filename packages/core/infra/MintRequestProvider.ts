@@ -1,5 +1,6 @@
 import type { Logger } from '../logging/Logger.ts';
 import { RequestRateLimiter } from './RequestRateLimiter.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 /**
  * A function compatible with cashu-ts's `_customRequest` parameter.
@@ -58,6 +59,7 @@ export class MintRequestProvider {
    * Creates a new rate limiter if one doesn't exist for this mint.
    */
   getRequestFn(mintUrl: string): MintRequestFn {
+    mintUrl = normalizeMintUrl(mintUrl);
     return this.getOrCreateLimiter(mintUrl).request;
   }
 
@@ -65,6 +67,7 @@ export class MintRequestProvider {
    * Get or create a rate limiter for a specific mint.
    */
   private getOrCreateLimiter(mintUrl: string): RequestRateLimiter {
+    mintUrl = normalizeMintUrl(mintUrl);
     const existing = this.limiters.get(mintUrl);
     if (existing) return existing;
 
@@ -86,6 +89,7 @@ export class MintRequestProvider {
    * Clear the rate limiter for a specific mint.
    */
   clearMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.limiters.delete(mintUrl);
   }
 

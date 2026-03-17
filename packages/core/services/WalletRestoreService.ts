@@ -1,5 +1,5 @@
 import { type Proof, Mint, Wallet, type OutputConfig } from '@cashu/cashu-ts';
-import { mapProofToCoreProof } from '@core/utils';
+import { mapProofToCoreProof, normalizeMintUrl } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
 import type { Logger } from '../logging/Logger.ts';
@@ -33,6 +33,7 @@ export class WalletRestoreService {
   }
 
   async sweepKeyset(mintUrl: string, keysetId: string, bip39seed: Uint8Array): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('Sweeping keyset', { mintUrl, keysetId });
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
@@ -151,6 +152,7 @@ export class WalletRestoreService {
    * Throws on any validation or persistence error. No transactions are used here.
    */
   async restoreKeyset(mintUrl: string, wallet: Wallet, keysetId: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('Restoring keyset', { mintUrl, keysetId });
     const oldProofs = await this.proofService.getProofsByKeysetId(mintUrl, keysetId);
     this.logger?.debug('Existing proofs before restore', {

@@ -16,7 +16,12 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import {
+  deserializeOutputData,
+  mapProofToCoreProof,
+  normalizeMintUrl,
+  type SerializedOutputData,
+} from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 export class ProofService {
@@ -53,6 +58,7 @@ export class ProofService {
    * This is used when the sender pays fees for the receiver.
    */
   async calculateSendAmountWithFees(mintUrl: string, sendAmount: number): Promise<number> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const { wallet, keys, keysetId } =
       await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     // Split the send amount to determine number of outputs
@@ -82,7 +88,7 @@ export class ProofService {
     }
     const batchedByMint: { [mintUrl: string]: CoreProof[] } = {};
     for (const proof of inflightProofs) {
-      const mintUrl = proof.mintUrl;
+      const mintUrl = normalizeMintUrl(proof.mintUrl);
       if (!mintUrl) continue;
       const batch = batchedByMint[mintUrl] ?? (batchedByMint[mintUrl] = []);
       batch.push(proof);
@@ -138,6 +144,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (
       !Number.isFinite(amount.keep) ||
       !Number.isFinite(amount.send) ||
@@ -205,7 +212,10 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!Array.isArray(proofs) || proofs.length === 0) return;
+
+    proofs = proofs.map((proof) => ({ ...proof, mintUrl }));
 
     const groupedByKeyset = this.groupProofsByKeysetId(proofs);
 
@@ -252,6 +262,7 @@ export class ProofService {
   }
 
   async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
+    mintUrl = normalizeMintUrl(mintUrl);
     return this.proofRepository.getReadyProofs(mintUrl);
   }
 
@@ -268,6 +279,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     const proofs = await this.getReadyProofs(mintUrl);
     return proofs.reduce((acc, proof) => acc + proof.amount, 0);
   }
@@ -280,7 +292,7 @@ export class ProofService {
     const proofs = await this.getAllReadyProofs();
     const balances: { [mintUrl: string]: number } = {};
     for (const proof of proofs) {
-      const mintUrl = proof.mintUrl;
+      const mintUrl = normalizeMintUrl(proof.mintUrl);
       const balance = balances[mintUrl] || 0;
       balances[mintUrl] = balance + proof.amount;
     }
@@ -313,6 +325,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!secrets || secrets.length === 0) return;
     await this.proofRepository.setProofState(mintUrl, secrets, state);
     await this.eventBus?.emit('proofs:state-changed', {
@@ -338,6 +351,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!operationId || operationId.trim().length === 0) {
       throw new ProofValidationError('operationId is required');
     }
@@ -377,6 +391,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!secrets || secrets.length === 0) return;
 
     await this.proofRepository.releaseProofs(mintUrl, secrets);
@@ -394,6 +409,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!secrets || secrets.length === 0) return;
 
     await this.proofRepository.setProofState(mintUrl, secrets, 'ready');
@@ -408,6 +424,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!secrets || secrets.length === 0) return;
     await this.proofRepository.deleteProofs(mintUrl, secrets);
     await this.eventBus?.emit('proofs:deleted', { mintUrl, secrets });
@@ -418,6 +435,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!keysetId || keysetId.trim().length === 0) {
       throw new ProofValidationError('keysetId is required');
     }
@@ -442,6 +460,7 @@ export class ProofService {
     amount: number,
     includeFees: boolean = true,
   ): Promise<Proof[]> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
     const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
     if (totalAmount < amount) {
@@ -476,6 +495,7 @@ export class ProofService {
   }
 
   async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+    mintUrl = normalizeMintUrl(mintUrl);
     return this.proofRepository.getProofsByKeysetId(mintUrl, keysetId);
   }
 
@@ -483,6 +503,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!keysetId || keysetId.trim().length === 0) {
       throw new ProofValidationError('keysetId is required');
     }
@@ -571,6 +592,7 @@ export class ProofService {
     if (!Number.isFinite(amount) || amount < 0) {
       throw new ProofValidationError('amount must be a non-negative number');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     if (amount === 0) {
       return [];
@@ -614,6 +636,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (
       !outputData ||
       outputData.length === 0 ||
@@ -683,6 +706,7 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     if (!serializedOutputData) {
       throw new ProofValidationError('serializedOutputData is required');
     }

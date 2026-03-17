@@ -5,6 +5,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 export interface HybridTransportOptions {
   /** Polling interval while WS is connected (default: 20000ms) */
@@ -66,6 +67,7 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   on(mintUrl: string, event: TransportEvent, handler: (evt: any) => void): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Create deduplication wrapper for the handler
     const wrappedHandler = this.createDedupeHandler(mintUrl, event, handler);
 
@@ -78,6 +80,7 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   send(mintUrl: string, req: WsRequest): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Forward to BOTH transports - polling always needs to know about subscriptions
     this.wsTransport.send(mintUrl, req);
     this.pollingTransport.send(mintUrl, req);
@@ -96,6 +99,7 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.wsTransport.closeMint(mintUrl);
     this.pollingTransport.closeMint(mintUrl);
 
@@ -141,6 +145,7 @@ export class HybridTransport implements RealTimeTransport {
    * Only registers once per mint.
    */
   private ensureInternalHandlers(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (this.hasInternalHandlersByMint.has(mintUrl)) return;
     this.hasInternalHandlersByMint.add(mintUrl);
 
@@ -159,6 +164,7 @@ export class HybridTransport implements RealTimeTransport {
    * Handle WS failure - mark as failed and speed up polling.
    */
   private handleWsFailure(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Don't mark as failed during intentional pause - WS will reconnect on resume
     if (this.paused) return;
     if (this.wsFailedByMint.has(mintUrl)) return; // Already failed
@@ -171,6 +177,7 @@ export class HybridTransport implements RealTimeTransport {
    * Speed up polling for a mint after WS failure.
    */
   private updatePollingInterval(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.pollingTransport.setIntervalForMint(mintUrl, this.options.fastPollingIntervalMs);
   }
 
@@ -182,6 +189,7 @@ export class HybridTransport implements RealTimeTransport {
     event: TransportEvent,
     originalHandler: (evt: any) => void,
   ): (evt: any) => void {
+    mintUrl = normalizeMintUrl(mintUrl);
     return (evt: any) => {
       // Dedupe 'open' events - only emit once per mint
       if (event === 'open') {
@@ -240,6 +248,7 @@ export class HybridTransport implements RealTimeTransport {
     mintUrl: string,
     notification: { params?: { subId?: string; payload?: { Y?: string; quote?: string } } },
   ): string {
+    mintUrl = normalizeMintUrl(mintUrl);
     const subId = notification.params?.subId ?? '';
     const payload = notification.params?.payload;
     // Include identifier to differentiate items within the same subscription:

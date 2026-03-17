@@ -28,6 +28,7 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
   generateSubId,
+  normalizeMintUrl,
 } from '../../utils';
 import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
@@ -124,6 +125,7 @@ export class SendOperationService {
       methodData: {} as SendMethodData<M>,
     },
   ): Promise<InitSendOperation> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -313,6 +315,7 @@ export class SendOperationService {
    * This is the main entry point for consumers.
    */
   async send(mintUrl: string, amount: number): Promise<Token> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const initOp = await this.init(mintUrl, amount);
     const preparedOp = await this.prepare(initOp);
     const { token } = await this.execute(preparedOp);

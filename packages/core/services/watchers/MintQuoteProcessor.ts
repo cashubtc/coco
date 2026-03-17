@@ -3,6 +3,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MintQuoteService } from '../MintQuoteService';
 import type { MintQuoteState } from '@cashu/cashu-ts';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { normalizeMintUrl } from '../../utils.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -196,6 +197,7 @@ export class MintQuoteProcessor {
    * Called when a mint is untrusted to stop processing its quotes.
    */
   clearMintFromQueue(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     const before = this.queue.length;
     this.queue = this.queue.filter((item) => item.mintUrl !== mintUrl);
     const removed = before - this.queue.length;
@@ -209,6 +211,7 @@ export class MintQuoteProcessor {
   // deduplicate within the queue, so an item can be enqueued again if a new event arrives
   // during in-flight processing.
   private enqueue(mintUrl: string, quoteId: string, quoteType: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Check if already in queue
     const existing = this.queue.find(
       (item) => item.mintUrl === mintUrl && item.quoteId === quoteId,

@@ -57,4 +57,3 @@ export class MemorySendOperationRepository implements SendOperationRepository {
     this.operations.delete(id);
   }
 }
-

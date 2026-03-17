@@ -1,3 +1,5 @@
+import { normalizeMintUrl } from '../utils.ts';
+
 type LockQueue = {
   locked: boolean;
   waiters: Array<() => void>;
@@ -13,6 +15,7 @@ export class MintScopedLock {
   private readonly queues = new Map<string, LockQueue>();
 
   async acquire(mintUrl: string): Promise<() => void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     let queue = this.queues.get(mintUrl);
     if (!queue) {
       queue = { locked: false, waiters: [] };

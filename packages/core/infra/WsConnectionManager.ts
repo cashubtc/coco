@@ -1,4 +1,5 @@
 import type { Logger } from '../logging/Logger.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 export interface WebSocketLike {
   send(data: string): void;
@@ -50,6 +51,7 @@ export class WsConnectionManager {
   }
 
   private buildWsUrl(baseMintUrl: string): string {
+    baseMintUrl = normalizeMintUrl(baseMintUrl);
     const url = new URL(baseMintUrl);
     const isSecure = url.protocol === 'https:';
     url.protocol = isSecure ? 'wss:' : 'ws:';
@@ -59,6 +61,7 @@ export class WsConnectionManager {
   }
 
   private ensureSocket(mintUrl: string): WebSocketLike {
+    mintUrl = normalizeMintUrl(mintUrl);
     const existing = this.sockets.get(mintUrl);
     if (existing) return existing;
 
@@ -149,6 +152,7 @@ export class WsConnectionManager {
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: any) => void,
   ): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Check if socket already exists - if so, we'll attach directly
     // If not, we'll add to map first so ensureSocket can attach it
     const socketExists = this.sockets.has(mintUrl);
@@ -182,6 +186,7 @@ export class WsConnectionManager {
     type: 'open' | 'message' | 'error' | 'close',
     listener: (event: any) => void,
   ): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     const socket = this.ensureSocket(mintUrl);
     socket.removeEventListener(type, listener);
     const map = this.listenersByMint.get(mintUrl);
@@ -190,6 +195,7 @@ export class WsConnectionManager {
   }
 
   send(mintUrl: string, message: unknown): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     const socket = this.ensureSocket(mintUrl);
     const payload = typeof message === 'string' ? message : JSON.stringify(message);
     const isOpen = this.isOpenByMint.get(mintUrl);
@@ -236,6 +242,7 @@ export class WsConnectionManager {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     // Close socket for this mint
     const socket = this.sockets.get(mintUrl);
     if (socket) {

@@ -7,7 +7,7 @@ import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { Logger } from '../logging/Logger';
 import { ProofValidationError, UnknownMintError } from '../models/Error';
-import { mapProofToCoreProof } from '../utils';
+import { mapProofToCoreProof, normalizeMintUrl } from '../utils';
 
 export class TransactionService {
   private readonly mintService: MintService;
@@ -38,6 +38,7 @@ export class TransactionService {
       this.logger?.warn('Failed to decode token for receive', { err });
       throw new ProofValidationError('Invalid token');
     }
+    mint = normalizeMintUrl(mint);
 
     const trusted = await this.mintService.isTrustedMint(mint);
     if (!trusted) {
@@ -91,6 +92,7 @@ export class TransactionService {
   }
 
   async send(mintUrl: string, amount: number): Promise<Token> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -157,6 +159,5 @@ export class TransactionService {
     return token;
   }
 }
-
 
 

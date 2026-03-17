@@ -11,6 +11,7 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 interface CachedWallet {
   wallet: Wallet;
@@ -48,6 +49,7 @@ export class WalletService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new Error('mintUrl is required');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
 
     // Serve from cache when fresh
     const cached = this.walletCache.get(mintUrl);
@@ -94,6 +96,7 @@ export class WalletService {
    * Clear cached wallet for a specific mint URL
    */
   clearCache(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.walletCache.delete(mintUrl);
     this.logger?.debug('Wallet cache cleared', { mintUrl });
   }
@@ -110,6 +113,7 @@ export class WalletService {
    * Force refresh mint data and get fresh wallet
    */
   async refreshWallet(mintUrl: string): Promise<Wallet> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.clearCache(mintUrl);
     this.inFlight.delete(mintUrl);
     await this.mintService.updateMintData(mintUrl);
@@ -117,6 +121,7 @@ export class WalletService {
   }
 
   private async buildWallet(mintUrl: string): Promise<Wallet> {
+    mintUrl = normalizeMintUrl(mintUrl);
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
 
     const validKeysets = keysets.filter(
@@ -144,9 +149,9 @@ export class WalletService {
 
     const seed = await this.seedService.getSeed();
 
-    const requestFn = this.requestProvider.getRequestFn(mintUrl);
-    const authProvider = this.authProviderGetter?.(mintUrl);
-    const wallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn, authProvider }), {
+    const requestFn = this.requestProvider.getRequestFn(mint.mintUrl);
+    const authProvider = this.authProviderGetter?.(mint.mintUrl);
+    const wallet = new Wallet(new Mint(mint.mintUrl, { customRequest: requestFn, authProvider }), {
       unit: DEFAULT_UNIT,
       // @ts-ignore
       logger:
@@ -155,12 +160,12 @@ export class WalletService {
     });
     wallet.loadMintFromCache(mint.mintInfo, cache);
 
-    this.walletCache.set(mintUrl, {
+    this.walletCache.set(mint.mintUrl, {
       wallet,
       lastCheck: Date.now(),
     });
 
-    this.logger?.info('Wallet built', { mintUrl, keysetCount: validKeysets.length });
+    this.logger?.info('Wallet built', { mintUrl: mint.mintUrl, keysetCount: validKeysets.length });
     return wallet;
   }
 }
