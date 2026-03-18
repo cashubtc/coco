@@ -1,5 +1,9 @@
 import { SqliteDb, getUnixTimeSeconds } from './db.ts';
 import { normalizeMintUrl } from 'coco-cashu-core';
+import {
+  detectSqliteMintUrlStorageIssues,
+  repairSqliteMintUrlStorageIssues,
+} from './mintUrlStorage.ts';
 
 interface Migration {
   id: string;
@@ -368,6 +372,27 @@ const MIGRATIONS: readonly Migration[] = [
         batPoolJson  TEXT
       );
     `,
+  },
+  {
+    id: '018_repair_noncanonical_proof_and_counter_urls',
+    run: async (db: SqliteDb) => {
+      const before = await detectSqliteMintUrlStorageIssues(db);
+      if (before.issueCount === 0) {
+        return;
+      }
+
+      const repair = await repairSqliteMintUrlStorageIssues(db, { dryRun: false });
+      const remaining = await detectSqliteMintUrlStorageIssues(db);
+
+      if (remaining.issueCount > 0) {
+        console.warn(
+          `SQLite mint URL repair migration skipped ${repair.skippedRows} row(s) and left ` +
+            `${remaining.issueCount} issue(s) affecting ${remaining.affectedRowCount} row(s) ` +
+            `for manual inspection. Rerun the mint URL repair helper after restoring ` +
+            `canonical mint records or resolving conflicts.`,
+        );
+      }
+    },
   },
 ];
 

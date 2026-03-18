@@ -15,6 +15,10 @@ import type {
 } from 'coco-cashu-core';
 import { SqliteDb, type SqliteDbOptions } from './db.ts';
 import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
+import {
+  detectSqliteMintUrlStorageIssues,
+  repairSqliteMintUrlStorageIssues,
+} from './mintUrlStorage.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';
 import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
@@ -92,6 +96,8 @@ export {
   ensureSchema,
   ensureSchemaUpTo,
   MIGRATIONS,
+  detectSqliteMintUrlStorageIssues,
+  repairSqliteMintUrlStorageIssues,
   SqliteMintRepository,
   SqliteKeyRingRepository,
   SqliteKeysetRepository,

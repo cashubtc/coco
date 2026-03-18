@@ -48,9 +48,7 @@ export class PaymentRequestService {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const matchingMints = await this.findMatchingMints(decodedPaymentRequest);
-    const requiredMints = (decodedPaymentRequest.mints ?? []).map((mintUrl) =>
-      normalizeMintUrl(mintUrl),
-    );
+    const requiredMints = this.normalizePaymentRequestMints(decodedPaymentRequest.mints) ?? [];
     return {
       paymentRequest: decodedPaymentRequest,
       matchingMints,
@@ -150,7 +148,7 @@ export class PaymentRequestService {
 
   private validateMint(mintUrl: string, mints?: string[]): void {
     mintUrl = normalizeMintUrl(mintUrl);
-    const normalizedMints = mints?.map((candidate) => normalizeMintUrl(candidate));
+    const normalizedMints = this.normalizePaymentRequestMints(mints);
     if (normalizedMints && normalizedMints.length > 0 && !normalizedMints.includes(mintUrl)) {
       throw new PaymentRequestError(
         `Mint ${mintUrl} is not in the allowed mints list: ${normalizedMints.join(', ')}`,
@@ -178,7 +176,7 @@ export class PaymentRequestService {
   private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
     const balances = await this.proofService.getTrustedBalances();
     const amount = paymentRequest.amount ?? 0;
-    const mintRequirement = paymentRequest.mints?.map((mintUrl) => normalizeMintUrl(mintUrl));
+    const mintRequirement = this.normalizePaymentRequestMints(paymentRequest.mints);
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {
       if (balance >= amount && (!mintRequirement || mintRequirement.includes(mintUrl))) {
@@ -199,5 +197,21 @@ export class PaymentRequestService {
       throw new PaymentRequestError('Amount is required but was not provided');
     }
     return finalAmount;
+  }
+
+  private normalizePaymentRequestMints(mints?: string[]): string[] | undefined {
+    if (!mints) {
+      return undefined;
+    }
+
+    return mints.map((mintUrl) => {
+      try {
+        return normalizeMintUrl(mintUrl);
+      } catch {
+        throw new PaymentRequestError(
+          `Malformed payment request: Invalid mint URL \"${mintUrl}\"`,
+        );
+      }
+    });
   }
 }

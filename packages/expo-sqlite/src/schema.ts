@@ -1,5 +1,9 @@
 import { ExpoSqliteDb, getUnixTimeSeconds } from './db.ts';
 import { normalizeMintUrl } from 'coco-cashu-core';
+import {
+  detectExpoSqliteMintUrlStorageIssues,
+  repairExpoSqliteMintUrlStorageIssues,
+} from './mintUrlStorage.ts';
 
 interface Migration {
   id: string;
@@ -368,6 +372,27 @@ const MIGRATIONS: readonly Migration[] = [
         batPoolJson  TEXT
       );
     `,
+  },
+  {
+    id: '018_repair_noncanonical_proof_and_counter_urls',
+    run: async (db: ExpoSqliteDb) => {
+      const before = await detectExpoSqliteMintUrlStorageIssues(db);
+      if (before.issueCount === 0) {
+        return;
+      }
+
+      const repair = await repairExpoSqliteMintUrlStorageIssues(db, { dryRun: false });
+      const remaining = await detectExpoSqliteMintUrlStorageIssues(db);
+
+      if (remaining.issueCount > 0) {
+        console.warn(
+          `Expo SQLite mint URL repair migration skipped ${repair.skippedRows} row(s) and left ` +
+            `${remaining.issueCount} issue(s) affecting ${remaining.affectedRowCount} row(s) ` +
+            `for manual inspection. Rerun the mint URL repair helper after restoring ` +
+            `canonical mint records or resolving conflicts.`,
+        );
+      }
+    },
   },
 ];
 

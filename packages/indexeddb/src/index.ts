@@ -15,6 +15,10 @@ import type {
 } from 'coco-cashu-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
+import {
+  detectIndexedDbMintUrlStorageIssues,
+  repairIndexedDbMintUrlStorageIssues,
+} from './mintUrlStorage.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';
 import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
 import { IdbKeyRingRepository } from './repositories/KeyRingRepository.ts';
@@ -98,6 +102,8 @@ export class IndexedDbRepositories implements Repositories {
 export {
   IdbDb,
   ensureSchema,
+  detectIndexedDbMintUrlStorageIssues,
+  repairIndexedDbMintUrlStorageIssues,
   IdbMintRepository,
   IdbKeyRingRepository,
   IdbKeysetRepository,

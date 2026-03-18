@@ -15,6 +15,10 @@ import type {
 } from 'coco-cashu-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
 import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
+import {
+  detectExpoSqliteMintUrlStorageIssues,
+  repairExpoSqliteMintUrlStorageIssues,
+} from './mintUrlStorage.ts';
 import { ExpoMintRepository } from './repositories/MintRepository.ts';
 import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
 import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
@@ -92,6 +96,8 @@ export {
   ensureSchema,
   ensureSchemaUpTo,
   MIGRATIONS,
+  detectExpoSqliteMintUrlStorageIssues,
+  repairExpoSqliteMintUrlStorageIssues,
   ExpoMintRepository,
   ExpoKeyRingRepository,
   ExpoKeysetRepository,

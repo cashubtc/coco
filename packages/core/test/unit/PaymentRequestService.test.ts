@@ -107,6 +107,17 @@ describe('PaymentRequestService', () => {
       expect(result.matchingMints).toEqual([testMintUrl]);
     });
 
+    it('throws a payment request error for malformed mint URLs', async () => {
+      const pr = new PaymentRequest([], 'request-id-invalid-mint', 100, 'sat', ['not-a-url']);
+
+      await expect(service.processPaymentRequest(pr.toEncodedRequest())).rejects.toThrow(
+        PaymentRequestError,
+      );
+      await expect(service.processPaymentRequest(pr.toEncodedRequest())).rejects.toThrow(
+        'Malformed payment request: Invalid mint URL "not-a-url"',
+      );
+    });
+
     it('should decode an HTTP POST payment request', async () => {
       const pr = new PaymentRequest(
         [{ type: PaymentRequestTransportType.POST, target: testHttpTarget }],
