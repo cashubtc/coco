@@ -2,6 +2,7 @@ import type { Transaction as DexieTransaction } from 'dexie';
 import { normalizeMintUrl } from 'coco-cashu-core';
 import type {
   CounterRow,
+  HistoryRow,
   IdbDb,
   MeltOperationRow,
   MeltQuoteRow,
@@ -15,6 +16,7 @@ export const MINT_URL_STORAGE_TABLES = [
   'coco_cashu_proofs',
   'coco_cashu_mint_quotes',
   'coco_cashu_melt_quotes',
+  'coco_cashu_history',
   'coco_cashu_send_operations',
   'coco_cashu_melt_operations',
 ] as const;
@@ -30,6 +32,7 @@ export type MintUrlRepairSkipReason =
   | 'proof_conflict'
   | 'mint_quote_conflict'
   | 'melt_quote_conflict'
+  | 'history_conflict'
   | 'melt_operation_conflict';
 
 export interface MintUrlStorageIssue {
@@ -243,6 +246,20 @@ function meltQuoteRowsMatch(a: MeltQuoteRow, b: MeltQuoteRow): boolean {
   );
 }
 
+function historyRowsMatch(a: HistoryRow, b: HistoryRow): boolean {
+  return (
+    a.type === b.type &&
+    a.unit === b.unit &&
+    a.amount === b.amount &&
+    normalizeNullableString(a.quoteId) === normalizeNullableString(b.quoteId) &&
+    normalizeNullableString(a.state) === normalizeNullableString(b.state) &&
+    normalizeNullableString(a.paymentRequest) === normalizeNullableString(b.paymentRequest) &&
+    normalizeNullableString(a.tokenJson) === normalizeNullableString(b.tokenJson) &&
+    JSON.stringify(a.metadata ?? null) === JSON.stringify(b.metadata ?? null) &&
+    normalizeNullableString(a.operationId) === normalizeNullableString(b.operationId)
+  );
+}
+
 async function repairCounters(
   tx: DexieTransaction,
   canonicalMintUrls: Set<string>,
@@ -447,6 +464,80 @@ async function repairMeltQuotes(
   }
 }
 
+async function repairHistory(
+  tx: DexieTransaction,
+  canonicalMintUrls: Set<string>,
+  actions: Map<string, MintUrlRepairAction>,
+  dryRun: boolean,
+): Promise<void> {
+  const table = getTable<HistoryRow, number>(tx, 'coco_cashu_history');
+  const rows = await table.toArray();
+
+  for (const row of rows) {
+    const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
+    if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+
+    const action = getAction(actions, 'coco_cashu_history', row.mintUrl, normalizedMintUrl);
+    action.examinedRows += 1;
+
+    if (!canonicalMintUrls.has(normalizedMintUrl)) {
+      action.skippedRows += 1;
+      addReason(action, 'normalized_mint_missing');
+      continue;
+    }
+
+    let existing: HistoryRow | undefined;
+    if ((row.type === 'mint' || row.type === 'melt') && row.quoteId) {
+      const existingRows = await table.toArray();
+      existing = existingRows.find(
+        (candidate) =>
+          candidate.id !== row.id &&
+          candidate.mintUrl === normalizedMintUrl &&
+          candidate.type === row.type &&
+          candidate.quoteId === row.quoteId,
+      );
+    } else if (row.type === 'send' && row.operationId) {
+      const existingRows = await table.toArray();
+      existing = existingRows.find(
+        (candidate) =>
+          candidate.id !== row.id &&
+          candidate.mintUrl === normalizedMintUrl &&
+          candidate.type === 'send' &&
+          candidate.operationId === row.operationId,
+      );
+    }
+
+    if (!existing) {
+      action.updatedRows += 1;
+      if (!dryRun) {
+        await table.put({ ...row, mintUrl: normalizedMintUrl });
+      }
+      continue;
+    }
+
+    if (historyRowsMatch(existing, row)) {
+      if (row.createdAt < existing.createdAt) {
+        action.updatedRows += 1;
+        if (!dryRun) {
+          await table.put({ ...existing, createdAt: row.createdAt });
+        }
+      }
+
+      action.deletedRows += 1;
+      if (!dryRun) {
+        await table.delete(row.id);
+      }
+      continue;
+    }
+
+    action.skippedRows += 1;
+    action.conflictRows += 1;
+    addReason(action, 'history_conflict');
+  }
+}
+
 async function repairSendOperations(
   tx: DexieTransaction,
   canonicalMintUrls: Set<string>,
@@ -554,6 +645,7 @@ export async function repairIndexedDbMintUrlStorageIssuesInTransaction(
   await repairProofs(tx, canonicalMintUrls, actions, dryRun);
   await repairMintQuotes(tx, canonicalMintUrls, actions, dryRun);
   await repairMeltQuotes(tx, canonicalMintUrls, actions, dryRun);
+  await repairHistory(tx, canonicalMintUrls, actions, dryRun);
   await repairSendOperations(tx, canonicalMintUrls, actions, dryRun);
   await repairMeltOperations(tx, canonicalMintUrls, actions, dryRun);
 

@@ -6,6 +6,7 @@ export const MINT_URL_STORAGE_TABLES = [
   'coco_cashu_proofs',
   'coco_cashu_mint_quotes',
   'coco_cashu_melt_quotes',
+  'coco_cashu_history',
   'coco_cashu_send_operations',
   'coco_cashu_melt_operations',
 ] as const;
@@ -20,6 +21,7 @@ export type MintUrlRepairSkipReason =
   | 'proof_conflict'
   | 'mint_quote_conflict'
   | 'melt_quote_conflict'
+  | 'history_conflict'
   | 'melt_operation_conflict';
 
 export interface MintUrlStorageIssue {
@@ -110,6 +112,21 @@ interface MeltQuoteRow {
   expiry: number;
   fee_reserve: number;
   payment_preimage: string | null;
+}
+
+interface HistoryRow {
+  id: number;
+  mintUrl: string;
+  type: 'mint' | 'melt' | 'send' | 'receive';
+  unit: string;
+  amount: number;
+  createdAt: number;
+  quoteId: string | null;
+  state: string | null;
+  paymentRequest: string | null;
+  tokenJson: string | null;
+  metadata: string | null;
+  operationId: string | null;
 }
 
 interface SendOperationRow {
@@ -273,6 +290,20 @@ function meltQuoteRowsMatch(a: MeltQuoteRow, b: MeltQuoteRow): boolean {
     a.expiry === b.expiry &&
     a.fee_reserve === b.fee_reserve &&
     nullableStringEquals(a.payment_preimage, b.payment_preimage)
+  );
+}
+
+function historyRowsMatch(a: HistoryRow, b: HistoryRow): boolean {
+  return (
+    a.type === b.type &&
+    a.unit === b.unit &&
+    a.amount === b.amount &&
+    nullableStringEquals(a.quoteId, b.quoteId) &&
+    nullableStringEquals(a.state, b.state) &&
+    nullableStringEquals(a.paymentRequest, b.paymentRequest) &&
+    nullableStringEquals(a.tokenJson, b.tokenJson) &&
+    nullableStringEquals(a.metadata, b.metadata) &&
+    nullableStringEquals(a.operationId, b.operationId)
   );
 }
 
@@ -524,6 +555,76 @@ async function repairMeltQuotes(
   }
 }
 
+async function repairHistory(
+  db: SqliteDb,
+  canonicalMintUrls: Set<string>,
+  actions: Map<string, MintUrlRepairAction>,
+  dryRun: boolean,
+): Promise<void> {
+  const rows = await db.all<HistoryRow>(
+    'SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId FROM coco_cashu_history',
+  );
+
+  for (const row of rows) {
+    const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
+    if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+
+    const action = getAction(actions, 'coco_cashu_history', row.mintUrl, normalizedMintUrl);
+    action.examinedRows += 1;
+
+    if (!canonicalMintUrls.has(normalizedMintUrl)) {
+      action.skippedRows += 1;
+      addReason(action, 'normalized_mint_missing');
+      continue;
+    }
+
+    let existing: HistoryRow | undefined;
+    if ((row.type === 'mint' || row.type === 'melt') && row.quoteId) {
+      existing = await db.get<HistoryRow>(
+        'SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?',
+        [normalizedMintUrl, row.quoteId, row.type],
+      );
+    } else if (row.type === 'send' && row.operationId) {
+      existing = await db.get<HistoryRow>(
+        "SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'send'",
+        [normalizedMintUrl, row.operationId],
+      );
+    }
+
+    if (!existing) {
+      action.updatedRows += 1;
+      if (!dryRun) {
+        await db.run('UPDATE coco_cashu_history SET mintUrl = ? WHERE id = ?', [normalizedMintUrl, row.id]);
+      }
+      continue;
+    }
+
+    if (historyRowsMatch(existing, row)) {
+      if (row.createdAt < existing.createdAt) {
+        action.updatedRows += 1;
+        if (!dryRun) {
+          await db.run('UPDATE coco_cashu_history SET createdAt = ? WHERE id = ?', [
+            row.createdAt,
+            existing.id,
+          ]);
+        }
+      }
+
+      action.deletedRows += 1;
+      if (!dryRun) {
+        await db.run('DELETE FROM coco_cashu_history WHERE id = ?', [row.id]);
+      }
+      continue;
+    }
+
+    action.skippedRows += 1;
+    action.conflictRows += 1;
+    addReason(action, 'history_conflict');
+  }
+}
+
 async function repairSendOperations(
   db: SqliteDb,
   canonicalMintUrls: Set<string>,
@@ -632,6 +733,7 @@ export async function repairSqliteMintUrlStorageIssues(
     await repairProofs(tx, canonicalMintUrls, actions, dryRun);
     await repairMintQuotes(tx, canonicalMintUrls, actions, dryRun);
     await repairMeltQuotes(tx, canonicalMintUrls, actions, dryRun);
+    await repairHistory(tx, canonicalMintUrls, actions, dryRun);
     await repairSendOperations(tx, canonicalMintUrls, actions, dryRun);
     await repairMeltOperations(tx, canonicalMintUrls, actions, dryRun);
 

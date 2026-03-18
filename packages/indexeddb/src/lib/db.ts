@@ -168,6 +168,21 @@ export interface MeltQuoteRow {
   payment_preimage: string | null;
 }
 
+export interface HistoryRow {
+  id: number;
+  mintUrl: string;
+  type: 'mint' | 'melt' | 'send' | 'receive';
+  unit: string;
+  amount: number;
+  createdAt: number;
+  quoteId?: string | null;
+  state?: string | null;
+  paymentRequest?: string | null;
+  tokenJson?: string | null;
+  metadata?: unknown;
+  operationId?: string | null;
+}
+
 export interface SendOperationRow {
   id: string;
   mintUrl: string;

@@ -113,6 +113,35 @@ describe('SQLite mint URL repair migration', () => {
     );
   }
 
+  async function insertHistoryEntry(params: {
+    mintUrl: string;
+    type: 'mint' | 'send';
+    amount: number;
+    createdAt: number;
+    quoteId?: string | null;
+    state?: string | null;
+    paymentRequest?: string | null;
+    operationId?: string | null;
+    tokenJson?: string | null;
+  }): Promise<void> {
+    await db.run(
+      'INSERT INTO coco_cashu_history (mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        params.mintUrl,
+        params.type,
+        'sat',
+        params.amount,
+        params.createdAt,
+        params.quoteId ?? null,
+        params.state ?? null,
+        params.paymentRequest ?? null,
+        params.tokenJson ?? null,
+        null,
+        params.operationId ?? null,
+      ],
+    );
+  }
+
   it('repairs non-canonical counters and proofs during migration', async () => {
     await insertMint(normalizedMintUrl);
     await insertCounter(normalizedMintUrl, 'keyset-1', 5);
@@ -121,6 +150,24 @@ describe('SQLite mint URL repair migration', () => {
     await insertMeltQuote(rawMintUrl, 'melt-quote-1');
     await insertSendOperation(rawMintUrl, 'send-op-1');
     await insertMeltOperation(rawMintUrl, 'melt-op-1', 'melt-quote-1');
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'mint',
+      amount: 21,
+      createdAt: 1,
+      quoteId: 'mint-quote-1',
+      state: 'PAID',
+      paymentRequest: 'lnbc1mint',
+    });
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'send',
+      amount: 55,
+      createdAt: 2,
+      operationId: 'send-op-1',
+      state: 'pending',
+      tokenJson: '{"token":"pending"}',
+    });
 
     await insertProof({
       mintUrl: rawMintUrl,
@@ -197,6 +244,20 @@ describe('SQLite mint URL repair migration', () => {
     await expect(
       db.get('SELECT mintUrl, quoteId FROM coco_cashu_melt_operations WHERE id = ?', ['melt-op-1']),
     ).resolves.toEqual({ mintUrl: normalizedMintUrl, quoteId: 'melt-quote-1' });
+    await expect(
+      db.get('SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?', [
+        normalizedMintUrl,
+        'mint-quote-1',
+        'mint',
+      ]),
+    ).resolves.toEqual({ mintUrl: normalizedMintUrl });
+    await expect(
+      db.get('SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = ?', [
+        normalizedMintUrl,
+        'send-op-1',
+        'send',
+      ]),
+    ).resolves.toEqual({ mintUrl: normalizedMintUrl });
 
     warnSpy.mockRestore();
   });
@@ -244,6 +305,15 @@ describe('SQLite mint URL repair migration', () => {
 
   it('lets callers retry skipped rows after the canonical mint record is restored', async () => {
     await insertCounter(rawMintUrl, 'keyset-1', 4);
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'mint',
+      amount: 21,
+      createdAt: 1,
+      quoteId: 'mint-quote-1',
+      state: 'PAID',
+      paymentRequest: 'lnbc1mint',
+    });
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -269,9 +339,23 @@ describe('SQLite mint URL repair migration', () => {
       ]),
     ).resolves.toEqual({ counter: 4 });
     await expect(
+      db.get('SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?', [
+        normalizedMintUrl,
+        'mint-quote-1',
+        'mint',
+      ]),
+    ).resolves.toEqual({ mintUrl: normalizedMintUrl });
+    await expect(
       db.get('SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?', [
         rawMintUrl,
         'keyset-1',
+      ]),
+    ).resolves.toBeUndefined();
+    await expect(
+      db.get('SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?', [
+        rawMintUrl,
+        'mint-quote-1',
+        'mint',
       ]),
     ).resolves.toBeUndefined();
 

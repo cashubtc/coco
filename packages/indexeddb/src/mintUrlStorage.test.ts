@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'bun:test';
 import type {
   CounterRow,
+  HistoryRow,
   MeltOperationRow,
   MeltQuoteRow,
   MintQuoteRow,
@@ -25,6 +26,7 @@ type TableName =
   | 'coco_cashu_proofs'
   | 'coco_cashu_mint_quotes'
   | 'coco_cashu_melt_quotes'
+  | 'coco_cashu_history'
   | 'coco_cashu_send_operations'
   | 'coco_cashu_melt_operations';
 type TableState = Record<TableName, MintUrlRow[]>;
@@ -40,6 +42,7 @@ function createTableState(overrides: Partial<TableState>): TableState {
     coco_cashu_proofs: (overrides.coco_cashu_proofs ?? []).map((row) => cloneRow(row)),
     coco_cashu_mint_quotes: (overrides.coco_cashu_mint_quotes ?? []).map((row) => cloneRow(row)),
     coco_cashu_melt_quotes: (overrides.coco_cashu_melt_quotes ?? []).map((row) => cloneRow(row)),
+    coco_cashu_history: (overrides.coco_cashu_history ?? []).map((row) => cloneRow(row)),
     coco_cashu_send_operations: (overrides.coco_cashu_send_operations ?? []).map((row) =>
       cloneRow(row),
     ),
@@ -61,6 +64,8 @@ function createKey(tableName: TableName, row: MintUrlRow): string {
       return `${row.mintUrl}::${String(row.quote)}`;
     case 'coco_cashu_melt_quotes':
       return `${row.mintUrl}::${String(row.quote)}`;
+    case 'coco_cashu_history':
+      return String(row.id);
     case 'coco_cashu_send_operations':
       return String(row.id);
     case 'coco_cashu_melt_operations':
@@ -86,8 +91,8 @@ function createDb(overrides: Partial<TableState>) {
             },
             async get(key: unknown) {
               const match = state[tableName].find((row) => {
-                if (typeof key === 'string') {
-                  return createKey(tableName, row) === key;
+                if (typeof key === 'string' || typeof key === 'number') {
+                  return createKey(tableName, row) === String(key);
                 }
                 if (Array.isArray(key)) {
                   return createKey(tableName, row) === key.map(String).join('::');
@@ -165,6 +170,19 @@ describe('IndexedDB mint URL repair helpers', () => {
           payment_preimage: null,
         },
       ],
+      coco_cashu_history: [
+        {
+          id: 1,
+          mintUrl: rawMintUrl,
+          type: 'mint',
+          unit: 'sat',
+          amount: 21,
+          createdAt: 1,
+          quoteId: 'mint-quote-1',
+          state: 'PAID',
+          paymentRequest: 'lnbc1mint',
+        },
+      ],
       coco_cashu_send_operations: [
         {
           id: 'send-op-1',
@@ -201,8 +219,8 @@ describe('IndexedDB mint URL repair helpers', () => {
 
     const report = await detectIndexedDbMintUrlStorageIssues(db as any);
 
-    expect(report.issueCount).toBe(6);
-    expect(report.repairableIssueCount).toBe(6);
+    expect(report.issueCount).toBe(7);
+    expect(report.repairableIssueCount).toBe(7);
     expect(report.issues).toEqual([
       {
         table: 'coco_cashu_counters',
@@ -210,6 +228,15 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
+      },
+      {
+        table: 'coco_cashu_history',
+        mintUrl: rawMintUrl,
+        normalizedMintUrl,
+        rowCount: 1,
+        repairable: true,
+        reason: undefined,
       },
       {
         table: 'coco_cashu_melt_operations',
@@ -217,6 +244,7 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
       },
       {
         table: 'coco_cashu_melt_quotes',
@@ -224,6 +252,7 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
       },
       {
         table: 'coco_cashu_mint_quotes',
@@ -231,6 +260,7 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
       },
       {
         table: 'coco_cashu_proofs',
@@ -238,6 +268,7 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
       },
       {
         table: 'coco_cashu_send_operations',
@@ -245,6 +276,7 @@ describe('IndexedDB mint URL repair helpers', () => {
         normalizedMintUrl,
         rowCount: 1,
         repairable: true,
+        reason: undefined,
       },
     ]);
   });
@@ -328,6 +360,63 @@ describe('IndexedDB mint URL repair helpers', () => {
           payment_preimage: null,
         },
       ],
+      coco_cashu_history: [
+        {
+          id: 1,
+          mintUrl: rawMintUrl,
+          type: 'mint',
+          unit: 'sat',
+          amount: 21,
+          createdAt: 1,
+          quoteId: 'mint-quote-1',
+          state: 'PAID',
+          paymentRequest: 'lnbc1mint',
+        },
+        {
+          id: 2,
+          mintUrl: normalizedMintUrl,
+          type: 'send',
+          unit: 'sat',
+          amount: 55,
+          createdAt: 5,
+          operationId: 'send-op-1',
+          state: 'pending',
+          tokenJson: '{"token":"normalized"}',
+        },
+        {
+          id: 3,
+          mintUrl: rawMintUrl,
+          type: 'send',
+          unit: 'sat',
+          amount: 55,
+          createdAt: 2,
+          operationId: 'send-op-1',
+          state: 'pending',
+          tokenJson: '{"token":"normalized"}',
+        },
+        {
+          id: 4,
+          mintUrl: normalizedMintUrl,
+          type: 'mint',
+          unit: 'sat',
+          amount: 99,
+          createdAt: 3,
+          quoteId: 'history-conflict',
+          state: 'PAID',
+          paymentRequest: 'lnbc1existing',
+        },
+        {
+          id: 5,
+          mintUrl: rawMintUrl,
+          type: 'mint',
+          unit: 'sat',
+          amount: 100,
+          createdAt: 4,
+          quoteId: 'history-conflict',
+          state: 'ISSUED',
+          paymentRequest: 'lnbc1raw',
+        },
+      ],
       coco_cashu_send_operations: [
         {
           id: 'send-op-1',
@@ -365,9 +454,9 @@ describe('IndexedDB mint URL repair helpers', () => {
     const dryRunReport = await repairIndexedDbMintUrlStorageIssues(db as any);
 
     expect(dryRunReport.dryRun).toBe(true);
-    expect(dryRunReport.updatedRows).toBe(7);
-    expect(dryRunReport.deletedRows).toBe(2);
-    expect(dryRunReport.skippedRows).toBe(1);
+    expect(dryRunReport.updatedRows).toBe(9);
+    expect(dryRunReport.deletedRows).toBe(3);
+    expect(dryRunReport.skippedRows).toBe(2);
     expect(state.coco_cashu_counters).toHaveLength(2);
 
     const report = await repairIndexedDbMintUrlStorageIssues(db as any, { dryRun: false });
@@ -439,6 +528,52 @@ describe('IndexedDB mint URL repair helpers', () => {
         payment_preimage: null,
       },
     ] satisfies MeltQuoteRow[]);
+    expect(state.coco_cashu_history).toEqual([
+      {
+        id: 1,
+        mintUrl: normalizedMintUrl,
+        type: 'mint',
+        unit: 'sat',
+        amount: 21,
+        createdAt: 1,
+        quoteId: 'mint-quote-1',
+        state: 'PAID',
+        paymentRequest: 'lnbc1mint',
+      },
+      {
+        id: 2,
+        mintUrl: normalizedMintUrl,
+        type: 'send',
+        unit: 'sat',
+        amount: 55,
+        createdAt: 2,
+        operationId: 'send-op-1',
+        state: 'pending',
+        tokenJson: '{"token":"normalized"}',
+      },
+      {
+        id: 4,
+        mintUrl: normalizedMintUrl,
+        type: 'mint',
+        unit: 'sat',
+        amount: 99,
+        createdAt: 3,
+        quoteId: 'history-conflict',
+        state: 'PAID',
+        paymentRequest: 'lnbc1existing',
+      },
+      {
+        id: 5,
+        mintUrl: rawMintUrl,
+        type: 'mint',
+        unit: 'sat',
+        amount: 100,
+        createdAt: 4,
+        quoteId: 'history-conflict',
+        state: 'ISSUED',
+        paymentRequest: 'lnbc1raw',
+      },
+    ] satisfies HistoryRow[]);
     expect(state.coco_cashu_send_operations).toEqual([
       {
         id: 'send-op-1',

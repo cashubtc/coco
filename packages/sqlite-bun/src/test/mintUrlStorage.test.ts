@@ -117,6 +117,35 @@ describe('sqlite-bun mint URL repair migration', () => {
     );
   }
 
+  async function insertHistoryEntry(params: {
+    mintUrl: string;
+    type: 'mint' | 'send';
+    amount: number;
+    createdAt: number;
+    quoteId?: string | null;
+    state?: string | null;
+    paymentRequest?: string | null;
+    operationId?: string | null;
+    tokenJson?: string | null;
+  }): Promise<void> {
+    await db.run(
+      'INSERT INTO coco_cashu_history (mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        params.mintUrl,
+        params.type,
+        'sat',
+        params.amount,
+        params.createdAt,
+        params.quoteId ?? null,
+        params.state ?? null,
+        params.paymentRequest ?? null,
+        params.tokenJson ?? null,
+        null,
+        params.operationId ?? null,
+      ],
+    );
+  }
+
   it('repairs non-canonical counters and proofs during migration', async () => {
     await insertMint(normalizedMintUrl);
     await insertCounter(normalizedMintUrl, 'keyset-1', 5);
@@ -125,6 +154,24 @@ describe('sqlite-bun mint URL repair migration', () => {
     await insertMeltQuote(rawMintUrl, 'melt-quote-1');
     await insertSendOperation(rawMintUrl, 'send-op-1');
     await insertMeltOperation(rawMintUrl, 'melt-op-1', 'melt-quote-1');
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'mint',
+      amount: 21,
+      createdAt: 1,
+      quoteId: 'mint-quote-1',
+      state: 'PAID',
+      paymentRequest: 'lnbc1mint',
+    });
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'send',
+      amount: 55,
+      createdAt: 2,
+      operationId: 'send-op-1',
+      state: 'pending',
+      tokenJson: '{"token":"pending"}',
+    });
     await insertProof({
       mintUrl: rawMintUrl,
       secret: 'move-me',
@@ -194,6 +241,14 @@ describe('sqlite-bun mint URL repair migration', () => {
       'SELECT mintUrl, quoteId FROM coco_cashu_melt_operations WHERE id = ?',
       ['melt-op-1'],
     );
+    const movedMintHistory = await db.get(
+      'SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?',
+      [normalizedMintUrl, 'mint-quote-1', 'mint'],
+    );
+    const movedSendHistory = await db.get(
+      'SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = ?',
+      [normalizedMintUrl, 'send-op-1', 'send'],
+    );
 
     expect(normalizedCounter).toEqual({ counter: 7 });
     expect(rawCounter == null).toBe(true);
@@ -202,6 +257,8 @@ describe('sqlite-bun mint URL repair migration', () => {
     expect(removedDuplicate == null).toBe(true);
     expect(movedMintQuote).toEqual({ mintUrl: normalizedMintUrl });
     expect(movedMeltQuote).toEqual({ mintUrl: normalizedMintUrl });
+    expect(movedMintHistory).toEqual({ mintUrl: normalizedMintUrl });
+    expect(movedSendHistory).toEqual({ mintUrl: normalizedMintUrl });
     expect(movedSendOperation).toEqual({ mintUrl: normalizedMintUrl });
     expect(movedMeltOperation).toEqual({ mintUrl: normalizedMintUrl, quoteId: 'melt-quote-1' });
   });
@@ -252,6 +309,15 @@ describe('sqlite-bun mint URL repair migration', () => {
 
   it('lets callers retry skipped rows after the canonical mint record is restored', async () => {
     await insertCounter(rawMintUrl, 'keyset-1', 4);
+    await insertHistoryEntry({
+      mintUrl: rawMintUrl,
+      type: 'mint',
+      amount: 21,
+      createdAt: 1,
+      quoteId: 'mint-quote-1',
+      state: 'PAID',
+      paymentRequest: 'lnbc1mint',
+    });
 
     const warnSpy = mock(() => {});
     const originalWarn = console.warn;
@@ -265,7 +331,7 @@ describe('sqlite-bun mint URL repair migration', () => {
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String((warnSpy as any).mock.calls[0]?.[0] ?? '')).toContain(
-      'left 1 issue(s) affecting 1 row(s)',
+      'left 2 issue(s) affecting 2 row(s)',
     );
     const rawCounter = await db.get(
       'SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?',
@@ -282,13 +348,23 @@ describe('sqlite-bun mint URL repair migration', () => {
       'SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?',
       [normalizedMintUrl, 'keyset-1'],
     );
+    const normalizedHistory = await db.get(
+      'SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?',
+      [normalizedMintUrl, 'mint-quote-1', 'mint'],
+    );
     const removedRawCounter = await db.get(
       'SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?',
       [rawMintUrl, 'keyset-1'],
     );
+    const removedRawHistory = await db.get(
+      'SELECT mintUrl FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = ?',
+      [rawMintUrl, 'mint-quote-1', 'mint'],
+    );
 
     expect(normalizedCounter).toEqual({ counter: 4 });
+    expect(normalizedHistory).toEqual({ mintUrl: normalizedMintUrl });
     expect(removedRawCounter == null).toBe(true);
+    expect(removedRawHistory == null).toBe(true);
   });
 
   it('treats null and missing optional proof fields as equivalent when merging duplicates', async () => {
