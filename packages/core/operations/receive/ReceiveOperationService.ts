@@ -286,19 +286,6 @@ export class ReceiveOperationService {
       }),
     );
 
-    const inputSecrets = executing.inputProofs.map((proof) => proof.secret);
-    const existingInputProofs = await this.proofRepository.getProofsBySecrets(
-      executing.mintUrl,
-      inputSecrets,
-    );
-    const locallyInflightSecrets = existingInputProofs
-      .filter((proof) => proof.state === 'inflight')
-      .map((proof) => proof.secret);
-
-    if (locallyInflightSecrets.length > 0) {
-      await this.proofService.setProofState(executing.mintUrl, locallyInflightSecrets, 'spent');
-    }
-
     return await this.markAsFinalized(executing);
   }
 
