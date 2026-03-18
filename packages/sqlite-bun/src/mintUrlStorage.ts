@@ -1,6 +1,7 @@
 import {
   detectSqliteLikeMintUrlStorageIssues,
   repairSqliteLikeMintUrlStorageIssues,
+  repairSqliteLikeMintUrlStorageIssuesForMint as repairSqliteLikeMintUrlStorageIssuesForCanonicalMint,
 } from '../../shared/src/sqlite/mintUrlStorage.ts';
 import { normalizeMintUrl } from 'coco-cashu-core';
 import type { SqliteDb } from './db.ts';
@@ -78,4 +79,17 @@ export async function repairSqliteMintUrlStorageIssues(
   options: MintUrlRepairOptions = {},
 ): Promise<MintUrlRepairReport> {
   return repairSqliteLikeMintUrlStorageIssues(db, normalizeMintUrl, options);
+}
+
+export async function repairSqliteMintUrlStorageIssuesForMint(
+  db: SqliteDb,
+  mintUrl: string,
+  options: MintUrlRepairOptions = {},
+): Promise<MintUrlRepairReport> {
+  return repairSqliteLikeMintUrlStorageIssuesForCanonicalMint(
+    db,
+    normalizeMintUrl,
+    mintUrl,
+    options,
+  );
 }

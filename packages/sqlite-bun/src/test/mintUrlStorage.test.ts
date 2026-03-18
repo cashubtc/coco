@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
 import {
+  SqliteCounterRepository,
   SqliteDb,
+  SqliteMintRepository,
+  SqliteProofRepository,
   ensureSchema,
   ensureSchemaUpTo,
   repairSqliteMintUrlStorageIssues,
@@ -365,6 +368,74 @@ describe('sqlite-bun mint URL repair migration', () => {
     expect(normalizedHistory).toEqual({ mintUrl: normalizedMintUrl });
     expect(removedRawCounter == null).toBe(true);
     expect(removedRawHistory == null).toBe(true);
+  });
+
+  it('repairs skipped proof and counter rows when a mint is restored through the repository', async () => {
+    await insertCounter(rawMintUrl, 'keyset-1', 4);
+    await insertProof({
+      mintUrl: rawMintUrl,
+      secret: 'restore-proof',
+      amount: 12,
+      C: 'C-restore',
+      createdAt: 2,
+    });
+
+    const warnSpy = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warnSpy;
+
+    try {
+      await ensureSchema(db);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const rawCounter = await db.get(
+      'SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?',
+      [rawMintUrl, 'keyset-1'],
+    );
+    expect(rawCounter).toEqual({ counter: 4 });
+
+    const mintRepo = new SqliteMintRepository(db);
+    const counterRepo = new SqliteCounterRepository(db);
+    const proofRepo = new SqliteProofRepository(db);
+
+    await mintRepo.addOrUpdateMint({
+      mintUrl: normalizedMintUrl,
+      name: 'Mint',
+      mintInfo: {} as any,
+      trusted: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const normalizedCounter = await counterRepo.getCounter(normalizedMintUrl, 'keyset-1');
+    const normalizedProofs = await proofRepo.getReadyProofs(normalizedMintUrl);
+    const removedRawCounter = await db.get(
+      'SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?',
+      [rawMintUrl, 'keyset-1'],
+    );
+    const removedRawProof = await db.get(
+      'SELECT mintUrl FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?',
+      [rawMintUrl, 'restore-proof'],
+    );
+
+    expect(normalizedCounter).toEqual({
+      mintUrl: normalizedMintUrl,
+      keysetId: 'keyset-1',
+      counter: 4,
+    });
+    expect(normalizedProofs).toEqual([
+      expect.objectContaining({
+        mintUrl: normalizedMintUrl,
+        secret: 'restore-proof',
+        amount: 12,
+        C: 'C-restore',
+      }),
+    ]);
+    expect(removedRawCounter == null).toBe(true);
+    expect(removedRawProof == null).toBe(true);
   });
 
   it('treats null and missing optional proof fields as equivalent when merging duplicates', async () => {

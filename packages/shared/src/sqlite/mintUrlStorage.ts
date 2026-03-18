@@ -66,6 +66,8 @@ interface MintUrlRepairDb {
 
 type NormalizeMintUrl = (mintUrl: string) => string;
 
+type TargetCanonicalMintUrls = ReadonlySet<string> | undefined;
+
 interface MintUrlCountRow {
   mintUrl: string;
   rowCount: number;
@@ -196,6 +198,7 @@ async function collectIssues(
   db: MintUrlRepairDb,
   canonicalMintUrls: Set<string>,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<MintUrlStorageIssue[]> {
   const issues: MintUrlStorageIssue[] = [];
 
@@ -207,6 +210,9 @@ async function collectIssues(
     for (const row of rows) {
       const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
       if (normalizedMintUrl === row.mintUrl) {
+        continue;
+      }
+      if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
         continue;
       }
 
@@ -321,12 +327,16 @@ async function repairCounters(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<CounterRow>('SELECT mintUrl, keysetId, counter FROM coco_cashu_counters');
 
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -383,6 +393,7 @@ async function repairProofs(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<ProofRow>(
     'SELECT mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId FROM coco_cashu_proofs',
@@ -391,6 +402,9 @@ async function repairProofs(
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -453,6 +467,7 @@ async function repairMintQuotes(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<MintQuoteRow>(
     'SELECT mintUrl, quote, state, request, amount, unit, expiry, pubkey FROM coco_cashu_mint_quotes',
@@ -461,6 +476,9 @@ async function repairMintQuotes(
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -513,6 +531,7 @@ async function repairMeltQuotes(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<MeltQuoteRow>(
     'SELECT mintUrl, quote, state, request, amount, unit, expiry, fee_reserve, payment_preimage FROM coco_cashu_melt_quotes',
@@ -521,6 +540,9 @@ async function repairMeltQuotes(
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -573,6 +595,7 @@ async function repairHistory(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<HistoryRow>(
     'SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId FROM coco_cashu_history',
@@ -581,6 +604,9 @@ async function repairHistory(
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -644,12 +670,16 @@ async function repairSendOperations(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<SendOperationRow>('SELECT id, mintUrl FROM coco_cashu_send_operations');
 
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -678,6 +708,7 @@ async function repairMeltOperations(
   actions: Map<string, MintUrlRepairAction>,
   dryRun: boolean,
   normalizeMintUrl: NormalizeMintUrl,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<void> {
   const rows = await db.all<MeltOperationRow>(
     'SELECT id, mintUrl, quoteId FROM coco_cashu_melt_operations',
@@ -686,6 +717,9 @@ async function repairMeltOperations(
   for (const row of rows) {
     const normalizedMintUrl = normalizeMintUrl(row.mintUrl);
     if (normalizedMintUrl === row.mintUrl) {
+      continue;
+    }
+    if (targetCanonicalMintUrls && !targetCanonicalMintUrls.has(normalizedMintUrl)) {
       continue;
     }
 
@@ -732,25 +766,57 @@ export async function detectSqliteLikeMintUrlStorageIssues(
   });
 }
 
-export async function repairSqliteLikeMintUrlStorageIssues(
+async function runSqliteLikeMintUrlRepair(
   db: MintUrlRepairDb,
   normalizeMintUrl: NormalizeMintUrl,
-  options: MintUrlRepairOptions = {},
+  dryRun: boolean,
+  targetCanonicalMintUrls?: TargetCanonicalMintUrls,
 ): Promise<MintUrlRepairReport> {
-  const dryRun = options.dryRun ?? true;
-
   return db.transaction(async (tx) => {
     const canonicalMintUrls = await getCanonicalMintUrls(tx);
-    const issues = await collectIssues(tx, canonicalMintUrls, normalizeMintUrl);
+    const issues = await collectIssues(
+      tx,
+      canonicalMintUrls,
+      normalizeMintUrl,
+      targetCanonicalMintUrls,
+    );
     const actions = new Map<string, MintUrlRepairAction>();
 
-    await repairCounters(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairProofs(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairMintQuotes(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairMeltQuotes(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairHistory(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairSendOperations(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
-    await repairMeltOperations(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl);
+    await repairCounters(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl, targetCanonicalMintUrls);
+    await repairProofs(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl, targetCanonicalMintUrls);
+    await repairMintQuotes(
+      tx,
+      canonicalMintUrls,
+      actions,
+      dryRun,
+      normalizeMintUrl,
+      targetCanonicalMintUrls,
+    );
+    await repairMeltQuotes(
+      tx,
+      canonicalMintUrls,
+      actions,
+      dryRun,
+      normalizeMintUrl,
+      targetCanonicalMintUrls,
+    );
+    await repairHistory(tx, canonicalMintUrls, actions, dryRun, normalizeMintUrl, targetCanonicalMintUrls);
+    await repairSendOperations(
+      tx,
+      canonicalMintUrls,
+      actions,
+      dryRun,
+      normalizeMintUrl,
+      targetCanonicalMintUrls,
+    );
+    await repairMeltOperations(
+      tx,
+      canonicalMintUrls,
+      actions,
+      dryRun,
+      normalizeMintUrl,
+      targetCanonicalMintUrls,
+    );
 
     const actionList = Array.from(actions.values()).sort(compareAction);
     const report = createCheckReport(issues);
@@ -765,4 +831,31 @@ export async function repairSqliteLikeMintUrlStorageIssues(
       conflictRows: actionList.reduce((sum, action) => sum + action.conflictRows, 0),
     };
   });
+}
+
+export async function repairSqliteLikeMintUrlStorageIssues(
+  db: MintUrlRepairDb,
+  normalizeMintUrl: NormalizeMintUrl,
+  options: MintUrlRepairOptions = {},
+): Promise<MintUrlRepairReport> {
+  const dryRun = options.dryRun ?? true;
+
+  return runSqliteLikeMintUrlRepair(db, normalizeMintUrl, dryRun);
+}
+
+export async function repairSqliteLikeMintUrlStorageIssuesForMint(
+  db: MintUrlRepairDb,
+  normalizeMintUrl: NormalizeMintUrl,
+  canonicalMintUrl: string,
+  options: MintUrlRepairOptions = {},
+): Promise<MintUrlRepairReport> {
+  const dryRun = options.dryRun ?? true;
+  const normalizedCanonicalMintUrl = normalizeMintUrl(canonicalMintUrl);
+
+  return runSqliteLikeMintUrlRepair(
+    db,
+    normalizeMintUrl,
+    dryRun,
+    new Set([normalizedCanonicalMintUrl]),
+  );
 }

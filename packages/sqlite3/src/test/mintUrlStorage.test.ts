@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
 import {
+  SqliteCounterRepository,
   SqliteDb,
+  SqliteMintRepository,
+  SqliteProofRepository,
   ensureSchema,
   ensureSchemaUpTo,
   repairSqliteMintUrlStorageIssues,
@@ -356,6 +359,70 @@ describe('SQLite mint URL repair migration', () => {
         rawMintUrl,
         'mint-quote-1',
         'mint',
+      ]),
+    ).resolves.toBeUndefined();
+
+    warnSpy.mockRestore();
+  });
+
+  it('repairs skipped proof and counter rows when a mint is restored through the repository', async () => {
+    await insertCounter(rawMintUrl, 'keyset-1', 4);
+    await insertProof({
+      mintUrl: rawMintUrl,
+      secret: 'restore-proof',
+      amount: 12,
+      C: 'C-restore',
+      createdAt: 2,
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await ensureSchema(db);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    await expect(
+      db.get('SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?', [
+        rawMintUrl,
+        'keyset-1',
+      ]),
+    ).resolves.toEqual({ counter: 4 });
+
+    const mintRepo = new SqliteMintRepository(db);
+    const counterRepo = new SqliteCounterRepository(db);
+    const proofRepo = new SqliteProofRepository(db);
+
+    await mintRepo.addOrUpdateMint({
+      mintUrl: normalizedMintUrl,
+      name: 'Mint',
+      mintInfo: {} as any,
+      trusted: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    await expect(counterRepo.getCounter(normalizedMintUrl, 'keyset-1')).resolves.toEqual({
+      mintUrl: normalizedMintUrl,
+      keysetId: 'keyset-1',
+      counter: 4,
+    });
+    await expect(proofRepo.getReadyProofs(normalizedMintUrl)).resolves.toEqual([
+      expect.objectContaining({
+        mintUrl: normalizedMintUrl,
+        secret: 'restore-proof',
+        amount: 12,
+        C: 'C-restore',
+      }),
+    ]);
+    await expect(
+      db.get('SELECT counter FROM coco_cashu_counters WHERE mintUrl = ? AND keysetId = ?', [
+        rawMintUrl,
+        'keyset-1',
+      ]),
+    ).resolves.toBeUndefined();
+    await expect(
+      db.get('SELECT mintUrl FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?', [
+        rawMintUrl,
+        'restore-proof',
       ]),
     ).resolves.toBeUndefined();
 

@@ -1,5 +1,6 @@
 import type { MintRepository, Mint } from 'coco-cashu-core';
 import { SqliteDb } from '../db.ts';
+import { repairSqliteMintUrlStorageIssuesForMint } from '../mintUrlStorage.ts';
 
 export class SqliteMintRepository implements MintRepository {
   private readonly db: SqliteDb;
@@ -106,6 +107,7 @@ export class SqliteMintRepository implements MintRepository {
         mint.updatedAt,
       ],
     );
+    await repairSqliteMintUrlStorageIssuesForMint(this.db, mint.mintUrl, { dryRun: false });
   }
 
   async addOrUpdateMint(mint: Mint): Promise<void> {
@@ -126,6 +128,7 @@ export class SqliteMintRepository implements MintRepository {
         mint.updatedAt,
       ],
     );
+    await repairSqliteMintUrlStorageIssuesForMint(this.db, mint.mintUrl, { dryRun: false });
   }
 
   async updateMint(mint: Mint): Promise<void> {
