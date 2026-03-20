@@ -234,7 +234,8 @@ export class HistoryService {
       state: quote.state,
     };
     try {
-      await this.historyRepository.addHistoryEntry(entry);
+      const newEntry = await this.historyRepository.addHistoryEntry(entry);
+      await this.handleHistoryUpdated(mintUrl, newEntry);
     } catch (err) {
       this.logger?.error('Failed to add melt quote created history entry', {
         mintUrl,
