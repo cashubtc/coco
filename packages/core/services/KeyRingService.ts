@@ -138,12 +138,10 @@ export class KeyRingService {
 
   /**
    * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
-   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
    */
   private getPublicKeyHex(secretKey: Uint8Array): string {
-    const publicKey = schnorr.getPublicKey(secretKey);
-    return '02' + bytesToHex(publicKey);
+    const publicKey = secp256k1.getPublicKey(secretKey, true);
+    return bytesToHex(publicKey);
   }
 
   private getCompressedPublicKeyHex(secretKey: Uint8Array): string {
