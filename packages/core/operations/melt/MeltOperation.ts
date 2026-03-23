@@ -28,9 +28,8 @@ export type MeltOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
-import type { MeltQuoteBolt11Response } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
-import type { MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
+import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -92,6 +91,20 @@ interface PreparedData {
   swapOutputData?: SerializedOutputData;
 }
 
+/**
+ * Method-specific data that may be available once a melt has settled.
+ */
+export interface MeltMethodFinalizedDataMap {
+  bolt11: {
+    preimage?: string;
+  };
+  bolt12: never;
+  onchain: never;
+}
+
+export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
+  MeltMethodFinalizedDataMap[M];
+
 // ============================================================================
 // State-specific Operation Types
 // ============================================================================
@@ -128,7 +141,7 @@ export interface PendingMeltOperation extends MeltOperationBase, PreparedData {
  * Finalized state - sent proofs confirmed spent, operation finalized.
  * Contains actual settlement amounts after the melt is complete.
  */
-export interface FinalizedMeltOperation extends MeltOperationBase, PreparedData {
+interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
   state: 'finalized';
 
   /**
@@ -148,6 +161,11 @@ export interface FinalizedMeltOperation extends MeltOperationBase, PreparedData 
    */
   effectiveFee?: number;
 }
+
+export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> =
+  FinalizedMeltOperationBase & MeltMethodMeta<M> & {
+    finalizedData?: MeltMethodFinalizedData<M>;
+  };
 
 /**
  * Failed state - melt failed, proofs reclaimed

@@ -860,12 +860,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(operationAfterExecute!.state).toBe(executed!.state);
 
         if (executed?.state === 'finalized') {
-          const settlement = executed as { changeAmount?: number; effectiveFee?: number };
+          const settlement = executed as {
+            changeAmount?: number;
+            effectiveFee?: number;
+            finalizedData?: { preimage?: string };
+          };
           expect(settlement.changeAmount).toBeDefined();
           expect(settlement.effectiveFee).toBeDefined();
+          expect(settlement.finalizedData?.preimage).toBeDefined();
           expect(operationAfterExecute?.state).toBe('finalized');
           expect((operationAfterExecute as any).changeAmount).toBe(settlement.changeAmount);
           expect((operationAfterExecute as any).effectiveFee).toBe(settlement.effectiveFee);
+          expect((operationAfterExecute as any).finalizedData?.preimage).toBe(
+            settlement.finalizedData?.preimage,
+          );
         }
 
         if (executed?.state === 'pending') {
@@ -887,9 +895,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(operationAfterRetry).toBeDefined();
 
           if (refreshed.state === 'finalized') {
+            const settlement = refreshed as {
+              changeAmount?: number;
+              effectiveFee?: number;
+              finalizedData?: { preimage?: string };
+            };
             expect(operationAfterRetry!.state).toBe('finalized');
-            expect((operationAfterRetry as any).changeAmount).toBeDefined();
-            expect((operationAfterRetry as any).effectiveFee).toBeDefined();
+            expect(settlement.changeAmount).toBeDefined();
+            expect(settlement.effectiveFee).toBeDefined();
+            expect(settlement.finalizedData?.preimage).toBeDefined();
+            expect((operationAfterRetry as any).changeAmount).toBe(settlement.changeAmount);
+            expect((operationAfterRetry as any).effectiveFee).toBe(settlement.effectiveFee);
+            expect((operationAfterRetry as any).finalizedData?.preimage).toBe(
+              settlement.finalizedData?.preimage,
+            );
           } else if (refreshed.state === 'rolled_back') {
             expect(operationAfterRetry!.state).toBe('rolled_back');
           } else {

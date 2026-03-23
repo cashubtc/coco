@@ -306,13 +306,14 @@ export class MeltOperationService {
         return {
           changeAmount: finalizedOp.changeAmount,
           effectiveFee: finalizedOp.effectiveFee,
+          finalizedData: finalizedOp.finalizedData,
         };
       }
       if (operation.state === 'rolled_back' || operation.state === 'rolling_back') {
         this.logger?.debug('Operation was rolled back or is rolling back, skipping finalization', {
           operationId,
         });
-        return { changeAmount: undefined, effectiveFee: undefined };
+        return { changeAmount: undefined, effectiveFee: undefined, finalizedData: undefined };
       }
 
       if (operation.state !== 'pending') {
@@ -332,6 +333,7 @@ export class MeltOperationService {
         updatedAt: Date.now(),
         changeAmount: finalizeResult?.changeAmount,
         effectiveFee: finalizeResult?.effectiveFee,
+        finalizedData: finalizeResult?.finalizedData,
       };
 
       await this.meltOperationRepository.update(finalized);
@@ -350,6 +352,7 @@ export class MeltOperationService {
       return {
         changeAmount: finalized.changeAmount,
         effectiveFee: finalized.effectiveFee,
+        finalizedData: finalized.finalizedData,
       };
     } finally {
       releaseLock();

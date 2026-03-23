@@ -74,6 +74,13 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       0,
     );
   }
+
+  private buildFinalizedData(
+    paymentPreimage?: string | null,
+  ): FinalizeResult<'bolt11'>['finalizedData'] {
+    return paymentPreimage == null ? undefined : { preimage: paymentPreimage };
+  }
+
   // ============================================================================
   // Prepare Phase
   // ============================================================================
@@ -305,7 +312,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     ctx.logger?.info('Melt execution completed', { operationId, quoteId, state: res.state });
 
-    return this.handleMeltResponse(ctx, res.state, proofsToMelt, res.change);
+    return this.handleMeltResponse(ctx, res, proofsToMelt);
   }
 
   /**
@@ -313,11 +320,15 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    */
   private async handleMeltResponse(
     ctx: ExecuteContext<'bolt11'>,
-    state: 'PAID' | 'UNPAID' | 'PENDING',
+    response: {
+      state: 'PAID' | 'UNPAID' | 'PENDING';
+      change?: SerializedBlindedSignature[];
+      payment_preimage?: string | null;
+    },
     proofsToMelt: Proof[],
-    change?: SerializedBlindedSignature[],
   ): Promise<ExecutionResult<'bolt11'>> {
     const { mintUrl } = ctx.operation;
+    const { state, change, payment_preimage: paymentPreimage } = response;
 
     switch (state) {
       case 'PAID': {
@@ -329,7 +340,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
           change,
         );
         await this.finalizeOperation(ctx, change);
-        return buildPaidResult(ctx.operation, changeAmount, effectiveFee);
+        return buildPaidResult(ctx.operation, {
+          changeAmount,
+          effectiveFee,
+          finalizedData: this.buildFinalizedData(paymentPreimage),
+        });
       }
 
       case 'PENDING':
@@ -416,7 +431,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    * Called by MeltOperationService when checkPending returns 'finalize'.
    * Returns settlement amounts for accurate accounting.
    */
-  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<FinalizeResult> {
+  async finalize(ctx: FinalizeContext<'bolt11'>): Promise<FinalizeResult<'bolt11'>> {
     const { mintUrl, quoteId, id: operationId, amount: meltAmount } = ctx.operation;
 
     ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
@@ -446,7 +461,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       effectiveFee,
     });
 
-    return { changeAmount, effectiveFee };
+    return {
+      changeAmount,
+      effectiveFee,
+      finalizedData: this.buildFinalizedData(res.payment_preimage),
+    };
   }
 
   /**
@@ -613,7 +632,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       effectiveFee,
     });
 
-    return buildPaidResult(ctx.operation, changeAmount, effectiveFee);
+    return buildPaidResult(ctx.operation, {
+      changeAmount,
+      effectiveFee,
+      finalizedData: this.buildFinalizedData(res.payment_preimage),
+    });
   }
 
   /**

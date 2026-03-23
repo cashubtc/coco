@@ -77,6 +77,7 @@ function makeFinalizedMeltOperation(): FinalizedMeltOperation {
     changeOutputData: { keep: [], send: [] },
     changeAmount: 2,
     effectiveFee: 3,
+    finalizedData: { preimage: '' },
   };
 }
 

@@ -1,6 +1,7 @@
 import type { Proof } from '@cashu/cashu-ts';
 import type {
   ExecutingMeltOperation,
+  FinalizeResult,
   MeltMethodMeta,
   MeltMethod,
   ExecutionResult,
@@ -71,8 +72,7 @@ export function getSwapSendSecrets(swapOutputData: SerializedOutputData): string
  */
 export function buildPaidResult<M extends MeltMethod>(
   operation: ExecutingMeltOperation & MeltMethodMeta<M>,
-  changeAmount: number,
-  effectiveFee: number,
+  finalizeResult: FinalizeResult<M>,
 ): ExecutionResult<M> {
   return {
     status: 'PAID',
@@ -80,8 +80,7 @@ export function buildPaidResult<M extends MeltMethod>(
       ...operation,
       state: 'finalized',
       updatedAt: Date.now(),
-      changeAmount,
-      effectiveFee,
+      ...finalizeResult,
     },
   };
 }

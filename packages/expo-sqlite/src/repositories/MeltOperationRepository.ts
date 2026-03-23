@@ -5,7 +5,11 @@ type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['get
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethod = MeltOperation['method'];
 type MeltMethodData = MeltOperation['methodData'];
-type MeltSettlementData = { changeAmount?: number; effectiveFee?: number };
+type MeltSettlementData = {
+  changeAmount?: number;
+  effectiveFee?: number;
+  finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
+};
 
 interface MeltOperationRow {
   id: string;
@@ -27,6 +31,7 @@ interface MeltOperationRow {
   swapOutputDataJson: string | null;
   changeAmount: number | null;
   effectiveFee: number | null;
+  finalizedDataJson: string | null;
 }
 
 const preparedStates: MeltOperationState[] = [
@@ -80,6 +85,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
       ...operation,
       changeAmount: row.changeAmount ?? undefined,
       effectiveFee: row.effectiveFee ?? undefined,
+      finalizedData: row.finalizedDataJson ? JSON.parse(row.finalizedDataJson) : undefined,
     } as MeltOperation;
   }
 
@@ -112,12 +118,17 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
       null,
       null,
       null,
+      null,
     ];
   }
 
   const settlement = operation as MeltSettlementData;
   const changeAmount = operation.state === 'finalized' ? settlement.changeAmount ?? null : null;
   const effectiveFee = operation.state === 'finalized' ? settlement.effectiveFee ?? null : null;
+  const finalizedDataJson =
+    operation.state === 'finalized' && settlement.finalizedData !== undefined
+      ? JSON.stringify(settlement.finalizedData)
+      : null;
 
   return [
     operation.id,
@@ -139,6 +150,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
     changeAmount,
     effectiveFee,
+    finalizedDataJson,
   ];
 };
 
@@ -165,8 +177,8 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -207,7 +219,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_melt_operations
-        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?
+        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?, finalizedDataJson = ?
         WHERE id = ?`,
       [
         operation.state,
@@ -226,6 +238,9 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
         operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
         operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
         operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
+        operation.state === 'finalized' && settlement.finalizedData !== undefined
+          ? JSON.stringify(settlement.finalizedData)
+          : null,
         operation.id,
       ],
     );

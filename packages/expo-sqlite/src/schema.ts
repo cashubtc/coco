@@ -528,6 +528,12 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE quoteId IS NOT NULL;
     `,
   },
+  {
+    id: '021_melt_finalized_data',
+    sql: `
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN finalizedDataJson TEXT;
+    `,
+  },
 ];
 
 // Export for testing

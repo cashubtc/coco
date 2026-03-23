@@ -226,12 +226,14 @@ describe('MeltBolt11Handler', () => {
         Promise.resolve({
           state: 'PAID' as const,
           change: [],
+          payment_preimage: 'preimage-123',
         }),
       ),
       checkMeltQuote: mock(() =>
         Promise.resolve({
           state: 'PAID' as const,
           change: [],
+          payment_preimage: 'preimage-123',
         }),
       ),
       checkMeltQuoteState: mock(() => Promise.resolve('PAID' as const)),
@@ -477,6 +479,7 @@ describe('MeltBolt11Handler', () => {
         if (result.status === 'PAID') {
           expect(result.finalized.changeAmount).toBe(0);
           expect(result.finalized.effectiveFee).toBe(10);
+          expect(result.finalized.finalizedData?.preimage).toBe('preimage-123');
         }
         expect(proofService.setProofState).toHaveBeenCalledWith(
           mintUrl,
@@ -689,7 +692,11 @@ describe('MeltBolt11Handler', () => {
         { id: keysetId, amount: 5, C_: 'C_change' },
       ];
       (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
-        Promise.resolve({ state: 'PAID', change: changeSignatures }),
+        Promise.resolve({
+          state: 'PAID',
+          change: changeSignatures,
+          payment_preimage: 'preimage-123',
+        }),
       );
 
       const ctx = buildFinalizeContext(operation);
@@ -698,7 +705,11 @@ describe('MeltBolt11Handler', () => {
       expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, 'quote-123');
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
-      expect(result).toEqual({ changeAmount: 5, effectiveFee: 5 });
+      expect(result).toEqual({
+        changeAmount: 5,
+        effectiveFee: 5,
+        finalizedData: { preimage: 'preimage-123' },
+      });
     });
 
     it('should throw if quote is not PAID', async () => {
@@ -723,7 +734,7 @@ describe('MeltBolt11Handler', () => {
       });
 
       (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
-        Promise.resolve({ state: 'PAID', change: [] }),
+        Promise.resolve({ state: 'PAID', change: [], payment_preimage: 'preimage-123' }),
       );
 
       const ctx = buildFinalizeContext(operation);
@@ -750,7 +761,11 @@ describe('MeltBolt11Handler', () => {
       const ctx = buildFinalizeContext(operation);
       const result = await handler.finalize(ctx);
 
-      expect(result).toEqual({ changeAmount: 0, effectiveFee: 5 });
+      expect(result).toEqual({
+        changeAmount: 0,
+        effectiveFee: 5,
+        finalizedData: undefined,
+      });
     });
   });
 
@@ -861,7 +876,11 @@ describe('MeltBolt11Handler', () => {
           Promise.resolve('PAID'),
         );
         (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
-          Promise.resolve({ state: 'PAID', change: [] }),
+          Promise.resolve({
+            state: 'PAID',
+            change: [],
+            payment_preimage: 'preimage-123',
+          }),
         );
 
         const ctx = buildRecoverContext(operation);
@@ -871,6 +890,7 @@ describe('MeltBolt11Handler', () => {
         if (result.status === 'PAID') {
           expect(result.finalized.changeAmount).toBe(0);
           expect(result.finalized.effectiveFee).toBe(10);
+          expect(result.finalized.finalizedData?.preimage).toBe('preimage-123');
         }
         expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       });

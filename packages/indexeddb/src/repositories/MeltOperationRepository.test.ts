@@ -27,6 +27,7 @@ function makeFinalizedOperation(): FinalizedMeltOperation {
     changeOutputData: { keep: [], send: [] },
     changeAmount: 2,
     effectiveFee: 3,
+    finalizedData: { preimage: '' },
   };
 }
 
@@ -52,6 +53,7 @@ describe('IdbMeltOperationRepository', () => {
       swapOutputDataJson: null,
       changeAmount: 2,
       effectiveFee: 3,
+      finalizedDataJson: JSON.stringify({ preimage: '' }),
     } satisfies MeltOperationRow;
 
     const repository = new IdbMeltOperationRepository({
@@ -92,5 +94,6 @@ describe('IdbMeltOperationRepository', () => {
 
     expect(persistedRow?.changeAmount).toBe(2);
     expect(persistedRow?.effectiveFee).toBe(3);
+    expect(persistedRow?.finalizedDataJson).toBe(JSON.stringify({ preimage: '' }));
   });
 });

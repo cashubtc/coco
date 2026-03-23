@@ -5,7 +5,11 @@ import { getUnixTimeSeconds } from '../lib/db.ts';
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethodData = MeltOperation['methodData'];
-type MeltSettlementData = { changeAmount?: number; effectiveFee?: number };
+type MeltSettlementData = {
+  changeAmount?: number;
+  effectiveFee?: number;
+  finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
+};
 
 const preparedStates: MeltOperationState[] = [
   'prepared',
@@ -58,6 +62,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
       ...operation,
       changeAmount: row.changeAmount ?? undefined,
       effectiveFee: row.effectiveFee ?? undefined,
+      finalizedData: row.finalizedDataJson ? JSON.parse(row.finalizedDataJson) : undefined,
     } as MeltOperation;
   }
 
@@ -92,6 +97,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       inputProofSecretsJson: null,
       changeOutputDataJson: null,
       swapOutputDataJson: null,
+      finalizedDataJson: null,
     };
   }
 
@@ -117,6 +123,10 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     swapOutputDataJson: operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
     changeAmount: operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
     effectiveFee: operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
+    finalizedDataJson:
+      operation.state === 'finalized' && settlement.finalizedData !== undefined
+        ? JSON.stringify(settlement.finalizedData)
+        : null,
   };
 };
 

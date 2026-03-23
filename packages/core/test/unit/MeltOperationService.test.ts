@@ -112,6 +112,7 @@ describe('MeltOperationService', () => {
     state: 'finalized',
     changeAmount: 0,
     effectiveFee: 1,
+    finalizedData: { preimage: 'preimage-123' },
     ...overrides,
   });
 
@@ -151,7 +152,13 @@ describe('MeltOperationService', () => {
           methodData: operation.methodData,
         }),
       })),
-      finalize: mock(async () => ({ changeAmount: 0, effectiveFee: 1 } as FinalizeResult)),
+      finalize: mock(async () =>
+        ({
+          changeAmount: 0,
+          effectiveFee: 1,
+          finalizedData: { preimage: 'preimage-123' },
+        } as FinalizeResult)
+      ),
       rollback: mock(async () => {}),
       checkPending: mock(async () => 'stay_pending' as PendingCheckResult),
       recoverExecuting: mock(async ({ operation }) => ({
@@ -331,6 +338,7 @@ describe('MeltOperationService', () => {
       if (result.state === 'finalized') {
         expect(result.changeAmount).toBe(0);
         expect(result.effectiveFee).toBe(1);
+        expect(result.finalizedData?.preimage).toBe('preimage-123');
       }
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-4');
@@ -338,6 +346,7 @@ describe('MeltOperationService', () => {
       const finalizedOp = stored as FinalizedMeltOperation;
       expect(finalizedOp.changeAmount).toBe(0);
       expect(finalizedOp.effectiveFee).toBe(1);
+      expect(finalizedOp.finalizedData?.preimage).toBe('preimage-123');
     });
 
     it('moves to pending on PENDING response', async () => {
@@ -385,7 +394,11 @@ describe('MeltOperationService', () => {
       const result = await service.finalize('op-7');
 
       expect(handler.finalize).toHaveBeenCalled();
-      expect(result).toEqual({ changeAmount: 0, effectiveFee: 1 });
+      expect(result).toEqual({
+        changeAmount: 0,
+        effectiveFee: 1,
+        finalizedData: { preimage: 'preimage-123' },
+      });
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-7');
       expect(stored?.state).toBe('finalized');
@@ -393,6 +406,7 @@ describe('MeltOperationService', () => {
       const finalizedOp = stored as FinalizedMeltOperation;
       expect(finalizedOp.changeAmount).toBe(0);
       expect(finalizedOp.effectiveFee).toBe(1);
+      expect(finalizedOp.finalizedData?.preimage).toBe('preimage-123');
     });
 
     it('returns early if already finalized', async () => {
@@ -402,7 +416,11 @@ describe('MeltOperationService', () => {
       const result = await service.finalize('op-8');
 
       expect(handler.finalize).not.toHaveBeenCalled();
-      expect(result).toEqual({ changeAmount: 0, effectiveFee: 1 });
+      expect(result).toEqual({
+        changeAmount: 0,
+        effectiveFee: 1,
+        finalizedData: { preimage: 'preimage-123' },
+      });
     });
 
     it('returns undefined settlement amounts for legacy finalized operations', async () => {
@@ -411,7 +429,11 @@ describe('MeltOperationService', () => {
       const result = await service.finalize('op-legacy');
 
       expect(handler.finalize).not.toHaveBeenCalled();
-      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
+      expect(result).toEqual({
+        changeAmount: undefined,
+        effectiveFee: undefined,
+        finalizedData: undefined,
+      });
     });
 
     it('returns undefined settlement amounts for rolled back operations', async () => {
@@ -420,7 +442,11 @@ describe('MeltOperationService', () => {
       const result = await service.finalize('op-rolled-back');
 
       expect(handler.finalize).not.toHaveBeenCalled();
-      expect(result).toEqual({ changeAmount: undefined, effectiveFee: undefined });
+      expect(result).toEqual({
+        changeAmount: undefined,
+        effectiveFee: undefined,
+        finalizedData: undefined,
+      });
     });
   });
 

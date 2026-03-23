@@ -11,6 +11,7 @@ import type {
   FailedMeltOperation,
   FinalizedMeltOperation,
   InitMeltOperation,
+  MeltMethodFinalizedData,
   PendingMeltOperation,
   PreparedMeltOperation,
   PreparedOrLaterOperation,
@@ -75,17 +76,14 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
   operation: PendingMeltOperation & MeltMethodMeta<M>;
 }
 
-/**
- * Data returned from the finalize method containing settlement information.
- * Values may be unavailable when reading legacy finalized operations that were
- * stored before settlement tracking was introduced.
- */
-export interface FinalizeResult {
+export type FinalizeResult<M extends MeltMethod = MeltMethod> = {
   /** Total amount returned as change by the mint */
   changeAmount?: number;
   /** Actual fee impact after settlement */
   effectiveFee?: number;
-}
+  /** Method-specific data that may be available once settlement completes */
+  finalizedData?: MeltMethodFinalizedData<M>;
+};
 
 export interface RollbackContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PreparedOrLaterOperation & MeltMethodMeta<M>;
@@ -101,7 +99,7 @@ export interface RecoverExecutingContext<M extends MeltMethod = MeltMethod>
 export type ExecutionResult<M extends MeltMethod = MeltMethod> =
   | {
     status: 'PAID';
-    finalized: FinalizedMeltOperation & MeltMethodMeta<M>;
+    finalized: FinalizedMeltOperation<M>;
     sendProofs?: Proof[];
     keepProofs?: Proof[];
   }
@@ -123,7 +121,7 @@ export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
-  finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult>;
+  finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult<M>>;
   rollback?(ctx: RollbackContext<M>): Promise<void>;
   checkPending?(ctx: PendingContext<M>): Promise<PendingCheckResult>;
   /**

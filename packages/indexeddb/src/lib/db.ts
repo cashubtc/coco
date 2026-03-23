@@ -219,6 +219,7 @@ export interface MeltOperationRow {
   swapOutputDataJson?: string | null;
   changeAmount?: number | null;
   effectiveFee?: number | null;
+  finalizedDataJson?: string | null;
 }
 
 export interface AuthSessionRow {
