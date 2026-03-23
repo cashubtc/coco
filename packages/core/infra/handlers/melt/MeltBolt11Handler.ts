@@ -536,16 +536,25 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   async rollback(ctx: RollbackContext<'bolt11'>): Promise<void> {
     const { id: operationId, mintUrl, needsSwap } = ctx.operation;
     ctx.logger?.debug('Rolling back bolt11 melt operation', { operationId, needsSwap });
-    const secretsToRestore = this.getMeltInputSecrets(ctx.operation);
 
-    // restoreProofsToReady sets state to 'ready' and clears usedByOperationId
-    // This handles both 'ready' proofs (just clears reservation) and 'inflight' proofs
-    await ctx.proofService.restoreProofsToReady(mintUrl, secretsToRestore);
+    if (needsSwap) {
+      // Restore swap send proofs (inflight → ready). No-op if swap wasn't executed yet.
+      const swapSendSecrets = getSwapSendSecrets(ctx.operation.swapOutputData!);
+      await ctx.proofService.restoreProofsToReady(mintUrl, swapSendSecrets);
+
+      // Release original input proofs (clear usedByOperationId only, don't change state).
+      // Pre-execute: proofs are "ready" + reserved → released.
+      // Post-execute: proofs are "spent" → clearing usedByOperationId is harmless
+      // since spent proofs are never returned by getReadyProofs().
+      await ctx.proofService.releaseProofs(mintUrl, ctx.operation.inputProofSecrets);
+    } else {
+      await ctx.proofService.restoreProofsToReady(mintUrl, ctx.operation.inputProofSecrets);
+    }
 
     ctx.logger?.info('Melt operation rolled back, proofs restored', {
       operationId,
       needsSwap,
-      proofCount: secretsToRestore.length,
+      proofCount: ctx.operation.inputProofSecrets.length,
     });
   }
 
