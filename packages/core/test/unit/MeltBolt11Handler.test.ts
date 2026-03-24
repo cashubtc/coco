@@ -844,7 +844,7 @@ describe('MeltBolt11Handler', () => {
       ]);
     });
 
-    it('should restore swap send proofs for swap-then-melt', async () => {
+    it('should restore swap send proofs and release original inputs for swap-then-melt', async () => {
       const swapOutputData = createMockOutputData(['keep-1'], ['send-1', 'send-2']);
       const operation = makePreparedOp('op-1', {
         needsSwap: true,
@@ -857,6 +857,7 @@ describe('MeltBolt11Handler', () => {
 
       // Should restore swap send proofs (not original inputs)
       expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['send-1', 'send-2']);
+      expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1']);
     });
   });
 
