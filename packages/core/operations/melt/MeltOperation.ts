@@ -93,6 +93,7 @@ interface PreparedData {
 
 /**
  * Method-specific data that may be available once a melt has settled.
+ * Extend via declaration merging if custom methods need to persist finalized metadata.
  */
 export interface MeltMethodFinalizedDataMap {
   bolt11: {
@@ -103,7 +104,7 @@ export interface MeltMethodFinalizedDataMap {
 }
 
 export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
-  MeltMethodFinalizedDataMap[M];
+  M extends keyof MeltMethodFinalizedDataMap ? MeltMethodFinalizedDataMap[M] : never;
 
 // ============================================================================
 // State-specific Operation Types
