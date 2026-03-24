@@ -34,6 +34,10 @@ async function mnemonicToSeedNormalized(
   return new Uint8Array(seed);
 }
 
+function getLegacyPublicKeyHex(secretKey: Uint8Array): string {
+  return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+}
+
 describe('KeyRingService', () => {
   let repo: MemoryKeyRingRepository;
   let seedService: SeedService;
@@ -466,6 +470,49 @@ describe('KeyRingService', () => {
       expect(signatureBytes.length).toBe(64);
     });
 
+    it('signs proofs locked to the legacy public key alias', async () => {
+      const kp = await service.generateNewKeyPair({ dumpSecretKey: true });
+      const legacyPublicKeyHex = getLegacyPublicKeyHex(kp.secretKey);
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'legacy-secret',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const signed = await service.signProof(proof, legacyPublicKeyHex);
+      const witness = JSON.parse(signed.witness as string);
+
+      expect(witness.signatures).toHaveLength(1);
+    });
+
+    it('signs legacy aliases for keys with odd-Y compressed public keys', async () => {
+      const seed = await mnemonicToSeedNormalized(
+        'half depart obvious quality work element tank gorilla view sugar picture humble',
+        '',
+      );
+      const vectorRepo = new MemoryKeyRingRepository();
+      const vectorSeedService = new SeedService(async () => seed);
+      const vectorService = new KeyRingService(vectorRepo, vectorSeedService);
+
+      await vectorService.generateNewKeyPair();
+      const oddYKeyPair = await vectorService.generateNewKeyPair({ dumpSecretKey: true });
+      expect(oddYKeyPair.publicKeyHex.startsWith('03')).toBe(true);
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'odd-y-legacy-secret',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const signed = await vectorService.signProof(proof, getLegacyPublicKeyHex(oddYKeyPair.secretKey));
+      const witness = JSON.parse(signed.witness as string);
+
+      expect(witness.signatures).toHaveLength(1);
+    });
+
     it('throws when keypair not found', async () => {
       const proof: Proof = {
         id: 'keyset123',
@@ -493,6 +540,23 @@ describe('KeyRingService', () => {
 
       await expect(service.signProof(proof, fakePublicKey)).rejects.toThrow(
         'Key pair not found for public key: abcdef12...',
+      );
+    });
+
+    it('does not match unrelated legacy public keys', async () => {
+      await service.generateNewKeyPair({ dumpSecretKey: true });
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'my-secret-string',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const fakeLegacyPublicKey = '02' + '11'.repeat(32);
+
+      await expect(service.signProof(proof, fakeLegacyPublicKey)).rejects.toThrow(
+        /Key pair not found for public key/,
       );
     });
 
