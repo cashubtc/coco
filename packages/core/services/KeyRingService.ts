@@ -120,7 +120,7 @@ export class KeyRingService {
     if (!proof.secret || typeof proof.secret !== 'string') {
       throw new Error('Proof secret is required and must be a string');
     }
-    const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+    const keyPair = await this.findSigningKeyPair(publicKey);
     if (!keyPair) {
       const publicKeyPreview = publicKey.substring(0, 8);
       this.logger?.error('Key pair not found', { publicKey });
@@ -146,5 +146,25 @@ export class KeyRingService {
 
   private getCompressedPublicKeyHex(secretKey: Uint8Array): string {
     return bytesToHex(secp256k1.getPublicKey(secretKey, true));
+  }
+
+  private getLegacyPublicKeyHex(secretKey: Uint8Array): string {
+    return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+  }
+
+  private async findSigningKeyPair(publicKey: string): Promise<Keypair | null> {
+    const directMatch = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const persistedKeyPairs = await this.keyRingRepository.getAllPersistedKeyPairs('p2pk');
+    for (const keyPair of persistedKeyPairs) {
+      if (this.getLegacyPublicKeyHex(keyPair.secretKey) === publicKey) {
+        return keyPair;
+      }
+    }
+
+    return null;
   }
 }
