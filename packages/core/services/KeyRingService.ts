@@ -2,7 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
 import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair } from '@core/models/Keypair';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { SeedService } from '@core/services/SeedService.ts';
@@ -84,7 +84,7 @@ export class KeyRingService {
     if (!proof.secret || typeof proof.secret !== 'string') {
       throw new Error('Proof secret is required and must be a string');
     }
-    const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey);
+    const keyPair = await this.findSigningKeyPair(publicKey);
     if (!keyPair) {
       const publicKeyPreview = publicKey.substring(0, 8);
       this.logger?.error('Key pair not found', { publicKey });
@@ -102,11 +102,29 @@ export class KeyRingService {
 
   /**
    * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
-   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
    */
   private getPublicKeyHex(secretKey: Uint8Array): string {
-    const publicKey = schnorr.getPublicKey(secretKey);
-    return '02' + bytesToHex(publicKey);
+    const publicKey = secp256k1.getPublicKey(secretKey, true);
+    return bytesToHex(publicKey);
+  }
+
+  private getLegacyPublicKeyHex(secretKey: Uint8Array): string {
+    return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+  }
+
+  private async findSigningKeyPair(publicKey: string): Promise<Keypair | null> {
+    const directMatch = await this.keyRingRepository.getPersistedKeyPair(publicKey);
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const persistedKeyPairs = await this.keyRingRepository.getAllPersistedKeyPairs();
+    for (const keyPair of persistedKeyPairs) {
+      if (this.getLegacyPublicKeyHex(keyPair.secretKey) === publicKey) {
+        return keyPair;
+      }
+    }
+
+    return null;
   }
 }

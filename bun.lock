@@ -16,22 +16,22 @@
     },
     "packages/adapter-tests": {
       "name": "coco-cashu-adapter-tests",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "dependencies": {
         "fake-bolt11": "^0.1.0",
       },
       "devDependencies": {
-        "coco-cashu-core": "1.1.2-rc.47",
+        "coco-cashu-core": "1.1.2-rc.48",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "^3.3.0",
-        "coco-cashu-core": "^1.1.2-rc.47",
+        "coco-cashu-core": "^1.1.2-rc.48",
         "typescript": "^5",
       },
     },
     "packages/core": {
       "name": "coco-cashu-core",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "dependencies": {
         "@cashu/cashu-ts": "^3.5.0",
         "@noble/curves": "^2.0.1",
@@ -39,7 +39,7 @@
         "@scure/bip32": "^2.0.1",
       },
       "devDependencies": {
-        "coco-cashu-adapter-tests": "1.1.2-rc.47",
+        "coco-cashu-adapter-tests": "1.1.2-rc.48",
         "typescript-eslint": "^8.40.0",
       },
       "peerDependencies": {
@@ -54,7 +54,7 @@
     },
     "packages/expo-sqlite": {
       "name": "coco-cashu-expo-sqlite",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "devDependencies": {
         "coco-cashu-adapter-tests": "1.1.2-rc.47",
       },
@@ -66,7 +66,7 @@
     },
     "packages/indexeddb": {
       "name": "coco-cashu-indexeddb",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "dependencies": {
         "dexie": "^4.0.8",
       },
@@ -83,14 +83,14 @@
     },
     "packages/react": {
       "name": "coco-cashu-react",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "devDependencies": {
         "@eslint/js": "^9.33.0",
         "@types/react": "^19.1.10",
         "@types/react-dom": "^19.1.7",
         "@vitejs/plugin-react": "^5.0.0",
         "ajv": "^8.17.1",
-        "coco-cashu-core": "1.1.2-rc.47",
+        "coco-cashu-core": "1.1.2-rc.48",
         "eslint": "^9.33.0",
         "eslint-plugin-react-hooks": "^5.2.0",
         "eslint-plugin-react-refresh": "^0.4.20",
@@ -101,13 +101,13 @@
         "vite-plugin-dts": "^4.5.4",
       },
       "peerDependencies": {
-        "coco-cashu-core": "1.1.2-rc.47",
+        "coco-cashu-core": "1.1.2-rc.48",
         "react": "^19",
       },
     },
     "packages/sqlite-bun": {
       "name": "coco-cashu-sqlite-bun",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "devDependencies": {
         "coco-cashu-adapter-tests": "1.1.2-rc.47",
       },
@@ -118,7 +118,7 @@
     },
     "packages/sqlite3": {
       "name": "coco-cashu-sqlite3",
-      "version": "1.1.2-rc.47",
+      "version": "1.1.2-rc.48",
       "dependencies": {
         "better-sqlite3": "^12.6.2",
       },

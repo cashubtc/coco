@@ -3,13 +3,39 @@ import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
 for (let i = 0; i < 64; i++) {
   MOCK_SEED[i] = i;
+}
+
+async function mnemonicToSeedNormalized(
+  mnemonic: string,
+  passphrase: string,
+): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const password = encoder.encode(mnemonic.normalize('NFKD'));
+  const salt = encoder.encode(`mnemonic${passphrase.normalize('NFKD')}`);
+  const key = await crypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
+  const seed = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-512',
+      salt,
+      iterations: 2048,
+    },
+    key,
+    512,
+  );
+
+  return new Uint8Array(seed);
+}
+
+function getLegacyPublicKeyHex(secretKey: Uint8Array): string {
+  return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
 }
 
 describe('KeyRingService', () => {
@@ -28,8 +54,8 @@ describe('KeyRingService', () => {
       const result = await service.generateNewKeyPair();
 
       expect(result.publicKeyHex).toBeDefined();
-      expect(result.publicKeyHex.length).toBe(66); // 32 bytes * 2 for hex + '02' prefix
-      expect(result.publicKeyHex.startsWith('02')).toBe(true);
+      expect(result.publicKeyHex.length).toBe(66);
+      expect(['02', '03']).toContain(result.publicKeyHex.slice(0, 2));
       expect('secretKey' in result).toBe(false);
 
       // Verify it was stored in the repository
@@ -97,6 +123,50 @@ describe('KeyRingService', () => {
       expect(bytesToHex(kp1.secretKey)).toBe(bytesToHex(kp2.secretKey));
     });
 
+    it('P2PK derivation test vectors', async () => {
+      const seed = await mnemonicToSeedNormalized(
+        'half depart obvious quality work element tank gorilla view sugar picture humble',
+        '',
+      );
+      const vectorRepo = new MemoryKeyRingRepository();
+      const vectorSeedService = new SeedService(async () => seed);
+      const vectorService = new KeyRingService(vectorRepo, vectorSeedService);
+
+      const kp0 = await vectorService.generateNewKeyPair();
+      const kp1 = await vectorService.generateNewKeyPair();
+      const kp2 = await vectorService.generateNewKeyPair();
+      const kp3 = await vectorService.generateNewKeyPair();
+      const kp4 = await vectorService.generateNewKeyPair();
+
+      expect(kp0.publicKeyHex).toBe(
+        '021693d45f4fdf610ae641fedb0944fb460fbb8264f21c19d2626c3da755fcbbcb',
+      );
+      expect(kp1.publicKeyHex).toBe(
+        '0395461ab678058c0ed6aa39f38dda490eaa163e9ad27070b23ec3d06b41e07535',
+      );
+      expect(kp2.publicKeyHex).toBe(
+        '02a05e4e593a633e9b4405f01c9632c8afde24cb613017a1aee56fd76291ad26d1',
+      );
+      expect(kp3.publicKeyHex).toBe(
+        '033addea25c3873b93d67d536c61c9d9c993f6efd8b9dfa657951b66b5001e51dd',
+      );
+      expect(kp4.publicKeyHex).toBe(
+        '03c964bdf42fc82b6c574615746eeca37527a24f1fdfc1b34a732c53843b5744a5',
+      );
+
+      const stored0 = await vectorRepo.getPersistedKeyPair(kp0.publicKeyHex);
+      const stored1 = await vectorRepo.getPersistedKeyPair(kp1.publicKeyHex);
+      const stored2 = await vectorRepo.getPersistedKeyPair(kp2.publicKeyHex);
+      const stored3 = await vectorRepo.getPersistedKeyPair(kp3.publicKeyHex);
+      const stored4 = await vectorRepo.getPersistedKeyPair(kp4.publicKeyHex);
+
+      expect(stored0?.derivationIndex).toBe(0);
+      expect(stored1?.derivationIndex).toBe(1);
+      expect(stored2?.derivationIndex).toBe(2);
+      expect(stored3?.derivationIndex).toBe(3);
+      expect(stored4?.derivationIndex).toBe(4);
+    });
+
     it('continues derivation index after imported keys', async () => {
       // Generate first key (index 0)
       const derived1 = await service.generateNewKeyPair();
@@ -162,8 +232,7 @@ describe('KeyRingService', () => {
       const secretKey = schnorr.utils.randomSecretKey();
       const result = await service.addKeyPair(secretKey);
 
-      // The public key should have '02' prefix for compressed format
-      const publicKeyHex = '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+      const publicKeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true));
       const stored = await repo.getPersistedKeyPair(publicKeyHex);
 
       expect(stored).not.toBeNull();
@@ -401,6 +470,49 @@ describe('KeyRingService', () => {
       expect(signatureBytes.length).toBe(64);
     });
 
+    it('signs proofs locked to the legacy public key alias', async () => {
+      const kp = await service.generateNewKeyPair({ dumpSecretKey: true });
+      const legacyPublicKeyHex = getLegacyPublicKeyHex(kp.secretKey);
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'legacy-secret',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const signed = await service.signProof(proof, legacyPublicKeyHex);
+      const witness = JSON.parse(signed.witness as string);
+
+      expect(witness.signatures).toHaveLength(1);
+    });
+
+    it('signs legacy aliases for keys with odd-Y compressed public keys', async () => {
+      const seed = await mnemonicToSeedNormalized(
+        'half depart obvious quality work element tank gorilla view sugar picture humble',
+        '',
+      );
+      const vectorRepo = new MemoryKeyRingRepository();
+      const vectorSeedService = new SeedService(async () => seed);
+      const vectorService = new KeyRingService(vectorRepo, vectorSeedService);
+
+      await vectorService.generateNewKeyPair();
+      const oddYKeyPair = await vectorService.generateNewKeyPair({ dumpSecretKey: true });
+      expect(oddYKeyPair.publicKeyHex.startsWith('03')).toBe(true);
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'odd-y-legacy-secret',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const signed = await vectorService.signProof(proof, getLegacyPublicKeyHex(oddYKeyPair.secretKey));
+      const witness = JSON.parse(signed.witness as string);
+
+      expect(witness.signatures).toHaveLength(1);
+    });
+
     it('throws when keypair not found', async () => {
       const proof: Proof = {
         id: 'keyset123',
@@ -428,6 +540,23 @@ describe('KeyRingService', () => {
 
       await expect(service.signProof(proof, fakePublicKey)).rejects.toThrow(
         'Key pair not found for public key: abcdef12...',
+      );
+    });
+
+    it('does not match unrelated legacy public keys', async () => {
+      await service.generateNewKeyPair({ dumpSecretKey: true });
+
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: 64,
+        secret: 'my-secret-string',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const fakeLegacyPublicKey = '02' + '11'.repeat(32);
+
+      await expect(service.signProof(proof, fakeLegacyPublicKey)).rejects.toThrow(
+        /Key pair not found for public key/,
       );
     });
 
