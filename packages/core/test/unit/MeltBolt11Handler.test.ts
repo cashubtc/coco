@@ -26,6 +26,7 @@ import type {
 } from '../../operations/melt/MeltMethodHandler';
 import type { Wallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
+import { MintOperationError } from '../../models/Error';
 
 describe('MeltBolt11Handler', () => {
   const mintUrl = 'https://mint.test';
@@ -1110,6 +1111,26 @@ describe('MeltBolt11Handler', () => {
           operationId: 'op-1',
         });
       });
+    });
+
+    describe('quote expired recovery (20007)', () => {
+      it('should treat expired quote as UNPAID and release proofs (no swap)', async () => {
+        const operation = makeExecutingOp('op-1', {
+          needsSwap: false,
+          inputProofSecrets: ['input-1', 'input-2'],
+        });
+
+        (mintAdapter.checkMeltQuoteState as Mock<any>).mockImplementation(() => {
+          throw new MintOperationError(20007, 'Quote expired');
+        });
+
+        const ctx = buildRecoverContext(operation);
+        const result = await handler.recoverExecuting(ctx);
+
+        expect(result.status).toBe('FAILED');
+        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
+      });
+
     });
 
     describe('unexpected state handling', () => {

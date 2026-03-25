@@ -20,6 +20,7 @@ import {
   computeYHexForSecrets,
   type SerializedOutputData,
 } from '@core/utils';
+import { MintOperationError } from '@core/models';
 import {
   type MeltQuoteData,
   SWAP_THRESHOLD_RATIO,
@@ -585,7 +586,19 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       needsSwap,
     });
 
-    const state = await ctx.mintAdapter.checkMeltQuoteState(mintUrl, quoteId);
+    let state: string;
+    try {
+      state = await ctx.mintAdapter.checkMeltQuoteState(mintUrl, quoteId);
+    } catch (err) {
+      if (err instanceof MintOperationError && err.code === 20007) {
+        ctx.logger?.info('Melt quote expired during recovery, treating as UNPAID', {
+          operationId,
+          quoteId,
+        });
+        return this.recoverExecutingUnpaidOperation(ctx);
+      }
+      throw err;
+    }
 
     ctx.logger?.debug('Melt quote state checked during recovery', { operationId, quoteId, state });
 
