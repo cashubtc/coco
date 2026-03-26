@@ -1,4 +1,5 @@
-import type { Proof, SerializedBlindedSignature, OutputConfig } from '@cashu/cashu-ts';
+import type { OutputConfig, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
+import { MintOperationError } from '@core/models';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -14,21 +15,20 @@ import type {
   RollbackContext,
 } from '@core/operations/melt';
 import {
-  deserializeOutputData,
-  serializeOutputData,
-  mapProofToCoreProof,
   computeYHexForSecrets,
+  deserializeOutputData,
+  mapProofToCoreProof,
+  serializeOutputData,
   type SerializedOutputData,
 } from '@core/utils';
-import { MintOperationError } from '@core/models';
 import {
-  type MeltQuoteData,
   SWAP_THRESHOLD_RATIO,
-  sumProofs,
-  getSwapSendSecrets,
+  buildFailedResult,
   buildPaidResult,
   buildPendingResult,
-  buildFailedResult,
+  getSwapSendSecrets,
+  sumProofs,
+  type MeltQuoteData,
 } from './MeltBolt11Handler.utils.ts';
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
@@ -760,7 +760,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   }
 
   /**
-   * Recover when no swap occurred - release original proofs.
+   * Recover when no swap occurred - restore original proofs to ready.
    */
   private async recoverExecutingWithoutSwap(
     ctx: RecoverExecutingContext<'bolt11'>,
@@ -768,9 +768,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { operation } = ctx;
     const { mintUrl, inputProofSecrets, id: operationId } = operation;
 
-    await ctx.proofService.releaseProofs(mintUrl, inputProofSecrets);
+    await ctx.proofService.restoreProofsToReady(mintUrl, inputProofSecrets);
 
-    ctx.logger?.info('Released proofs after failed melt (no swap occurred)', {
+    ctx.logger?.info('Restored proofs after failed melt (no swap occurred)', {
       operationId,
       proofCount: inputProofSecrets.length,
     });

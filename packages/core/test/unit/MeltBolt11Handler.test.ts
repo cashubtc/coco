@@ -1,32 +1,32 @@
-import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
+import type { Proof, SerializedBlindedSignature, Wallet } from '@cashu/cashu-ts';
+import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { ProofService } from '../../services/ProofService';
-import type { MintService } from '../../services/MintService';
-import type { WalletService } from '../../services/WalletService';
-import type { Logger } from '../../logging/Logger';
-import type { CoreProof } from '../../types';
-import type { ProofRepository } from '../../repositories';
 import type { MintAdapter } from '../../infra';
+import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
+import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
+import type { Logger } from '../../logging/Logger';
+import { MintOperationError } from '../../models/Error';
 import type {
-  InitMeltOperation,
-  PreparedMeltOperation,
-  ExecutingMeltOperation,
-  PendingMeltOperation,
-} from '../../operations/melt/MeltOperation';
-import type {
-  MeltMethodMeta,
   BasePrepareContext,
   ExecuteContext,
   FinalizeContext,
+  MeltMethodMeta,
   PendingContext,
-  RollbackContext,
   RecoverExecutingContext,
+  RollbackContext,
 } from '../../operations/melt/MeltMethodHandler';
-import type { Wallet, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
-import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
-import { MintOperationError } from '../../models/Error';
+import type {
+  ExecutingMeltOperation,
+  InitMeltOperation,
+  PendingMeltOperation,
+  PreparedMeltOperation,
+} from '../../operations/melt/MeltOperation';
+import type { ProofRepository } from '../../repositories';
+import type { MintService } from '../../services/MintService';
+import type { ProofService } from '../../services/ProofService';
+import type { WalletService } from '../../services/WalletService';
+import type { CoreProof } from '../../types';
 
 describe('MeltBolt11Handler', () => {
   const mintUrl = 'https://mint.test';
@@ -981,7 +981,7 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('FAILED');
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
+        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
       });
     });
 
@@ -1006,7 +1006,7 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('FAILED');
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1']);
+        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['input-1']);
       });
     });
 
@@ -1128,7 +1128,7 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('FAILED');
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
+        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
       });
 
     });
