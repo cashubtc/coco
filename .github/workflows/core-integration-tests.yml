@@ -24,4 +24,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run core integration tests
-        run: ./scripts/test-integration.sh core
+        run: ./scripts/test-integration.sh core --coverage
+
+      - name: Upload core integration coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        uses: codecov/codecov-action@v5
+        with:
+          working-directory: packages/core
+          files: coverage/integration/lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          flags: core-integration
+          name: core-integration
+          token: ${{ secrets.CODECOV_TOKEN }}

@@ -35,6 +35,16 @@ log_test() {
     echo -e "${BLUE}[TEST]${NC} $1"
 }
 
+coverage_enabled_for_package() {
+    local package_name=$1
+
+    if [ "$ENABLE_COVERAGE" = "true" ] && [ "$package_name" = "core" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
 # Check if a package uses browser tests (has test:browser script)
 is_browser_test_package() {
     local package_dir=$1
@@ -169,8 +179,17 @@ run_test() {
         return 1
     fi
 
-    # Extract package directory from test file path
-    local package_dir=$(dirname "$test_file" | sed 's|/src/test||')
+    # Package roots are always under packages/<name>, even when the test file
+    # lives outside src/test (for example packages/core/test/integration).
+    local package_dir="$PROJECT_ROOT/packages/$package_name"
+    local coverage_dir="$package_dir/coverage/integration"
+    local package_coverage_enabled="false"
+
+    if coverage_enabled_for_package "$package_name"; then
+        package_coverage_enabled="true"
+    elif [ "$ENABLE_COVERAGE" = "true" ]; then
+        log_warn "Coverage is only supported for core integration tests; running $package_name without coverage"
+    fi
 
     log_test "Running integration tests for: $package_name"
     if [ -n "$test_pattern" ]; then
@@ -178,6 +197,10 @@ run_test() {
     fi
     if [ -n "$log_level" ]; then
         log_test "Log level: $log_level"
+    fi
+    if [ "$package_coverage_enabled" = "true" ]; then
+        rm -rf "$coverage_dir"
+        log_test "Coverage output: $coverage_dir/lcov.info"
     fi
     cd "$package_dir"
 
@@ -205,7 +228,7 @@ run_test() {
         unset VITE_MINT_URL
         unset VITE_TEST_LOG_LEVEL
     else
-        # Standard npm test for non-browser packages (uses vitest or bun:test)
+        # Standard test command for non-browser packages (uses vitest or bun:test)
         export MINT_URL="$mint_url"
         if [ -n "$log_level" ]; then
             export TEST_LOG_LEVEL="$log_level"
@@ -213,14 +236,27 @@ run_test() {
             unset TEST_LOG_LEVEL
         fi
 
+        local bun_args=()
+        if [ "$package_coverage_enabled" = "true" ]; then
+            bun_args+=(
+                --coverage
+                --coverage-reporter=lcov
+                "--coverage-dir=$coverage_dir"
+            )
+        fi
+
         if [ -n "$test_pattern" ]; then
-            bun run test -- -t "$test_pattern" "$test_file" || test_result=$?
+            bun run test -- "${bun_args[@]}" -t "$test_pattern" "$test_file" || test_result=$?
         else
-            bun run test -- "$test_file" || test_result=$?
+            bun run test -- "${bun_args[@]}" "$test_file" || test_result=$?
         fi
 
         unset MINT_URL
         unset TEST_LOG_LEVEL
+    fi
+
+    if [ "$package_coverage_enabled" = "true" ] && [ -f "$coverage_dir/lcov.info" ]; then
+        log_info "Coverage report generated: $coverage_dir/lcov.info"
     fi
 
     # Stop the mint container
@@ -317,6 +353,7 @@ fi
 COMMAND="all"
 TEST_PATTERN=""
 LOG_LEVEL=""
+ENABLE_COVERAGE="false"
 
 # Parse flags and positional arguments
 while [[ $# -gt 0 ]]; do
@@ -337,12 +374,16 @@ while [[ $# -gt 0 ]]; do
             LOG_LEVEL="${1#*=}"
             shift
             ;;
+        --coverage)
+            ENABLE_COVERAGE="true"
+            shift
+            ;;
         list|--list)
             list_tests
             exit 0
             ;;
         help|--help|-h)
-            echo "Usage: $0 [package-name|all|list] [-t PATTERN] [-l LEVEL]"
+            echo "Usage: $0 [package-name|all|list] [-t PATTERN] [-l LEVEL] [--coverage]"
             echo ""
             echo "Options:"
             echo "  package-name              Run integration tests for a specific package (e.g., expo-sqlite, sqlite3)"
@@ -350,12 +391,14 @@ while [[ $# -gt 0 ]]; do
             echo "  list                      List available integration tests"
             echo "  -t, --test-name-pattern   Filter tests by name pattern (e.g., 'should create a melt quote')"
             echo "  -l, --log-level           Set log level: error, warn, info, debug (default: no logging)"
+            echo "  --coverage                Generate lcov.info under packages/core/coverage/integration"
             echo "  help                      Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0                                    # Run all tests"
             echo "  $0 expo-sqlite                        # Run all expo-sqlite tests"
             echo "  $0 expo-sqlite -t 'melt quote'        # Run expo-sqlite tests matching 'melt quote'"
+            echo "  $0 core --coverage                    # Run core tests and emit coverage"
             echo "  $0 all -t 'should create'            # Run all tests matching 'should create'"
             echo "  $0 expo-sqlite -l debug               # Run expo-sqlite tests with debug logging"
             echo "  $0 all -l info -t 'melt'             # Run all 'melt' tests with info logging"
