@@ -213,7 +213,27 @@ export class WalletApi {
     return wallet.decodeToken(tokenString);
   }
 
-  encodeToken(token: Token): string {
-    return getEncodedToken(token);
+  /**
+   * Encode a token to a string.
+   * @param token - The token to encode
+   * @param opts - Optional encoding options
+   * @param opts.version - Token version (3 for cashuA, 4 for cashuB). Defaults to 4 if keyset allows it.
+   * @returns Encoded token string
+   */
+  encodeToken(token: Token, opts?: { version?: 3 | 4 }): string {
+    return getEncodedToken(token, opts);
+  }
+
+  /**
+   * Encode a PaymentRequest to a string.
+   * @param paymentRequest - The PaymentRequest to encode
+   * @param version - Encoding version ('creqA' for base64 text, 'creqB' for bech32m binary). Defaults to 'creqA'.
+   * @returns Encoded payment request string
+   */
+  encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string {
+    if (version === 'creqB') {
+      return paymentRequest.toEncodedCreqB();
+    }
+    return paymentRequest.toEncodedCreqA();
   }
 }

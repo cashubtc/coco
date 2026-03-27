@@ -10,7 +10,7 @@ import type { SendOperationService } from '../../operations/send/SendOperationSe
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
-import { getEncodedToken, OutputData } from '@cashu/cashu-ts';
+import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
@@ -340,7 +340,7 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('encodeToken', () => {
-    it('should encode tokens with cashu encoder', () => {
+    it('should encode tokens with default encoding', () => {
       const token = {
         mint: testMintUrl,
         proofs: testProofs,
@@ -349,6 +349,70 @@ describe('WalletApi - Trust Enforcement', () => {
       const encodedToken = walletApi.encodeToken(token);
 
       expect(encodedToken).toBe(getEncodedToken(token));
+    });
+
+    it('should encode tokens with V3 when version 3 is specified', () => {
+      const token = {
+        mint: testMintUrl,
+        proofs: [
+          {
+            id: '009a1f293253e41e',
+            amount: 2,
+            secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
+            C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
+          } as Proof,
+        ],
+      };
+
+      const encodedToken = walletApi.encodeToken(token, { version: 3 });
+
+      expect(encodedToken).toStartWith('cashuA');
+      expect(encodedToken).toBe(getEncodedToken(token, { version: 3 }));
+    });
+
+    it('should encode tokens with V4 when version 4 is specified', () => {
+      const v4Token = {
+        mint: testMintUrl,
+        proofs: [
+          {
+            id: '009a1f293253e41e',
+            amount: 2,
+            secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
+            C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
+          } as Proof,
+        ],
+      };
+
+      const encodedToken = walletApi.encodeToken(v4Token, { version: 4 });
+
+      expect(encodedToken).toStartWith('cashuB');
+      expect(encodedToken).toBe(getEncodedToken(v4Token, { version: 4 }));
+    });
+  });
+
+  describe('encodePaymentRequest', () => {
+    it('should encode payment request as creqA by default', () => {
+      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+
+      const encoded = walletApi.encodePaymentRequest(pr);
+
+      expect(encoded).toStartWith('creqA');
+    });
+
+    it('should encode payment request as creqA when specified', () => {
+      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+
+      const encoded = walletApi.encodePaymentRequest(pr, 'creqA');
+
+      expect(encoded).toStartWith('creqA');
+    });
+
+    it('should encode payment request as creqB when specified', () => {
+      const pr = new PaymentRequest([], 'test-id', 10, 'sat', [testMintUrl]);
+
+      const encoded = walletApi.encodePaymentRequest(pr, 'creqB');
+
+      expect(encoded).toStartWith('CREQB');
     });
   });
 });
