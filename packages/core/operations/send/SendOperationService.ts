@@ -26,10 +26,12 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
+import { generateSubId } from '../../utils';
 import {
-  generateSubId,
-} from '../../utils';
-import { UnknownMintError, ProofValidationError, OperationInProgressError } from '../../models/Error';
+  UnknownMintError,
+  ProofValidationError,
+  OperationInProgressError,
+} from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 

@@ -375,13 +375,10 @@ describe('PaymentRequestService', () => {
 
     it('should preserve the resolved amount for legacy amountless requests', async () => {
       const request = {
-        paymentRequest: new PaymentRequest(
-          [],
-          'legacy-id',
-          undefined,
-          'sat',
-          [testMintUrl, testMintUrl2],
-        ),
+        paymentRequest: new PaymentRequest([], 'legacy-id', undefined, 'sat', [
+          testMintUrl,
+          testMintUrl2,
+        ]),
         matchingMints: [testMintUrl, testMintUrl2],
         requiredMints: [testMintUrl, testMintUrl2],
         amount: undefined,

@@ -18,7 +18,8 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async prepare(
     ctx: PrepareContext<'bolt11'>,
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
-    const quote = ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
+    const quote =
+      ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
 
     if (!quote.amount || quote.amount <= 0) {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);

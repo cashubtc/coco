@@ -24,7 +24,7 @@ export class IdbKeysetRepository implements KeysetRepository {
           active: !!r.active,
           feePpk: r.feePpk,
           updatedAt: r.updatedAt,
-        } satisfies Keyset),
+        }) satisfies Keyset,
     );
   }
 

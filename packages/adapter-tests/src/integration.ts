@@ -376,11 +376,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintUrl: string;
             operationId: string;
             operation: { quoteId?: string };
-          }>(
-            mgr!,
-            'mint-op:finalized',
-            (payload) => payload.operationId === pendingMint.id,
-          );
+          }>(mgr!, 'mint-op:finalized', (payload) => payload.operationId === pendingMint.id);
 
           await executeMintOperation(mgr!, pendingMint.id);
 
@@ -1518,8 +1514,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           mgr = await initializeCoco({
             repo: repositories,
             seedGetter,
-          logger,
-          watchers: {
+            logger,
+            watchers: {
               mintOperationWatcher: {
                 watchExistingPendingOnStart: false,
               },

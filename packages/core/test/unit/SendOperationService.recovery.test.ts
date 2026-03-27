@@ -51,7 +51,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       mintUrl,
       state: 'ready',
       ...overrides,
-    } as CoreProof);
+    }) as CoreProof;
 
   const makeInitOp = (id: string): InitSendOperation => ({
     id,
@@ -172,39 +172,39 @@ describe('SendOperationService - recoverPendingOperations', () => {
           serializedOutputData: any,
           options?: { persistRecoveredProofs?: boolean },
         ) => {
-        // Deserialize output data and call wallet restore
-        const allOutputs = [...serializedOutputData.keep, ...serializedOutputData.send];
-        if (allOutputs.length === 0) return [];
+          // Deserialize output data and call wallet restore
+          const allOutputs = [...serializedOutputData.keep, ...serializedOutputData.send];
+          if (allOutputs.length === 0) return [];
 
-        const blindedMessages = allOutputs.map((o: any) => o.blindedMessage);
-        const restoreResult = await mockMintRestore({ outputs: blindedMessages });
+          const blindedMessages = allOutputs.map((o: any) => o.blindedMessage);
+          const restoreResult = await mockMintRestore({ outputs: blindedMessages });
 
-        // Construct proofs from restore result
-        const recoveredProofs: any[] = [];
-        for (let i = 0; i < restoreResult.outputs.length; i++) {
-          const output = allOutputs.find(
-            (o: any) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_,
-          );
-          const signature = restoreResult.signatures[i];
-          if (output && signature) {
-            recoveredProofs.push({
-              id: signature.id,
-              amount: signature.amount,
-              secret: Buffer.from(output.secret, 'hex').toString(),
-              C: signature.C_,
-              mintUrl,
-              state: 'ready',
-            });
+          // Construct proofs from restore result
+          const recoveredProofs: any[] = [];
+          for (let i = 0; i < restoreResult.outputs.length; i++) {
+            const output = allOutputs.find(
+              (o: any) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_,
+            );
+            const signature = restoreResult.signatures[i];
+            if (output && signature) {
+              recoveredProofs.push({
+                id: signature.id,
+                amount: signature.amount,
+                secret: Buffer.from(output.secret, 'hex').toString(),
+                C: signature.C_,
+                mintUrl,
+                state: 'ready',
+              });
+            }
           }
-        }
 
-        // Save recovered proofs (already mocked) unless explicitly disabled.
-        if (recoveredProofs.length > 0 && options?.persistRecoveredProofs !== false) {
-          await proofService.saveProofs(mintUrl, recoveredProofs);
-        }
+          // Save recovered proofs (already mocked) unless explicitly disabled.
+          if (recoveredProofs.length > 0 && options?.persistRecoveredProofs !== false) {
+            await proofService.saveProofs(mintUrl, recoveredProofs);
+          }
 
-        return recoveredProofs;
-      },
+          return recoveredProofs;
+        },
       ),
     } as unknown as ProofService;
 
@@ -583,7 +583,9 @@ describe('SendOperationService - recoverPendingOperations', () => {
       });
       await sendOpRepo.create(executingOp);
 
-      await proofRepo.saveProofs(mintUrl, [makeProof('input-1', { usedByOperationId: 'exec-p2pk-1' })]);
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof('input-1', { usedByOperationId: 'exec-p2pk-1' }),
+      ]);
 
       mockCheckProofsStates.mockImplementation(() =>
         Promise.resolve([{ state: 'SPENT', Y: 'y1' } as CashuProofState]),
@@ -604,9 +606,11 @@ describe('SendOperationService - recoverPendingOperations', () => {
       });
 
       const savedProofBatches: any[][] = [];
-      (proofService.saveProofs as Mock<any>).mockImplementation(async (_mintUrl: string, proofs: any[]) => {
-        savedProofBatches.push(proofs);
-      });
+      (proofService.saveProofs as Mock<any>).mockImplementation(
+        async (_mintUrl: string, proofs: any[]) => {
+          savedProofBatches.push(proofs);
+        },
+      );
 
       const pendingEvents: Array<{ operationId: string; token: any }> = [];
       eventBus.on('send:pending', (event) => void pendingEvents.push(event));

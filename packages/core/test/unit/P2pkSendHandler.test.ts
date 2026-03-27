@@ -78,10 +78,7 @@ describe('P2pkSendHandler', () => {
     })),
   });
 
-  const makeInitOp = (
-    id: string,
-    overrides?: Partial<InitSendOperation>,
-  ): InitSendOperation => ({
+  const makeInitOp = (id: string, overrides?: Partial<InitSendOperation>): InitSendOperation => ({
     id,
     state: 'init',
     mintUrl,
@@ -153,19 +150,14 @@ describe('P2pkSendHandler', () => {
           send: [makeProof('send-1', 100)],
         }),
       ),
-      checkProofsStates: mock(() =>
-        Promise.resolve([{ state: 'UNSPENT', Y: 'y1' }]),
-      ),
+      checkProofsStates: mock(() => Promise.resolve([{ state: 'UNSPENT', Y: 'y1' }])),
       unit: 'sat',
     } as unknown as Wallet;
 
     // Mock ProofRepository
     proofRepository = {
       getAvailableProofs: mock(() =>
-        Promise.resolve([
-          makeCoreProof('input-1', 60),
-          makeCoreProof('input-2', 50),
-        ]),
+        Promise.resolve([makeCoreProof('input-1', 60), makeCoreProof('input-2', 50)]),
       ),
       getProofsByOperationId: mock(() => Promise.resolve([])),
     } as unknown as ProofRepository;
@@ -228,9 +220,7 @@ describe('P2pkSendHandler', () => {
   // Context Builders
   // ============================================================================
 
-  const buildPrepareContext = (
-    operation: InitSendOperation,
-  ): BasePrepareContext => ({
+  const buildPrepareContext = (operation: InitSendOperation): BasePrepareContext => ({
     operation,
     wallet: mockWallet,
     proofRepository,
@@ -256,9 +246,7 @@ describe('P2pkSendHandler', () => {
     logger,
   });
 
-  const buildFinalizeContext = (
-    operation: PendingSendOperation,
-  ): FinalizeContext => ({
+  const buildFinalizeContext = (operation: PendingSendOperation): FinalizeContext => ({
     operation,
     proofRepository,
     proofService,
@@ -281,9 +269,7 @@ describe('P2pkSendHandler', () => {
     logger,
   });
 
-  const buildRecoverContext = (
-    operation: ExecutingSendOperation,
-  ): RecoverExecutingContext => ({
+  const buildRecoverContext = (operation: ExecutingSendOperation): RecoverExecutingContext => ({
     operation,
     wallet: mockWallet,
     proofRepository,
@@ -312,8 +298,8 @@ describe('P2pkSendHandler', () => {
 
     it('should throw if balance is insufficient', async () => {
       const operation = makeInitOp('op-1', { amount: 1000 }); // More than available
-      (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(() =>
-        Promise.resolve([makeCoreProof('input-1', 50)]), // Only 50 available
+      (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(
+        () => Promise.resolve([makeCoreProof('input-1', 50)]), // Only 50 available
       );
 
       const ctx = buildPrepareContext(operation);
@@ -365,10 +351,10 @@ describe('P2pkSendHandler', () => {
       await handler.prepare(ctx);
 
       // Selected amount (110) - amount (100) - fee (1) = 9 keep
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-        mintUrl,
-        { keep: 9, send: 0 },
-      );
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
+        keep: 9,
+        send: 0,
+      });
     });
 
     it('should log preparation with pubkey', async () => {
@@ -546,7 +532,6 @@ describe('P2pkSendHandler', () => {
           expect(result.pending.token).toEqual(token);
         }
       });
-
     });
 
     describe('error handling', () => {
@@ -559,9 +544,7 @@ describe('P2pkSendHandler', () => {
 
         const ctx = buildExecuteContext(operation, inputProofs);
 
-        await expect(handler.execute(ctx)).rejects.toThrow(
-          'Could not find all reserved proofs',
-        );
+        await expect(handler.execute(ctx)).rejects.toThrow('Could not find all reserved proofs');
       });
     });
   });
@@ -579,10 +562,7 @@ describe('P2pkSendHandler', () => {
       const ctx = buildFinalizeContext(operation);
       await handler.finalize(ctx);
 
-      expect(proofService.releaseProofs).toHaveBeenCalledWith(
-        mintUrl,
-        ['input-1', 'input-2'],
-      );
+      expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
     });
 
     it('should release send and keep proof reservations when present', async () => {
@@ -610,10 +590,7 @@ describe('P2pkSendHandler', () => {
         const ctx = buildRollbackContext(operation);
         await handler.rollback(ctx);
 
-        expect(proofService.releaseProofs).toHaveBeenCalledWith(
-          mintUrl,
-          ['input-1', 'input-2'],
-        );
+        expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
       });
     });
 
@@ -746,11 +723,7 @@ describe('P2pkSendHandler', () => {
         const ctx = buildRecoverContext(operation);
         await handler.recoverExecuting(ctx);
 
-        expect(proofService.setProofState).toHaveBeenCalledWith(
-          mintUrl,
-          ['input-1'],
-          'spent',
-        );
+        expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       });
 
       it('should return pending without a token when the reconstructed send proofs are already spent', async () => {
@@ -804,10 +777,7 @@ describe('P2pkSendHandler', () => {
       (mockWallet.send as Mock<any>).mockImplementation(() =>
         Promise.resolve({
           keep: [makeProof('keep-1', 9)],
-          send: [
-            makeProof('send-1', 50),
-            makeProof('send-2', 50),
-          ],
+          send: [makeProof('send-1', 50), makeProof('send-2', 50)],
         }),
       );
 

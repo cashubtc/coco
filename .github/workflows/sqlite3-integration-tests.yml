@@ -3,11 +3,11 @@ name: sqlite3-integration-tests
 on:
   pull_request:
     paths:
-      - "packages/sqlite3/**"
-      - "packages/adapter-tests/**"
-      - "packages/core/**"
-      - "scripts/test-integration.sh"
-      - ".github/workflows/sqlite3-integration-tests.yml"
+      - 'packages/sqlite3/**'
+      - 'packages/adapter-tests/**'
+      - 'packages/core/**'
+      - 'scripts/test-integration.sh'
+      - '.github/workflows/sqlite3-integration-tests.yml'
 
 jobs:
   integration-tests:

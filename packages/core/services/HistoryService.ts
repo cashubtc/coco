@@ -1,8 +1,4 @@
-import type {
-  MeltQuoteBolt11Response,
-  MeltQuoteState,
-  Token,
-} from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type { HistoryRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';

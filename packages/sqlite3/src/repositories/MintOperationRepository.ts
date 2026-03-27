@@ -34,12 +34,7 @@ const isPersistedState = (state: string): state is (typeof persistedStates)[numb
   persistedStates.includes(state as (typeof persistedStates)[number]);
 
 const normalizeState = (state: string): MintOperationState => {
-  if (
-    state === 'pending' ||
-    state === 'executing' ||
-    state === 'finalized' ||
-    state === 'failed'
-  ) {
+  if (state === 'pending' || state === 'executing' || state === 'finalized' || state === 'failed') {
     return state;
   }
   return 'init';

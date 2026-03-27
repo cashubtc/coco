@@ -87,6 +87,7 @@
 ### Phase 3: Rewire watcher and processor around operations
 
 Implementation order for this phase:
+
 1. Rewire watcher startup and live subscription registration around pending mint operations while keeping legacy quote-state compatibility events flowing from the operation path.
 2. Rewire processor queueing and execution around mint operations / operation lookup instead of quote-repository-driven orchestration.
 3. Rewrite history creation and state updates to consume operation-owned quote snapshots and operation-based mint events.

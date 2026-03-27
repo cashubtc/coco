@@ -52,4 +52,3 @@ const useTrustedBalance = () => {
 };
 
 export default useTrustedBalance;
-

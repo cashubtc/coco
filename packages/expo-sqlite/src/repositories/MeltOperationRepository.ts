@@ -123,8 +123,8 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
   }
 
   const settlement = operation as MeltSettlementData;
-  const changeAmount = operation.state === 'finalized' ? settlement.changeAmount ?? null : null;
-  const effectiveFee = operation.state === 'finalized' ? settlement.effectiveFee ?? null : null;
+  const changeAmount = operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null;
+  const effectiveFee = operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null;
   const finalizedDataJson =
     operation.state === 'finalized' && settlement.finalizedData !== undefined
       ? JSON.stringify(settlement.finalizedData)
@@ -236,8 +236,8 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
         JSON.stringify(operation.inputProofSecrets),
         JSON.stringify(operation.changeOutputData),
         operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
-        operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
-        operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
+        operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null,
+        operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null,
         operation.state === 'finalized' && settlement.finalizedData !== undefined
           ? JSON.stringify(settlement.finalizedData)
           : null,

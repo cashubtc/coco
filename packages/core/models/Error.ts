@@ -122,7 +122,7 @@ export class AuthSessionError extends Error {
     super(message ?? `Auth session error for mint ${mintUrl}`);
     this.name = 'AuthSessionError';
     this.mintUrl = mintUrl;
-    (this as unknown as {cause?: unknown}).cause = cause;
+    (this as unknown as { cause?: unknown }).cause = cause;
   }
 }
 

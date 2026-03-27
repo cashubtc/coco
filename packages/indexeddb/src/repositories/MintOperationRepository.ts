@@ -13,12 +13,7 @@ const isPersistedState = (state: string): state is (typeof persistedStates)[numb
   persistedStates.includes(state as (typeof persistedStates)[number]);
 
 const normalizeState = (state: string): MintOperationState => {
-  if (
-    state === 'pending' ||
-    state === 'executing' ||
-    state === 'finalized' ||
-    state === 'failed'
-  ) {
+  if (state === 'pending' || state === 'executing' || state === 'finalized' || state === 'failed') {
     return state;
   }
   return 'init';
@@ -148,9 +143,9 @@ export class IdbMintOperationRepository implements MintOperationRepository {
   }
 
   async getById(id: string): Promise<MintOperation | null> {
-    const row = (await (this.db as any)
-      .table('coco_cashu_mint_operations')
-      .get(id)) as MintOperationRow | undefined;
+    const row = (await (this.db as any).table('coco_cashu_mint_operations').get(id)) as
+      | MintOperationRow
+      | undefined;
     return row ? rowToOperation(row) : null;
   }
 

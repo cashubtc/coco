@@ -11,7 +11,7 @@ const createMockMintAdapter = (): MintAdapter =>
     checkMintQuoteState: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
-  } as unknown as MintAdapter);
+  }) as unknown as MintAdapter;
 
 class MockTransport implements RealTimeTransport {
   public paused = false;

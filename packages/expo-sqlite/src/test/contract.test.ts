@@ -91,15 +91,9 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runAuthSessionRepositoryContract(
-  { createRepositories },
-  { describe, it, expect },
-);
+runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
-runProofRepositoryContract(
-  { createRepositories },
-  { describe, it, expect },
-);
+runProofRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('expo-sqlite adapter transactions', () => {
   it('commits across repositories', async () => {

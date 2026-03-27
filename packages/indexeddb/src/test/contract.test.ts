@@ -25,12 +25,6 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runAuthSessionRepositoryContract(
-  { createRepositories },
-  { describe, it, expect },
-);
+runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
-runProofRepositoryContract(
-  { createRepositories },
-  { describe, it, expect },
-);
+runProofRepositoryContract({ createRepositories }, { describe, it, expect });

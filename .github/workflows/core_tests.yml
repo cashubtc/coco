@@ -5,16 +5,16 @@ on:
     branches:
       - master
     paths:
-      - "packages/core/**"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/core_tests.yml"
+      - 'packages/core/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/core_tests.yml'
   pull_request:
     paths:
-      - "packages/core/**"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/core_tests.yml"
+      - 'packages/core/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/core_tests.yml'
 
 jobs:
   test:

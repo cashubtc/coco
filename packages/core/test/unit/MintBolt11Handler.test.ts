@@ -4,7 +4,11 @@ import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
 import { MintOperationError } from '../../models/Error';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
-import type { PendingContext, PrepareContext, RecoverExecutingContext } from '../../operations/mint';
+import type {
+  PendingContext,
+  PrepareContext,
+  RecoverExecutingContext,
+} from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';

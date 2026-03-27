@@ -5,12 +5,12 @@ on:
     branches:
       - master
     paths:
-      - "packages/**"
-      - ".github/workflows/build-packages.yml"
+      - 'packages/**'
+      - '.github/workflows/build-packages.yml'
   pull_request:
     paths:
-      - "packages/**"
-      - ".github/workflows/build-packages.yml"
+      - 'packages/**'
+      - '.github/workflows/build-packages.yml'
 
 jobs:
   build:

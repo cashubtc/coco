@@ -1,8 +1,5 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type {
-  MintOperationRepository,
-  ProofRepository,
-} from '../../repositories';
+import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
   FailedMintOperation,

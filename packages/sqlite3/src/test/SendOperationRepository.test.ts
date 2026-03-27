@@ -68,9 +68,9 @@ describe('SqliteSendOperationRepository', () => {
     await expect(repositories.sendOperationRepository.getById(operation.id)).resolves.toEqual(
       operation,
     );
-    await expect(
-      repositories.sendOperationRepository.getByState('rolling_back'),
-    ).resolves.toEqual([operation]);
+    await expect(repositories.sendOperationRepository.getByState('rolling_back')).resolves.toEqual([
+      operation,
+    ]);
     await expect(repositories.sendOperationRepository.getPending()).resolves.toEqual([operation]);
   });
 

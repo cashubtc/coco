@@ -240,9 +240,7 @@ describe('AuthManager automatic topUp', () => {
     await limitedAuth.getBlindAuthToken({ method: 'POST', path: '/v1/mint/bolt11' });
 
     // Should have requested min(5, 2) = 2 tokens in first topUp
-    const mintCalls = limitedMint.calls.filter((c) =>
-      c.endpoint.includes('/v1/auth/blind/mint'),
-    );
+    const mintCalls = limitedMint.calls.filter((c) => c.endpoint.includes('/v1/auth/blind/mint'));
     expect(mintCalls).toHaveLength(1);
     expect(mintCalls[0]!.body.outputs).toHaveLength(2);
 

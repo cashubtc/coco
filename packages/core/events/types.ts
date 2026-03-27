@@ -1,8 +1,4 @@
-import type {
-  MeltQuoteBolt11Response,
-  MeltQuoteState,
-  Token,
-} from '@cashu/cashu-ts';
+import type { MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type { MeltOperation } from '@core/operations/melt';
 import type { Counter } from '../models/Counter';
 import type { HistoryEntry } from '../models/History';

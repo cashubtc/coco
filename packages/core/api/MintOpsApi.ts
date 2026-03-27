@@ -26,15 +26,16 @@ type ImportMintQuoteInputCommon = {
   mintUrl: string;
 };
 
-type MethodDataInput<M extends MintMethod> = MintMethodData<M> extends Record<string, never>
-  ? {
-      /** Method-specific payload required for the selected mint method. */
-      methodData?: MintMethodData<M>;
-    }
-  : {
-      /** Method-specific payload required for the selected mint method. */
-      methodData: MintMethodData<M>;
-    };
+type MethodDataInput<M extends MintMethod> =
+  MintMethodData<M> extends Record<string, never>
+    ? {
+        /** Method-specific payload required for the selected mint method. */
+        methodData?: MintMethodData<M>;
+      }
+    : {
+        /** Method-specific payload required for the selected mint method. */
+        methodData: MintMethodData<M>;
+      };
 
 export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: PrepareMintInputCommon & {

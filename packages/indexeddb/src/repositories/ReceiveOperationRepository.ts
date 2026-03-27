@@ -105,9 +105,9 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
   }
 
   async getById(id: string): Promise<ReceiveOperation | null> {
-    const row = (await (this.db as any)
-      .table('coco_cashu_receive_operations')
-      .get(id)) as ReceiveOperationRow | undefined;
+    const row = (await (this.db as any).table('coco_cashu_receive_operations').get(id)) as
+      | ReceiveOperationRow
+      | undefined;
     return row ? rowToOperation(row) : null;
   }
 

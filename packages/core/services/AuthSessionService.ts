@@ -1,9 +1,9 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { CoreEvents, EventBus } from "@core/events";
-import type { Logger } from "@core/logging";
-import { AuthSessionError, AuthSessionExpiredError } from "@core/models";
-import type { AuthSessionRepository } from "@core/repositories";
-import { normalizeMintUrl } from "@core/utils";
+import type { CoreEvents, EventBus } from '@core/events';
+import type { Logger } from '@core/logging';
+import { AuthSessionError, AuthSessionExpiredError } from '@core/models';
+import type { AuthSessionRepository } from '@core/repositories';
+import { normalizeMintUrl } from '@core/utils';
 import type { AuthSession } from '../models/AuthSession';
 
 export class AuthSessionService {
@@ -11,11 +11,7 @@ export class AuthSessionService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
-  constructor(
-    repo: AuthSessionRepository,
-    eventBus: EventBus<CoreEvents>,
-    logger?: Logger,
-  ) {
+  constructor(repo: AuthSessionRepository, eventBus: EventBus<CoreEvents>, logger?: Logger) {
     this.repo = repo;
     this.eventBus = eventBus;
     this.logger = logger;
@@ -75,10 +71,10 @@ export class AuthSessionService {
     await this.eventBus.emit('auth-session:deleted', { mintUrl });
     this.logger?.info('Auth session deleted', { mintUrl });
   }
-  
+
   /** Notify listeners that auth state changed (e.g. after restore) */
   async emitUpdated(mintUrl: string): Promise<void> {
-    await this.eventBus.emit('auth-session:updated', {mintUrl: normalizeMintUrl(mintUrl)});
+    await this.eventBus.emit('auth-session:updated', { mintUrl: normalizeMintUrl(mintUrl) });
   }
 
   /** Get session without expiry check; returns null if missing. */

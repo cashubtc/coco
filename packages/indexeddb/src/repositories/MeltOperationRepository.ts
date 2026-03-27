@@ -121,8 +121,8 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     inputProofSecretsJson: JSON.stringify(operation.inputProofSecrets),
     changeOutputDataJson: JSON.stringify(operation.changeOutputData),
     swapOutputDataJson: operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
-    changeAmount: operation.state === 'finalized' ? settlement.changeAmount ?? null : null,
-    effectiveFee: operation.state === 'finalized' ? settlement.effectiveFee ?? null : null,
+    changeAmount: operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null,
+    effectiveFee: operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null,
     finalizedDataJson:
       operation.state === 'finalized' && settlement.finalizedData !== undefined
         ? JSON.stringify(settlement.finalizedData)
@@ -188,9 +188,9 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
   }
 
   async getById(id: string): Promise<MeltOperation | null> {
-    const row = (await (this.db as any)
-      .table('coco_cashu_melt_operations')
-      .get(id)) as MeltOperationRow | undefined;
+    const row = (await (this.db as any).table('coco_cashu_melt_operations').get(id)) as
+      | MeltOperationRow
+      | undefined;
     return row ? rowToOperation(row) : null;
   }
 

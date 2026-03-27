@@ -20,12 +20,12 @@ describe('WalletRestoreService', () => {
   let service: WalletRestoreService;
 
   const makeProof = (amount: number, secret: string): Proof =>
-  ({
-    amount,
-    C: `C_${secret}`,
-    id: keysetId,
-    secret,
-  } as unknown as Proof);
+    ({
+      amount,
+      C: `C_${secret}`,
+      id: keysetId,
+      secret,
+    }) as unknown as Proof;
 
   beforeEach(() => {
     // Mock ProofService
@@ -63,10 +63,10 @@ describe('WalletRestoreService', () => {
 
     // Mock Logger
     logger = {
-      debug: mock(() => { }),
-      info: mock(() => { }),
-      warn: mock(() => { }),
-      error: mock(() => { }),
+      debug: mock(() => {}),
+      info: mock(() => {}),
+      warn: mock(() => {}),
+      error: mock(() => {}),
     } as Logger;
 
     // Mock MintRequestProvider

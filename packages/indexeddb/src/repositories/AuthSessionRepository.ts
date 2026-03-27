@@ -40,7 +40,9 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
   }
 
   async getAllSessions(): Promise<AuthSession[]> {
-    const rows = (await (this.db as any).table('coco_cashu_auth_sessions').toArray()) as AuthSessionRow[];
+    const rows = (await (this.db as any)
+      .table('coco_cashu_auth_sessions')
+      .toArray()) as AuthSessionRow[];
     return rows.map((row) => ({
       mintUrl: row.mintUrl,
       accessToken: row.accessToken,

@@ -3,11 +3,11 @@ name: sqlite-bun-integration-tests
 on:
   pull_request:
     paths:
-      - "packages/sqlite-bun/**"
-      - "packages/adapter-tests/**"
-      - "packages/core/**"
-      - "scripts/test-integration.sh"
-      - ".github/workflows/sqlite-bun-integration-tests.yml"
+      - 'packages/sqlite-bun/**'
+      - 'packages/adapter-tests/**'
+      - 'packages/core/**'
+      - 'scripts/test-integration.sh'
+      - '.github/workflows/sqlite-bun-integration-tests.yml'
 
 jobs:
   integration-tests:

@@ -12,10 +12,7 @@ import type { MeltQuoteService } from '@core/services';
 export class QuotesApi {
   private meltQuoteService: MeltQuoteService;
   private meltOperationService: MeltOperationService;
-  constructor(
-    meltQuoteService: MeltQuoteService,
-    meltOperationService: MeltOperationService,
-  ) {
+  constructor(meltQuoteService: MeltQuoteService, meltOperationService: MeltOperationService) {
     this.meltQuoteService = meltQuoteService;
     this.meltOperationService = meltOperationService;
   }

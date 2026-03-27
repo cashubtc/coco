@@ -7,7 +7,11 @@ import type { SendOperationRow } from '../lib/db.ts';
 
 function createDbStub(row: SendOperationRow | undefined) {
   return {
-    runTransaction: async (_mode: 'r' | 'rw', _stores: string[], fn: (tx: any) => Promise<unknown>) =>
+    runTransaction: async (
+      _mode: 'r' | 'rw',
+      _stores: string[],
+      fn: (tx: any) => Promise<unknown>,
+    ) =>
       fn({
         table: () => ({
           get: async () => row,

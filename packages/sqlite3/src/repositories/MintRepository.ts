@@ -59,7 +59,7 @@ export class SqliteMintRepository implements MintRepository {
           trusted: r.trusted === 1,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
-        } satisfies Mint),
+        }) satisfies Mint,
     );
   }
 
@@ -83,7 +83,7 @@ export class SqliteMintRepository implements MintRepository {
           trusted: r.trusted === 1,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
-        } satisfies Mint),
+        }) satisfies Mint,
     );
   }
 

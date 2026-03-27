@@ -39,10 +39,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   /**
    * Calculate change amount and effective fee from melt operation results.
    * These values are derived from the actual melt settlement, not from the quote.
-    *
-    * changeAmount: Sum of amounts from change proofs returned by the mint
-    * effectiveFee: Actual fee paid = meltInputAmount - amount - changeAmount
-    */
+   *
+   * changeAmount: Sum of amounts from change proofs returned by the mint
+   * effectiveFee: Actual fee paid = meltInputAmount - amount - changeAmount
+   */
   private calculateSettlementAmounts(
     meltInputAmount: number,
     meltAmount: number,

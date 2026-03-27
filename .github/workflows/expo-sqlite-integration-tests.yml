@@ -3,11 +3,11 @@ name: expo-sqlite-integration-tests
 on:
   pull_request:
     paths:
-      - "packages/expo-sqlite/**"
-      - "packages/adapter-tests/**"
-      - "packages/core/**"
-      - "scripts/test-integration.sh"
-      - ".github/workflows/expo-sqlite-integration-tests.yml"
+      - 'packages/expo-sqlite/**'
+      - 'packages/adapter-tests/**'
+      - 'packages/core/**'
+      - 'scripts/test-integration.sh'
+      - '.github/workflows/expo-sqlite-integration-tests.yml'
 
 jobs:
   integration-tests:

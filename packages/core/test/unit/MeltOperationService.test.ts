@@ -56,7 +56,7 @@ describe('MeltOperationService', () => {
       mintUrl,
       state: 'ready',
       ...overrides,
-    } as CoreProof);
+    }) as CoreProof;
 
   const makeInitOp = (id: string, overrides?: Partial<InitMeltOperation>): InitMeltOperation => ({
     id,
@@ -152,12 +152,13 @@ describe('MeltOperationService', () => {
           methodData: operation.methodData,
         }),
       })),
-      finalize: mock(async () =>
-        ({
-          changeAmount: 0,
-          effectiveFee: 1,
-          finalizedData: { preimage: 'preimage-123' },
-        } as FinalizeResult)
+      finalize: mock(
+        async () =>
+          ({
+            changeAmount: 0,
+            effectiveFee: 1,
+            finalizedData: { preimage: 'preimage-123' },
+          }) as FinalizeResult,
       ),
       rollback: mock(async () => {}),
       checkPending: mock(async () => 'stay_pending' as PendingCheckResult),
@@ -288,16 +289,18 @@ describe('MeltOperationService', () => {
       const firstPrepareBlocked = new Promise<void>((resolve) => {
         releaseFirstPrepare = resolve;
       });
-      (handler.prepare as Mock<any>).mockImplementation(async ({ operation }: { operation: any }) => {
-        if (operation.id === 'op-12') {
-          await firstPrepareBlocked;
-        }
-        return makePreparedOp(operation.id, {
-          mintUrl: operation.mintUrl,
-          method: operation.method,
-          methodData: operation.methodData,
-        });
-      });
+      (handler.prepare as Mock<any>).mockImplementation(
+        async ({ operation }: { operation: any }) => {
+          if (operation.id === 'op-12') {
+            await firstPrepareBlocked;
+          }
+          return makePreparedOp(operation.id, {
+            mintUrl: operation.mintUrl,
+            method: operation.method,
+            methodData: operation.methodData,
+          });
+        },
+      );
 
       const first = service.prepare('op-12');
       await Promise.resolve();
@@ -550,9 +553,7 @@ describe('MeltOperationService', () => {
       await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
       await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
 
-      expect(service.getOperationByQuote(mintUrl, 'quote-dupe')).rejects.toThrow(
-        'melt operations',
-      );
+      expect(service.getOperationByQuote(mintUrl, 'quote-dupe')).rejects.toThrow('melt operations');
     });
   });
 });

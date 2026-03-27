@@ -121,11 +121,13 @@ describe('MintOperationService', () => {
       return { status: 'PENDING' };
     });
 
-    const mockCheckPending = mock(async (): Promise<PendingMintCheckResult<'bolt11'>> => ({
-      observedRemoteState: 'UNPAID',
-      observedRemoteStateAt: Date.now(),
-      category: 'waiting',
-    }));
+    const mockCheckPending = mock(
+      async (): Promise<PendingMintCheckResult<'bolt11'>> => ({
+        observedRemoteState: 'UNPAID',
+        observedRemoteStateAt: Date.now(),
+        category: 'waiting',
+      }),
+    );
 
     handler = {
       prepare: mockPrepare,
@@ -179,12 +181,14 @@ describe('MintOperationService', () => {
       pendingEvents.push(event);
     });
 
-    (handler.prepare as Mock<any>).mockImplementationOnce(async ({ operation }: { operation: InitMintOperation }) => ({
-      ...makePendingOp(operation.id),
-      quoteId: 'quote-created',
-      request: 'lnbc1created',
-      lastObservedRemoteState: 'UNPAID',
-    }));
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: 'quote-created',
+        request: 'lnbc1created',
+        lastObservedRemoteState: 'UNPAID',
+      }),
+    );
 
     const pending = await service.prepareNewQuote(mintUrl, 10, 'sat');
 
@@ -213,14 +217,16 @@ describe('MintOperationService', () => {
       state: 'PAID',
     };
 
-    (handler.prepare as Mock<any>).mockImplementationOnce(async ({ operation }: { operation: InitMintOperation }) => ({
-      ...makePendingOp(operation.id),
-      quoteId: importedQuote.quote,
-      amount: importedQuote.amount,
-      request: importedQuote.request,
-      expiry: importedQuote.expiry,
-      lastObservedRemoteState: importedQuote.state,
-    }));
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: importedQuote.quote,
+        amount: importedQuote.amount,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        lastObservedRemoteState: importedQuote.state,
+      }),
+    );
 
     const pending = await service.importQuote(mintUrl, importedQuote, 'bolt11', {});
 

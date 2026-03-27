@@ -39,7 +39,7 @@ export class WalletRestoreService {
     const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       bip39seed,
     });
-    await sweepWallet.loadMint()
+    await sweepWallet.loadMint();
 
     const { proofs } = await sweepWallet.batchRestore(
       this.restoreBatchSize,
@@ -124,12 +124,17 @@ export class WalletRestoreService {
     const outputResults = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
       keep: 0,
       send: sweepTotalAmount,
-    })
+    });
     const outputConfig: OutputConfig = {
       send: { type: 'custom', data: outputResults.send },
       keep: { type: 'custom', data: outputResults.keep },
     };
-    const { send, keep } = await wallet.send(sweepTotalAmount, checkedProofs.ready, undefined, outputConfig)
+    const { send, keep } = await wallet.send(
+      sweepTotalAmount,
+      checkedProofs.ready,
+      undefined,
+      outputConfig,
+    );
     await this.proofService.saveProofs(
       mintUrl,
       mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),

@@ -5,20 +5,20 @@ on:
     branches:
       - master
     paths:
-      - "packages/core/**"
-      - "packages/adapter-tests/**"
-      - "scripts/test-integration.sh"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/core-integration-tests.yml"
+      - 'packages/core/**'
+      - 'packages/adapter-tests/**'
+      - 'scripts/test-integration.sh'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/core-integration-tests.yml'
   pull_request:
     paths:
-      - "packages/core/**"
-      - "packages/adapter-tests/**"
-      - "scripts/test-integration.sh"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/core-integration-tests.yml"
+      - 'packages/core/**'
+      - 'packages/adapter-tests/**'
+      - 'scripts/test-integration.sh'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/core-integration-tests.yml'
 
 jobs:
   integration-tests:

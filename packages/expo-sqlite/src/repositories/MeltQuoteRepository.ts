@@ -103,7 +103,7 @@ export class ExpoMeltQuoteRepository implements MeltQuoteRepository {
           expiry: row.expiry,
           fee_reserve: row.fee_reserve,
           payment_preimage: row.payment_preimage,
-        } satisfies MeltQuote),
+        }) satisfies MeltQuote,
     );
   }
 }

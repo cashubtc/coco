@@ -90,31 +90,32 @@ export interface RollbackContext<M extends MeltMethod = MeltMethod> extends Base
   wallet: Wallet;
 }
 
-export interface RecoverExecutingContext<M extends MeltMethod = MeltMethod>
-  extends BaseHandlerDeps {
+export interface RecoverExecutingContext<
+  M extends MeltMethod = MeltMethod,
+> extends BaseHandlerDeps {
   operation: ExecutingMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
 }
 
 export type ExecutionResult<M extends MeltMethod = MeltMethod> =
   | {
-    status: 'PAID';
-    finalized: FinalizedMeltOperation<M>;
-    sendProofs?: Proof[];
-    keepProofs?: Proof[];
-  }
+      status: 'PAID';
+      finalized: FinalizedMeltOperation<M>;
+      sendProofs?: Proof[];
+      keepProofs?: Proof[];
+    }
   | {
-    status: 'PENDING';
-    pending: PendingMeltOperation & MeltMethodMeta<M>;
-    sendProofs?: Proof[];
-    keepProofs?: Proof[];
-  }
+      status: 'PENDING';
+      pending: PendingMeltOperation & MeltMethodMeta<M>;
+      sendProofs?: Proof[];
+      keepProofs?: Proof[];
+    }
   | {
-    status: 'FAILED';
-    failed: FailedMeltOperation & MeltMethodMeta<M>;
-    sendProofs?: Proof[];
-    keepProofs?: Proof[];
-  };
+      status: 'FAILED';
+      failed: FailedMeltOperation & MeltMethodMeta<M>;
+      sendProofs?: Proof[];
+      keepProofs?: Proof[];
+    };
 
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 

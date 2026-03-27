@@ -15,12 +15,12 @@ const myPlugin: Plugin<['eventBus', 'logger']> = {
   onInit(ctx) {
     // Called when the plugin system initializes
     ctx.services.logger.info('Plugin initialized!');
-    
+
     // Subscribe to events
     const unsubscribe = ctx.services.eventBus.on('proofs:saved', (payload) => {
       ctx.services.logger.info('Proofs saved', payload);
     });
-    
+
     // Return cleanup function (optional)
     return unsubscribe;
   },
@@ -58,23 +58,23 @@ manager.use(myPlugin);
 
 Plugins can request access to internal services by declaring them in the `required` array. The following services are available:
 
-| Service | Description |
-|---------|-------------|
-| `mintService` | Manage mints (add, update, trust/untrust) |
-| `walletService` | Low-level wallet operations |
-| `proofService` | Manage proofs (save, delete, query) |
-| `keyRingService` | P2PK key management |
-| `seedService` | Access the wallet seed |
-| `walletRestoreService` | Restore wallet from seed |
-| `counterService` | Keyset counter management |
-| `mintQuoteService` | Mint quote operations |
-| `meltQuoteService` | Melt quote operations |
-| `historyService` | Transaction history |
-| `transactionService` | Send/receive transactions |
-| `sendOperationService` | Send operation lifecycle |
-| `subscriptions` | WebSocket subscription manager |
-| `eventBus` | Event pub/sub system |
-| `logger` | Logging interface |
+| Service                | Description                               |
+| ---------------------- | ----------------------------------------- |
+| `mintService`          | Manage mints (add, update, trust/untrust) |
+| `walletService`        | Low-level wallet operations               |
+| `proofService`         | Manage proofs (save, delete, query)       |
+| `keyRingService`       | P2PK key management                       |
+| `seedService`          | Access the wallet seed                    |
+| `walletRestoreService` | Restore wallet from seed                  |
+| `counterService`       | Keyset counter management                 |
+| `mintQuoteService`     | Mint quote operations                     |
+| `meltQuoteService`     | Melt quote operations                     |
+| `historyService`       | Transaction history                       |
+| `transactionService`   | Send/receive transactions                 |
+| `sendOperationService` | Send operation lifecycle                  |
+| `subscriptions`        | WebSocket subscription manager            |
+| `eventBus`             | Event pub/sub system                      |
+| `logger`               | Logging interface                         |
 
 ## Plugin Extensions
 
@@ -87,11 +87,11 @@ Use `ctx.registerExtension(key, api)` in your plugin's `onInit` or `onReady` hoo
 ```ts
 class MyPluginApi {
   constructor(private eventBus: EventBus) {}
-  
+
   doSomething() {
     this.eventBus.emit('my-plugin:action', { foo: 'bar' });
   }
-  
+
   async fetchData() {
     // Custom plugin logic
     return { data: 'example' };
@@ -135,8 +135,12 @@ import type { Plugin, PluginExtensions } from 'coco-cashu-core';
 // Define your API class
 export class MyPluginApi {
   constructor(private eventBus: EventBus) {}
-  doSomething(): void { /* ... */ }
-  async fetchData(): Promise<{ data: string }> { /* ... */ }
+  doSomething(): void {
+    /* ... */
+  }
+  async fetchData(): Promise<{ data: string }> {
+    /* ... */
+  }
 }
 
 // Augment PluginExtensions for type safety
@@ -201,6 +205,7 @@ const pluginB: Plugin<['logger']> = {
 ### `onInit(ctx)`
 
 Called when the plugin system initializes. This is where you should:
+
 - Set up event listeners
 - Register extensions
 - Initialize plugin state
@@ -212,6 +217,7 @@ Return a cleanup function to be called during disposal (optional).
 ### `onReady(ctx)`
 
 Called after all plugins have completed their `onInit` phase. Use this for:
+
 - Logic that depends on other plugins being initialized
 - Registering extensions that depend on other extensions
 
@@ -220,6 +226,7 @@ Return a cleanup function to be called during disposal (optional).
 ### `onDispose()`
 
 Called when `manager.dispose()` is invoked. Use this for:
+
 - Cleaning up resources
 - Closing connections
 - Flushing data
@@ -242,13 +249,7 @@ This ensures that `manager.ext` contains all registered extensions before the ma
 If you instantiate `Manager` directly instead of using `initializeCoco()`, you must call `initPlugins()` manually:
 
 ```ts
-const manager = new Manager(
-  repositories,
-  seedGetter,
-  logger,
-  webSocketFactory,
-  [myPlugin],
-);
+const manager = new Manager(repositories, seedGetter, logger, webSocketFactory, [myPlugin]);
 
 // Required for plugins to initialize and extensions to be available
 await manager.initPlugins();

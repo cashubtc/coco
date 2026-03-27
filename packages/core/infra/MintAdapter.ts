@@ -124,5 +124,4 @@ export class MintAdapter {
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
     return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
   }
-
 }

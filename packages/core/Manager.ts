@@ -528,7 +528,9 @@ export class Manager {
     await this.mintOperationService.recoverPendingOperations();
   }
 
-  async reconcileLegacyMintQuotes(mintUrl?: string): Promise<{ reconciled: string[]; skipped: string[] }> {
+  async reconcileLegacyMintQuotes(
+    mintUrl?: string,
+  ): Promise<{ reconciled: string[]; skipped: string[] }> {
     const reconciled: string[] = [];
     const skipped: string[] = [];
     const quotes = await this.mintQuoteRepository.getPendingMintQuotes();
@@ -550,7 +552,10 @@ export class Manager {
         continue;
       }
 
-      const existing = await this.mintOperationService.getOperationByQuote(quote.mintUrl, quote.quote);
+      const existing = await this.mintOperationService.getOperationByQuote(
+        quote.mintUrl,
+        quote.quote,
+      );
       if (existing && existing.state !== 'init') {
         skipped.push(quote.quote);
         continue;
@@ -951,10 +956,7 @@ export class Manager {
       this.tokenService,
       walletApiLogger,
     );
-    const quotes = new QuotesApi(
-      this.meltQuoteService,
-      this.meltOperationService,
-    );
+    const quotes = new QuotesApi(this.meltQuoteService, this.meltOperationService);
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);

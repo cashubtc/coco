@@ -162,8 +162,8 @@ interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
   effectiveFee?: number;
 }
 
-export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> =
-  FinalizedMeltOperationBase & MeltMethodMeta<M> & {
+export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> = FinalizedMeltOperationBase &
+  MeltMethodMeta<M> & {
     finalizedData?: MeltMethodFinalizedData<M>;
   };
 

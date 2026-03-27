@@ -55,14 +55,14 @@ interface PendingData {
 }
 
 export interface InitMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>,
-    MintIntentData {
+  extends MintOperationBase<M>, MintIntentData {
   state: 'init';
   quoteId?: string;
 }
 
 export interface PendingMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>,
+  extends
+    MintOperationBase<M>,
     MintIntentData,
     MintQuoteSnapshot,
     MintRemoteObservation<M>,
@@ -71,7 +71,8 @@ export interface PendingMintOperation<M extends MintMethod = MintMethod>
 }
 
 export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>,
+  extends
+    MintOperationBase<M>,
     MintIntentData,
     MintQuoteSnapshot,
     MintRemoteObservation<M>,
@@ -80,7 +81,8 @@ export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
 }
 
 export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>,
+  extends
+    MintOperationBase<M>,
     MintIntentData,
     MintQuoteSnapshot,
     MintRemoteObservation<M>,
@@ -89,7 +91,8 @@ export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
 }
 
 export interface FailedMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>,
+  extends
+    MintOperationBase<M>,
     MintIntentData,
     MintQuoteSnapshot,
     MintRemoteObservation<M>,
@@ -126,7 +129,9 @@ export function isTerminalOperation<M extends MintMethod>(
   return op.state === 'finalized' || op.state === 'failed';
 }
 
-export function getOutputProofSecrets<M extends MintMethod>(op: PendingOrLaterOperation<M>): string[] {
+export function getOutputProofSecrets<M extends MintMethod>(
+  op: PendingOrLaterOperation<M>,
+): string[] {
   const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(op.outputData);
   return [...keepSecrets, ...sendSecrets];
 }

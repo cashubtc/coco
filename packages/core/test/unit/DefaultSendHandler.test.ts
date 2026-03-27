@@ -142,7 +142,9 @@ describe('DefaultSendHandler', () => {
 
         return {
           send,
-          keep: proofs.filter((proof) => !send.some((selected) => selected.secret === proof.secret)),
+          keep: proofs.filter(
+            (proof) => !send.some((selected) => selected.secret === proof.secret),
+          ),
         };
       }),
       getFeesForProofs: mock(() => 1),
@@ -165,10 +167,12 @@ describe('DefaultSendHandler', () => {
     } as unknown as ProofRepository;
 
     proofService = {
-      selectProofsToSend: mock(async (selectedMintUrl: string, amount: number, includeFees = true) => {
-        const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
-        return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
-      }),
+      selectProofsToSend: mock(
+        async (selectedMintUrl: string, amount: number, includeFees = true) => {
+          const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
+          return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+        },
+      ),
       reserveProofs: mock(() => Promise.resolve({ amount: 100 })),
       releaseProofs: mock(() => Promise.resolve()),
       createOutputsAndIncrementCounters: mock(() =>
@@ -394,8 +398,8 @@ describe('DefaultSendHandler', () => {
       (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
         Promise.resolve([sendProof]),
       );
-      (mockWallet.receive as Mock<any>).mockImplementation(
-        () => Promise.resolve([makeProof('reclaim-1', 99)]),
+      (mockWallet.receive as Mock<any>).mockImplementation(() =>
+        Promise.resolve([makeProof('reclaim-1', 99)]),
       );
 
       await handler.rollback(buildRollbackContext(operation));

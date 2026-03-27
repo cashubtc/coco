@@ -56,7 +56,11 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   async getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
-      if (operation.mintUrl === mintUrl && 'quoteId' in operation && operation.quoteId === quoteId) {
+      if (
+        operation.mintUrl === mintUrl &&
+        'quoteId' in operation &&
+        operation.quoteId === quoteId
+      ) {
         results.push({ ...operation });
       }
     }

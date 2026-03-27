@@ -77,7 +77,10 @@ export class TransactionService {
         throw new Error('Failed to create outputs for receive');
       }
 
-      const newProofs = await wallet.receive({ mint, proofs, unit: wallet.unit }, undefined, { type: 'custom', data: outputData });
+      const newProofs = await wallet.receive({ mint, proofs, unit: wallet.unit }, undefined, {
+        type: 'custom',
+        data: outputData,
+      });
       await this.proofService.saveProofs(mint, mapProofToCoreProof(mint, 'ready', newProofs));
       await this.eventBus.emit('receive:created', { mintUrl: mint, token: { mint, proofs } });
       this.logger?.debug('Token received and proofs saved', {
@@ -157,6 +160,3 @@ export class TransactionService {
     return token;
   }
 }
-
-
-

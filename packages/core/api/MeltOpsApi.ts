@@ -4,11 +4,7 @@ import type {
   PendingMeltOperation,
   PreparedMeltOperation,
 } from '@core/operations/melt';
-import type {
-  MeltMethod,
-  MeltMethodData,
-  MeltOperationService,
-} from '@core/operations/melt';
+import type { MeltMethod, MeltMethodData, MeltOperationService } from '@core/operations/melt';
 
 /** Melt methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMeltMethod = 'bolt11';

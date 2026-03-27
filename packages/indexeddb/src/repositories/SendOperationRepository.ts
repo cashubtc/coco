@@ -179,8 +179,11 @@ export class IdbSendOperationRepository implements SendOperationRepository {
 
   async getByState(state: SendOperationState): Promise<SendOperation[]> {
     const rows = await this.db.runTransaction('r', [this.storeName], async (tx) => {
-      return (await tx.table(this.storeName).where('state').equals(state).toArray()) as
-        SendOperationRow[];
+      return (await tx
+        .table(this.storeName)
+        .where('state')
+        .equals(state)
+        .toArray()) as SendOperationRow[];
     });
     return rows.map(rowToOperation);
   }
@@ -198,8 +201,11 @@ export class IdbSendOperationRepository implements SendOperationRepository {
 
   async getByMintUrl(mintUrl: string): Promise<SendOperation[]> {
     const rows = await this.db.runTransaction('r', [this.storeName], async (tx) => {
-      return (await tx.table(this.storeName).where('mintUrl').equals(mintUrl).toArray()) as
-        SendOperationRow[];
+      return (await tx
+        .table(this.storeName)
+        .where('mintUrl')
+        .equals(mintUrl)
+        .toArray()) as SendOperationRow[];
     });
     return rows.map(rowToOperation);
   }

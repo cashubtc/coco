@@ -161,7 +161,12 @@ export class MeltQuoteService {
           keep: { type: 'custom', data: outputData.keep },
         };
 
-        const { send, keep } = await wallet.send(outputData.sendAmount, selectedProofs, undefined, outputConfig);
+        const { send, keep } = await wallet.send(
+          outputData.sendAmount,
+          selectedProofs,
+          undefined,
+          outputConfig,
+        );
         this.logger?.debug('Swapped successfully', {
           mintUrl,
           quoteId,
@@ -184,7 +189,10 @@ export class MeltQuoteService {
           'inflight',
         );
 
-        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, { type: 'custom', data: blankOutputs });
+        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, {
+          type: 'custom',
+          data: blankOutputs,
+        });
         await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
         await this.proofService.setProofState(
           mintUrl,

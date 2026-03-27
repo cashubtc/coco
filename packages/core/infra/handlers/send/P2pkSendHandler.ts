@@ -209,7 +209,6 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     if (keepSecrets.length > 0) {
       await proofService.releaseProofs(operation.mintUrl, keepSecrets);
     }
-
   }
 
   /**

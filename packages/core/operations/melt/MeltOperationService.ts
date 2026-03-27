@@ -19,10 +19,7 @@ import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import { generateSubId } from '../../utils';
-import {
-  UnknownMintError,
-  ProofValidationError,
-} from '../../models/Error';
+import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
 import type { FinalizeResult } from './MeltMethodHandler';

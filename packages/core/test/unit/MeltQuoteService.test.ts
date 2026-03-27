@@ -22,12 +22,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
   let emittedEvents: Array<{ event: string; payload: any }>;
 
   const makeProof = (amount: number, secret: string): Proof =>
-  ({
-    amount,
-    secret,
-    C: 'C_' as any,
-    id: 'keyset-1',
-  } as Proof);
+    ({
+      amount,
+      secret,
+      C: 'C_' as any,
+      id: 'keyset-1',
+    }) as Proof;
 
   beforeEach(() => {
     emittedEvents = [];
@@ -47,8 +47,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       async getMeltQuote() {
         return null;
       },
-      async addMeltQuote() { },
-      async setMeltQuoteState() { },
+      async addMeltQuote() {},
+      async setMeltQuoteState() {},
       async getPendingMeltQuotes() {
         return [];
       },
@@ -58,7 +58,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       async selectProofsToSend() {
         return [];
       },
-      async setProofState() { },
+      async setProofState() {},
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
       ),
@@ -190,7 +190,9 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     const saveProofsSpy = mock(() => Promise.resolve());
     mockProofService.saveProofs = saveProofsSpy;
-    const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [makeProof(10, 'secret-4')] }));
+    const meltProofsBolt11Spy = mock(() =>
+      Promise.resolve({ change: [makeProof(10, 'secret-4')] }),
+    );
     const sendSpy = mock(() => Promise.resolve({ send: swappedProofs, keep: keepProofs }));
 
     // Create a wallet object that will be returned consistently
@@ -254,7 +256,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
     const expectedBlankOutputType = { type: 'custom', data: [] };
 
     // Verify meltProofsBolt11 was called with swapped proofs (not original selected proofs)
-    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, swappedProofs, undefined, expectedBlankOutputType);
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(
+      quote,
+      swappedProofs,
+      undefined,
+      expectedBlankOutputType,
+    );
 
     // Verify events were emitted
     expect(emittedEvents.length).toBeGreaterThanOrEqual(2);

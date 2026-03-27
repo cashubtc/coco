@@ -56,7 +56,11 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   async getByQuoteId(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
-      if (operation.mintUrl === mintUrl && 'quoteId' in operation && operation.quoteId === quoteId) {
+      if (
+        operation.mintUrl === mintUrl &&
+        'quoteId' in operation &&
+        operation.quoteId === quoteId
+      ) {
         results.push({ ...operation });
       }
     }

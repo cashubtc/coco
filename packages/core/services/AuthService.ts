@@ -138,7 +138,9 @@ export class AuthService {
     const expired = session.expiresAt <= now;
 
     if (expired && !session.refreshToken) {
-      this.logger?.info('Auth session expired without refresh token, skipping restore', { mintUrl });
+      this.logger?.info('Auth session expired without refresh token, skipping restore', {
+        mintUrl,
+      });
       return false;
     }
 
@@ -280,12 +282,14 @@ export class AuthService {
 
   private persistPool(mintUrl: string, auth: AuthManager): void {
     const pool = auth.exportPool();
-    this.authSessionService.updateBatPool(mintUrl, pool.length > 0 ? pool : undefined).catch((err) => {
-      this.logger?.error('Failed to persist BAT pool after change', {
-        mintUrl,
-        cause: err instanceof Error ? err.message : String(err),
+    this.authSessionService
+      .updateBatPool(mintUrl, pool.length > 0 ? pool : undefined)
+      .catch((err) => {
+        this.logger?.error('Failed to persist BAT pool after change', {
+          mintUrl,
+          cause: err instanceof Error ? err.message : String(err),
+        });
       });
-    });
   }
 
   private async saveSessionWithPool(

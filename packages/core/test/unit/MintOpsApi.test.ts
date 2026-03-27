@@ -16,22 +16,20 @@ const quoteId = 'quote-1';
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
 type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
-type _AssertBolt11PrepareAllowsOmittedMethodData =
-  Assert<
-    Extract<PrepareMintInput, { method: 'bolt11' }> extends {
-      methodData?: Record<string, never>;
-    }
-      ? true
-      : false
-  >;
-type _AssertBolt11ImportAllowsOmittedMethodData =
-  Assert<
-    Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
-      methodData?: Record<string, never>;
-    }
-      ? true
-      : false
-  >;
+type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
+  Extract<PrepareMintInput, { method: 'bolt11' }> extends {
+    methodData?: Record<string, never>;
+  }
+    ? true
+    : false
+>;
+type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
+  Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
+    methodData?: Record<string, never>;
+  }
+    ? true
+    : false
+>;
 
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',
@@ -194,10 +192,12 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.execute).toHaveBeenCalledWith(pendingOperation.id);
     expect(result.state).toBe('finalized');
 
-    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce({
-      ...pendingOperation,
-      state: 'executing',
-    } as MintOperation);
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      {
+        ...pendingOperation,
+        state: 'executing',
+      } as MintOperation,
+    );
 
     await expect(api.execute(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
   });

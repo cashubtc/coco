@@ -39,7 +39,7 @@ export class IdbMintRepository implements MintRepository {
           trusted: r.trusted ?? true,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
-        } satisfies Mint),
+        }) satisfies Mint,
     );
   }
 
@@ -56,7 +56,7 @@ export class IdbMintRepository implements MintRepository {
             trusted: r.trusted ?? true,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
-          } satisfies Mint),
+          }) satisfies Mint,
       );
   }
 

@@ -3,11 +3,11 @@ name: indexeddb-integration-tests
 on:
   pull_request:
     paths:
-      - "packages/indexeddb/**"
-      - "packages/adapter-tests/**"
-      - "packages/core/**"
-      - "scripts/test-integration.sh"
-      - ".github/workflows/indexeddb-integration-tests.yml"
+      - 'packages/indexeddb/**'
+      - 'packages/adapter-tests/**'
+      - 'packages/core/**'
+      - 'scripts/test-integration.sh'
+      - '.github/workflows/indexeddb-integration-tests.yml'
 
 jobs:
   integration-tests:

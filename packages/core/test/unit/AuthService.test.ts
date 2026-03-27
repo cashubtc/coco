@@ -144,9 +144,7 @@ describe('AuthService', () => {
     });
 
     it('imports batPool into AuthManager when session has batPool', async () => {
-      const fakeBatPool = [
-        { id: 'key1', amount: 1, secret: 's1', C: 'c1' },
-      ] as any;
+      const fakeBatPool = [{ id: 'key1', amount: 1, secret: 's1', C: 'c1' }] as any;
       const sessionWithPool: AuthSession = {
         ...fakeSession,
         batPool: fakeBatPool,

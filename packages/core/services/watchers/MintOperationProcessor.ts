@@ -16,7 +16,10 @@ interface OperationHandler {
 }
 
 class Bolt11MintOperationHandler implements OperationHandler {
-  constructor(private mintOperations: MintOperationService, private logger?: Logger) {}
+  constructor(
+    private mintOperations: MintOperationService,
+    private logger?: Logger,
+  ) {}
 
   async process(_mintUrl: string, operationId: string): Promise<void> {
     await this.mintOperations.finalize(operationId);

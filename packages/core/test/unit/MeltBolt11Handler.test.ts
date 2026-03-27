@@ -243,10 +243,10 @@ describe('MeltBolt11Handler', () => {
 
     // Mock Logger
     logger = {
-      debug: mock(() => { }),
-      info: mock(() => { }),
-      warn: mock(() => { }),
-      error: mock(() => { }),
+      debug: mock(() => {}),
+      info: mock(() => {}),
+      warn: mock(() => {}),
+      error: mock(() => {}),
     } as Logger;
   });
 
@@ -981,7 +981,10 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('FAILED');
-        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
+        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, [
+          'input-1',
+          'input-2',
+        ]);
       });
     });
 
@@ -1128,9 +1131,11 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.recoverExecuting(ctx);
 
         expect(result.status).toBe('FAILED');
-        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['input-1', 'input-2']);
+        expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, [
+          'input-1',
+          'input-2',
+        ]);
       });
-
     });
 
     describe('unexpected state handling', () => {

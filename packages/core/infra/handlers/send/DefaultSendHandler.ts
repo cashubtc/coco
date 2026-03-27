@@ -220,7 +220,6 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     if (keepSecrets.length > 0) {
       await proofService.releaseProofs(operation.mintUrl, keepSecrets);
     }
-
   }
 
   /**

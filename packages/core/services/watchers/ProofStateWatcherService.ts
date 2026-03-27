@@ -386,7 +386,8 @@ export class ProofStateWatcherService {
       const sendProofs = await this.proofRepository.getProofsBySecrets(mintUrl, sendProofSecrets);
       const expectedProofCount = new Set(sendProofSecrets).size;
       const allSpent =
-        sendProofs.length === expectedProofCount && sendProofs.every((proof) => proof.state === 'spent');
+        sendProofs.length === expectedProofCount &&
+        sendProofs.every((proof) => proof.state === 'spent');
 
       if (allSpent) {
         this.logger?.info('All send proofs spent, finalizing operation', { operationId });

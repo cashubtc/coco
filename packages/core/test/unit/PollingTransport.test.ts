@@ -9,7 +9,7 @@ const createMockMintAdapter = (): MintAdapter =>
     checkMintQuoteState: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
-  } as unknown as MintAdapter);
+  }) as unknown as MintAdapter;
 
 // Helper to create a delayed mock adapter
 const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
@@ -19,7 +19,7 @@ const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
     ),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
-  } as unknown as MintAdapter);
+  }) as unknown as MintAdapter;
 
 describe('PollingTransport per-mint intervals', () => {
   let transport: PollingTransport;

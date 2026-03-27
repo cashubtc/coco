@@ -235,7 +235,9 @@ export class MintOperationWatcherService {
 
       for (const batch of chunks) {
         const quoteIds = batch.map((operation) => operation.quoteId);
-        const operationIdByQuote = new Map(batch.map((operation) => [operation.quoteId, operation.id]));
+        const operationIdByQuote = new Map(
+          batch.map((operation) => [operation.quoteId, operation.id]),
+        );
         const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteResponse>(
           mintUrl,
           'bolt11_mint_quote',
@@ -273,13 +275,16 @@ export class MintOperationWatcherService {
                 state: payload.state,
               });
             } catch (err) {
-              this.logger?.error('Failed to emit pending mint operation update from remote update', {
-                operationId,
-                mintUrl,
-                quoteId,
-                state: payload.state,
-                err,
-              });
+              this.logger?.error(
+                'Failed to emit pending mint operation update from remote update',
+                {
+                  operationId,
+                  mintUrl,
+                  quoteId,
+                  state: payload.state,
+                  err,
+                },
+              );
             }
 
             if (payload.state === 'ISSUED') {
@@ -324,7 +329,11 @@ export class MintOperationWatcherService {
           this.keyByOperationId.set(operation.id, key);
         }
 
-        this.logger?.debug('Watching mint operation batch', { mintUrl, subId, count: batch.length });
+        this.logger?.debug('Watching mint operation batch', {
+          mintUrl,
+          subId,
+          count: batch.length,
+        });
       }
     }
   }

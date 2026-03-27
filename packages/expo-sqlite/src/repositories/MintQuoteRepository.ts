@@ -97,7 +97,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
           unit: row.unit,
           expiry: row.expiry,
           pubkey: row.pubkey ?? undefined,
-        } satisfies MintQuote),
+        }) satisfies MintQuote,
     );
   }
 }

@@ -57,9 +57,7 @@ export function sumProofs(proofs: Proof[]): number {
  * and will be used as melt inputs.
  */
 export function getSwapSendSecrets(swapOutputData: SerializedOutputData): string[] {
-  return deserializeOutputData(swapOutputData).send.map((o) =>
-    new TextDecoder().decode(o.secret),
-  );
+  return deserializeOutputData(swapOutputData).send.map((o) => new TextDecoder().decode(o.secret));
 }
 
 // ============================================================================
