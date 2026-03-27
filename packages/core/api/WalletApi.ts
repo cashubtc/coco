@@ -1,4 +1,4 @@
-import { getEncodedToken, getTokenMetadata, type Token } from '@cashu/cashu-ts';
+import { getEncodedToken, getTokenMetadata, type PaymentRequest, type Token } from '@cashu/cashu-ts';
 import type {
   MintService,
   WalletService,

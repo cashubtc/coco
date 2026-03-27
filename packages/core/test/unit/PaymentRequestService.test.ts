@@ -225,11 +225,18 @@ describe('PaymentRequestService', () => {
     });
 
     it('should use amount from options if not in request', async () => {
-      const request = createResolvedRequest({ amount: undefined });
+      const request = createResolvedRequest({
+        amount: undefined,
+        allowedMints: [testMintUrl, testMintUrl2],
+      });
 
-      await service.prepare(request, { mintUrl: testMintUrl, amount: 150 });
+      const transaction = await service.prepare(request, { mintUrl: testMintUrl, amount: 750 });
 
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 150);
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 750);
+      expect(transaction.request).not.toBe(request);
+      expect(transaction.request.amount).toBe(750);
+      expect(transaction.request.paymentRequest.amount).toBe(750);
+      expect(transaction.request.payableMints).toEqual([testMintUrl]);
     });
 
     it('should throw if mint is not in allowed list', async () => {
@@ -364,6 +371,29 @@ describe('PaymentRequestService', () => {
       expect(transaction.request.requiredMints).toEqual([testMintUrl]);
       expect(transaction.request.matchingMints).toEqual([testMintUrl]);
       expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 100);
+    });
+
+    it('should preserve the resolved amount for legacy amountless requests', async () => {
+      const request = {
+        paymentRequest: new PaymentRequest(
+          [],
+          'legacy-id',
+          undefined,
+          'sat',
+          [testMintUrl, testMintUrl2],
+        ),
+        matchingMints: [testMintUrl, testMintUrl2],
+        requiredMints: [testMintUrl, testMintUrl2],
+        amount: undefined,
+        transport: { type: 'inband' as const },
+      };
+
+      const transaction = await service.preparePaymentRequestTransaction(testMintUrl, request, 750);
+
+      expect(transaction.request.amount).toBe(750);
+      expect(transaction.request.paymentRequest.amount).toBe(750);
+      expect(transaction.request.matchingMints).toEqual([testMintUrl]);
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 750);
     });
 
     it('should execute legacy inband requests through the callback API', async () => {

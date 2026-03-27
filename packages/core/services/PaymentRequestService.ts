@@ -115,11 +115,12 @@ export class PaymentRequestService {
     const { mintUrl, amount } = options;
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
+    const preparedRequest = await this.resolvePreparedRequest(request, finalAmount);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
     const initSend = await this.sendOperationService.init(mintUrl, finalAmount);
     const preparedSend = await this.sendOperationService.prepare(initSend);
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
-    return { sendOperation: preparedSend, request };
+    return { sendOperation: preparedSend, request: preparedRequest };
   }
 
   /**
@@ -295,6 +296,34 @@ export class PaymentRequestService {
       throw new PaymentRequestError('Amount is required but was not provided');
     }
     return finalAmount;
+  }
+
+  private async resolvePreparedRequest(
+    request: ResolvedPaymentRequest,
+    amount: number,
+  ): Promise<ResolvedPaymentRequest> {
+    if (request.amount === amount) {
+      return request;
+    }
+
+    const paymentRequest = new PaymentRequest(
+      request.paymentRequest.transport,
+      request.paymentRequest.id,
+      amount,
+      request.paymentRequest.unit,
+      request.paymentRequest.mints,
+      request.paymentRequest.description,
+      request.paymentRequest.singleUse,
+      request.paymentRequest.nut10,
+    );
+    const payableMints = await this.findMatchingMints(paymentRequest);
+
+    return {
+      ...request,
+      amount,
+      payableMints,
+      paymentRequest,
+    };
   }
 
   private toResolvedPaymentRequest(

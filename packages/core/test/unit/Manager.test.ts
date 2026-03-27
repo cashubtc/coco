@@ -56,9 +56,9 @@ describe('initializeCoco', () => {
 
       expect(manager.paymentRequests).toBeInstanceOf(PaymentRequestsApi);
 
-      await manager.disableMintQuoteWatcher();
+      await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
-      await manager.disableMintQuoteProcessor();
+      await manager.disableMintOperationProcessor();
     });
 
     it('should use NullLogger by default', async () => {
