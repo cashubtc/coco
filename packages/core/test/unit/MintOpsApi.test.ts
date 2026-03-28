@@ -13,6 +13,26 @@ import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
 
+type Assert<T extends true> = T;
+type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
+type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
+type _AssertBolt11PrepareAllowsOmittedMethodData =
+  Assert<
+    Extract<PrepareMintInput, { method: 'bolt11' }> extends {
+      methodData?: Record<string, never>;
+    }
+      ? true
+      : false
+  >;
+type _AssertBolt11ImportAllowsOmittedMethodData =
+  Assert<
+    Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
+      methodData?: Record<string, never>;
+    }
+      ? true
+      : false
+  >;
+
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',
   state: 'pending',
@@ -97,6 +117,23 @@ describe('MintOpsApi', () => {
     expect(result).toBe(pendingOperation);
   });
 
+  it('prepare defaults empty methodData for bolt11', async () => {
+    const result = await api.prepare({
+      mintUrl,
+      amount: 10,
+      method: 'bolt11',
+    });
+
+    expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
+      mintUrl,
+      10,
+      'sat',
+      'bolt11',
+      {},
+    );
+    expect(result).toBe(pendingOperation);
+  });
+
   it('prepare rejects non-sat units before delegating to the service', async () => {
     await expect(
       api.prepare({
@@ -117,6 +154,17 @@ describe('MintOpsApi', () => {
       quote,
       method: 'bolt11',
       methodData: {},
+    });
+
+    expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, quote, 'bolt11', {});
+    expect(result).toBe(pendingOperation);
+  });
+
+  it('importQuote defaults empty methodData for bolt11', async () => {
+    const result = await api.importQuote({
+      mintUrl,
+      quote,
+      method: 'bolt11',
     });
 
     expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, quote, 'bolt11', {});

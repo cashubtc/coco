@@ -12,32 +12,44 @@ import type {
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
 
+type PrepareMintInputCommon = {
+  /** Mint that will execute the quote-backed mint operation. */
+  mintUrl: string;
+  /** Amount to request from the mint. */
+  amount: number;
+  /** Unit to request from the mint. Only `sat` is currently supported. */
+  unit?: 'sat';
+};
+
+type ImportMintQuoteInputCommon = {
+  /** Mint that issued the existing quote. */
+  mintUrl: string;
+};
+
+type MethodDataInput<M extends MintMethod> = MintMethodData<M> extends Record<string, never>
+  ? {
+      /** Method-specific payload required for the selected mint method. */
+      methodData?: MintMethodData<M>;
+    }
+  : {
+      /** Method-specific payload required for the selected mint method. */
+      methodData: MintMethodData<M>;
+    };
+
 export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: {
-    /** Mint that will execute the quote-backed mint operation. */
-    mintUrl: string;
-    /** Amount to request from the mint. */
-    amount: number;
-    /** Unit to request from the mint. Only `sat` is currently supported. */
-    unit?: 'sat';
+  [M in TSupported]: PrepareMintInputCommon & {
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
-    /** Method-specific payload required for the selected mint method. */
-    methodData: MintMethodData<M>;
-  };
+  } & MethodDataInput<M>;
 }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: {
-    /** Mint that issued the existing quote. */
-    mintUrl: string;
+  [M in TSupported]: ImportMintQuoteInputCommon & {
     /** Existing quote snapshot to track as an operation. */
     quote: MintMethodQuoteSnapshot<M>;
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
-    /** Method-specific payload required for the selected mint method. */
-    methodData: MintMethodData<M>;
-  };
+  } & MethodDataInput<M>;
 }[TSupported];
 
 export interface MintRecoveryApi {
@@ -84,13 +96,14 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const unit = input.unit ?? 'sat';
     this.assertSupportedUnit(unit);
+    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
     return this.mintOperationService.prepareNewQuote(
       input.mintUrl,
       input.amount,
       unit,
       input.method,
-      input.methodData,
+      methodData,
     );
   }
 
@@ -99,12 +112,13 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    */
   async importQuote(input: ImportMintQuoteInput<TSupported>): Promise<PendingMintOperation> {
     this.assertSupportedUnit(input.quote.unit);
+    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
     return this.mintOperationService.importQuote(
       input.mintUrl,
       input.quote,
       input.method,
-      input.methodData,
+      methodData,
     );
   }
 
