@@ -3,7 +3,7 @@ import type {
   PreparedSendOperation,
   PendingSendOperation,
   Manager,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { useManager } from '../contexts/ManagerContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 

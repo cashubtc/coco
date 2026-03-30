@@ -1,4 +1,4 @@
-import type { MintOperationRepository } from 'coco-cashu-core';
+import type { MintOperationRepository } from '@cashu/coco-core';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

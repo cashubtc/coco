@@ -1,6 +1,6 @@
 {
-  "name": "coco-cashu-core",
-  "version": "1.1.2-rc.50",
+  "name": "@cashu/coco-core",
+  "version": "1.0.0-rc.0",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "repository": {
@@ -9,7 +9,7 @@
     "directory": "packages/core"
   },
   "devDependencies": {
-    "coco-cashu-adapter-tests": "1.1.2-rc.50",
+    "@cashu/coco-adapter-tests": "1.0.0-rc.0",
     "typescript-eslint": "^8.40.0"
   },
   "peerDependencies": {

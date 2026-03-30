@@ -5,7 +5,7 @@ import type {
   Repositories,
   MeltOperation,
   AuthSession,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;

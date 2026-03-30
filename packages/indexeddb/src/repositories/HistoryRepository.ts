@@ -6,7 +6,7 @@ import type {
   ReceiveHistoryEntry,
   SendHistoryEntry,
   SendHistoryState,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import type { IdbDb } from '../lib/db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];

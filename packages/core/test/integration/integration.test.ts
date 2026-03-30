@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
-import { runIntegrationTests } from 'coco-cashu-adapter-tests';
+import { runIntegrationTests } from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory';
 import { ConsoleLogger } from '../../logging';
 import type { Logger, LogLevel } from '../../logging';

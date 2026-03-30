@@ -1,6 +1,6 @@
-# Contributing to coco-cashu
+# Contributing to coco
 
-We want to make it easy to contribute to coco-cashu.
+We want to make it easy to contribute to coco.
 
 The kinds of changes that are usually a good fit:
 
@@ -18,7 +18,7 @@ straight to a pull request.
 If you are unsure whether a change is in scope, open an issue with the problem you
 want to solve and the approach you have in mind.
 
-## Developing coco-cashu
+## Developing coco
 
 - Requirements: Bun (CI currently runs Bun 1.2.18)
 - Install dependencies from the repo root:
@@ -60,14 +60,14 @@ bun run docs:build
 Useful package-level commands:
 
 ```bash
-bun run --filter='coco-cashu-core' test
-bun run --filter='coco-cashu-core' test:unit
-bun run --filter='coco-cashu-core' test:integration
-bun run --filter='coco-cashu-react' lint
-bun run --filter='coco-cashu-indexeddb' test
-bun run --filter='coco-cashu-indexeddb' test:browser
-bun run --filter='coco-cashu-sqlite3' test
-bun run --filter='coco-cashu-sqlite-bun' test
+bun run --filter='@cashu/coco-core' test
+bun run --filter='@cashu/coco-core' test:unit
+bun run --filter='@cashu/coco-core' test:integration
+bun run --filter='@cashu/coco-react' lint
+bun run --filter='@cashu/coco-indexeddb' test
+bun run --filter='@cashu/coco-indexeddb' test:browser
+bun run --filter='@cashu/coco-sqlite' test
+bun run --filter='@cashu/coco-sqlite-bun' test
 bun --cwd packages/expo-sqlite test
 ```
 
@@ -78,11 +78,11 @@ good default.
 ### Running a single test
 
 ```bash
-bun run --filter='coco-cashu-core' test -- test/unit/Manager.test.ts
-bun run --filter='coco-cashu-core' test -- -t "initializeCoco" test/unit/Manager.test.ts
-bun run --filter='coco-cashu-sqlite3' test -- src/test/integration.test.ts
-bun run --filter='coco-cashu-indexeddb' test -- src/test/integration.test.ts
-bun run --filter='coco-cashu-indexeddb' test:browser -- src/test/integration.test.ts
+bun run --filter='@cashu/coco-core' test -- test/unit/Manager.test.ts
+bun run --filter='@cashu/coco-core' test -- -t "initializeCoco" test/unit/Manager.test.ts
+bun run --filter='@cashu/coco-sqlite' test -- src/test/integration.test.ts
+bun run --filter='@cashu/coco-indexeddb' test -- src/test/integration.test.ts
+bun run --filter='@cashu/coco-indexeddb' test:browser -- src/test/integration.test.ts
 ```
 
 ## Workflow expectations
@@ -186,7 +186,7 @@ We use `bun:test` across most packages, plus Vitest for some adapter coverage.
 For browser coverage in `packages/indexeddb`, run:
 
 ```bash
-CI=1 bun run --filter='coco-cashu-indexeddb' test:browser
+CI=1 bun run --filter='@cashu/coco-indexeddb' test:browser
 ```
 
 ## Releases and versioning

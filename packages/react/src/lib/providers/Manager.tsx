@@ -1,4 +1,4 @@
-import type { Manager } from 'coco-cashu-core';
+import type { Manager } from '@cashu/coco-core';
 import { useMemo } from 'react';
 import { ManagerCtx, useManagerContext } from '../contexts/ManagerContext';
 

@@ -6,7 +6,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
   HistoryRepository,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];

@@ -2,7 +2,7 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperation,
   ReceiveOperationState,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface ReceiveOperationRow {

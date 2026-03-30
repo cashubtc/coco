@@ -1,7 +1,7 @@
 {
-  "name": "coco-cashu-adapter-tests",
+  "name": "@cashu/coco-adapter-tests",
   "module": "index.ts",
-  "version": "1.1.2-rc.50",
+  "version": "1.0.0-rc.0",
   "type": "module",
   "repository": {
     "type": "git",
@@ -9,7 +9,7 @@
     "directory": "packages/adapter-tests"
   },
   "devDependencies": {
-    "coco-cashu-core": "1.1.2-rc.50"
+    "@cashu/coco-core": "1.0.0-rc.0"
   },
   "files": [
     "dist",
@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "coco-cashu-core": "^1.1.2-rc.50",
+    "@cashu/coco-core": "^1.0.0-rc.0",
     "typescript": "^5",
     "@cashu/cashu-ts": "^3.3.0"
   },

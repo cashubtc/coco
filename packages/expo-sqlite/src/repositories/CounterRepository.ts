@@ -1,4 +1,4 @@
-import type { CounterRepository, Counter } from 'coco-cashu-core';
+import type { CounterRepository, Counter } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 export class ExpoCounterRepository implements CounterRepository {

@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import type { PendingSendOperation, RollingBackSendOperation } from 'coco-cashu-core';
+import type { PendingSendOperation, RollingBackSendOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 function makeRollingBackOperation(): RollingBackSendOperation {

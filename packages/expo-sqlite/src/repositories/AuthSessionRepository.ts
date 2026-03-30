@@ -1,4 +1,4 @@
-import type { AuthSessionRepository, AuthSession } from 'coco-cashu-core';
+import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 interface AuthSessionRow {

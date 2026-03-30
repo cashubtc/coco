@@ -8,7 +8,7 @@ Coco will try to use the global `WebSocket` object by default. As this is not av
 Here is an example of how to instantiate Coco with the popular Websocket implementation `ws` in NodeJS:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
+import { initializeCoco } from '@cashu/coco-core';
 import { WebSocket } from 'ws';
 
 const coco = await initializeCoco({

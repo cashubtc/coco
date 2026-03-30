@@ -1,5 +1,5 @@
 import type { IdbDb } from './db.ts';
-import { normalizeMintUrl } from 'coco-cashu-core';
+import { normalizeMintUrl } from '@cashu/coco-core';
 
 export async function ensureSchema(db: IdbDb): Promise<void> {
   // Dexie schema with final versioned stores (flattened for first release)

@@ -4,7 +4,7 @@ import type {
   MintHistoryEntry,
   ReceiveHistoryEntry,
   SendHistoryEntry,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];

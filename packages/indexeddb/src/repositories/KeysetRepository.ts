@@ -1,4 +1,4 @@
-import type { KeysetRepository, Keyset } from 'coco-cashu-core';
+import type { KeysetRepository, Keyset } from '@cashu/coco-core';
 import type { IdbDb, KeysetRow } from '../lib/db.ts';
 
 export class IdbKeysetRepository implements KeysetRepository {

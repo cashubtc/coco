@@ -14,21 +14,21 @@ const coco = await initializeCoco({
 
 Some storage implementations are maintained as part of the cashubtc/coco repository, but technically you can use any class that implements the `Repositories` interface.
 
-## coco-cashu-indexeddb
+## @cashu/coco-indexeddb
 
 Implements Repositories using the IndexedDB Browser API.
 
 Installation:
 
 ```sh
-npm i coco-cashu-indexeddb
+npm i @cashu/coco-indexeddb
 ```
 
 Usage:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
-import { IndexedDbRepositories } from 'coco-cashu-indexeddb';
+import { initializeCoco } from '@cashu/coco-core';
+import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
 
 const repo = new IndexedDbRepositories({ name: 'your-db-name' });
 const coco = await initializeCoco({
@@ -37,21 +37,21 @@ const coco = await initializeCoco({
 });
 ```
 
-## coco-cashu-expo-sqlite
+## @cashu/coco-expo-sqlite
 
 Installation:
 
 ```sh
-npm i coco-cashu-expo-sqlite
-# coco-cashu-expo-sqlite expects an Expo SQLite client to be passed
+npm i @cashu/coco-expo-sqlite
+# @cashu/coco-expo-sqlite expects an Expo SQLite client to be passed
 npx expo install expo-sqlite
 ```
 
 Usage:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
-import { ExpoSqliteRepositories } from 'coco-cashu-expo-sqlite';
+import { initializeCoco } from '@cashu/coco-core';
+import { ExpoSqliteRepositories } from '@cashu/coco-expo-sqlite';
 import { openDatabaseAsync } from 'expo-sqlite';
 
 // First we create an expo-sqlite client
@@ -64,23 +64,23 @@ const coco = await initializeCoco({
 });
 ```
 
-## coco-cashu-sqlite3
+## @cashu/coco-sqlite
 
 Installation:
 
 ```sh
-npm i coco-cashu-sqlite3
-npm i sqlite3
+npm i @cashu/coco-sqlite
+npm i better-sqlite3
 ```
 
 Usage:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
-import { SqliteRepositories } from 'coco-cashu-sqlite3';
-import { Database } from 'sqlite3';
+import { initializeCoco } from '@cashu/coco-core';
+import { SqliteRepositories } from '@cashu/coco-sqlite';
+import Database from 'better-sqlite3';
 
-// First we create a sqlite3 client
+// First we create a better-sqlite3 client
 const db = new Database('./test.db');
 // Then we pass it to our storage implementation
 const repo = new SqliteRepositories({ database: db });
@@ -90,21 +90,21 @@ const coco = await initializeCoco({
 });
 ```
 
-## coco-cashu-sqlite-bun
+## @cashu/coco-sqlite-bun
 
 SQLite adapter for Bun runtime using Bun's built-in `bun:sqlite` module.
 
 Installation:
 
 ```sh
-npm i coco-cashu-sqlite-bun
+npm i @cashu/coco-sqlite-bun
 ```
 
 Usage:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
-import { SqliteRepositories } from 'coco-cashu-sqlite-bun';
+import { initializeCoco } from '@cashu/coco-core';
+import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 import { Database } from 'bun:sqlite';
 
 // First we create a bun:sqlite client
@@ -117,4 +117,5 @@ const coco = await initializeCoco({
 });
 ```
 
-**Note:** This adapter is specifically designed for Bun runtime environments. For Node.js environments, use `coco-cashu-sqlite3` instead.
+**Note:** This adapter is specifically designed for Bun runtime environments. For
+Node.js environments, use `@cashu/coco-sqlite` instead.

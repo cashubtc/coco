@@ -1,5 +1,5 @@
-import type { Repositories, Manager, Logger } from 'coco-cashu-core';
-import { initializeCoco, getEncodedToken, ConsoleLogger } from 'coco-cashu-core';
+import type { Repositories, Manager, Logger } from '@cashu/coco-core';
+import { initializeCoco, getEncodedToken, ConsoleLogger } from '@cashu/coco-core';
 import {
   Mint,
   Wallet,

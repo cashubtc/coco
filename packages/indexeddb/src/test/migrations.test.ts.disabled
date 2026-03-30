@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import { IndexedDbRepositories } from '../index.ts';
-import { initializeCoco, type Manager } from 'coco-cashu-core';
+import { initializeCoco, type Manager } from '@cashu/coco-core';
 
 /**
  * Migration tests for IndexedDB adapter.

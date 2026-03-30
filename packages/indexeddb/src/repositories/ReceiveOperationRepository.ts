@@ -2,7 +2,7 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperation,
   ReceiveOperationState,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

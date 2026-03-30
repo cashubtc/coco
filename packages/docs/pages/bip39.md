@@ -7,7 +7,7 @@ Coco is a deterministic wallet by default. That means it will only work when giv
 The BIP-39 seed is never persisted by coco, instead it needs to be supplied via a `seedGetter` function that is passed at instantiation:
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
+import { initializeCoco } from '@cashu/coco-core';
 
 async function seedGetter(): Promise<Uint8Array> {
   // Add your implementation here

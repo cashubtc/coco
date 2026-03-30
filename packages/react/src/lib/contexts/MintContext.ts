@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Mint } from 'coco-cashu-core';
+import type { Mint } from '@cashu/coco-core';
 
 export type AddMintOptions = {
   trusted?: boolean;

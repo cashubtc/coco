@@ -1,5 +1,5 @@
-import type { MeltQuoteRepository } from 'coco-cashu-core';
-import type { MeltQuote } from 'coco-cashu-core';
+import type { MeltQuoteRepository } from '@cashu/coco-core';
+import type { MeltQuote } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 export class SqliteMeltQuoteRepository implements MeltQuoteRepository {

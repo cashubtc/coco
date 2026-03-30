@@ -1,4 +1,4 @@
-import type { MeltOperationRepository } from 'coco-cashu-core';
+import type { MeltOperationRepository } from '@cashu/coco-core';
 import type { IdbDb, MeltOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

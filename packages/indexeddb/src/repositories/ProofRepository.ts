@@ -1,4 +1,4 @@
-import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
+import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function rowToProof(r: ProofRow): CoreProof {

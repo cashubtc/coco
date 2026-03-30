@@ -2,7 +2,7 @@
 
 // @ts-ignore bun:test types are provided by the test runner in this workspace.
 import { describe, expect, it } from 'bun:test';
-import type { MeltOperation } from 'coco-cashu-core';
+import type { MeltOperation } from '@cashu/coco-core';
 import { IdbMeltOperationRepository } from './MeltOperationRepository.ts';
 import type { MeltOperationRow } from '../lib/db.ts';
 

@@ -1,4 +1,4 @@
-import type { ProofRepository, CoreProof, ProofState } from 'coco-cashu-core';
+import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface ProofRow {

@@ -7,7 +7,7 @@ import {
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
-} from 'coco-cashu-adapter-tests';
+} from '@cashu/coco-adapter-tests';
 import { SqliteRepositories as Repositories } from '../index.ts';
 
 function createDeferred<T = void>() {

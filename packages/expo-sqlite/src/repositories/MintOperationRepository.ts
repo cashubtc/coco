@@ -1,4 +1,4 @@
-import type { MintOperationRepository } from 'coco-cashu-core';
+import type { MintOperationRepository } from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;

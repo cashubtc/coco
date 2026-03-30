@@ -8,4 +8,4 @@ export type {
   Keyset,
   Counter,
   CoreProof,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';

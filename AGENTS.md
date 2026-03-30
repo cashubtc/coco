@@ -48,46 +48,46 @@ Guidance for agentic coding in this repo.
 ## Build
 
 - All packages: `bun run build`
-- Core: `bun run --filter='coco-cashu-core' build`
-- Adapter tests: `bun run --filter='coco-cashu-adapter-tests' build`
-- IndexedDB: `bun run --filter='coco-cashu-indexeddb' build`
-- Expo SQLite: `bun run --filter='coco-cashu-expo-sqlite' build`
-- SQLite3: `bun run --filter='coco-cashu-sqlite3' build`
-- React: `bun run --filter='coco-cashu-react' build`
+- Core: `bun run --filter='@cashu/coco-core' build`
+- Adapter tests: `bun run --filter='@cashu/coco-adapter-tests' build`
+- IndexedDB: `bun run --filter='@cashu/coco-indexeddb' build`
+- Expo SQLite: `bun run --filter='@cashu/coco-expo-sqlite' build`
+- SQLite3: `bun run --filter='@cashu/coco-sqlite' build`
+- React: `bun run --filter='@cashu/coco-react' build`
 - Docs: `bun run docs:build`
 
 ## Typecheck
 
 - All packages: `bun run typecheck`
-- Core: `bun run --filter='coco-cashu-core' typecheck`
-- IndexedDB: `bun run --filter='coco-cashu-indexeddb' typecheck`
-- Expo SQLite: `bun run --filter='coco-cashu-expo-sqlite' typecheck`
-- SQLite3: `bun run --filter='coco-cashu-sqlite3' typecheck`
-- React (project refs): `bun run --filter='coco-cashu-react' typecheck`
+- Core: `bun run --filter='@cashu/coco-core' typecheck`
+- IndexedDB: `bun run --filter='@cashu/coco-indexeddb' typecheck`
+- Expo SQLite: `bun run --filter='@cashu/coco-expo-sqlite' typecheck`
+- SQLite3: `bun run --filter='@cashu/coco-sqlite' typecheck`
+- React (project refs): `bun run --filter='@cashu/coco-react' typecheck`
 
 ## Lint
 
-- React only: `bun run --filter='coco-cashu-react' lint`
+- React only: `bun run --filter='@cashu/coco-react' lint`
 
 ## Test
 
-- Core all tests: `bun run --filter='coco-cashu-core' test`
-- Core unit: `bun run --filter='coco-cashu-core' test:unit`
-- Core integration: `bun run --filter='coco-cashu-core' test:integration`
-- SQLite3 adapter: `bun run --filter='coco-cashu-sqlite3' test`
-- IndexedDB adapter: `bun run --filter='coco-cashu-indexeddb' test`
-- IndexedDB browser tests: `bun run --filter='coco-cashu-indexeddb' test:browser`
+- Core all tests: `bun run --filter='@cashu/coco-core' test`
+- Core unit: `bun run --filter='@cashu/coco-core' test:unit`
+- Core integration: `bun run --filter='@cashu/coco-core' test:integration`
+- SQLite3 adapter: `bun run --filter='@cashu/coco-sqlite' test`
+- IndexedDB adapter: `bun run --filter='@cashu/coco-indexeddb' test`
+- IndexedDB browser tests: `bun run --filter='@cashu/coco-indexeddb' test:browser`
 - Expo SQLite tests (no script): `bun --cwd packages/expo-sqlite test`
 - React package has no tests yet.
 
 ## Run a single test
 
-- Bun file: `bun run --filter='coco-cashu-core' test -- test/unit/Manager.test.ts`
-- Bun by name: `bun run --filter='coco-cashu-core' test -- -t "initializeCoco" test/unit/Manager.test.ts`
-- SQLite3 file: `bun run --filter='coco-cashu-sqlite3' test -- src/test/integration.test.ts`
-- IndexedDB file: `bun run --filter='coco-cashu-indexeddb' test -- src/test/integration.test.ts`
-- Vitest browser file: `bun run --filter='coco-cashu-indexeddb' test:browser -- src/test/integration.test.ts`
-- Run all browsers locally: `CI=1 bun run --filter='coco-cashu-indexeddb' test:browser`
+- Bun file: `bun run --filter='@cashu/coco-core' test -- test/unit/Manager.test.ts`
+- Bun by name: `bun run --filter='@cashu/coco-core' test -- -t "initializeCoco" test/unit/Manager.test.ts`
+- SQLite3 file: `bun run --filter='@cashu/coco-sqlite' test -- src/test/integration.test.ts`
+- IndexedDB file: `bun run --filter='@cashu/coco-indexeddb' test -- src/test/integration.test.ts`
+- Vitest browser file: `bun run --filter='@cashu/coco-indexeddb' test:browser -- src/test/integration.test.ts`
+- Run all browsers locally: `CI=1 bun run --filter='@cashu/coco-indexeddb' test:browser`
 
 ## Docs
 

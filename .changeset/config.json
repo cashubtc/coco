@@ -4,13 +4,13 @@
   "commit": false,
   "fixed": [
     [
-      "coco-cashu-core",
-      "coco-cashu-indexeddb",
-      "coco-cashu-expo-sqlite",
-      "coco-cashu-sqlite3",
-      "coco-cashu-sqlite-bun",
-      "coco-cashu-adapter-tests",
-      "coco-cashu-react"
+      "@cashu/coco-core",
+      "@cashu/coco-indexeddb",
+      "@cashu/coco-expo-sqlite",
+      "@cashu/coco-sqlite",
+      "@cashu/coco-sqlite-bun",
+      "@cashu/coco-adapter-tests",
+      "@cashu/coco-react"
     ]
   ],
   "linked": [],

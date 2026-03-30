@@ -1,10 +1,13 @@
-# coco-cashu
+# coco
 
 A modular, TypeScript-first toolkit for building Cashu wallets and applications.
 
 > ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
 
-coco-cashu provides a complete foundation for Cashu development with a storage-agnostic core that handles all the complexity: proof management, mint synchronization, quote lifecycle, counter tracking, and state updates through a typed event bus. Choose from ready-to-use storage adapters (SQLite3, IndexedDB, Expo SQLite) or implement your own using the simple repository interface. For React developers, there's a dedicated wrapper with hooks and context providers for seamless integration.
+coco provides a complete foundation for Cashu development with a storage-agnostic
+core that handles proof management, mint synchronization, quote lifecycle,
+counter tracking, and state updates through a typed event bus. Published
+packages now live under the `@cashu` npm scope.
 
 ## Architecture
 
@@ -17,7 +20,7 @@ coco-cashu provides a complete foundation for Cashu development with a storage-a
                            ▼
         ┌──────────────────────────────────┐
         │                                  │
-        │            @core                 │
+        │      @cashu/coco-core           │
         │                                  │
         │  • Services & Business Logic     │
         │  • Event Bus                     │
@@ -37,13 +40,15 @@ coco-cashu provides a complete foundation for Cashu development with a storage-a
 
 ## Packages
 
-- `packages/core` — storage-agnostic core with services, typed event bus, plugin system, and in-memory repositories for testing.
-- `packages/react` — React wrapper with hooks and context providers for easy integration in React apps.
-- `packages/sqlite3` — SQLite3 repository implementations for Node (uses `sqlite3` npm package).
-- `packages/indexeddb` — IndexedDB repository implementations for web.
-- `packages/expo-sqlite` — Expo SQLite repository implementations for React Native.
-- `packages/demo-cli` — Node CLI demo using the SQLite3 adapter.
-- `packages/demo-web` — Vite web demo using the IndexedDB adapter.
+- `@cashu/coco-core` — storage-agnostic core with services, typed event bus, and
+  in-memory repositories for testing.
+- `@cashu/coco-react` — React hooks and providers for integrating a Coco
+  `Manager` into UI code.
+- `@cashu/coco-sqlite` — Node adapter built on `better-sqlite3`.
+- `@cashu/coco-indexeddb` — IndexedDB adapter for web environments.
+- `@cashu/coco-expo-sqlite` — Expo SQLite adapter for React Native and Expo.
+- `@cashu/coco-sqlite-bun` — Bun adapter built on `bun:sqlite`.
+- `@cashu/coco-adapter-tests` — reusable storage adapter contract test helpers.
 
 ## Philosophy
 

@@ -13,7 +13,7 @@ import type {
   MintOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';

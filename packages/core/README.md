@@ -1,4 +1,4 @@
-# coco-cashu/core
+# @cashu/coco-core
 
 Modular, storage-agnostic core for working with Cashu mints and wallets.
 
@@ -47,7 +47,7 @@ bun install
 ## Quick start
 
 ```ts
-import { initializeCoco, MemoryRepositories, ConsoleLogger } from 'coco-cashu-core';
+import { initializeCoco, MemoryRepositories, ConsoleLogger } from '@cashu/coco-core';
 
 // Provide a deterministic 64-byte seed for wallet key derivation
 const seedGetter = async () => seed;
@@ -354,7 +354,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### Types
 
 ```ts
-import type { Plugin, ServiceKey } from 'coco-cashu-core';
+import type { Plugin, ServiceKey } from '@cashu/coco-core';
 
 // Service keys you can request:
 // 'mintService' | 'walletService' | 'proofService' | 'seedService' | 'walletRestoreService'

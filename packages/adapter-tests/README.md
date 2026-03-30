@@ -1,7 +1,7 @@
-# coco-cashu adapter contract tests
+# @cashu/coco-adapter-tests
 
 This package exports reusable test helpers that verify whether a storage adapter
-conforms to the `Repositories` contract from `coco-cashu-core`.
+conforms to the `Repositories` contract from `@cashu/coco-core`.
 
 ## Usage
 
@@ -10,7 +10,7 @@ contract suite into your test runner:
 
 ```ts
 import { describe, it, expect } from 'bun:test';
-import { runRepositoryTransactionContract } from 'coco-cashu-adapter-tests';
+import { runRepositoryTransactionContract } from '@cashu/coco-adapter-tests';
 import { MyAdapterRepositories } from './src';
 
 runRepositoryTransactionContract(

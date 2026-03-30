@@ -1,9 +1,9 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { runIntegrationTests } from 'coco-cashu-adapter-tests';
+import { runIntegrationTests } from '@cashu/coco-adapter-tests';
 import { ExpoSqliteRepositories } from '../index.ts';
 import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
-import { ConsoleLogger, type Logger } from 'coco-cashu-core';
+import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = process.env.MINT_URL;
 

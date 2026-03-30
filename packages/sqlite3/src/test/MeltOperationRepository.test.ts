@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
-import type { MeltOperation } from 'coco-cashu-core';
+import type { MeltOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 type FinalizedMeltOperation = Extract<MeltOperation, { state: 'finalized' }>;

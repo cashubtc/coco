@@ -1,5 +1,5 @@
 import { ExpoSqliteDb, getUnixTimeSeconds } from './db.ts';
-import { normalizeMintUrl } from 'coco-cashu-core';
+import { normalizeMintUrl } from '@cashu/coco-core';
 
 interface Migration {
   id: string;

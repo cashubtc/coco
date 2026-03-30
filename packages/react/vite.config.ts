@@ -7,12 +7,12 @@ export default defineConfig({
   build: {
     lib: {
       entry: './src/lib/index.ts',
-      name: 'coco-cashu-react',
+      name: '@cashu/coco-react',
       fileName: 'index',
       formats: ['es'],
     },
     rollupOptions: {
-      external: ['react', 'coco-cashu-core'],
+      external: ['react', '@cashu/coco-core'],
     },
   },
   plugins: [react(), dts({ tsconfigPath: './tsconfig.app.json', rollupTypes: true })],

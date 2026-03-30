@@ -1,5 +1,5 @@
 {
-  "name": "coco-cashu",
+  "name": "coco",
   "private": true,
   "repository": {
     "type": "git",
@@ -27,8 +27,8 @@
     "@changesets/cli": "^2.29.8"
   },
   "scripts": {
-    "build": "bun run --filter='coco-cashu-core' build && bun run --filter='coco-cashu-adapter-tests' build && bun run --filter='coco-cashu-indexeddb' build && bun run --filter='coco-cashu-expo-sqlite' build && bun run --filter='coco-cashu-sqlite3' build && bun run --filter='coco-cashu-sqlite-bun' build && bun run --filter='coco-cashu-react' build",
-    "typecheck": "bun run --filter='coco-cashu-core' typecheck && bun run --filter='coco-cashu-adapter-tests' typecheck && bun run --filter='coco-cashu-indexeddb' typecheck && bun run --filter='coco-cashu-expo-sqlite' typecheck && bun run --filter='coco-cashu-sqlite3' typecheck && bun run --filter='coco-cashu-sqlite-bun' typecheck && bun run --filter='coco-cashu-react' typecheck",
+    "build": "bun run --filter='@cashu/coco-core' build && bun run --filter='@cashu/coco-adapter-tests' build && bun run --filter='@cashu/coco-indexeddb' build && bun run --filter='@cashu/coco-expo-sqlite' build && bun run --filter='@cashu/coco-sqlite' build && bun run --filter='@cashu/coco-sqlite-bun' build && bun run --filter='@cashu/coco-react' build",
+    "typecheck": "bun run --filter='@cashu/coco-core' typecheck && bun run --filter='@cashu/coco-adapter-tests' typecheck && bun run --filter='@cashu/coco-indexeddb' typecheck && bun run --filter='@cashu/coco-expo-sqlite' typecheck && bun run --filter='@cashu/coco-sqlite' typecheck && bun run --filter='@cashu/coco-sqlite-bun' typecheck && bun run --filter='@cashu/coco-react' typecheck",
     "test:coverage:core": "bun test packages/core/test/unit --coverage --coverage-reporter=lcov --coverage-dir=coverage/core",
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",

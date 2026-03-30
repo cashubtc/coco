@@ -1,17 +1,24 @@
-# coco-cashu sqlite3 adapter
+# @cashu/coco-sqlite
 
 > ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
 
-## Install deps
+Node storage adapter for Coco built on `better-sqlite3`.
+
+## Install
 
 ```bash
-npm i
+npm install @cashu/coco-sqlite better-sqlite3
 ```
 
-## Build
+## Usage
 
-```bash
-npm run build
+```ts
+import Database from 'better-sqlite3';
+import { SqliteRepositories } from '@cashu/coco-sqlite';
+
+const database = new Database('./coco.db');
+const repositories = new SqliteRepositories({ database });
+await repositories.init();
 ```
 
 ## Notes

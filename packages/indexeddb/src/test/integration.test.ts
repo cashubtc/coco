@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
-import { runIntegrationTests } from 'coco-cashu-adapter-tests';
+import { runIntegrationTests } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
-import { ConsoleLogger, type Logger } from 'coco-cashu-core';
+import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = import.meta.env.VITE_MINT_URL || 'http://localhost:3338';
 

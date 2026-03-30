@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
-import type { PendingSendOperation, RollingBackSendOperation } from 'coco-cashu-core';
+import type { PendingSendOperation, RollingBackSendOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 function makeRollingBackOperation(): RollingBackSendOperation {

@@ -1,4 +1,4 @@
-import { initializeCoco, type Repositories } from 'coco-cashu-core';
+import { initializeCoco, type Repositories } from '@cashu/coco-core';
 
 /**
  * Test runner interface for migration tests.
@@ -103,7 +103,7 @@ export type MigrationTestOptions<TRepositories extends Repositories = Repositori
  *
  * @example
  * ```typescript
- * import { runMigrationTests } from 'coco-cashu-adapter-tests';
+ * import { runMigrationTests } from '@cashu/coco-adapter-tests';
  * import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
  *
  * runMigrationTests({

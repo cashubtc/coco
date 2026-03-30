@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import type { MintOperation } from 'coco-cashu-core';
+import type { MintOperation } from '@cashu/coco-core';
 import { ExpoSqliteRepositories, type ExpoSqliteRepositoriesOptions } from '../index.ts';
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;

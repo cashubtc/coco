@@ -1,13 +1,13 @@
 # Providers and Contexts
 
-All hooks in `coco-cashu-react` depend on React context providers. You can use the `CocoCashuProvider` convenience wrapper or compose providers individually.
+All hooks in `@cashu/coco-react` depend on React context providers. You can use the `CocoCashuProvider` convenience wrapper or compose providers individually.
 
 ## CocoCashuProvider
 
 Wraps `ManagerProvider`, `MintProvider`, and `BalanceProvider` in the correct order.
 
 ```tsx
-import { CocoCashuProvider } from 'coco-cashu-react';
+import { CocoCashuProvider } from '@cashu/coco-react';
 
 <CocoCashuProvider manager={manager}>{children}</CocoCashuProvider>;
 ```
@@ -17,7 +17,7 @@ import { CocoCashuProvider } from 'coco-cashu-react';
 `ManagerProvider` exposes the `Manager` instance. `ManagerGate` is a helper that only renders children when the manager is ready. `MintProvider` and `BalanceProvider` require `ManagerProvider` to be above them in the tree.
 
 ```tsx
-import { ManagerProvider, ManagerGate, useManagerContext } from 'coco-cashu-react';
+import { ManagerProvider, ManagerGate, useManagerContext } from '@cashu/coco-react';
 
 <ManagerProvider manager={manager}>
   <ManagerGate fallback={<Spinner />}>
@@ -35,7 +35,7 @@ If you just need the manager instance and want a strict check, use `useManager()
 Tracks all mints and trusted mints, and refreshes automatically on `mint:added` and `mint:updated` events.
 
 ```tsx
-import { MintProvider, useMints, useTrustedMints } from 'coco-cashu-react';
+import { MintProvider, useMints, useTrustedMints } from '@cashu/coco-react';
 
 <MintProvider>
   <MintList />
@@ -50,7 +50,7 @@ const { mints: trusted, trustMint: trust, untrustMint: untrust } = useTrustedMin
 Tracks total and per-mint balances. It refreshes automatically on `proofs:saved`, `proofs:state-changed`, and `mint:updated` events.
 
 ```tsx
-import { BalanceProvider, useBalanceContext } from 'coco-cashu-react';
+import { BalanceProvider, useBalanceContext } from '@cashu/coco-react';
 
 <BalanceProvider>
   <BalanceWidget />

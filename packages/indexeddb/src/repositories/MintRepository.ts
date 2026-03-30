@@ -1,4 +1,4 @@
-import type { MintRepository, Mint } from 'coco-cashu-core';
+import type { MintRepository, Mint } from '@cashu/coco-core';
 import type { IdbDb, MintRow } from '../lib/db.ts';
 
 export class IdbMintRepository implements MintRepository {

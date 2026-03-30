@@ -1,4 +1,4 @@
-import type { MintRepository, Mint } from 'coco-cashu-core';
+import type { MintRepository, Mint } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 export class ExpoMintRepository implements MintRepository {

@@ -3,7 +3,7 @@ import type {
   SendOperation,
   SendOperationState,
   SendMethod,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface SendOperationRow {

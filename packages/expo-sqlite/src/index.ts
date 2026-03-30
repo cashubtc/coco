@@ -13,7 +13,7 @@ import type {
   MintOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
 import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
 import { ExpoMintRepository } from './repositories/MintRepository.ts';

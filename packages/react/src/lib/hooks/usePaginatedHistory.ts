@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { HistoryEntry } from 'coco-cashu-core';
+import type { HistoryEntry } from '@cashu/coco-core';
 import { useManager } from '../contexts/ManagerContext';
 
 export type UsePaginatedHistoryResult = {

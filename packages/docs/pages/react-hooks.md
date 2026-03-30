@@ -7,7 +7,7 @@ Hooks are built on top of the providers and the core `Manager` API. Make sure yo
 Provides a two-step send flow that mirrors the core send saga. This is the recommended way to send tokens from the UI. `status` is one of `idle`, `loading`, `success`, or `error`.
 
 ```tsx
-import { useSend } from 'coco-cashu-react';
+import { useSend } from '@cashu/coco-react';
 
 const {
   prepareSend,
@@ -35,7 +35,7 @@ const { operation, token } = await executePreparedSend(prepared.id);
 Receives a token with simple status tracking. `status` follows the same `idle` to `error` lifecycle and `reset()` returns it to `idle`.
 
 ```tsx
-import { useReceive } from 'coco-cashu-react';
+import { useReceive } from '@cashu/coco-react';
 
 const { receive, status, error, reset, isReceiving } = useReceive();
 
@@ -50,7 +50,7 @@ await receive(token, {
 Provides paginated access to history and auto-refreshes on `history:updated` events.
 
 ```tsx
-import { usePaginatedHistory } from 'coco-cashu-react';
+import { usePaginatedHistory } from '@cashu/coco-react';
 
 const { history, loadMore, goToPage, refresh, hasMore, isFetching } = usePaginatedHistory(50);
 ```
@@ -60,7 +60,7 @@ const { history, loadMore, goToPage, refresh, hasMore, isFetching } = usePaginat
 Returns balances only for trusted mints and a total across those mints. This hook depends on `MintProvider` and `ManagerProvider`.
 
 ```tsx
-import { useTrustedBalance } from 'coco-cashu-react';
+import { useTrustedBalance } from '@cashu/coco-react';
 
 const { balance } = useTrustedBalance();
 ```

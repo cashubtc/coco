@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { runMigrationTests } from 'coco-cashu-adapter-tests';
+import { runMigrationTests } from '@cashu/coco-adapter-tests';
 import {
   ExpoSqliteRepositories,
   ExpoSqliteDb,

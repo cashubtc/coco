@@ -6,9 +6,9 @@ In this example we will setup a coco wallet in a long-running NodeJS process (li
 
 After setting up your node project we need to install the required dependencies.
 
-- coco-cashu-core: Our core module
-- coco-cashu-sqlite3: Our sqlite3 storage adapter
-- sqlite3: A sqlite driver / client for node
+- @cashu/coco-core: Our core module
+- @cashu/coco-sqlite: Our Node storage adapter
+- better-sqlite3: A SQLite driver / client for Node
 - ws & @types/ws: A websocket implementation for node
 - @scure/bip39: A set of utilities to work with BIP39 mnemonics
 
@@ -41,12 +41,14 @@ export function cachedSeedGetter() {
 
 ### Persistence
 
-We are going to use sqlite3 to persist our wallet data. Coco expects a repository implementation when instantiating. The `coco-cashu-sqlite3` package helps us bridge sqlite3 to coco
+We are going to use `better-sqlite3` to persist our wallet data. Coco expects a
+repository implementation when instantiating. The `@cashu/coco-sqlite` package
+helps us bridge `better-sqlite3` to Coco.
 
 ```ts
 // repo.ts
-import { SqliteRepositories } from 'coco-cashu-sqlite3';
-import { Database } from 'sqlite3';
+import { SqliteRepositories } from '@cashu/coco-sqlite';
+import Database from 'better-sqlite3';
 
 const db = new Database('./coco.db');
 export const repo = new SqliteRepositories({ database: db });
@@ -59,7 +61,7 @@ As node does not offer a native Websocket implementation we will provide one to 
 ```ts
 // websocket.ts
 import { WebSocket } from 'ws';
-import { WebSocketFactory } from 'coco-cashu-core';
+import { WebSocketFactory } from '@cashu/coco-core';
 
 export const websocketFactory: WebSocketFactory = (url: string) => new WebSocket(url);
 ```
@@ -69,7 +71,7 @@ export const websocketFactory: WebSocketFactory = (url: string) => new WebSocket
 Now that we have all the parts prepared we can bring them together and instantiate coco
 
 ```ts
-import { initializeCoco } from 'coco-cashu-core';
+import { initializeCoco } from '@cashu/coco-core';
 import { repo } from './repo.ts';
 import { websocketFactory } from './websocket.ts';
 import { cachedSeedGetter } from './seedgetter.ts';

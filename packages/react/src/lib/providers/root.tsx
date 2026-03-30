@@ -1,4 +1,4 @@
-import type { Manager } from 'coco-cashu-core';
+import type { Manager } from '@cashu/coco-core';
 import { ManagerProvider } from './Manager';
 import { BalanceProvider } from './Balance';
 import { MintProvider } from './MintProvider';

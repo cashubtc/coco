@@ -1,4 +1,4 @@
-import type { KeysetRepository, Keyset } from 'coco-cashu-core';
+import type { KeysetRepository, Keyset } from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 export class SqliteKeysetRepository implements KeysetRepository {

@@ -165,7 +165,7 @@ if (token) {
 ## Error Handling
 
 ```ts
-import { UnknownMintError, ProofValidationError } from 'coco-cashu-core';
+import { UnknownMintError, ProofValidationError } from '@cashu/coco-core';
 
 try {
   const prepared = await coco.ops.send.prepare({ mintUrl, amount });

@@ -15,7 +15,7 @@ export class ConsoleLogger implements Logger {
     debug: 3,
   };
 
-  constructor(prefix = 'coco-cashu', options: ConsoleLoggerOptions = {}) {
+  constructor(prefix = 'coco', options: ConsoleLoggerOptions = {}) {
     this.prefix = prefix;
     this.level = options.level ?? 'info';
   }

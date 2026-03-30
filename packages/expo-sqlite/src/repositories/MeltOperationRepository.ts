@@ -1,4 +1,4 @@
-import type { MeltOperationRepository } from 'coco-cashu-core';
+import type { MeltOperationRepository } from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;

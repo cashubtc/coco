@@ -3,7 +3,7 @@ import type {
   SendOperation,
   SendOperationState,
   SendMethod,
-} from 'coco-cashu-core';
+} from '@cashu/coco-core';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

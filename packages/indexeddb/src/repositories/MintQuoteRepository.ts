@@ -1,5 +1,5 @@
-import type { MintQuoteRepository } from 'coco-cashu-core';
-import type { MintQuote } from 'coco-cashu-core';
+import type { MintQuoteRepository } from '@cashu/coco-core';
+import type { MintQuote } from '@cashu/coco-core';
 import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 
 export class IdbMintQuoteRepository implements MintQuoteRepository {

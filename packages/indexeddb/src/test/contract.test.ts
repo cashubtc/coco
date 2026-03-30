@@ -3,7 +3,7 @@ import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
-} from 'coco-cashu-adapter-tests';
+} from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
 let dbCounter = 0;

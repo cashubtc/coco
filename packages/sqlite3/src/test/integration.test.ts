@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import Database from 'better-sqlite3';
-import { runIntegrationTests } from 'coco-cashu-adapter-tests';
+import { runIntegrationTests } from '@cashu/coco-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
-import { ConsoleLogger, type Logger } from 'coco-cashu-core';
+import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = process.env.MINT_URL;
 
