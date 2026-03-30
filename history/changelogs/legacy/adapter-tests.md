@@ -16,7 +16,6 @@
   `finalizedData`, store it across all melt operation repositories, and update adapter tests to
   require preimage propagation only when the mint actually returns one.
 - 8a2d720: Finish the mint quote removal migration and make mint operations the runtime source of truth.
-
   - Replace legacy `mint-quote:*` runtime events with operation-based mint events.
   - Rename watcher and processor config and manager methods to the operation-based surface:
     `mintOperationWatcher`, `mintOperationProcessor`, `enableMintOperationWatcher()`,
@@ -84,7 +83,6 @@
 ### Patch Changes
 
 - 6f0ed09: feat: adds new methods to the WalletAPI:
-
   - `WalletApi.encode`: This method encodes a Token into a V4 cashuB token
   - `WalletApi.decode`: This method decodes a string token into its decoded Token form. It will use the internal keyset information to resolve short keyset IDs automatically
 
