@@ -139,4 +139,25 @@ describe('SendOpsApi', () => {
     await api.reclaim(pendingOperation.id);
     expect(sendOperationService.rollback).toHaveBeenCalledWith(pendingOperation.id);
   });
+
+  it('finalize delegates directly to the service', async () => {
+    await api.finalize(pendingOperation.id);
+
+    expect(sendOperationService.finalize).toHaveBeenCalledWith(pendingOperation.id);
+    expect(sendOperationService.getOperation).not.toHaveBeenCalled();
+  });
+
+  it('finalize preserves service-owned idempotence for already finalized operations', async () => {
+    const finalizedOperation: FinalizedSendOperation = {
+      ...pendingOperation,
+      state: 'finalized',
+      updatedAt: Date.now(),
+    };
+    (sendOperationService.finalize as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      undefined,
+    );
+
+    await expect(api.finalize(finalizedOperation.id)).resolves.toBeUndefined();
+    expect(sendOperationService.finalize).toHaveBeenCalledWith(finalizedOperation.id);
+  });
 });

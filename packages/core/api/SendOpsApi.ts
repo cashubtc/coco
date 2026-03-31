@@ -161,14 +161,7 @@ export class SendOpsApi {
    * method remains useful when the caller knows the token has been claimed.
    */
   async finalize(operationId: string): Promise<void> {
-    const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot finalize operation in state '${operation.state}'. Expected 'pending'.`,
-      );
-    }
-
-    await this.sendOperationService.finalize(operation.id);
+    await this.sendOperationService.finalize(operationId);
   }
 
   private getCreateOptions(target?: SendTarget): CreateSendOperationOptions {
