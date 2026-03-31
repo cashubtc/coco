@@ -507,16 +507,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           });
         });
 
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
 
         await preparedPromise;
         await pendingPromise;
       });
 
-      it('should expose deprecated send and receive aliases through manager.ops', async () => {
-        expect(mgr!.send).toBe(mgr!.ops.send);
-        expect(mgr!.receive).toBe(mgr!.ops.receive);
+      it('should expose the ops api for send, receive, and melt workflows', async () => {
+        expect(mgr!.ops.send).toBeDefined();
+        expect(mgr!.ops.receive).toBeDefined();
         expect(mgr!.ops.melt).toBeDefined();
       });
 
@@ -525,8 +525,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const initialAmount = initialBalance[mintUrl] || 0;
 
         const sendAmount = 30;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
         const balanceAfterSend = await mgr!.wallet.getBalances();
         const amountAfterSend = balanceAfterSend[mintUrl] || 0;
@@ -573,8 +573,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should receive tokens from encoded string', async () => {
         const sendAmount = 25;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
         const encodedToken = getEncodedToken(token);
 
@@ -590,8 +590,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should encode and decode tokens via wallet api', async () => {
         const sendAmount = 40;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
         const encodedToken = mgr!.wallet.encodeToken(token);
         expect(encodedToken).toBeDefined();
@@ -615,8 +615,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const tokens: Token[] = [];
 
         for (const amount of amounts) {
-          const preparedSend = await mgr!.send.prepareSend(mintUrl, amount);
-          const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+          const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount });
+          const { token } = await mgr!.ops.send.execute(preparedSend.id);
           tokens.push(token);
         }
 
@@ -675,8 +675,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should mark inflight proofs as spent on manual check', async () => {
         const sendAmount = 25;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
         await mgr!.wallet.receive(token);
 
@@ -728,96 +728,73 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         repositories = undefined;
       });
 
-      it('should create a melt quote', async () => {
-        const eventPromise = new Promise((resolve) => {
-          mgr!.once('melt-quote:created', (payload) => {
-            expect(payload.mintUrl).toBe(mintUrl);
-            resolve(payload);
-          });
-        });
+      it('should prepare a melt operation with a persisted quote id', async () => {
         const invoice = createFakeInvoice(100);
-        const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
-
-        expect(meltQuote.quote).toBeDefined();
-        expect(meltQuote.amount).toBeGreaterThan(0);
-
-        const stored = await repositories!.meltQuoteRepository.getMeltQuote(
+        const prepared = await mgr!.ops.melt.prepare({
           mintUrl,
-          meltQuote.quote,
-        );
+          method: 'bolt11',
+          methodData: { invoice },
+        });
+
+        expect(prepared.quoteId).toBeDefined();
+        expect(prepared.amount).toBeGreaterThan(0);
+        expect(prepared.state).toBe('prepared');
+
+        const stored = await repositories!.meltOperationRepository.getById(prepared.id);
         expect(stored).toBeDefined();
-        expect(stored?.quote).toBe(meltQuote.quote);
-        expect(stored?.mintUrl).toBe(mintUrl);
+        expect((stored as { quoteId?: string } | null)?.quoteId).toBe(prepared.quoteId);
+        expect(stored?.state).toBe('prepared');
 
-        await eventPromise;
+        const byQuote = await mgr!.ops.melt.getByQuote(mintUrl, prepared.quoteId);
+        expect(byQuote?.id).toBe(prepared.id);
       });
 
-      it('should reject invalid melt quote parameters', async () => {
+      it('should reject invalid melt preparation parameters', async () => {
         const invoice = createFakeInvoice(10);
-        await expect(mgr!.quotes.createMeltQuote('', invoice)).rejects.toThrow();
-        await expect(mgr!.quotes.createMeltQuote(mintUrl, '')).rejects.toThrow();
-        await expect(mgr!.quotes.payMeltQuote('', 'quote-id')).rejects.toThrow();
-        await expect(mgr!.quotes.payMeltQuote(mintUrl, '')).rejects.toThrow();
+        await expect(
+          mgr!.ops.melt.prepare({ mintUrl: '', method: 'bolt11', methodData: { invoice } }),
+        ).rejects.toThrow();
+        await expect(
+          mgr!.ops.melt.prepare({ mintUrl, method: 'bolt11', methodData: { invoice: '' } }),
+        ).rejects.toThrow();
+        await expect(mgr!.ops.melt.execute('')).rejects.toThrow();
       });
 
-      it('should reject melt quote creation for untrusted mint', async () => {
+      it('should reject melt preparation for untrusted mint', async () => {
         await mgr!.mint.untrustMint(mintUrl);
         const invoice = createFakeInvoice(15);
-        await expect(mgr!.quotes.createMeltQuote(mintUrl, invoice)).rejects.toThrow();
+        await expect(
+          mgr!.ops.melt.prepare({ mintUrl, method: 'bolt11', methodData: { invoice } }),
+        ).rejects.toThrow();
       });
 
-      it('should reject paying a missing melt quote', async () => {
-        await expect(mgr!.quotes.payMeltQuote(mintUrl, 'missing-quote')).rejects.toThrow();
+      it('should reject executing a missing melt operation', async () => {
+        await expect(mgr!.ops.melt.execute('missing-operation')).rejects.toThrow();
       });
 
-      it('should reject paying melt quote for untrusted mint', async () => {
-        const invoice = createFakeInvoice(30);
-        const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
-        await mgr!.mint.untrustMint(mintUrl);
-        await expect(mgr!.quotes.payMeltQuote(mintUrl, meltQuote.quote)).rejects.toThrow();
-      });
-
-      it('should pay a melt quote (may skip swap if exact amount)', async () => {
+      it('should execute a melt operation (may skip swap if exact amount)', async () => {
         const invoice = createFakeInvoice(20);
-        const meltQuote = await mgr!.quotes.createMeltQuote(mintUrl, invoice);
+        const prepared = await mgr!.ops.melt.prepare({
+          mintUrl,
+          method: 'bolt11',
+          methodData: { invoice },
+        });
 
-        expect(meltQuote.quote).toBeDefined();
-        expect(meltQuote.amount).toBeGreaterThan(0);
+        expect(prepared.quoteId).toBeDefined();
+        expect(prepared.amount).toBeGreaterThan(0);
 
         const balanceBefore = await mgr!.wallet.getBalances();
         const balanceBeforeAmount = balanceBefore[mintUrl] || 0;
+        const result = await mgr!.ops.melt.execute(prepared.id);
+        expect(result.id).toBe(prepared.id);
+        expect(result.quoteId).toBe(prepared.quoteId);
 
-        const paidEventPromise = new Promise((resolve) => {
-          mgr!.once('melt-quote:paid', (payload) => {
-            expect(payload.mintUrl).toBe(mintUrl);
-            expect(payload.quoteId).toBe(meltQuote.quote);
-            resolve(payload);
-          });
-        });
-
-        const stateChangedEventPromise = new Promise((resolve) => {
-          mgr!.once('melt-quote:state-changed', (payload) => {
-            if (payload.state === 'PAID') {
-              expect(payload.mintUrl).toBe(mintUrl);
-              expect(payload.quoteId).toBe(meltQuote.quote);
-              resolve(payload);
-            }
-          });
-        });
-
-        await mgr!.quotes.payMeltQuote(mintUrl, meltQuote.quote);
-
-        await Promise.all([paidEventPromise, stateChangedEventPromise]);
-
-        const storedQuote = await repositories!.meltQuoteRepository.getMeltQuote(
-          mintUrl,
-          meltQuote.quote,
-        );
-        expect(storedQuote?.state).toBe('PAID');
+        const storedOperation = await repositories!.meltOperationRepository.getById(prepared.id);
+        expect(storedOperation?.state).toBe(result.state);
 
         const balanceAfter = await mgr!.wallet.getBalances();
         const balanceAfterAmount = balanceAfter[mintUrl] || 0;
-        const amountWithFee = meltQuote.amount + meltQuote.fee_reserve;
+        const amountWithFee = prepared.amount + prepared.fee_reserve;
 
         // Balance should decrease by at least the amount + fee
         expect(balanceAfterAmount).toBeLessThanOrEqual(balanceBeforeAmount - amountWithFee);
@@ -913,12 +890,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should return null when executing or checking missing quote', async () => {
-        const missingExecute = await mgr!.quotes.executeMeltByQuote(mintUrl, 'missing-quote');
-        expect(missingExecute).toBe(null);
-
-        const missingCheck = await mgr!.quotes.checkPendingMeltByQuote(mintUrl, 'missing-quote');
-        expect(missingCheck).toBe(null);
+      it('should return null when resolving a missing melt quote', async () => {
+        const missingOperation = await mgr!.ops.melt.getByQuote(mintUrl, 'missing-quote');
+        expect(missingOperation).toBe(null);
       });
     });
 
@@ -956,8 +930,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', {
           amount: sendAmount,
         });
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { operation } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { operation } = await mgr!.ops.send.execute(preparedSend.id);
         await pendingHistoryPromise;
 
         const history = await mgr!.history.getPaginatedHistory(0, 10);
@@ -986,8 +960,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', {
           amount: sendAmount,
         });
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
         await pendingHistoryPromise;
 
         // Should have at least 2 history events: prepared and pending
@@ -1044,15 +1018,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should get pending send operations', async () => {
         // Initially no pending operations
-        const pendingBefore = await mgr!.send.getPendingOperations();
+        const pendingBefore = await mgr!.ops.send.listInFlight();
         expect(Array.isArray(pendingBefore)).toBe(true);
 
         // Send tokens to create a pending operation
         const sendAmount = 30;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
 
-        const pendingAfter = await mgr!.send.getPendingOperations();
+        const pendingAfter = await mgr!.ops.send.listInFlight();
         expect(pendingAfter.length).toBeGreaterThan(0);
 
         const operation = pendingAfter[0];
@@ -1068,12 +1042,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         const sendAmount = 25;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
 
         expect(operationId).toBeDefined();
 
-        const operation = await mgr!.send.getOperation(operationId!);
+        const operation = await mgr!.ops.send.get(operationId!);
         expect(operation).toBeDefined();
         expect(operation!.id).toBe(operationId);
         expect(operation!.state).toBe('pending');
@@ -1090,8 +1064,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const amountBefore = balanceBefore[mintUrl] || 0;
 
         const sendAmount = 40;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
 
         const balanceAfterSend = await mgr!.wallet.getBalances();
         const amountAfterSend = balanceAfterSend[mintUrl] || 0;
@@ -1109,11 +1083,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         // Rollback the operation
-        await mgr!.send.rollback(operationId!);
+        await mgr!.ops.send.reclaim(operationId!);
         await rolledBackPromise;
 
         // Operation should be rolled back
-        const operation = await mgr!.send.getOperation(operationId!);
+        const operation = await mgr!.ops.send.get(operationId!);
         expect(operation!.state).toBe('rolled_back');
 
         // Balance should be restored (minus fees for swap if any)
@@ -1128,8 +1102,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', {
           amount: sendAmount,
         });
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        await mgr!.ops.send.execute(preparedSend.id);
         const { operationId } = await pendingPromise;
         await pendingHistoryPromise;
 
@@ -1145,7 +1119,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const rolledBackHistoryPromise = waitForSendHistoryState(mgr!, 'rolledBack', {
           operationId,
         });
-        await mgr!.send.rollback(operationId!);
+        await mgr!.ops.send.reclaim(operationId!);
         await rolledBackHistoryPromise;
 
         // Check updated history state
@@ -1161,8 +1135,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const pendingPromise = waitForEvent<{ operationId: string }>(mgr!, 'send:pending');
 
         const sendAmount = 20;
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, sendAmount);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
 
         const { operationId } = await pendingPromise;
         const finalizedPromise = waitForEvent<{ operationId: string }>(
@@ -1180,7 +1154,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await finalizedHistoryPromise;
 
         // Operation should be finalized
-        const operation = await mgr!.send.getOperation(operationId);
+        const operation = await mgr!.ops.send.get(operationId);
         expect(operation!.state).toBe('finalized');
 
         // Check history state
@@ -1199,18 +1173,18 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, 25);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 25 });
+        await mgr!.ops.send.execute(preparedSend.id);
 
         // Verify operation is pending
-        const operationBefore = await mgr!.send.getOperation(operationId!);
+        const operationBefore = await mgr!.ops.send.get(operationId!);
         expect(operationBefore!.state).toBe('pending');
 
         // Manually call recovery (simulates restart)
-        await mgr!.send.recoverPendingOperations();
+        await mgr!.ops.send.recovery.run();
 
         // Operation should still exist (recovery handles it)
-        const operationAfter = await mgr!.send.getOperation(operationId!);
+        const operationAfter = await mgr!.ops.send.get(operationId!);
         expect(operationAfter).toBeDefined();
       });
     });
@@ -1227,6 +1201,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           logger,
           watchers: {
             mintOperationWatcher: {
+              disabled: true,
+            },
+            proofStateWatcher: {
               disabled: true,
             },
           },
@@ -1246,15 +1223,15 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should prevent concurrent execution of executePreparedSend on same operation', async () => {
         // Prepare a send operation
-        const prepared = await mgr!.send.prepareSend(mintUrl, 30);
+        const prepared = await mgr!.ops.send.prepare({ mintUrl, amount: 30 });
         expect(prepared.state).toBe('prepared');
 
         // Execute once - should work
-        const { operation } = await mgr!.send.executePreparedSend(prepared.id);
+        const { operation } = await mgr!.ops.send.execute(prepared.id);
         expect(operation.state).toBe('pending');
 
         // Second execute should fail because operation state is no longer 'prepared'
-        await expect(mgr!.send.executePreparedSend(prepared.id)).rejects.toThrow();
+        await expect(mgr!.ops.send.execute(prepared.id)).rejects.toThrow();
       });
 
       it('should prevent concurrent rollback on same operation', async () => {
@@ -1264,13 +1241,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, 40);
-        await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 40 });
+        await mgr!.ops.send.execute(preparedSend.id);
         expect(operationId).toBeDefined();
 
         // Start two rollbacks concurrently - second should fail
-        const rollback1 = mgr!.send.rollback(operationId!);
-        const rollback2 = mgr!.send.rollback(operationId!);
+        const rollback1 = mgr!.ops.send.reclaim(operationId!);
+        const rollback2 = mgr!.ops.send.reclaim(operationId!);
 
         // Wait for both to settle
         const results = await Promise.allSettled([rollback1, rollback2]);
@@ -1294,16 +1271,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           operationId = payload.operationId;
         });
 
-        const preparedSend = await mgr!.send.prepareSend(mintUrl, 35);
-        const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 35 });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
         expect(operationId).toBeDefined();
 
         // Receive the token to make proofs spent (so finalize can work)
         await mgr!.wallet.receive(token);
 
         // Start two finalizes concurrently - at most one should execute the main logic
-        const finalize1 = mgr!.send.finalize(operationId!);
-        const finalize2 = mgr!.send.finalize(operationId!);
+        const finalize1 = mgr!.ops.send.finalize(operationId!);
+        const finalize2 = mgr!.ops.send.finalize(operationId!);
 
         // Wait for both to settle
         const results = await Promise.allSettled([finalize1, finalize2]);
@@ -1311,14 +1288,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         // Due to idempotent pre-checks, both might succeed if first completes before second checks
         // But if they're truly concurrent, second should fail with "already in progress"
         // Either way, operation should be completed
-        const operation = await mgr!.send.getOperation(operationId!);
+        const operation = await mgr!.ops.send.get(operationId!);
         expect(operation!.state).toBe('finalized');
       });
 
       it('should prevent concurrent recoverPendingOperations calls', async () => {
         // Start two recovery processes concurrently
-        const recovery1 = mgr!.send.recoverPendingOperations();
-        const recovery2 = mgr!.send.recoverPendingOperations();
+        const recovery1 = mgr!.ops.send.recovery.run();
+        const recovery2 = mgr!.ops.send.recovery.run();
 
         // Wait for both to settle
         const results = await Promise.allSettled([recovery1, recovery2]);
@@ -1337,52 +1314,52 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should report unlocked state before and after executePreparedSend', async () => {
         // Prepare a send operation
-        const prepared = await mgr!.send.prepareSend(mintUrl, 25);
+        const prepared = await mgr!.ops.send.prepare({ mintUrl, amount: 25 });
 
         // Before execution starts, operation should not be locked
-        expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
+        expect(mgr!.ops.send.diagnostics.isLocked(prepared.id)).toBe(false);
 
-        await mgr!.send.executePreparedSend(prepared.id);
+        await mgr!.ops.send.execute(prepared.id);
 
         // After execute completes, operation should no longer be locked
-        expect(mgr!.send.isOperationLocked(prepared.id)).toBe(false);
+        expect(mgr!.ops.send.diagnostics.isLocked(prepared.id)).toBe(false);
       });
 
       it('should report correct recovery status via isRecoveryInProgress', async () => {
         // Before recovery starts, should not be in progress
-        expect(mgr!.send.isRecoveryInProgress()).toBe(false);
+        expect(mgr!.ops.send.recovery.inProgress()).toBe(false);
 
         // Start recovery
-        const recoveryPromise = mgr!.send.recoverPendingOperations();
-        expect(mgr!.send.isRecoveryInProgress()).toBe(true);
+        const recoveryPromise = mgr!.ops.send.recovery.run();
+        expect(mgr!.ops.send.recovery.inProgress()).toBe(true);
 
         // After recovery completes, should no longer be in progress
         await recoveryPromise;
-        expect(mgr!.send.isRecoveryInProgress()).toBe(false);
+        expect(mgr!.ops.send.recovery.inProgress()).toBe(false);
       });
 
       it('should allow sequential operations on same operation ID after first completes', async () => {
         // Prepare and execute
-        const prepared = await mgr!.send.prepareSend(mintUrl, 20);
-        const { operation } = await mgr!.send.executePreparedSend(prepared.id);
+        const prepared = await mgr!.ops.send.prepare({ mintUrl, amount: 20 });
+        const { operation } = await mgr!.ops.send.execute(prepared.id);
 
         // Rollback should work (operation is now unlocked)
-        await mgr!.send.rollback(operation.id);
+        await mgr!.ops.send.reclaim(operation.id);
 
         // Verify rolled back
-        const finalOp = await mgr!.send.getOperation(operation.id);
+        const finalOp = await mgr!.ops.send.get(operation.id);
         expect(finalOp!.state).toBe('rolled_back');
       });
 
       it('should not affect different operations when one is locked', async () => {
         // Prepare two operations
-        const prepared1 = await mgr!.send.prepareSend(mintUrl, 15);
-        const prepared2 = await mgr!.send.prepareSend(mintUrl, 15);
+        const prepared1 = await mgr!.ops.send.prepare({ mintUrl, amount: 15 });
+        const prepared2 = await mgr!.ops.send.prepare({ mintUrl, amount: 15 });
 
         // Execute both - they have different IDs so both should work
         const [result1, result2] = await Promise.all([
-          mgr!.send.executePreparedSend(prepared1.id),
-          mgr!.send.executePreparedSend(prepared2.id),
+          mgr!.ops.send.execute(prepared1.id),
+          mgr!.ops.send.execute(prepared2.id),
         ]);
 
         expect(result1.operation.state).toBe('pending');
@@ -1473,8 +1450,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             savedProofs.push(payload);
           });
 
-          const preparedSend = await mgr!.send.prepareSend(mintUrl, 50);
-          await mgr!.send.executePreparedSend(preparedSend.id);
+          const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 50 });
+          await mgr!.ops.send.execute(preparedSend.id);
 
           expect(stateChanges.length).toBeGreaterThan(0);
           const spentChange = stateChanges.find(
@@ -1604,11 +1581,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             });
           });
 
-          const preparedSend = await mgr!.send.prepareSend(mintUrl, 20);
-          const { token } = await mgr!.send.executePreparedSend(preparedSend.id);
+          const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 20 });
+          const { token } = await mgr!.ops.send.execute(preparedSend.id);
           await pendingPromise;
 
-          const pendingOperation = await mgr!.send.getOperation(operationId!);
+          const pendingOperation = await mgr!.ops.send.get(operationId!);
           expect(pendingOperation!.state).toBe('pending');
 
           await mgr.pauseSubscriptions();
@@ -1635,7 +1612,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await mgr!.wallet.receive(token);
           await finalizedPromise;
 
-          const finalized = await mgr!.send.getOperation(operationId!);
+          const finalized = await mgr!.ops.send.get(operationId!);
           expect(finalized!.state).toBe('finalized');
         } finally {
           if (mgr) {
@@ -1670,8 +1647,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(balanceAfterMint[mintUrl] || 0).toBeGreaterThanOrEqual(500);
 
           const sendAmount = 100;
-          const preparedSend1 = await mgr!.send.prepareSend(mintUrl, sendAmount);
-          const { token: token1 } = await mgr!.send.executePreparedSend(preparedSend1.id);
+          const preparedSend1 = await mgr!.ops.send.prepare({ mintUrl, amount: sendAmount });
+          const { token: token1 } = await mgr!.ops.send.execute(preparedSend1.id);
           expect(token1.proofs.length).toBeGreaterThan(0);
 
           const balanceAfterSend = await mgr.wallet.getBalances();
@@ -1684,8 +1661,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const amountAfterReceive = balanceAfterReceive[mintUrl] || 0;
           expect(amountAfterReceive).toBeGreaterThan(amountAfterSend);
 
-          const preparedSend2 = await mgr!.send.prepareSend(mintUrl, 50);
-          const { token: token2 } = await mgr!.send.executePreparedSend(preparedSend2.id);
+          const preparedSend2 = await mgr!.ops.send.prepare({ mintUrl, amount: 50 });
+          const { token: token2 } = await mgr!.ops.send.execute(preparedSend2.id);
           await mgr.wallet.receive(token2);
 
           const finalBalance = await mgr.wallet.getBalances();
@@ -2269,14 +2246,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const recipientKeypair = await mgr!.keyring.addKeyPair(secretKey);
         const sendAmount = 30;
 
-        const preparedSend = await mgr!.send.prepareSendP2pk(
+        const preparedSend = await mgr!.ops.send.prepare({
           mintUrl,
-          sendAmount,
-          recipientKeypair.publicKeyHex,
-        );
-        const { operation, token } = await mgr!.send.executePreparedSend(preparedSend.id);
+          amount: sendAmount,
+          target: { type: 'p2pk', pubkey: recipientKeypair.publicKeyHex },
+        });
+        const { operation, token } = await mgr!.ops.send.execute(preparedSend.id);
 
-        const pendingBeforeRestart = await mgr!.send.getOperation(operation.id);
+        const pendingBeforeRestart = await mgr!.ops.send.get(operation.id);
         expect(pendingBeforeRestart).toBeDefined();
         expect(pendingBeforeRestart?.state).toBe('pending');
         expect(pendingBeforeRestart?.method).toBe('p2pk');
@@ -2304,7 +2281,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await mgr!.mint.addMint(mintUrl, { trusted: true });
         await mgr!.keyring.addKeyPair(secretKey);
 
-        const pendingAfterRestart = await mgr!.send.getOperation(operation.id);
+        const pendingAfterRestart = await mgr!.ops.send.get(operation.id);
         expect(pendingAfterRestart).toBeDefined();
         expect(pendingAfterRestart?.state).toBe('pending');
         expect(pendingAfterRestart?.method).toBe('p2pk');
@@ -2319,7 +2296,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(parsedSecret[0]).toBe('P2PK');
         expect(parsedSecret[1].data).toBe(recipientKeypair.publicKeyHex);
 
-        const pendingOperations = await mgr!.send.getPendingOperations();
+        const pendingOperations = await mgr!.ops.send.listInFlight();
         const recoveredPending = pendingOperations.find((pending) => pending.id === operation.id);
         expect(recoveredPending).toBeDefined();
         expect(recoveredPending?.method).toBe('p2pk');
@@ -2331,10 +2308,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
 
         await mgr!.wallet.receive(recoveredToken ?? token);
-        await mgr!.send.recoverPendingOperations();
+        await mgr!.ops.send.recovery.run();
         await finalizedPromise;
 
-        const finalizedOperation = await mgr!.send.getOperation(operation.id);
+        const finalizedOperation = await mgr!.ops.send.get(operation.id);
         expect(finalizedOperation?.state).toBe('finalized');
       });
 
@@ -2708,17 +2685,18 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect((balanceAfter[mintUrl] || 0) - (balanceBefore[mintUrl] || 0)).toBeGreaterThan(0);
       });
 
-      it('should keep supporting legacy wallet payment request wrappers', async () => {
+      it('should execute inband payment requests through manager.paymentRequests', async () => {
         const pr = new PaymentRequest([], 'legacy-wallet-api', 20, 'sat', [mintUrl]);
         const encoded = pr.toEncodedRequest();
 
-        const parsed = await mgr!.wallet.processPaymentRequest(encoded);
-        const transaction = await mgr!.wallet.preparePaymentRequestTransaction(mintUrl, parsed);
+        const parsed = await mgr!.paymentRequests.parse(encoded);
+        const transaction = await mgr!.paymentRequests.prepare(parsed, { mintUrl });
 
         let receivedToken: Token | undefined;
-        await mgr!.wallet.handleInbandPaymentRequest(transaction, async (token) => {
-          receivedToken = token;
-        });
+        const result = await mgr!.paymentRequests.execute(transaction);
+        if (result.type === 'inband') {
+          receivedToken = result.token;
+        }
 
         expect(receivedToken).toBeDefined();
       });

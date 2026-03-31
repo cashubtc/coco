@@ -65,8 +65,8 @@ describe('initializeCoco', () => {
       const manager = await initializeCoco(baseConfig);
 
       expect(manager['logger']).toBeInstanceOf(NullLogger);
-      expect(manager.ops.send).toBe(manager.send);
-      expect(manager.ops.receive).toBe(manager.receive);
+      expect(manager.ops.send).toBeDefined();
+      expect(manager.ops.receive).toBeDefined();
       expect(manager.ops.mint).toBeDefined();
       expect(manager.ops.melt).toBeDefined();
 
@@ -364,7 +364,6 @@ describe('initializeCoco', () => {
       // Should still have API access
       expect(manager.mint).toBeDefined();
       expect(manager.wallet).toBeDefined();
-      expect(manager.quotes).toBeDefined();
     });
   });
 
@@ -383,7 +382,6 @@ describe('initializeCoco', () => {
 
       expect(manager.mint).toBeDefined();
       expect(manager.wallet).toBeDefined();
-      expect(manager.quotes).toBeDefined();
       expect(manager.subscription).toBeDefined();
       expect(manager.history).toBeDefined();
       expect(manager.subscriptions).toBeDefined();

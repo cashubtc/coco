@@ -154,6 +154,23 @@ export class SendOpsApi {
     await this.sendOperationService.rollback(operation.id);
   }
 
+  /**
+   * Finalizes a pending send operation explicitly.
+   *
+   * Most callers should rely on proof-state watchers when available, but this
+   * method remains useful when the caller knows the token has been claimed.
+   */
+  async finalize(operationId: string): Promise<void> {
+    const operation = await this.requireOperation(operationId);
+    if (operation.state !== 'pending') {
+      throw new Error(
+        `Cannot finalize operation in state '${operation.state}'. Expected 'pending'.`,
+      );
+    }
+
+    await this.sendOperationService.finalize(operation.id);
+  }
+
   private getCreateOptions(target?: SendTarget): CreateSendOperationOptions {
     if (!target) {
       return {

@@ -5,8 +5,6 @@ import { WalletService } from '../../services/WalletService';
 import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { TransactionService } from '../../services/TransactionService';
-import { PaymentRequestService } from '../../services/PaymentRequestService';
-import type { SendOperationService } from '../../operations/send/SendOperationService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
@@ -23,9 +21,7 @@ describe('WalletApi - Trust Enforcement', () => {
   let mockWalletService: any;
   let mockProofService: any;
   let mockWalletRestoreService: any;
-  let mockSendOperationService: any;
   let transactionService: TransactionService;
-  let paymentRequestService: PaymentRequestService;
   let eventBus: EventBus<CoreEvents>;
   let proofReceiveRepo: MemoryProofRepository;
   let receiveOpRepo: MemoryReceiveOperationRepository;
@@ -104,20 +100,11 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
-    mockSendOperationService = {
-      send: mock(async () => ({ mint: testMintUrl, proofs: testProofs })),
-    };
-
     transactionService = new TransactionService(
       mockMintService,
       mockWalletService,
       mockProofService,
       eventBus,
-    );
-
-    paymentRequestService = new PaymentRequestService(
-      mockSendOperationService as SendOperationService,
-      mockProofService,
     );
 
     receiveOpRepo = new MemoryReceiveOperationRepository();
@@ -142,8 +129,6 @@ describe('WalletApi - Trust Enforcement', () => {
       mockProofService,
       mockWalletRestoreService,
       transactionService,
-      paymentRequestService,
-      mockSendOperationService as SendOperationService,
       receiveOperationService,
       tokenService,
     );
@@ -265,36 +250,6 @@ describe('WalletApi - Trust Enforcement', () => {
       // After untrusting
       mockMintService.isTrustedMint.mockImplementation(async () => false);
       await expect(walletApi.receive(token)).rejects.toThrow();
-    });
-  });
-
-  describe('send - trust enforcement', () => {
-    it('should reject sending from untrusted mints', async () => {
-      const amount = 10;
-
-      // Mock SendOperationService to throw UnknownMintError for untrusted mint
-      mockSendOperationService.send.mockImplementation(async () => {
-        throw new UnknownMintError(`Mint ${testMintUrl} is not trusted`);
-      });
-
-      await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow(UnknownMintError);
-      await expect(walletApi.send(testMintUrl, amount)).rejects.toThrow('not trusted');
-    });
-
-    it('should allow sending from trusted mints', async () => {
-      const amount = 10;
-
-      // Mock SendOperationService to return token
-      mockSendOperationService.send.mockImplementation(async () => ({
-        mint: testMintUrl,
-        proofs: testProofs,
-      }));
-
-      const result = await walletApi.send(testMintUrl, amount);
-
-      expect(result.mint).toBe(testMintUrl);
-      expect(result.proofs).toEqual(testProofs);
-      expect(mockSendOperationService.send).toHaveBeenCalledWith(testMintUrl, amount);
     });
   });
 
