@@ -43,26 +43,12 @@ export type PaymentRequestExecutionResult =
   | InbandPaymentRequestExecutionResult
   | HttpPaymentRequestExecutionResult;
 
-type ParsedPaymentRequest = {
-  paymentRequest: PaymentRequest;
-  matchingMints: string[];
-  requiredMints: string[];
-  amount?: number;
-  transport: PaymentRequestTransport;
-};
-
-export type PaymentRequestTransaction = {
-  sendOperation: PreparedSendOperation;
-  request: ParsedPaymentRequest;
-};
-
 type InbandTransport = InbandPaymentRequestTransport;
 type HttpTransport = HttpPaymentRequestTransport;
 type Transport = PaymentRequestTransport;
 
 export type {
   ResolvedPaymentRequest,
-  ParsedPaymentRequest,
   InbandPaymentRequestTransport,
   HttpPaymentRequestTransport,
   PaymentRequestTransport,
@@ -173,71 +159,6 @@ export class PaymentRequestService {
     }
   }
 
-  /**
-   * Parse and validate a payment request.
-   * @deprecated Use `parse()` instead.
-   */
-  async processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest> {
-    return this.toParsedPaymentRequest(await this.parse(paymentRequest));
-  }
-
-  /**
-   * Prepare a payment request transaction.
-   * @deprecated Use `prepare()` instead.
-   */
-  async preparePaymentRequestTransaction(
-    mintUrl: string,
-    request: ParsedPaymentRequest | ResolvedPaymentRequest,
-    amount?: number,
-  ): Promise<PaymentRequestTransaction> {
-    const prepared = await this.prepare(this.toResolvedPaymentRequest(request), {
-      mintUrl,
-      amount,
-    });
-    return this.toPaymentRequestTransaction(prepared);
-  }
-
-  /**
-   * Execute an inband payment request.
-   * @deprecated Use `execute()` instead.
-   */
-  async handleInbandPaymentRequest(
-    transaction: PaymentRequestTransaction | PreparedPaymentRequest,
-    inbandHandler: (token: Token) => Promise<void>,
-  ): Promise<void> {
-    const prepared = this.toPreparedPaymentRequest(transaction);
-    if (prepared.request.transport.type !== 'inband') {
-      throw new PaymentRequestError('Invalid transport type');
-    }
-    const result = await this.execute(prepared);
-    if (result.type !== 'inband') {
-      throw new PaymentRequestError('Invalid transport type');
-    }
-    this.logger?.debug('Executing inband payment request handler', {
-      mintUrl: result.operation.mintUrl,
-      amount: result.request.amount,
-    });
-    await inbandHandler(result.token);
-  }
-
-  /**
-   * Execute an HTTP payment request.
-   * @deprecated Use `execute()` instead.
-   */
-  async handleHttpPaymentRequest(
-    transaction: PaymentRequestTransaction | PreparedPaymentRequest,
-  ): Promise<Response> {
-    const prepared = this.toPreparedPaymentRequest(transaction);
-    if (prepared.request.transport.type !== 'http') {
-      throw new PaymentRequestError('Invalid transport type');
-    }
-    const result = await this.execute(prepared);
-    if (result.type !== 'http') {
-      throw new PaymentRequestError('Invalid transport type');
-    }
-    return result.response;
-  }
-
   private async readPaymentRequest(paymentRequest: string): Promise<PaymentRequest> {
     this.logger?.debug('Reading payment request', { paymentRequest });
     const decodedPaymentRequest = PaymentRequest.fromEncodedRequest(paymentRequest);
@@ -326,47 +247,4 @@ export class PaymentRequestService {
     };
   }
 
-  private toResolvedPaymentRequest(
-    request: ParsedPaymentRequest | ResolvedPaymentRequest,
-  ): ResolvedPaymentRequest {
-    if ('payableMints' in request && 'allowedMints' in request) {
-      return request;
-    }
-
-    return {
-      paymentRequest: request.paymentRequest,
-      payableMints: request.matchingMints,
-      allowedMints: request.requiredMints,
-      amount: request.amount,
-      transport: request.transport,
-    };
-  }
-
-  private toParsedPaymentRequest(request: ResolvedPaymentRequest): ParsedPaymentRequest {
-    return {
-      paymentRequest: request.paymentRequest,
-      matchingMints: request.payableMints,
-      requiredMints: request.allowedMints,
-      amount: request.amount,
-      transport: request.transport,
-    };
-  }
-
-  private toPreparedPaymentRequest(
-    transaction: PaymentRequestTransaction | PreparedPaymentRequest,
-  ): PreparedPaymentRequest {
-    return {
-      sendOperation: transaction.sendOperation,
-      request: this.toResolvedPaymentRequest(transaction.request),
-    };
-  }
-
-  private toPaymentRequestTransaction(
-    transaction: PreparedPaymentRequest,
-  ): PaymentRequestTransaction {
-    return {
-      sendOperation: transaction.sendOperation,
-      request: this.toParsedPaymentRequest(transaction.request),
-    };
-  }
 }

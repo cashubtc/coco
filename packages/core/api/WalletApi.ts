@@ -10,12 +10,8 @@ import type {
   ProofService,
   WalletRestoreService,
   TransactionService,
-  PaymentRequestService,
-  ParsedPaymentRequest,
-  PaymentRequestTransaction,
   TokenService,
 } from '@core/services';
-import type { SendOperationService } from '../operations/send/SendOperationService';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
 
@@ -25,8 +21,6 @@ export class WalletApi {
   private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
   private transactionService: TransactionService;
-  private paymentRequestService: PaymentRequestService;
-  private sendOperationService: SendOperationService;
   private receiveOperationService: ReceiveOperationService;
   private readonly tokenService: TokenService;
   private readonly logger?: Logger;
@@ -37,8 +31,6 @@ export class WalletApi {
     proofService: ProofService,
     walletRestoreService: WalletRestoreService,
     transactionService: TransactionService,
-    paymentRequestService: PaymentRequestService,
-    sendOperationService: SendOperationService,
     receiveOperationService: ReceiveOperationService,
     tokenService: TokenService,
     logger?: Logger,
@@ -48,8 +40,6 @@ export class WalletApi {
     this.proofService = proofService;
     this.walletRestoreService = walletRestoreService;
     this.transactionService = transactionService;
-    this.paymentRequestService = paymentRequestService;
-    this.sendOperationService = sendOperationService;
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;
@@ -65,76 +55,8 @@ export class WalletApi {
     return this.receiveOperationService.receive(token);
   }
 
-  /**
-   * Send tokens from a mint.
-   *
-   * @deprecated Use `manager.ops.send.prepare()` and `manager.ops.send.execute()` instead.
-   * This alias will be removed in a future release.
-   *
-   * @param mintUrl - The mint URL to send from
-   * @param amount - The amount to send
-   * @returns The token to share with the recipient
-   */
-  async send(mintUrl: string, amount: number): Promise<Token> {
-    return this.sendOperationService.send(mintUrl, amount);
-  }
-
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
     return this.proofService.getBalances();
-  }
-
-  /**
-   * Parse and validate a payment request string.
-   *
-   * @deprecated Use `manager.paymentRequests.parse()` instead.
-   */
-  async processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest> {
-    return this.paymentRequestService.processPaymentRequest(paymentRequest);
-  }
-
-  /**
-   * Prepare a payment request transaction.
-   *
-   * @deprecated Use `manager.paymentRequests.prepare()` instead.
-   *
-   * @param mintUrl - The mint to send from
-   * @param request - The parsed payment request
-   * @param amount - Optional amount (required if not specified in request)
-   * @returns The payment request transaction
-   */
-  async preparePaymentRequestTransaction(
-    mintUrl: string,
-    request: ParsedPaymentRequest,
-    amount?: number,
-  ): Promise<PaymentRequestTransaction> {
-    return this.paymentRequestService.preparePaymentRequestTransaction(mintUrl, request, amount);
-  }
-
-  /**
-   * Handle an inband payment request by sending tokens and calling the handler.
-   *
-   * @deprecated Use `manager.paymentRequests.execute()` instead.
-   *
-   * @param transaction - The prepared payment request transaction
-   * @param inbandHandler - Callback to deliver the token (e.g., display QR, send via NFC)
-   */
-  async handleInbandPaymentRequest(
-    transaction: PaymentRequestTransaction,
-    inbandHandler: (token: Token) => Promise<void>,
-  ): Promise<void> {
-    return this.paymentRequestService.handleInbandPaymentRequest(transaction, inbandHandler);
-  }
-
-  /**
-   * Handle an HTTP payment request by sending tokens to the specified URL.
-   *
-   * @deprecated Use `manager.paymentRequests.execute()` instead.
-   *
-   * @param transaction - The prepared payment request transaction
-   * @returns The HTTP response from the payment endpoint
-   */
-  async handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response> {
-    return this.paymentRequestService.handleHttpPaymentRequest(transaction);
   }
 
   // Restoration logic is delegated to WalletRestoreService

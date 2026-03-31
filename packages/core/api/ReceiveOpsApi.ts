@@ -5,7 +5,6 @@ import type {
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
-import { ReceiveApi } from './ReceiveApi';
 
 export interface PrepareReceiveInput {
   /** Token to receive, either encoded or already decoded. */
@@ -31,7 +30,7 @@ export interface ReceiveDiagnosticsApi {
  * resume, and cancel operations instead of relying only on a one-shot receive
  * call.
  */
-export class ReceiveOpsApi extends ReceiveApi {
+export class ReceiveOpsApi {
   /** Recovery helpers for receive operations. */
   readonly recovery: ReceiveRecoveryApi = {
     run: async () => this.receiveOperationService.recoverPendingOperations(),
@@ -43,9 +42,7 @@ export class ReceiveOpsApi extends ReceiveApi {
     isLocked: (operationId: string) => this.receiveOperationService.isOperationLocked(operationId),
   };
 
-  constructor(receiveOperationService: ReceiveOperationService) {
-    super(receiveOperationService);
-  }
+  constructor(private readonly receiveOperationService: ReceiveOperationService) {}
 
   /**
    * Decodes and validates a token, then prepares a receive operation without
@@ -86,15 +83,6 @@ export class ReceiveOpsApi extends ReceiveApi {
   /** Lists receive operations that are currently in flight. */
   async listInFlight(): Promise<ReceiveOperation[]> {
     return this.receiveOperationService.getPendingOperations();
-  }
-
-  /**
-   * @deprecated Use `listPrepared()` or `listInFlight()` instead.
-   * This alias will be removed in a future release.
-   */
-  async listActive(): Promise<ReceiveOperation[]> {
-    const [prepared, inFlight] = await Promise.all([this.listPrepared(), this.listInFlight()]);
-    return [...prepared, ...inFlight];
   }
 
   /**

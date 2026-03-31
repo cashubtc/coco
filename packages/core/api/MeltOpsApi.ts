@@ -108,15 +108,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   }
 
   /**
-   * @deprecated Use `listPrepared()` or `listInFlight()` instead.
-   * This alias will be removed in a future release.
-   */
-  async listActive(): Promise<MeltOperation[]> {
-    const [prepared, inFlight] = await Promise.all([this.listPrepared(), this.listInFlight()]);
-    return [...prepared, ...inFlight];
-  }
-
-  /**
    * Re-checks a melt operation and returns its latest persisted state.
    *
    * Pending operations are actively checked with the service before the updated

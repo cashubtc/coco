@@ -7,15 +7,9 @@ import type {
 import { useManager } from '../contexts/ManagerContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-type Token = Awaited<ReturnType<Manager['wallet']['send']>>;
+type Token = Awaited<ReturnType<Manager['ops']['send']['execute']>>['token'];
 
 type SendStatus = 'idle' | 'loading' | 'success' | 'error';
-
-type SendOptions = {
-  onSuccess?: (token: Token) => void;
-  onError?: (error: Error) => void;
-  onSettled?: () => void;
-};
 
 type PrepareOptions = {
   onSuccess?: (operation: PreparedSendOperation) => void;
@@ -35,10 +29,7 @@ type OperationOptions = {
   onSettled?: () => void;
 };
 
-/**
- * Result data type - can be Token (from send/executePreparedSend) or PreparedSendOperation (from prepareSend)
- */
-type SendData = Token | PreparedSendOperation | { operation: PendingSendOperation; token: Token };
+type SendData = PreparedSendOperation | { operation: PendingSendOperation; token: Token };
 
 const useSend = () => {
   const manager = useManager();
@@ -54,61 +45,6 @@ const useSend = () => {
       mountedRef.current = false;
     };
   }, []);
-
-  /**
-   * @deprecated Use `prepareSend()` followed by `executePreparedSend()` for better control over the send flow.
-   * This method will be removed in a future version.
-   *
-   * Sends ecash tokens in a single step. This is a high-level method that
-   * orchestrates the full send flow (init → prepare → execute).
-   *
-   * @param mintUrl - The mint URL to send from
-   * @param amount - The amount to send
-   * @param opts - Optional callbacks for success, error, and settled states
-   * @returns The token to share with the recipient
-   */
-  const send = useCallback(
-    async (mintUrl: string, amount: number, opts: SendOptions = {}): Promise<Token> => {
-      if (isOperationInProgressRef.current) {
-        const err = new Error('Operation already in progress');
-        opts.onError?.(err);
-        throw err;
-      }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        const err = new Error('Amount must be a positive number');
-        opts.onError?.(err);
-        throw err;
-      }
-
-      isOperationInProgressRef.current = true;
-      if (mountedRef.current) {
-        setStatus('loading');
-        setError(null);
-      }
-
-      try {
-        const token = await manager.wallet.send(mintUrl, amount);
-        if (mountedRef.current) {
-          setData(token);
-          setStatus('success');
-        }
-        opts.onSuccess?.(token);
-        return token;
-      } catch (e) {
-        const err = e instanceof Error ? e : new Error(String(e));
-        if (mountedRef.current) {
-          setError(err);
-          setStatus('error');
-        }
-        opts.onError?.(err);
-        throw err;
-      } finally {
-        isOperationInProgressRef.current = false;
-        opts.onSettled?.();
-      }
-    },
-    [manager],
-  );
 
   /**
    * Prepares a send operation without executing it.
@@ -146,7 +82,7 @@ const useSend = () => {
       }
 
       try {
-        const operation = await manager.send.prepareSend(mintUrl, amount);
+        const operation = await manager.ops.send.prepare({ mintUrl, amount });
         if (mountedRef.current) {
           setData(operation);
           setStatus('success');
@@ -195,7 +131,7 @@ const useSend = () => {
       }
 
       try {
-        const result = await manager.send.executePreparedSend(operationId);
+        const result = await manager.ops.send.execute(operationId);
         if (mountedRef.current) {
           setData(result);
           setStatus('success');
@@ -228,7 +164,16 @@ const useSend = () => {
   const rollback = useCallback(
     async (operationId: string, opts: OperationOptions = {}): Promise<void> => {
       try {
-        await manager.send.rollback(operationId);
+        const operation = await manager.ops.send.get(operationId);
+        if (!operation) {
+          throw new Error(`Operation ${operationId} not found`);
+        }
+
+        if (operation.state === 'prepared') {
+          await manager.ops.send.cancel(operationId);
+        } else {
+          await manager.ops.send.reclaim(operationId);
+        }
         opts.onSuccess?.();
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -251,7 +196,7 @@ const useSend = () => {
   const finalize = useCallback(
     async (operationId: string, opts: OperationOptions = {}): Promise<void> => {
       try {
-        await manager.send.finalize(operationId);
+        await manager.ops.send.finalize(operationId);
         opts.onSuccess?.();
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -271,7 +216,7 @@ const useSend = () => {
    * @returns Array of pending send operations
    */
   const getPendingOperations = useCallback(async (): Promise<SendOperation[]> => {
-    return manager.send.getPendingOperations();
+    return manager.ops.send.listInFlight();
   }, [manager]);
 
   /**
@@ -282,7 +227,7 @@ const useSend = () => {
    */
   const getOperation = useCallback(
     async (operationId: string): Promise<SendOperation | null> => {
-      return manager.send.getOperation(operationId);
+      return manager.ops.send.get(operationId);
     },
     [manager],
   );
@@ -317,11 +262,6 @@ const useSend = () => {
     // Convenience booleans
     isSending: status === 'loading',
     isError: status === 'error',
-
-    /**
-     * @deprecated Use `prepareSend()` followed by `executePreparedSend()` instead.
-     */
-    send,
   };
 };
 

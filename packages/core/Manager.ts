@@ -49,7 +49,6 @@ import { type Logger, NullLogger } from './logging';
 import {
   MintApi,
   WalletApi,
-  QuotesApi,
   HistoryApi,
   KeyRingApi,
   AuthApi,
@@ -193,22 +192,11 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
 export class Manager {
   readonly mint: MintApi;
   readonly wallet: WalletApi;
-  readonly quotes: QuotesApi;
   readonly keyring: KeyRingApi;
   readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
   readonly auth: AuthApi;
   readonly ops: OpsApi;
-  /**
-   * @deprecated Use `manager.ops.send` instead.
-   * This alias will be removed in a future release.
-   */
-  readonly send: SendOpsApi;
-  /**
-   * @deprecated Use `manager.ops.receive` instead.
-   * This alias will be removed in a future release.
-   */
-  readonly receive: ReceiveOpsApi;
   readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
@@ -303,14 +291,11 @@ export class Manager {
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
-    this.quotes = apis.quotes;
     this.keyring = apis.keyring;
     this.subscription = apis.subscription;
     this.history = apis.history;
     this.ops = apis.ops;
-    this.send = apis.send;
     this.auth = apis.auth;
-    this.receive = apis.receive;
     this.paymentRequests = apis.paymentRequests;
 
     // Point ext to pluginHost's extensions storage
@@ -498,30 +483,6 @@ export class Manager {
     if (!this.proofStateWatcher) return;
     await this.proofStateWatcher.stop();
     this.proofStateWatcher = undefined;
-  }
-
-  /**
-   * @deprecated Use `manager.ops.send.recovery.run()` instead.
-   * This alias will be removed in a future release.
-   */
-  async recoverPendingSendOperations(): Promise<void> {
-    await this.ops.send.recovery.run();
-  }
-
-  /**
-   * @deprecated Use `manager.ops.melt.recovery.run()` instead.
-   * This alias will be removed in a future release.
-   */
-  async recoverPendingMeltOperations(): Promise<void> {
-    await this.ops.melt.recovery.run();
-  }
-
-  /**
-   * @deprecated Use `manager.ops.receive.recovery.run()` instead.
-   * This alias will be removed in a future release.
-   */
-  async recoverPendingReceiveOperations(): Promise<void> {
-    await this.ops.receive.recovery.run();
   }
 
   async recoverPendingMintOperations(): Promise<void> {
@@ -931,14 +892,11 @@ export class Manager {
   private buildApis(): {
     mint: MintApi;
     wallet: WalletApi;
-    quotes: QuotesApi;
     keyring: KeyRingApi;
     subscription: SubscriptionApi;
     history: HistoryApi;
     ops: OpsApi;
     auth: AuthApi;
-    send: SendOpsApi;
-    receive: ReceiveOpsApi;
     paymentRequests: PaymentRequestsApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
@@ -950,13 +908,10 @@ export class Manager {
       this.proofService,
       this.walletRestoreService,
       this.transactionService,
-      this.paymentRequestService,
-      this.sendOperationService,
       this.receiveOperationService,
       this.tokenService,
       walletApiLogger,
     );
-    const quotes = new QuotesApi(this.meltQuoteService, this.meltOperationService);
     const keyring = new KeyRingApi(this.keyRingService);
     const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
@@ -970,14 +925,11 @@ export class Manager {
     return {
       mint,
       wallet,
-      quotes,
       keyring,
       subscription,
       history,
       ops,
       auth,
-      send,
-      receive,
       paymentRequests,
     };
   }

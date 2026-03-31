@@ -7,7 +7,6 @@ import type {
 } from '../operations/send/SendOperation';
 import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHandler';
 import type { SendOperationService } from '../operations/send/SendOperationService';
-import { SendApi } from './SendApi';
 
 type NonDefaultSendMethod = Exclude<SendMethod, 'default'>;
 
@@ -45,7 +44,7 @@ export interface SendDiagnosticsApi {
  * 3. `refresh()` to re-check pending operations
  * 4. `cancel()` or `reclaim()` to roll back when allowed
  */
-export class SendOpsApi extends SendApi {
+export class SendOpsApi {
   /** Recovery helpers for send operations. */
   readonly recovery: SendRecoveryApi = {
     run: async () => this.sendOperationService.recoverPendingOperations(),
@@ -57,9 +56,7 @@ export class SendOpsApi extends SendApi {
     isLocked: (operationId: string) => this.sendOperationService.isOperationLocked(operationId),
   };
 
-  constructor(sendOperationService: SendOperationService) {
-    super(sendOperationService);
-  }
+  constructor(private readonly sendOperationService: SendOperationService) {}
 
   /**
    * Creates a prepared send operation without executing it.
@@ -108,15 +105,6 @@ export class SendOpsApi extends SendApi {
   /** Lists send operations that are currently in flight. */
   async listInFlight(): Promise<SendOperation[]> {
     return this.sendOperationService.getPendingOperations();
-  }
-
-  /**
-   * @deprecated Use `listPrepared()` or `listInFlight()` instead.
-   * This alias will be removed in a future release.
-   */
-  async listActive(): Promise<SendOperation[]> {
-    const [prepared, inFlight] = await Promise.all([this.listPrepared(), this.listInFlight()]);
-    return [...prepared, ...inFlight];
   }
 
   /**
