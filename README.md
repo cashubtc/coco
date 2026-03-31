@@ -9,6 +9,10 @@ core that handles proof management, mint synchronization, quote lifecycle,
 counter tracking, and state updates through a typed event bus. Published
 packages now live under the `@cashu` npm scope.
 
+Maintained adapters currently cover Node via `@cashu/coco-sqlite`, Bun via
+`@cashu/coco-sqlite-bun`, web via `@cashu/coco-indexeddb`, and Expo/React
+Native via `@cashu/coco-expo-sqlite`.
+
 ## Architecture
 
 ```

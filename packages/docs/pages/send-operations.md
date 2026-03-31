@@ -34,7 +34,7 @@ init ──► prepared ──► executing ──► pending ──► complete
 
 ## Using the Send API
 
-`coco.ops.send` is the canonical send workflow API. `coco.send` exposes the same object today, but it is deprecated and will be removed in a future release.
+`coco.ops.send` is the canonical send workflow API.
 
 ### Prepare → Execute Flow
 

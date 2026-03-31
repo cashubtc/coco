@@ -45,6 +45,6 @@ if (operation) {
 }
 ```
 
-Use this when you only persisted the quote id (for example after a restart). The older `coco.quotes` melt workflow helpers are deprecated aliases.
+Use this when you only persisted the quote id (for example after a restart).
 
 > For the full saga walkthrough, see [Melt Operations](../pages/melt-operations.md).

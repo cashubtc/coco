@@ -2,6 +2,10 @@
 
 Coco is a TypeScript library that simplifies the development of Cashu applications. It provides a unified, platform-agnostic API for creating Cashu wallets, allowing you to focus on building across browsers, Node.js, and React Native.
 
+If you tested the old `coco-cashu-*` alpha packages, read
+[Migrating from Alpha](./migrating-from-alpha.md) before wiring the current
+`@cashu/*` packages into your app.
+
 ## Initialization
 
 To get started all you got to do is create a Coco `Manager` instance. This instance will be your entry-point to your Coco Cashu wallet.
@@ -15,9 +19,8 @@ const coco = await initializeCoco({ repo, seedGetter });
 const balances = await coco.wallet.getBalances();
 ```
 
-For lifecycle-oriented operation flows, use `coco.ops.send`, `coco.ops.receive`, and
-`coco.ops.melt`. The older `coco.send` and `coco.receive` properties still exist as deprecated
-aliases.
+For lifecycle-oriented operation flows, use `coco.ops.send`, `coco.ops.receive`,
+and `coco.ops.melt`.
 
 ## BIP-39 Seed
 

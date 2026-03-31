@@ -17,6 +17,7 @@ export default defineConfig({
         text: 'Starting',
         items: [
           { text: 'Start Here', link: '/starting/start-here' },
+          { text: 'Migrating from Alpha', link: '/starting/migrating-from-alpha' },
           { text: 'Adding Mints', link: '/starting/adding-mints' },
           { text: 'Subscriptions', link: '/starting/subscriptions' },
           { text: 'Minting Tokens', link: '/starting/minting' },

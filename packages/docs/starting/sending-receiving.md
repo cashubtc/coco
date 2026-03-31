@@ -51,7 +51,7 @@ if (userConfirmed) {
 }
 ```
 
-`coco.send` and `coco.receive` still exist as deprecated aliases, but `coco.ops.send` and `coco.ops.receive` are now the canonical workflow APIs.
+`coco.ops.send` and `coco.ops.receive` are the canonical workflow APIs.
 
 ### Understanding Fees
 
@@ -100,8 +100,6 @@ Use melt operations to pay BOLT11 invoices via `coco.ops.melt`:
 - `execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
 - `getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null>`
 - `refresh(operationId: string): Promise<MeltOperation>`
-
-The older melt workflow methods on `coco.quotes` are still available as deprecated aliases.
 
 Finalized melt operations include `changeAmount` and `effectiveFee` when that settlement data is available.
 

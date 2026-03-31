@@ -6,14 +6,19 @@ Modular, storage-agnostic core for working with Cashu mints and wallets.
 
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
-- **High-level APIs**: `MintApi`, `WalletApi`, `QuotesApi`, `SubscriptionApi`, and `manager.ops.*` for common flows.
+- **High-level APIs**: `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
+  `SubscriptionApi`, and `manager.ops.*` for common flows.
 - **Background watchers**: Optional services to track quote/payment and proof states.
 
 ## Install
 
 ```bash
-bun install
+npm install @cashu/coco-core
 ```
+
+For a real application you will usually install a storage adapter alongside the
+core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
+`@cashu/coco-expo-sqlite`.
 
 ## Protocol Support
 
@@ -38,8 +43,8 @@ bun install
 - [x] NUT-18
 - [ ] NUT-19
 - [ ] NUT-20
-- [ ] NUT-21
-- [ ] NUT-22
+- [x] NUT-21
+- [x] NUT-22
 - [x] NUT-23
 - [ ] NUT-24
 - [ ] NUT-25
@@ -149,8 +154,11 @@ Interfaces in `packages/core/repositories/index.ts`:
 - `MeltQuoteRepository`
 - `HistoryRepository`
 - `KeyRingRepository`
+- `AuthSessionRepository`
 - `SendOperationRepository`
 - `MeltOperationRepository`
+- `MintOperationRepository`
+- `ReceiveOperationRepository`
 
 In-memory reference implementations are provided under `repositories/memory/` for testing.
 
@@ -158,83 +166,31 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 ### Manager
 
-- `mint: MintApi`
-- `wallet: WalletApi`
-- `quotes: QuotesApi`
-- `ops: OpsApi`
-- `subscription: SubscriptionApi`
-- `history: HistoryApi`
-- `keyring: KeyRingApi`
-- `send: SendOpsApi` (deprecated alias of `manager.ops.send`)
-- `receive: ReceiveOpsApi` (deprecated alias of `manager.ops.receive`)
+- `mint`, `wallet`, `auth`, `paymentRequests`, `ops`, `subscription`, `history`,
+  and `keyring`
 - `ext: PluginExtensions`
 - `on/once/off` for `CoreEvents`
-- `enableMintOperationWatcher(options?: { watchExistingPendingOnStart?: boolean }): Promise<void>`
-- `disableMintOperationWatcher(): Promise<void>`
-- `enableMintOperationProcessor(options?: { processIntervalMs?: number; maxRetries?: number; baseRetryDelayMs?: number; initialEnqueueDelayMs?: number }): Promise<boolean>`
-- `disableMintOperationProcessor(): Promise<void>`
-- `waitForMintOperationProcessor(): Promise<void>`
-- `enableProofStateWatcher(): Promise<void>`
-- `disableProofStateWatcher(): Promise<void>`
-- `pauseSubscriptions(): Promise<void>`
-- `resumeSubscriptions(): Promise<void>`
-- `recoverPendingSendOperations(): Promise<void>` (deprecated)
-- `recoverPendingReceiveOperations(): Promise<void>` (deprecated)
-- `recoverPendingMeltOperations(): Promise<void>` (deprecated)
+- `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
+- `enableMintOperationProcessor()`, `disableMintOperationProcessor()`,
+  `waitForMintOperationProcessor()`
+- `enableProofStateWatcher()`, `disableProofStateWatcher()`
+- `pauseSubscriptions()`, `resumeSubscriptions()`
 - `use(plugin: Plugin): void`
 - `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
 
 ### OpsApi
 
-- `send.prepare({ mintUrl, amount, target? }): Promise<PreparedSendOperation>`
-- `send.execute(operationOrId): Promise<{ operation: PendingSendOperation; token: Token }>`
-- `send.get(operationId): Promise<SendOperation | null>`
-- `send.listPrepared(): Promise<PreparedSendOperation[]>`
-- `send.listInFlight(): Promise<SendOperation[]>`
-- `send.refresh(operationId): Promise<SendOperation>`
-- `send.cancel(operationId): Promise<void>`
-- `send.reclaim(operationId): Promise<void>`
-- `send.finalize(operationId): Promise<void>`
-- `send.recovery.run(): Promise<void>`
-- `send.recovery.inProgress(): boolean`
-- `send.diagnostics.isLocked(operationId): boolean`
-- `receive.prepare({ token }): Promise<PreparedReceiveOperation>`
-- `receive.execute(operationOrId): Promise<FinalizedReceiveOperation>`
-- `receive.get(operationId): Promise<ReceiveOperation | null>`
-- `receive.listPrepared(): Promise<PreparedReceiveOperation[]>`
-- `receive.listInFlight(): Promise<ReceiveOperation[]>`
-- `receive.refresh(operationId): Promise<ReceiveOperation>`
-- `receive.cancel(operationId): Promise<void>`
-- `receive.finalize(operationId): Promise<void>`
-- `receive.recovery.run(): Promise<void>`
-- `receive.recovery.inProgress(): boolean`
-- `receive.diagnostics.isLocked(operationId): boolean`
-- `melt.prepare({ mintUrl, method: 'bolt11', methodData: { invoice } }): Promise<PreparedMeltOperation>`
-- `melt.execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
-- `melt.get(operationId): Promise<MeltOperation | null>`
-- `melt.getByQuote(mintUrl, quoteId): Promise<MeltOperation | null>`
-- `melt.listPrepared(): Promise<PreparedMeltOperation[]>`
-- `melt.listInFlight(): Promise<MeltOperation[]>`
-- `melt.refresh(operationId): Promise<MeltOperation>`
-- `melt.cancel(operationId): Promise<void>`
-- `melt.reclaim(operationId): Promise<void>`
-- `melt.finalize(operationId): Promise<void>`
-- `melt.recovery.run(): Promise<void>`
-- `melt.recovery.inProgress(): boolean`
-- `melt.diagnostics.isLocked(operationId): boolean`
-- `mint.prepare({ mintUrl, quoteId, method: 'bolt11', methodData: {} }): Promise<PendingMintOperation>`
-- `mint.execute(operationOrId): Promise<FinalizedMintOperation>`
-- `mint.get(operationId): Promise<MintOperation | null>`
-- `mint.getByQuote(mintUrl, quoteId): Promise<MintOperation | null>`
-- `mint.listPending(): Promise<PendingMintOperation[]>`
-- `mint.listInFlight(): Promise<MintOperation[]>`
-- `mint.checkPayment(operationId): Promise<PendingMintCheckResult>`
-- `mint.refresh(operationId): Promise<MintOperation>`
-- `mint.finalize(operationId): Promise<FinalizedMintOperation>`
-- `mint.recovery.run(): Promise<void>`
-- `mint.recovery.inProgress(): boolean`
-- `mint.diagnostics.isLocked(operationId): boolean`
+- `send`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
+  `refresh`, `cancel`, `reclaim`, plus `recovery` and `diagnostics`
+- `receive`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
+  `refresh`, `cancel`, plus `recovery` and `diagnostics`
+- `mint`: `prepare`, `importQuote`, `execute`, `get`, `getByQuote`,
+  `listPending`, `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus
+  `recovery` and `diagnostics`
+- `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listPrepared`,
+  `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`, plus `recovery`
+  and `diagnostics`
 
 ### MintApi
 
@@ -252,28 +208,26 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `getBalances(): Promise<{ [mintUrl: string]: number }>`
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
-- `processPaymentRequest(paymentRequest: string): Promise<ParsedPaymentRequest>` (deprecated)
-- `preparePaymentRequestTransaction(mintUrl: string, request: ParsedPaymentRequest, amount?: number): Promise<PaymentRequestTransaction>` (deprecated)
-- `handleInbandPaymentRequest(transaction: PaymentRequestTransaction, inbandHandler: (token: Token) => Promise<void>): Promise<void>` (deprecated)
-- `handleHttpPaymentRequest(transaction: PaymentRequestTransaction): Promise<Response>` (deprecated)
+- `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
+- `encodeToken(token: Token, opts?: { version?: 3 | 4 }): string`
+- `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
+
+### AuthApi
+
+- `startDeviceAuth(mintUrl: string)`
+- `login(mintUrl, tokens): Promise<AuthSession>`
+- `restore(mintUrl): Promise<boolean>`
+- `logout(mintUrl): Promise<void>`
+- `getSession(mintUrl): Promise<AuthSession>`
+- `hasSession(mintUrl): Promise<boolean>`
+- `getAuthProvider(mintUrl): AuthProvider | undefined`
+- `getPoolSize(mintUrl): number`
 
 ### PaymentRequestsApi
 
 - `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
 - `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: number }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
-
-### QuotesApi
-
-- `prepareMeltBolt11(mintUrl: string, invoice: string): Promise<PreparedMeltOperation>` (deprecated)
-- `executeMelt(operationId: string): Promise<PendingMeltOperation | FinalizedMeltOperation>` (deprecated)
-- `executeMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingMeltOperation | FinalizedMeltOperation | null>` (deprecated)
-- `checkPendingMelt(operationId: string): Promise<PendingCheckResult>` (deprecated)
-- `checkPendingMeltByQuote(mintUrl: string, quoteId: string): Promise<PendingCheckResult | null>` (deprecated)
-- `rollbackMelt(operationId: string, reason?: string): Promise<void>`
-- `getMeltOperation(operationId: string): Promise<MeltOperation | null>`
-- `getPendingMeltOperations(): Promise<MeltOperation[]>`
-- `getPreparedMeltOperations(): Promise<PreparedMeltOperation[]>`
 
 ### SubscriptionApi
 
@@ -294,24 +248,14 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `getLatestKeyPair(): Promise<Keypair | null>`
 - `getAllKeyPairs(): Promise<Keypair[]>`
 
-### SendApi
-
-- `prepareSend(mintUrl: string, amount: number): Promise<PreparedSendOperation>`
-- `executePreparedSend(operationId: string): Promise<{ operation: PendingSendOperation; token: Token }>`
-- `getOperation(operationId: string): Promise<SendOperation | null>`
-- `getPendingOperations(): Promise<SendOperation[]>`
-- `finalize(operationId: string): Promise<void>`
-- `rollback(operationId: string): Promise<void>`
-- `recoverPendingOperations(): Promise<void>`
-- `checkPendingOperation(operationId: string): Promise<void>`
-- `isOperationLocked(operationId: string): boolean`
-- `isRecoveryInProgress(): boolean`
-
 ### Subscriptions in Node vs browser
 
 `Manager` will auto-detect a global `WebSocket` if available (e.g., browsers). In non-browser environments, provide a `webSocketFactory` to the `Manager` constructor or use the exposed `SubscriptionManager`/`WsConnectionManager` utilities.
 
 ## Core events
+
+See the `CoreEvents` type for the full, current event map. Common events
+include:
 
 - `mint:added` → `{ mint, keysets }`
 - `mint:updated` → `{ mint, keysets }`
@@ -342,6 +286,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`
 - `melt-op:finalized` → `{ mintUrl, operationId, operation }`
 - `melt-op:rolled-back` → `{ mintUrl, operationId, operation }`
+- `subscriptions:paused` / `subscriptions:resumed`
+- `auth-session:updated` / `auth-session:deleted` / `auth-session:expired`
 
 ## Plugins
 
@@ -356,10 +302,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ```ts
 import type { Plugin, ServiceKey } from '@cashu/coco-core';
 
-// Service keys you can request:
-// 'mintService' | 'walletService' | 'proofService' | 'seedService' | 'walletRestoreService'
-// 'counterService' | 'meltQuoteService' | 'historyService'
-// 'subscriptions' | 'eventBus' | 'logger'
+// Service keys are derived from the exported ServiceMap type.
+// Use ServiceKey when you want the current full set without duplicating it here.
 
 const myPlugin: Plugin<['eventBus', 'logger']> = {
   name: 'my-plugin',
@@ -399,10 +343,12 @@ await manager.dispose();
 From the package root:
 
 - `Manager`, `initializeCoco`, `CocoConfig`
-- Repository interfaces and memory implementations under `repositories/memory`
-- Models under `models`
+- Repository interfaces and memory implementations
+- Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
+  `SubscriptionApi`, and the operation-oriented APIs
+- Models, services, operations, and plugin types
 - Types: `CoreProof`, `ProofState`
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
-- Subscription infra: `SubscriptionManager`, `WsConnectionManager`, `WebSocketLike`, `WebSocketFactory`, `SubscriptionCallback`, `SubscriptionKind`
-- Plugins: `Plugin`, `PluginContext`, `ServiceKey`, `PluginHost`
+- Infrastructure helpers: `SubscriptionManager`, `WsConnectionManager`,
+  `WebSocketLike`, `WebSocketFactory`

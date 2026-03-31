@@ -22,8 +22,6 @@ The canonical API is exposed through `coco.ops.melt`:
 - `cancel(operationId)` cancels a prepared melt
 - `reclaim(operationId)` reclaims a pending melt when rollback is allowed
 
-The older melt workflow methods on `coco.quotes` remain available as deprecated aliases.
-
 ## Operation States
 
 Melt operations progress through the following states:
@@ -115,18 +113,14 @@ if (operation.state === 'finalized') {
 
 `refresh` queries the mint for the quote state when the operation is pending, performs any needed finalize or rollback work, and returns the latest stored operation.
 
-When it returns `finalize`, fetch the stored operation to inspect settlement amounts:
+The operation returned by `refresh()` already includes settlement details when the melt has finalized:
 
 ```ts
-const decision = await coco.quotes.checkPendingMelt(operationId);
+const operation = await coco.ops.melt.refresh(operationId);
 
-if (decision === 'finalize') {
-  const operation = await coco.quotes.getMeltOperation(operationId);
-
-  if (operation?.state === 'finalized') {
-    console.log('Change returned:', operation.changeAmount);
-    console.log('Effective fee:', operation.effectiveFee);
-  }
+if (operation.state === 'finalized') {
+  console.log('Change returned:', operation.changeAmount);
+  console.log('Effective fee:', operation.effectiveFee);
 }
 ```
 

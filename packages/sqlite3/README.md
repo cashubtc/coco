@@ -7,18 +7,24 @@ Node storage adapter for Coco built on `better-sqlite3`.
 ## Install
 
 ```bash
-npm install @cashu/coco-sqlite better-sqlite3
+npm install @cashu/coco-core @cashu/coco-sqlite better-sqlite3
 ```
 
 ## Usage
 
 ```ts
 import Database from 'better-sqlite3';
+import { initializeCoco } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite';
 
 const database = new Database('./coco.db');
 const repositories = new SqliteRepositories({ database });
 await repositories.init();
+
+const manager = await initializeCoco({
+  repo: repositories,
+  seedGetter,
+});
 ```
 
 ## Notes
