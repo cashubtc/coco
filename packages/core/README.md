@@ -133,7 +133,8 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 
 ## Architecture
 
-- `Manager`: Facade wiring services together; exposes `mint`, `wallet`, `quotes`, and `subscription` APIs plus watcher helpers.
+- `Manager`: Facade wiring services together; exposes `mint`, `wallet`, `ops`,
+  `paymentRequests`, and `subscription` APIs plus watcher helpers.
 - `MintService`: Fetches `mintInfo`, keysets and persists via repositories.
 - `WalletService`: Caches and constructs `Wallet` from stored keysets.
 - `ProofService`: Manages proofs, selection, states, and counters.

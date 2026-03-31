@@ -3,12 +3,16 @@
 This guide is for teams that tested Coco during the `coco-cashu-*` alpha phase
 and now want to move to the current `@cashu/*` release line.
 
-The biggest migration is the namespace change. In most codebases, the move is:
+The biggest migration is the namespace change, but this release line is also a
+clean API cut. It is not a package-name-only upgrade: several alpha-era
+compatibility aliases were intentionally removed.
+
+In most codebases, the move is:
 
 1. Replace old package names in `package.json`
 2. Rewrite imports to the new `@cashu/*` names
 3. Reinstall dependencies and regenerate your lockfile
-4. Switch to the current recommended APIs where the old ones are now deprecated
+4. Update any code that still uses removed alpha-era APIs
 
 ## Package rename map
 
@@ -93,16 +97,33 @@ import Database from 'better-sqlite3';
 
 If you are on Bun, prefer `@cashu/coco-sqlite-bun` instead.
 
-## Recommended API updates
+## Required API updates
 
 Much of the old wallet flow API was rewritten around a saga-based operation
 model. The current surface for send, receive, mint, and melt lifecycles now
 lives under `OpsApi`, exposed on the manager as `manager.ops.*`.
 
-The old manager aliases are still present in a few places, but the current
-operation-oriented API lives under `manager.ops.*`.
+The `@cashu/*` release line intentionally removes several deprecated alpha
+compatibility surfaces. If your app still used those wrappers, you must update
+that code as part of the migration.
 
-Prefer these forms going forward:
+Removed manager aliases:
+
+- `manager.send` -> `manager.ops.send`
+- `manager.receive` -> `manager.ops.receive`
+- `manager.quotes` -> use `manager.ops.mint` and `manager.ops.melt`
+- `manager.recoverPendingSendOperations()` -> `manager.ops.send.recovery.run()`
+- `manager.recoverPendingReceiveOperations()` -> `manager.ops.receive.recovery.run()`
+- `manager.recoverPendingMeltOperations()` -> `manager.ops.melt.recovery.run()`
+
+Removed `WalletApi` compatibility wrappers:
+
+- `wallet.send()` -> `manager.ops.send.prepare()` and `manager.ops.send.execute()`
+- `wallet.processPaymentRequest()` -> `manager.paymentRequests.parse()`
+- `wallet.preparePaymentRequestTransaction()` -> `manager.paymentRequests.prepare()`
+- `wallet.handle*PaymentRequest()` -> `manager.paymentRequests.execute()`
+
+Use these forms after migrating:
 
 ```ts
 // preferred
@@ -118,8 +139,10 @@ await manager.ops.melt.prepare({
 
 Notes:
 
-- Treat `manager.ops` as the canonical replacement for the older one-shot wallet
-  flow helpers when you need recoverable lifecycle state
+- Treat `manager.ops` as the supported replacement for the older one-shot wallet
+  flow helpers
+- Use `manager.paymentRequests.parse()`, `prepare()`, and `execute()` for
+  payment-request handling
 - React hooks such as `useSend()` and `useReceive()` remain the ergonomic React
   surface, but they now sit on top of the same operation-based workflows
 
@@ -179,7 +202,8 @@ version strings.
 - Rewrite imports to the new namespace
 - For Node, switch from `sqlite3` to `better-sqlite3`
 - Reinstall dependencies and regenerate the lockfile
+- Replace removed alpha-era manager and `WalletApi` wrappers with
+  `manager.ops.*` and `manager.paymentRequests.*`
 - Update Bun workspace filters and CI scripts
-- Prefer `manager.ops.*` for send, receive, mint, and melt flows
 - Start the app against your existing persisted data and verify balances,
   pending operations, and mint subscriptions
