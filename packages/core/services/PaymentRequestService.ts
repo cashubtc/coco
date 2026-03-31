@@ -246,5 +246,4 @@ export class PaymentRequestService {
       paymentRequest,
     };
   }
-
 }

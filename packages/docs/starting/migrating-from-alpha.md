@@ -16,14 +16,14 @@ In most codebases, the move is:
 
 ## Package rename map
 
-| Alpha package | Current package |
-| --- | --- |
-| `coco-cashu-core` | `@cashu/coco-core` |
-| `coco-cashu-indexeddb` | `@cashu/coco-indexeddb` |
-| `coco-cashu-expo-sqlite` | `@cashu/coco-expo-sqlite` |
-| `coco-cashu-sqlite3` | `@cashu/coco-sqlite` |
-| `coco-cashu-sqlite-bun` | `@cashu/coco-sqlite-bun` |
-| `coco-cashu-react` | `@cashu/coco-react` |
+| Alpha package              | Current package             |
+| -------------------------- | --------------------------- |
+| `coco-cashu-core`          | `@cashu/coco-core`          |
+| `coco-cashu-indexeddb`     | `@cashu/coco-indexeddb`     |
+| `coco-cashu-expo-sqlite`   | `@cashu/coco-expo-sqlite`   |
+| `coco-cashu-sqlite3`       | `@cashu/coco-sqlite`        |
+| `coco-cashu-sqlite-bun`    | `@cashu/coco-sqlite-bun`    |
+| `coco-cashu-react`         | `@cashu/coco-react`         |
 | `coco-cashu-adapter-tests` | `@cashu/coco-adapter-tests` |
 
 ## Update your dependencies
