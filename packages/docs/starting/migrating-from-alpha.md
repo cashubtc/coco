@@ -143,8 +143,74 @@ Notes:
   flow helpers
 - Use `manager.paymentRequests.parse()`, `prepare()`, and `execute()` for
   payment-request handling
-- React hooks such as `useSend()` and `useReceive()` remain the ergonomic React
-  surface, but they now sit on top of the same operation-based workflows
+
+### React hook breaking changes
+
+The React package changed more than just import paths. The old flow hooks were
+removed and replaced with operation-oriented hooks:
+
+- `useSend()` was removed. Use `useSendOperation()`.
+- `useReceive()` was removed. Use `useReceiveOperation()`.
+- `useMintOperation()` and `useMeltOperation()` are new first-class hooks for
+  the quote-backed flows that previously required dropping down to the manager.
+
+The new hooks intentionally mirror `manager.ops.*`, which means the React
+calling convention also changed:
+
+- The old callback-style action options were removed. Methods now return
+  promises and expose hook-managed `status`, `error`, `isLoading`, and
+  `isError` state.
+- Each hook binds to one operation after `prepare(...)`, `importQuote(...)`, or
+  `load(operationId)`.
+- Follow-up methods such as `execute()`, `refresh()`, `cancel()`, `reclaim()`,
+  `finalize()`, and `checkPayment()` act on the currently bound operation, so
+  you do not pass the operation id to those methods anymore.
+- Hook state is now split between `currentOperation` for the persisted
+  operation record and `executeResult` for execute-specific return data.
+- The optional hook argument is initial-only. If a mounted component needs to
+  switch to a different operation later, call `load(operationId)` explicitly.
+
+Example send migration:
+
+```tsx
+// before
+const { prepareSend, executePreparedSend, rollback, status, error } = useSend();
+
+const prepared = await prepareSend(mintUrl, amount, {
+  onSuccess: (op) => setPrepared(op),
+});
+
+const result = await executePreparedSend(prepared.id);
+await rollback(prepared.id);
+
+// after
+const {
+  prepare,
+  execute,
+  cancel,
+  currentOperation,
+  executeResult,
+  status,
+  error,
+} = useSendOperation();
+
+await prepare({ mintUrl, amount });
+await execute();
+await cancel();
+```
+
+Example receive migration:
+
+```tsx
+// before
+const { receive, status, error } = useReceive();
+await receive(token);
+
+// after
+const { prepare, execute, currentOperation, status, error } = useReceiveOperation();
+await prepare({ token });
+await execute();
+```
 
 ## Existing wallet data and migrations
 
