@@ -224,6 +224,21 @@ function createPreparedReceiveOperation(
   };
 }
 
+function createInitReceiveOperation(
+  overrides: Partial<ReceiveOperationRecord> = {},
+): ReceiveOperationRecord {
+  return {
+    id: 'receive-op-init',
+    state: 'init',
+    mintUrl: MINT_URL,
+    amount: 100,
+    inputProofs: [],
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  } as ReceiveOperationRecord;
+}
+
 function createFinalizedReceiveOperation(
   overrides: Partial<ReceiveExecuteResult> = {},
 ): ReceiveExecuteResult {
@@ -529,6 +544,31 @@ describe('useReceiveOperation', () => {
     });
     expect(result.current.status).toBe('error');
     expect(result.current.error?.message).toBe('Invalid token');
+  });
+
+  it('treats init cancel as success when the operation is deleted after rollback', async () => {
+    const { manager, receive } = createReceiveManagerMock();
+    const loaded = createInitReceiveOperation({ id: 'receive-op-init' });
+
+    receive.cancel.mockResolvedValue(undefined);
+    receive.get.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useReceiveOperation(loaded), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    expect(result.current.currentOperation).toEqual(loaded);
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(receive.cancel).toHaveBeenCalledWith(loaded.id);
+    expect(receive.get).toHaveBeenCalledWith(loaded.id);
+    expect(result.current.currentOperation).toBeNull();
+    expect(result.current.executeResult).toBeNull();
+    expect(result.current.status).toBe('success');
+    expect(result.current.error).toBeNull();
   });
 });
 

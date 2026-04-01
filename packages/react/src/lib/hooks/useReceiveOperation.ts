@@ -108,15 +108,29 @@ export function useReceiveOperation(
   ]);
 
   const cancel = useCallback(async (): Promise<void> => {
-    const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'cancel');
+    const currentOperation = getCurrentOperation();
+    const targetOperationId = requireCurrentOperationId(currentOperation, 'cancel');
 
     await runStatefulAction(
       async () => {
         await manager.ops.receive.cancel(targetOperationId);
-        return requireOperation((id) => manager.ops.receive.get(id), targetOperationId);
+        return {
+          operationBeforeCancel: currentOperation,
+          operationAfterCancel: await manager.ops.receive.get(targetOperationId),
+        };
       },
-      async (operation) => {
-        replaceCurrentOperation(operation, { clearExecuteResult: true });
+      async ({ operationBeforeCancel, operationAfterCancel }) => {
+        if (operationAfterCancel) {
+          replaceCurrentOperation(operationAfterCancel, { clearExecuteResult: true });
+          return;
+        }
+
+        if (operationBeforeCancel?.state === 'init') {
+          replaceCurrentOperation(null, { clearExecuteResult: true });
+          return;
+        }
+
+        throw new Error(`Operation ${targetOperationId} not found`);
       },
     );
   }, [getCurrentOperation, manager, replaceCurrentOperation, runStatefulAction]);
