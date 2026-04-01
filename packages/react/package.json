@@ -21,6 +21,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -29,6 +30,7 @@
     "@cashu/coco-core": "1.0.0-rc.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.0",
     "@eslint/js": "^9.33.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
@@ -40,8 +42,10 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.3.0",
+    "jsdom": "^26.1.0",
     "typescript-eslint": "^8.39.1",
     "vite": "^7.1.2",
+    "vitest": "^3.2.4",
     "vite-plugin-dts": "^4.5.4"
   }
 }

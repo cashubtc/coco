@@ -46,3 +46,6 @@ jobs:
 
       - name: Typecheck packages in dependency order
         run: bun run typecheck
+
+      - name: Run React package tests
+        run: bun run --filter='@cashu/coco-react' test
