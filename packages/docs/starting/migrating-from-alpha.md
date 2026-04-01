@@ -184,15 +184,8 @@ const result = await executePreparedSend(prepared.id);
 await rollback(prepared.id);
 
 // after
-const {
-  prepare,
-  execute,
-  cancel,
-  currentOperation,
-  executeResult,
-  status,
-  error,
-} = useSendOperation();
+const { prepare, execute, cancel, currentOperation, executeResult, status, error } =
+  useSendOperation();
 
 await prepare({ mintUrl, amount });
 await execute();
