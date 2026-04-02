@@ -1,7 +1,8 @@
 import type { Manager } from '@cashu/coco-core';
 import { act, cleanup, renderHook } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, createHookWrapper } from '../../test/testUtils';
+import { createDeferred, createHookWrapper, createStrictHookWrapper } from '../../test/testUtils';
 import type { SendOperationPrepareInput } from './useSendOperation';
 import { useSendOperation } from './useSendOperation';
 import type { ReceiveOperationPrepareInput } from './useReceiveOperation';
@@ -483,6 +484,111 @@ describe('useSendOperation', () => {
       await firstPreparePromise;
     });
 
+    expect(result.current.status).toBe('success');
+  });
+
+  it('updates operation state in StrictMode during prepare and execute', async () => {
+    const { manager, send } = createSendManagerMock();
+    const prepared = createPreparedSendOperation();
+    const executeResult = createSendExecuteResult({
+      operation: createPendingSendOperation({ id: prepared.id }),
+    });
+
+    send.prepare.mockResolvedValue(prepared);
+    send.execute.mockResolvedValue(executeResult);
+
+    const { result } = renderHook(() => useSendOperation(), {
+      wrapper: createStrictHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(SEND_PREPARE_INPUT);
+    });
+
+    expect(result.current.currentOperation).toEqual(prepared);
+    expect(result.current.status).toBe('success');
+
+    await act(async () => {
+      await result.current.execute();
+    });
+
+    expect(send.execute).toHaveBeenCalledWith(prepared.id);
+    expect(result.current.currentOperation).toEqual(executeResult.operation);
+    expect(result.current.executeResult).toEqual(executeResult);
+    expect(result.current.status).toBe('success');
+  });
+
+  it('reports loading for actions started from a mount-time layout effect', async () => {
+    const { manager, send } = createSendManagerMock();
+    const pendingPrepare = createDeferred<SendPrepareResult>();
+    const prepared = createPreparedSendOperation();
+
+    send.prepare.mockReturnValue(pendingPrepare.promise);
+
+    const { result } = renderHook(
+      () => {
+        const operation = useSendOperation();
+
+        useLayoutEffect(() => {
+          void operation.prepare(SEND_PREPARE_INPUT);
+        }, [operation.prepare]);
+
+        return operation;
+      },
+      {
+        wrapper: createHookWrapper(manager),
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(result.current.status).toBe('loading');
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      pendingPrepare.resolve(prepared);
+      await pendingPrepare.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(prepared);
+    expect(result.current.status).toBe('success');
+  });
+
+  it('reports loading for actions started from a mount-time layout effect in StrictMode', async () => {
+    const { manager, send } = createSendManagerMock();
+    const pendingPrepare = createDeferred<SendPrepareResult>();
+    const prepared = createPreparedSendOperation();
+
+    send.prepare.mockReturnValue(pendingPrepare.promise);
+
+    const { result } = renderHook(
+      () => {
+        const operation = useSendOperation();
+
+        useLayoutEffect(() => {
+          void operation.prepare(SEND_PREPARE_INPUT);
+        }, [operation.prepare]);
+
+        return operation;
+      },
+      {
+        wrapper: createStrictHookWrapper(manager),
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(result.current.status).toBe('loading');
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      pendingPrepare.resolve(prepared);
+      await pendingPrepare.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(prepared);
     expect(result.current.status).toBe('success');
   });
 });

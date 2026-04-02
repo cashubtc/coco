@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type { OperationBinding, OperationHookStatus } from './operation-types';
 
 type ReplaceCurrentOperationOptions = {
@@ -56,7 +56,9 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
   const statefulActionInProgressRef = useRef(false);
   const currentOperationRef = useRef<TOperation | null>(initialOperation);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+
     return () => {
       mountedRef.current = false;
     };
