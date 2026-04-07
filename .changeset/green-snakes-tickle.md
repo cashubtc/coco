@@ -1,5 +1,5 @@
 ---
-'@cashu/coco-react': major
+'@cashu/coco-react': patch
 ---
 
 Replace the legacy `useSend` and `useReceive` React hooks with operation-based
