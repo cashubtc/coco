@@ -10,5 +10,9 @@
     "@cashu/coco-sqlite-bun": "1.0.0-rc.0",
     "@cashu/coco-sqlite": "1.0.0-rc.0"
   },
-  "changesets": []
+  "changesets": [
+    "green-snakes-tickle",
+    "smooth-garlics-cheer",
+    "young-pumas-float"
+  ]
 }
