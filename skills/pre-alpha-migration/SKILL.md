@@ -1,6 +1,7 @@
 ---
 name: pre-alpha-migration
 description: Use when upgrading an app or library from the legacy coco-cashu alpha packages to the stable @cashu/* release line. This skill covers dependency and import renames, sqlite3 to better-sqlite3 migration, manager and WalletApi replacement APIs, React hook updates, script and CI filter rewrites, and validation against existing persisted wallet data.
+license: MIT
 ---
 
 # Pre-Alpha Migration
@@ -63,7 +64,7 @@ alpha-to-stable migration.
 
 ## Reference Use
 
-Read [migration-reference.md](./references/migration-reference.md) when you need
+Read [migration-reference.md](references/migration-reference.md) when you need
 the exact rename map, API replacements, React hook changes, balance shape
 changes, or the final migration checklist.
 

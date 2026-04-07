@@ -67,6 +67,11 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 - See `packages/core/README.md` → Plugins for details and examples.
 - Register at construction or via `manager.use(plugin)`; dispose with `manager.dispose()`.
 
+## Skills
+
+Generic agent skills live in `skills/` and follow the Agent Skills
+specification: https://agentskills.io/specification
+
 ## Development
 
 Use TypeScript for type checking and `tsdown` to build packages. See `packages/core/README.md` for API details and usage.

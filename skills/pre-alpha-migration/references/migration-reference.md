@@ -5,14 +5,14 @@ Use this reference when applying or reviewing a migration from the legacy
 
 ## Package Rename Map
 
-| Alpha package              | Stable package              |
-| -------------------------- | --------------------------- |
-| `coco-cashu-core`          | `@cashu/coco-core`          |
-| `coco-cashu-indexeddb`     | `@cashu/coco-indexeddb`     |
-| `coco-cashu-expo-sqlite`   | `@cashu/coco-expo-sqlite`   |
-| `coco-cashu-sqlite3`       | `@cashu/coco-sqlite`        |
-| `coco-cashu-sqlite-bun`    | `@cashu/coco-sqlite-bun`    |
-| `coco-cashu-react`         | `@cashu/coco-react`         |
+| Alpha package              | Stable package            |
+| -------------------------- | ------------------------- |
+| `coco-cashu-core`          | `@cashu/coco-core`        |
+| `coco-cashu-indexeddb`     | `@cashu/coco-indexeddb`   |
+| `coco-cashu-expo-sqlite`   | `@cashu/coco-expo-sqlite` |
+| `coco-cashu-sqlite3`       | `@cashu/coco-sqlite`      |
+| `coco-cashu-sqlite-bun`    | `@cashu/coco-sqlite-bun`  |
+| `coco-cashu-react`         | `@cashu/coco-react`       |
 | `coco-cashu-adapter-tests` | `@cashu/coco-adapter-tests` |
 
 ## Dependency And Import Updates
