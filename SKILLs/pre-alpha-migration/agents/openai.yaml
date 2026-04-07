@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pre-Alpha Migration"
+  short_description: "Upgrade coco-cashu alpha apps to stable"
+  default_prompt: "Use $pre-alpha-migration to upgrade this codebase from the coco-cashu alpha packages to the stable @cashu release line."
+
+policy:
+  allow_implicit_invocation: true
