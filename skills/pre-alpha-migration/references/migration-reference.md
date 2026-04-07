@@ -3,6 +3,10 @@
 Use this reference when applying or reviewing a migration from the legacy
 `coco-cashu-*` alpha packages to the stable `@cashu/*` release line.
 
+Do not silently work around upgrade problems. If dependency installs, API
+renames, persistence checks, builds, typechecks, tests, or runtime behavior do
+not match this reference, report the mismatch to the user explicitly.
+
 ## Package Rename Map
 
 | Alpha package              | Stable package            |
@@ -183,20 +187,34 @@ await execute();
 
 ## React Balance Shape Changes
 
-The balance hooks no longer return a flat numeric object. They now return a
-structured `balances` object.
+The balance hooks no longer return a flat numeric object. `useBalances()` and
+`useTrustedBalance()` now return `{ balances, refresh }`, and
+`useBalanceContext()` now exposes `{ balances }`.
 
-Before:
+Hook migration:
 
 ```tsx
+// before
+const { balance } = useBalances();
+const mintBalance = balance[mintUrl] ?? 0;
+const total = balance.total;
+
+// after
+const { balances, refresh } = useBalances();
+const mintBalance = balances.byMint[mintUrl]?.total ?? 0;
+const spendable = balances.byMint[mintUrl]?.spendable ?? 0;
+const total = balances.total.total;
+```
+
+The same return-shape break applies to `useTrustedBalance()`:
+
+```tsx
+// before
 const { balance } = useTrustedBalance();
 const mintBalance = balance[mintUrl] ?? 0;
 const total = balance.total;
-```
 
-After:
-
-```tsx
+// after
 const { balances, refresh } = useTrustedBalance();
 const mintBalance = balances.byMint[mintUrl]?.total ?? 0;
 const spendable = balances.byMint[mintUrl]?.spendable ?? 0;
@@ -244,6 +262,9 @@ In normal upgrades, do not add manual wallet export and re-import steps.
 
 - Replace all `coco-cashu-*` dependencies with `@cashu/*`
 - Rewrite imports to the new namespace
+- Reinstall dependencies and run the relevant build, typecheck, and test steps
+- If any migration or validation step fails, tell the user exactly what failed
+  and do not present the upgrade as complete
 - For Node, switch from `sqlite3` to `better-sqlite3`
 - Reinstall dependencies and regenerate the lockfile
 - Replace removed alpha manager and `WalletApi` wrappers with `manager.ops.*`

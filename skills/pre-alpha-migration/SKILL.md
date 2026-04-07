@@ -15,6 +15,11 @@ Treat this as a real API migration, not a package-name-only rename. The stable
 release line removes alpha-era compatibility aliases across the manager,
 wallet, and React hook surfaces.
 
+Do not silently work around migration errors. If installs, builds, tests,
+runtime behavior, or persisted-data startup checks fail or differ from the
+expected migration path, surface that clearly to the user and explain what did
+not behave as expected.
+
 ## When To Use
 
 Use this skill when a repo contains any of these signals:
@@ -53,7 +58,8 @@ alpha-to-stable migration.
    model.
 5. Update React code if present.
    Replace removed hooks and adjust the calling convention and balance return
-   shapes.
+   shapes, including the `useBalances()` and `useTrustedBalance()` change from
+   `{ balance }` to `{ balances, refresh }`.
 6. Preserve persisted wallet data.
    Keep the same repository or database location and initialize Coco normally.
    Do not introduce manual export and re-import steps unless the user explicitly
@@ -61,6 +67,10 @@ alpha-to-stable migration.
 7. Validate the migration.
    Reinstall dependencies, regenerate the lockfile, and run the most relevant
    build, typecheck, or test commands available in the consumer repo.
+8. Report migration issues explicitly.
+   If any command fails, APIs differ from the expected stable surface, or data
+   migration behavior is unclear, tell the user exactly what happened instead
+   of hiding it behind an undocumented workaround.
 
 ## Reference Use
 
@@ -72,8 +82,14 @@ changes, or the final migration checklist.
 
 - Prefer targeted edits over blanket find-and-replace when code semantics
   changed.
+- Never hide migration problems. Do not suppress failing commands, add
+  compatibility shims, skip validation, or change behavior without explicitly
+  telling the user what broke and why you changed course.
 - When migrating React hooks, update both the imported hook names and the
   method calls on the returned hook object.
+- `useBalances()` and `useTrustedBalance()` both changed their return shape from
+  `{ balance }` to `{ balances, refresh }`; `useBalanceContext()` now exposes
+  `{ balances }`.
 - When migrating balance reads, account for the structured balance shape:
   `balances.byMint[mintUrl]?.total` and `balances.total.total`.
 - If the target repo already mixes old and new packages, normalize everything to
@@ -91,3 +107,5 @@ The migration is complete when:
 - scripts and workspace filters reference the stable package names
 - the project installs cleanly with the chosen package manager
 - the app starts against existing persisted data and key wallet flows still work
+- any unresolved migration issue or validation failure has been explicitly
+  reported to the user
