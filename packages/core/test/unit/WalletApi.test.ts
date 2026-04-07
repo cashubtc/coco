@@ -94,6 +94,14 @@ describe('WalletApi - Trust Enforcement', () => {
         keep: makeOutputData(['out-1', 'out-2']),
         send: [],
       })),
+      getBalancesByMint: mock(async () => ({
+        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
+      })),
+      getBalanceTotal: mock(async () => ({
+        spendable: 10,
+        reserved: 5,
+        total: 15,
+      })),
       saveProofs: mock(async () => {}),
       prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
     };
@@ -135,6 +143,25 @@ describe('WalletApi - Trust Enforcement', () => {
   });
 
   describe('receive - trust enforcement', () => {
+    it('exposes the structured balances api', async () => {
+      await expect(walletApi.balances.byMint()).resolves.toEqual({
+        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
+      });
+      await expect(walletApi.balances.total()).resolves.toEqual({
+        spendable: 10,
+        reserved: 5,
+        total: 15,
+      });
+      await expect(walletApi.getBalancesByMint()).resolves.toEqual({
+        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
+      });
+      await expect(walletApi.getBalanceTotal()).resolves.toEqual({
+        spendable: 10,
+        reserved: 5,
+        total: 15,
+      });
+    });
+
     it('should reject tokens from untrusted mints', async () => {
       const token = {
         mint: testMintUrl,

@@ -5,6 +5,11 @@ import { NullLogger } from '../../logging';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function getMintTotalBalance(manager: Manager, mintUrl: string): Promise<number> {
+  const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
+  return balances[mintUrl]?.total ?? 0;
+}
+
 describe('Pause/Resume Integration Test', () => {
   let manager: Manager;
   const mintUrl = 'https://testnut.cashu.space';
@@ -121,8 +126,7 @@ describe('Pause/Resume Integration Test', () => {
     await sleep(3000);
 
     // Should still work
-    const balances = await manager.wallet.getBalances();
-    const balance = balances[mintUrl] || 0;
+    const balance = await getMintTotalBalance(manager, mintUrl);
     console.log('Balance after multiple cycles:', balance);
   }, 20000);
 
@@ -152,8 +156,7 @@ describe('Pause/Resume Integration Test', () => {
     await sleep(5000);
 
     // Should still work normally
-    const balances = await manager.wallet.getBalances();
-    const balance = balances[mintUrl] || 0;
+    const balance = await getMintTotalBalance(manager, mintUrl);
     expect(balance).toBeGreaterThanOrEqual(0);
     console.log('Balance after resume without pause:', balance);
   }, 20000);

@@ -16,7 +16,8 @@ import { initializeCoco } from '@cashu/coco-core';
 const coco = await initializeCoco({ repo, seedGetter });
 
 // After initialization you can start to use your coco wallet
-const balances = await coco.wallet.getBalances();
+const balances = await coco.wallet.balances.byMint();
+const total = await coco.wallet.balances.total();
 ```
 
 For lifecycle-oriented operation flows, use `coco.ops.send`, `coco.ops.receive`,

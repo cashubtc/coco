@@ -92,8 +92,14 @@ await manager.subscription.awaitMintQuotePaid(
 await manager.ops.mint.execute(pendingMint.id);
 
 // Check balances
-const balances = await manager.wallet.getBalances();
+const balances = await manager.wallet.balances.byMint();
+const total = await manager.wallet.balances.total();
 console.log('balances', balances);
+console.log('wallet total', total.total);
+
+// Inspect spendable vs reserved funds explicitly when needed
+console.log('spendable balance', balances['https://nofees.testnut.cashu.space']?.spendable ?? 0);
+console.log('reserved balance', balances['https://nofees.testnut.cashu.space']?.reserved ?? 0);
 ```
 
 ### Watchers & processors (optional)
@@ -206,12 +212,27 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`
-- `getBalances(): Promise<{ [mintUrl: string]: number }>`
+- `balances.byMint(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalancesByMint>`
+- `balances.total(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
+- `getBalancesByMint(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalancesByMint>`
+- `getBalanceTotal(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { version?: 3 | 4 }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
+
+Compatibility helpers retained for callers that want scalar values:
+
+- `getBalance(mintUrl: string): Promise<number>`
+- `getBalances(): Promise<{ [mintUrl: string]: number }>`
+- `getTrustedBalances(): Promise<{ [mintUrl: string]: number }>`
+- `getSpendableBalance(mintUrl: string): Promise<number>`
+- `getSpendableBalances(): Promise<{ [mintUrl: string]: number }>`
+- `getTrustedSpendableBalances(): Promise<{ [mintUrl: string]: number }>`
+- `getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown>` legacy alias for `ready/reserved/total`
+- `getBalancesBreakdown(): Promise<BalancesBreakdownByMint>` legacy alias for `ready/reserved/total`
+- `getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint>` legacy alias for `ready/reserved/total`
 
 ### AuthApi
 
@@ -348,7 +369,8 @@ From the package root:
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `SubscriptionApi`, and the operation-oriented APIs
 - Models, services, operations, and plugin types
-- Types: `CoreProof`, `ProofState`
+- Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
+  `BalancesByMint`, `BalanceBreakdown`, `BalancesBreakdownByMint`
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
 - Infrastructure helpers: `SubscriptionManager`, `WsConnectionManager`,

@@ -54,8 +54,9 @@ const { mints: trusted, trustMint: trust, untrustMint: untrust } = useTrustedMin
 
 ## BalanceProvider
 
-Tracks total and per-mint balances. It refreshes automatically on
-`proofs:saved`, `proofs:state-changed`, and `mint:updated` events.
+Tracks structured total and per-mint balances. It refreshes automatically on
+`proofs:saved`, `proofs:state-changed`, `proofs:reserved`, and
+`proofs:released` events.
 
 ```tsx
 import { BalanceProvider, useBalanceContext } from '@cashu/coco-react';
@@ -64,8 +65,10 @@ import { BalanceProvider, useBalanceContext } from '@cashu/coco-react';
   <BalanceWidget />
 </BalanceProvider>;
 
-const { balance } = useBalanceContext();
+const { balances } = useBalanceContext();
 ```
 
-`useBalanceContext()` returns a `balance` object keyed by mint URL plus a
-`total` field.
+`useBalanceContext()` returns a `balances` object with:
+
+- `byMint`: `{ [mintUrl]: { spendable, reserved, total } }`
+- `total`: `{ spendable, reserved, total }`

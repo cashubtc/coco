@@ -79,4 +79,4 @@ export function App() {
 
 For operation hooks, `ManagerProvider` is the only required context. The mint
 and balance providers are only needed for derived-data hooks such as
-`useTrustedBalance()` and `useMints()`.
+`useBalances()`, `useTrustedBalance()`, and `useMints()`.

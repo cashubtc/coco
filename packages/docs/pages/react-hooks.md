@@ -119,8 +119,26 @@ await execute();
 The existing derived-data hooks remain available for balance and history views.
 
 ```tsx
-import { usePaginatedHistory, useTrustedBalance } from '@cashu/coco-react';
+import { useBalances, usePaginatedHistory, useTrustedBalance } from '@cashu/coco-react';
 
-const { history, loadMore, goToPage, refresh, hasMore, isFetching } = usePaginatedHistory(50);
-const { balance } = useTrustedBalance();
+const { balances, refresh: refreshBalances } = useBalances();
+const {
+  history,
+  loadMore,
+  goToPage,
+  refresh: refreshHistory,
+  hasMore,
+  isFetching,
+} = usePaginatedHistory(50);
+const { balances: trustedBalances } = useTrustedBalance();
 ```
+
+`useBalances()` returns the full wallet snapshot:
+
+- `balances.byMint[mintUrl].spendable`
+- `balances.byMint[mintUrl].reserved`
+- `balances.byMint[mintUrl].total`
+- `balances.total`
+
+`useTrustedBalance()` applies the same structured shape, filtered to trusted
+mints only.

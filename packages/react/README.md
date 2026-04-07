@@ -9,7 +9,8 @@ applications.
 The package exports the `CocoCashuProvider` convenience wrapper, the underlying
 providers, operation-oriented hooks such as `useSendOperation`,
 `useReceiveOperation`, `useMintOperation`, and `useMeltOperation`, plus
-derived-data hooks such as `usePaginatedHistory` and `useTrustedBalance`.
+derived-data hooks such as `usePaginatedHistory`, `useBalances`, and
+`useTrustedBalance`.
 
 ## Install
 

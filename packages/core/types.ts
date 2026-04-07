@@ -4,6 +4,33 @@ export type MintInfo = Awaited<ReturnType<Mint['getInfo']>>;
 
 export type ProofState = 'inflight' | 'ready' | 'spent';
 
+export interface BalanceSnapshot {
+  spendable: number;
+  reserved: number;
+  total: number;
+}
+
+export type BalancesByMint = { [mintUrl: string]: BalanceSnapshot };
+
+export interface BalanceQuery {
+  mintUrls?: string[];
+  trustedOnly?: boolean;
+}
+
+/**
+ * @deprecated Use BalanceSnapshot instead.
+ */
+export interface BalanceBreakdown {
+  ready: number;
+  reserved: number;
+  total: number;
+}
+
+/**
+ * @deprecated Use BalancesByMint instead.
+ */
+export type BalancesBreakdownByMint = { [mintUrl: string]: BalanceBreakdown };
+
 export interface CoreProof extends Proof {
   mintUrl: string;
   state: ProofState;

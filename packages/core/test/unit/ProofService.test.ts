@@ -661,4 +661,198 @@ describe('ProofService', () => {
       expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
     });
   });
+
+  describe('balance queries', () => {
+    const otherMintUrl = 'https://mint.other';
+    const operationId = 'op-123';
+
+    it('returns canonical snapshot and legacy single-mint views', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'a1', amount: 100 }),
+        makeProof({ secret: 'a2', amount: 50 }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['a1'], operationId);
+
+      await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
+        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+      });
+      await expect(service.getBalanceTotal({ mintUrls: [mintUrl] })).resolves.toEqual({
+        spendable: 50,
+        reserved: 100,
+        total: 150,
+      });
+      await expect(service.getBalance(mintUrl)).resolves.toBe(150);
+      await expect(service.getSpendableBalance(mintUrl)).resolves.toBe(50);
+      await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
+        ready: 50,
+        reserved: 100,
+        total: 150,
+      });
+    });
+
+    it('uses mint-scoped ready proof reads for scoped balance queries', async () => {
+      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
+      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
+
+      proofRepo.getReadyProofs = mock((mintUrl: string) => originalGetReadyProofs(mintUrl));
+      proofRepo.getAllReadyProofs = mock(() => originalGetAllReadyProofs());
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'scope-a1', amount: 100 }),
+        makeProof({ secret: 'scope-a2', amount: 50 }),
+      ]);
+      await proofRepo.saveProofs(otherMintUrl, [
+        makeProof({ secret: 'scope-b1', amount: 200, mintUrl: otherMintUrl }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['scope-a1'], operationId);
+
+      await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
+        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+      });
+
+      expect(proofRepo.getReadyProofs).toHaveBeenCalledTimes(1);
+      expect(proofRepo.getReadyProofs).toHaveBeenCalledWith(mintUrl);
+      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
+    });
+
+    it('returns an empty snapshot for an explicit empty mint selection', async () => {
+      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
+      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
+
+      proofRepo.getReadyProofs = mock((mintUrl: string) => originalGetReadyProofs(mintUrl));
+      proofRepo.getAllReadyProofs = mock(() => originalGetAllReadyProofs());
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [makeProof({ secret: 'empty-a1', amount: 100 })]);
+      await proofRepo.saveProofs(otherMintUrl, [
+        makeProof({ secret: 'empty-b1', amount: 200, mintUrl: otherMintUrl }),
+      ]);
+
+      await expect(service.getBalancesByMint({ mintUrls: [] })).resolves.toEqual({});
+      await expect(service.getBalanceTotal({ mintUrls: [] })).resolves.toEqual({
+        spendable: 0,
+        reserved: 0,
+        total: 0,
+      });
+
+      expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
+      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
+    });
+
+    it('returns canonical and legacy map views for all mints', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'b1', amount: 100 }),
+        makeProof({ secret: 'b2', amount: 50 }),
+      ]);
+      await proofRepo.saveProofs(otherMintUrl, [
+        makeProof({ secret: 'c1', amount: 200, mintUrl: otherMintUrl }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['b1'], operationId);
+
+      await expect(service.getBalancesByMint()).resolves.toEqual({
+        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+        [otherMintUrl]: { spendable: 200, reserved: 0, total: 200 },
+      });
+      await expect(service.getBalanceTotal()).resolves.toEqual({
+        spendable: 250,
+        reserved: 100,
+        total: 350,
+      });
+      await expect(service.getBalances()).resolves.toEqual({
+        [mintUrl]: 150,
+        [otherMintUrl]: 200,
+      });
+      await expect(service.getSpendableBalances()).resolves.toEqual({
+        [mintUrl]: 50,
+        [otherMintUrl]: 200,
+      });
+      await expect(service.getBalancesBreakdown()).resolves.toEqual({
+        [mintUrl]: { ready: 50, reserved: 100, total: 150 },
+        [otherMintUrl]: { ready: 200, reserved: 0, total: 200 },
+      });
+    });
+
+    it('filters trusted balances across canonical and legacy queries', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'd1', amount: 100 }),
+        makeProof({ secret: 'd2', amount: 50 }),
+      ]);
+      await proofRepo.saveProofs(otherMintUrl, [
+        makeProof({ secret: 'e1', amount: 500, mintUrl: otherMintUrl }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['d1'], operationId);
+
+      await expect(service.getBalancesByMint({ trustedOnly: true })).resolves.toEqual({
+        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+      });
+      await expect(service.getBalanceTotal({ trustedOnly: true })).resolves.toEqual({
+        spendable: 50,
+        reserved: 100,
+        total: 150,
+      });
+      await expect(service.getTrustedBalances()).resolves.toEqual({
+        [mintUrl]: 150,
+      });
+      await expect(service.getTrustedSpendableBalances()).resolves.toEqual({
+        [mintUrl]: 50,
+      });
+      await expect(service.getTrustedBalancesBreakdown()).resolves.toEqual({
+        [mintUrl]: { ready: 50, reserved: 100, total: 150 },
+      });
+    });
+  });
 });

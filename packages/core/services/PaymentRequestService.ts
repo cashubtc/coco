@@ -194,12 +194,12 @@ export class PaymentRequestService {
   }
 
   private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
-    const balances = await this.proofService.getTrustedBalances();
+    const balances = await this.proofService.getBalancesByMint({ trustedOnly: true });
     const amount = paymentRequest.amount ?? 0;
     const mintRequirement = paymentRequest.mints;
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {
-      if (balance >= amount && (!mintRequirement || mintRequirement.includes(mintUrl))) {
+      if (balance.spendable >= amount && (!mintRequirement || mintRequirement.includes(mintUrl))) {
         matchingMints.push(mintUrl);
       }
     }

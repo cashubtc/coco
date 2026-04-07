@@ -91,7 +91,8 @@ Now that we have instantiated and exported an active coco manager class, we can 
 import { coco } from './coco.ts';
 
 async function apiBalanceController(res, req, next) {
-  const balances = await coco.wallet.getBalances();
-  res.json({ balances });
+  const balances = await coco.wallet.balances.byMint();
+  const total = await coco.wallet.balances.total();
+  res.json({ balances, total });
 }
 ```

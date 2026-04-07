@@ -12,8 +12,16 @@ import type {
   TransactionService,
   TokenService,
 } from '@core/services';
+import type {
+  BalanceBreakdown,
+  BalanceQuery,
+  BalanceSnapshot,
+  BalancesBreakdownByMint,
+  BalancesByMint,
+} from '../types';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
+import { WalletBalancesApi } from './WalletBalancesApi.ts';
 
 export class WalletApi {
   private mintService: MintService;
@@ -24,6 +32,7 @@ export class WalletApi {
   private receiveOperationService: ReceiveOperationService;
   private readonly tokenService: TokenService;
   private readonly logger?: Logger;
+  readonly balances: WalletBalancesApi;
 
   constructor(
     mintService: MintService,
@@ -43,6 +52,7 @@ export class WalletApi {
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;
+    this.balances = new WalletBalancesApi(proofService);
   }
 
   /**
@@ -55,8 +65,48 @@ export class WalletApi {
     return this.receiveOperationService.receive(token);
   }
 
+  async getBalance(mintUrl: string): Promise<number> {
+    return this.proofService.getBalance(mintUrl);
+  }
+
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
     return this.proofService.getBalances();
+  }
+
+  async getTrustedBalances(): Promise<{ [mintUrl: string]: number }> {
+    return this.proofService.getTrustedBalances();
+  }
+
+  async getSpendableBalance(mintUrl: string): Promise<number> {
+    return this.proofService.getSpendableBalance(mintUrl);
+  }
+
+  async getSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+    return this.proofService.getSpendableBalances();
+  }
+
+  async getTrustedSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+    return this.proofService.getTrustedSpendableBalances();
+  }
+
+  async getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown> {
+    return this.proofService.getBalanceBreakdown(mintUrl);
+  }
+
+  async getBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    return this.proofService.getBalancesBreakdown();
+  }
+
+  async getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    return this.proofService.getTrustedBalancesBreakdown();
+  }
+
+  async getBalancesByMint(scope?: BalanceQuery): Promise<BalancesByMint> {
+    return this.proofService.getBalancesByMint(scope);
+  }
+
+  async getBalanceTotal(scope?: BalanceQuery): Promise<BalanceSnapshot> {
+    return this.proofService.getBalanceTotal(scope);
   }
 
   // Restoration logic is delegated to WalletRestoreService

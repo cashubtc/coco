@@ -1,4 +1,5 @@
 export * from './WalletApi.ts';
+export * from './WalletBalancesApi.ts';
 export * from './MintApi.ts';
 export * from './KeyRingApi.ts';
 export * from './SubscriptionApi.ts';

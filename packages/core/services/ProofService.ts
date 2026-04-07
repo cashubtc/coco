@@ -5,7 +5,14 @@ import {
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
-import type { CoreProof } from '../types';
+import type {
+  BalanceBreakdown,
+  BalanceQuery,
+  BalanceSnapshot,
+  BalancesBreakdownByMint,
+  BalancesByMint,
+  CoreProof,
+} from '../types';
 import type { CounterService } from './CounterService';
 import type { ProofRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
@@ -260,7 +267,7 @@ export class ProofService {
   }
 
   /**
-   * Gets the balance for a single mint by summing ready proof amounts.
+   * Gets the total balance for a single mint.
    * @param mintUrl - The URL of the mint
    * @returns The total balance for the mint
    */
@@ -268,41 +275,188 @@ export class ProofService {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    const proofs = await this.getReadyProofs(mintUrl);
-    return proofs.reduce((acc, proof) => acc + proof.amount, 0);
+    const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
+    return balance[mintUrl]?.total ?? 0;
   }
 
   /**
-   * Gets balances for all mints by summing ready proof amounts.
-   * @returns An object mapping mint URLs to their balances
+   * Gets the spendable balance for a single mint.
+   * @param mintUrl - The URL of the mint
+   * @returns The spendable balance for the mint
+   */
+  async getSpendableBalance(mintUrl: string): Promise<number> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
+    return balance[mintUrl]?.spendable ?? 0;
+  }
+
+  /**
+   * Gets the full balance breakdown for a single mint.
+   * @param mintUrl - The URL of the mint
+   * @returns Balance breakdown with ready, reserved, and total amounts
+   */
+  async getBalanceBreakdown(mintUrl: string): Promise<BalanceBreakdown> {
+    if (!mintUrl || mintUrl.trim().length === 0) {
+      throw new ProofValidationError('mintUrl is required');
+    }
+    const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
+    return this.snapshotToBreakdown(balance[mintUrl] ?? this.emptyBalanceSnapshot());
+  }
+
+  /**
+   * Gets balances for all mints.
+   * @returns An object mapping mint URLs to their total balances
    */
   async getBalances(): Promise<{ [mintUrl: string]: number }> {
-    const proofs = await this.getAllReadyProofs();
-    const balances: { [mintUrl: string]: number } = {};
+    const balances = await this.getBalancesByMint();
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.total]),
+    );
+  }
+
+  /**
+   * Gets spendable balances for all mints.
+   * @returns An object mapping mint URLs to their spendable balances
+   */
+  async getSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+    const balances = await this.getBalancesByMint();
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.spendable]),
+    );
+  }
+
+  /**
+   * Gets canonical balances for all mints with spendable, reserved, and total amounts.
+   * @returns An object mapping mint URLs to their balances
+   */
+  async getBalancesByMint(scope?: BalanceQuery): Promise<BalancesByMint> {
+    const requestedMintUrls = scope?.mintUrls ? Array.from(new Set(scope.mintUrls)) : undefined;
+    const trustedMintUrls = scope?.trustedOnly
+      ? new Set((await this.mintService.getAllTrustedMints()).map((mint) => mint.mintUrl))
+      : undefined;
+    const balances: BalancesByMint = {};
+    const scopedMintUrls = requestedMintUrls?.filter(
+      (mintUrl) => !trustedMintUrls || trustedMintUrls.has(mintUrl),
+    );
+    const proofs = scopedMintUrls
+      ? (
+          await Promise.all(
+            scopedMintUrls.map((mintUrl) => this.proofRepository.getReadyProofs(mintUrl)),
+          )
+        ).flat()
+      : trustedMintUrls
+        ? (
+            await Promise.all(
+              Array.from(trustedMintUrls).map((mintUrl) =>
+                this.proofRepository.getReadyProofs(mintUrl),
+              ),
+            )
+          ).flat()
+        : await this.getAllReadyProofs();
+
     for (const proof of proofs) {
       const mintUrl = proof.mintUrl;
-      const balance = balances[mintUrl] || 0;
-      balances[mintUrl] = balance + proof.amount;
+      if (trustedMintUrls && !trustedMintUrls.has(mintUrl)) {
+        continue;
+      }
+
+      const balance = balances[mintUrl] || this.emptyBalanceSnapshot();
+      if (proof.usedByOperationId) {
+        balance.reserved += proof.amount;
+      } else {
+        balance.spendable += proof.amount;
+      }
+      balance.total = balance.spendable + balance.reserved;
+      balances[mintUrl] = balance;
     }
+
+    if (scopedMintUrls) {
+      for (const mintUrl of scopedMintUrls) {
+        balances[mintUrl] ??= this.emptyBalanceSnapshot();
+      }
+    }
+
     return balances;
   }
 
   /**
-   * Gets balances for trusted mints only by summing ready proof amounts.
-   * @returns An object mapping trusted mint URLs to their balances
+   * Gets the aggregated balance for the selected mint scope.
+   * @returns A single balance snapshot with spendable, reserved, and total amounts
+   */
+  async getBalanceTotal(scope?: BalanceQuery): Promise<BalanceSnapshot> {
+    const balances = await this.getBalancesByMint(scope);
+    return Object.values(balances).reduce<BalanceSnapshot>(
+      (total, balance) => ({
+        spendable: total.spendable + balance.spendable,
+        reserved: total.reserved + balance.reserved,
+        total: total.total + balance.total,
+      }),
+      this.emptyBalanceSnapshot(),
+    );
+  }
+
+  /**
+   * Gets balance breakdowns for all mints.
+   * @returns An object mapping mint URLs to their balance breakdowns
+   */
+  async getBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    const balances = await this.getBalancesByMint();
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [
+        mintUrl,
+        this.snapshotToBreakdown(balance),
+      ]),
+    );
+  }
+
+  /**
+   * Gets balances for trusted mints only.
+   * @returns An object mapping trusted mint URLs to their total balances
    */
   async getTrustedBalances(): Promise<{ [mintUrl: string]: number }> {
-    const balances = await this.getBalances();
-    const trustedMints = await this.mintService.getAllTrustedMints();
-    const trustedUrls = new Set(trustedMints.map((m) => m.mintUrl));
+    const balances = await this.getBalancesByMint({ trustedOnly: true });
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.total]),
+    );
+  }
 
-    const trustedBalances: { [mintUrl: string]: number } = {};
-    for (const [mintUrl, balance] of Object.entries(balances)) {
-      if (trustedUrls.has(mintUrl)) {
-        trustedBalances[mintUrl] = balance;
-      }
-    }
-    return trustedBalances;
+  /**
+   * Gets spendable balances for trusted mints only.
+   * @returns An object mapping trusted mint URLs to their spendable balances
+   */
+  async getTrustedSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+    const balances = await this.getBalancesByMint({ trustedOnly: true });
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.spendable]),
+    );
+  }
+
+  /**
+   * Gets balance breakdowns for trusted mints only.
+   * @returns An object mapping trusted mint URLs to their balance breakdowns
+   */
+  async getTrustedBalancesBreakdown(): Promise<BalancesBreakdownByMint> {
+    const balances = await this.getBalancesByMint({ trustedOnly: true });
+    return Object.fromEntries(
+      Object.entries(balances).map(([mintUrl, balance]) => [
+        mintUrl,
+        this.snapshotToBreakdown(balance),
+      ]),
+    );
+  }
+
+  private emptyBalanceSnapshot(): BalanceSnapshot {
+    return { spendable: 0, reserved: 0, total: 0 };
+  }
+
+  private snapshotToBreakdown(balance: BalanceSnapshot): BalanceBreakdown {
+    return {
+      ready: balance.spendable,
+      reserved: balance.reserved,
+      total: balance.total,
+    };
   }
 
   async setProofState(
