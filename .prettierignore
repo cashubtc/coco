@@ -1,6 +1,7 @@
 dist
 coverage
 node_modules
+.changeset/pre.json
 **/.vitepress/cache
 **/.vitepress/dist
 **/CHANGELOG.md
