@@ -79,12 +79,14 @@ export class SqliteHistoryRepository implements HistoryRepository {
         quoteId = h.quoteId;
         state = h.state;
         paymentRequest = h.paymentRequest;
+        operationId = h.operationId ?? null;
         break;
       }
       case 'melt': {
         const h = history as Omit<MeltHistoryEntry, 'id'>;
         quoteId = h.quoteId;
         state = h.state;
+        operationId = h.operationId ?? null;
         break;
       }
       case 'send': {
@@ -97,6 +99,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       case 'receive': {
         const h = history as Omit<ReceiveHistoryEntry, 'id'>;
         tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
+        operationId = h.operationId ?? null;
         break;
       }
     }
@@ -167,7 +170,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       paymentRequest = h.paymentRequest;
 
       await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?, operationId = ?
          WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
         [
           history.unit,
@@ -175,6 +178,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
           state,
           paymentRequest,
           history.metadata ? JSON.stringify(history.metadata) : null,
+          h.operationId ?? null,
           history.mintUrl,
           h.quoteId,
         ],
@@ -194,13 +198,14 @@ export class SqliteHistoryRepository implements HistoryRepository {
       state = h.state;
 
       await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?, operationId = ?
          WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
         [
           history.unit,
           history.amount,
           state,
           history.metadata ? JSON.stringify(history.metadata) : null,
+          h.operationId ?? null,
           history.mintUrl,
           h.quoteId,
         ],
@@ -281,6 +286,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
         type: 'mint',
         paymentRequest: row.paymentRequest ?? '',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
         amount: row.amount,
       };
@@ -290,6 +296,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
         ...base,
         type: 'melt',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
         amount: row.amount,
       };
@@ -309,6 +316,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       ...base,
       type: 'receive',
       amount: row.amount,
+      operationId: row.operationId ?? undefined,
       token,
     } satisfies HistoryEntry;
   }

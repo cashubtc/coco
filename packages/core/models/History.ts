@@ -7,6 +7,7 @@ type BaseHistoryEntry = {
   mintUrl: string;
   unit: string;
   metadata?: Record<string, string>;
+  operationId?: string;
 };
 
 export type MintHistoryEntry = BaseHistoryEntry & {

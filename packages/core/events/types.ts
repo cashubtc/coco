@@ -38,7 +38,7 @@ export interface CoreEvents {
   'send:finalized': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is rolled back */
   'send:rolled-back': { mintUrl: string; operationId: string; operation: SendOperation };
-  'receive:created': { mintUrl: string; token: Token };
+  'receive:created': { mintUrl: string; token: Token; operationId?: string };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
   'melt-op:prepared': { mintUrl: string; operationId: string; operation: MeltOperation };
   'melt-op:pending': { mintUrl: string; operationId: string; operation: MeltOperation };
