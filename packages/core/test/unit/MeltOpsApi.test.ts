@@ -33,6 +33,7 @@ const makePreparedOperation = (): PreparedMeltOperation => ({
   createdAt: Date.now(),
   updatedAt: Date.now(),
   quoteId: 'quote-1',
+  unit: 'sat',
   amount: 100,
   fee_reserve: 0,
   swap_fee: 0,

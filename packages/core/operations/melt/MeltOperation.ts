@@ -59,6 +59,9 @@ interface MeltOperationBase extends MeltMethodMeta {
  * Data set during the prepare phase
  */
 interface PreparedData {
+  /** The unit used by this melt operation */
+  unit: string;
+
   /** Whether the operation requires a swap (false = exact match melt) */
   needsSwap: boolean;
 

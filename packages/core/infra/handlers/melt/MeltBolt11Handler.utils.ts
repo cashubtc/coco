@@ -23,6 +23,8 @@ export interface MeltQuoteData {
   amount: number;
   /** The fee reserve required by the mint */
   fee_reserve: number;
+  /** The unit the quote was denominated in */
+  unit: string;
 }
 
 // ============================================================================

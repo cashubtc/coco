@@ -76,6 +76,7 @@ describe('MeltOperationService', () => {
     ...makeInitOp(id),
     state: 'prepared',
     quoteId: 'quote-1',
+    unit: 'sat',
     amount: 100,
     fee_reserve: 1,
     swap_fee: 0,

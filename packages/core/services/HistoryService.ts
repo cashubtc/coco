@@ -10,6 +10,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
+import type { PreparedOrLaterOperation } from '@core/operations/melt';
 import type { PendingMintOperation } from '@core/operations/mint';
 import type { MintQuoteState } from '@core/models/MintQuoteState';
 import type { Logger } from '@core/logging';
@@ -40,6 +41,22 @@ export class HistoryService {
     });
     this.eventBus.on('melt-quote:state-changed', ({ mintUrl, quoteId, state }) => {
       this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
+    });
+    this.eventBus.on('melt-op:prepared', ({ mintUrl, operation }) => {
+      if (operation.state !== 'prepared') return;
+      this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
+    });
+    this.eventBus.on('melt-op:pending', ({ mintUrl, operation }) => {
+      if (operation.state !== 'pending') return;
+      this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
+    });
+    this.eventBus.on('melt-op:finalized', ({ mintUrl, operation }) => {
+      if (operation.state !== 'finalized') return;
+      this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
+    });
+    this.eventBus.on('melt-op:rolled-back', ({ mintUrl, operation }) => {
+      if (operation.state !== 'rolled_back') return;
+      this.handleMeltOperationRolledBack(mintUrl, operation);
     });
     this.eventBus.on('send:prepared', ({ mintUrl, operationId, operation }) => {
       this.handleSendPrepared(mintUrl, operationId, operation);
@@ -239,6 +256,49 @@ export class HistoryService {
         err,
       });
     }
+  }
+
+  async handleMeltOperationUpdated(
+    mintUrl: string,
+    operation: PreparedOrLaterOperation,
+    state: MeltQuoteState,
+  ) {
+    const existing = await this.historyRepository.getMeltHistoryEntry(mintUrl, operation.quoteId);
+    const entry: Omit<MeltHistoryEntry, 'id'> = {
+      type: 'melt',
+      mintUrl,
+      quoteId: operation.quoteId,
+      amount: operation.amount,
+      state,
+      createdAt: operation.createdAt,
+      unit: operation.unit || existing?.unit || 'sat',
+    };
+
+    try {
+      if (existing) {
+        existing.amount = entry.amount;
+        existing.state = entry.state;
+        existing.unit = entry.unit;
+        const updated = await this.historyRepository.updateHistoryEntry(existing);
+        await this.handleHistoryUpdated(mintUrl, updated);
+        return;
+      }
+
+      const created = await this.historyRepository.addHistoryEntry(entry);
+      await this.handleHistoryUpdated(mintUrl, created);
+    } catch (err) {
+      this.logger?.error('Failed to upsert melt operation history entry', {
+        mintUrl,
+        quoteId: operation.quoteId,
+        operationId: operation.id,
+        state,
+        err,
+      });
+    }
+  }
+
+  async handleMeltOperationRolledBack(mintUrl: string, operation: PreparedOrLaterOperation) {
+    await this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
   }
 
   async handleMintOperationPending(mintUrl: string, operation: PendingMintOperation) {
