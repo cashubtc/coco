@@ -322,6 +322,7 @@ function createPreparedMeltOperation(
     updatedAt: 1_700_000_000_000,
     needsSwap: false,
     amount: 100,
+    unit: 'sat',
     fee_reserve: 1,
     quoteId: 'melt-quote-1',
     swap_fee: 0,
