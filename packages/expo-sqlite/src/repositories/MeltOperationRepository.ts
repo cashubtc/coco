@@ -21,6 +21,7 @@ interface MeltOperationRow {
   method: MeltMethod;
   methodDataJson: string;
   quoteId: string | null;
+  unit: string | null;
   amount: number | null;
   fee_reserve: number | null;
   swap_fee: number | null;
@@ -62,6 +63,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 
   const preparedData = {
     quoteId: row.quoteId ?? '',
+    unit: row.unit ?? 'sat',
     amount: row.amount ?? 0,
     fee_reserve: row.fee_reserve ?? 0,
     swap_fee: row.swap_fee ?? 0,
@@ -119,6 +121,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
       null,
       null,
       null,
+      null,
     ];
   }
 
@@ -140,6 +143,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     operation.method,
     methodDataJson,
     operation.quoteId,
+    operation.unit,
     operation.amount,
     operation.fee_reserve,
     operation.swap_fee,
@@ -177,8 +181,8 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, unit, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -219,7 +223,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_melt_operations
-        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?, finalizedDataJson = ?
+        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?, finalizedDataJson = ?
         WHERE id = ?`,
       [
         operation.state,
@@ -228,6 +232,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
         operation.method,
         JSON.stringify(operation.methodData),
         operation.quoteId,
+        operation.unit,
         operation.amount,
         operation.fee_reserve,
         operation.swap_fee,

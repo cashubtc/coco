@@ -18,6 +18,7 @@ function makeFinalizedOperation(): FinalizedMeltOperation {
     createdAt: 1_000,
     updatedAt: 2_000,
     quoteId: 'quote-1',
+    unit: 'sat',
     amount: 100,
     fee_reserve: 5,
     swap_fee: 0,
@@ -43,6 +44,7 @@ describe('IdbMeltOperationRepository', () => {
       method: 'bolt11',
       methodDataJson: JSON.stringify({ invoice: 'lnbc1test' }),
       quoteId: 'quote-1',
+      unit: 'sat',
       amount: 100,
       fee_reserve: 5,
       swap_fee: 0,
@@ -63,6 +65,41 @@ describe('IdbMeltOperationRepository', () => {
     } as any);
 
     await expect(repository.getById('melt-op-1')).resolves.toEqual(makeFinalizedOperation());
+  });
+
+  it('defaults legacy finalized rows without unit to sat', async () => {
+    const row = {
+      id: 'melt-op-legacy',
+      mintUrl: 'https://mint.test',
+      state: 'finalized',
+      createdAt: 1,
+      updatedAt: 2,
+      error: null,
+      method: 'bolt11',
+      methodDataJson: JSON.stringify({ invoice: 'lnbc1test' }),
+      quoteId: 'quote-legacy',
+      amount: 100,
+      fee_reserve: 5,
+      swap_fee: 0,
+      needsSwap: 0,
+      inputAmount: 105,
+      inputProofSecretsJson: JSON.stringify(['secret-1']),
+      changeOutputDataJson: JSON.stringify({ keep: [], send: [] }),
+      swapOutputDataJson: null,
+      changeAmount: 2,
+      effectiveFee: 3,
+      finalizedDataJson: JSON.stringify({ preimage: '' }),
+    } satisfies MeltOperationRow;
+
+    const repository = new IdbMeltOperationRepository({
+      table: () => ({
+        get: async () => row,
+      }),
+    } as any);
+
+    await expect(repository.getById('melt-op-legacy')).resolves.toMatchObject({
+      unit: 'sat',
+    });
   });
 
   it('persists settlement amounts for finalized operations', async () => {

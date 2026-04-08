@@ -534,6 +534,12 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_melt_operations ADD COLUMN finalizedDataJson TEXT;
     `,
   },
+  {
+    id: '022_melt_operation_unit',
+    sql: `
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN unit TEXT;
+    `,
+  },
 ];
 
 // Export for testing
