@@ -84,10 +84,10 @@ describe('SqliteMeltOperationRepository', () => {
       ],
     );
 
-    await expect(repositories.meltOperationRepository.getById('melt-op-legacy')).resolves.toMatchObject(
-      {
-        unit: 'sat',
-      },
-    );
+    await expect(
+      repositories.meltOperationRepository.getById('melt-op-legacy'),
+    ).resolves.toMatchObject({
+      unit: 'sat',
+    });
   });
 });
