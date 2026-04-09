@@ -39,6 +39,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 
   const preparedData = {
     quoteId: row.quoteId ?? '',
+    unit: row.unit ?? 'sat',
     amount: row.amount ?? 0,
     fee_reserve: row.fee_reserve ?? 0,
     swap_fee: row.swap_fee ?? 0,
@@ -113,6 +114,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     method: operation.method,
     methodDataJson,
     quoteId: operation.quoteId,
+    unit: operation.unit,
     amount: operation.amount,
     fee_reserve: operation.fee_reserve,
     swap_fee: operation.swap_fee,

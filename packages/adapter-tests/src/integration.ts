@@ -60,6 +60,7 @@ type SendHistoryUpdatedPayload = {
     type: string;
     state?: string;
     operationId?: string;
+    quoteId?: string;
     amount?: number;
     token?: Token;
   };
@@ -99,6 +100,25 @@ function waitForSendHistoryState(
       return false;
     }
     if (options?.operationId && payload.entry.operationId !== options.operationId) {
+      return false;
+    }
+    if (options?.amount !== undefined && payload.entry.amount !== options.amount) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function waitForMeltHistoryState(
+  manager: Manager,
+  state: string,
+  options?: { quoteId?: string; amount?: number },
+): Promise<SendHistoryUpdatedPayload> {
+  return waitForEvent<SendHistoryUpdatedPayload>(manager, 'history:updated', (payload) => {
+    if (payload.entry.type !== 'melt' || payload.entry.state !== state) {
+      return false;
+    }
+    if (options?.quoteId && payload.entry.quoteId !== options.quoteId) {
       return false;
     }
     if (options?.amount !== undefined && payload.entry.amount !== options.amount) {
@@ -948,6 +968,31 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(sendEntry.amount).toBe(sendAmount);
           expect(sendEntry.token).toBeDefined();
           expect(sendEntry.token!.proofs.length).toBeGreaterThan(0);
+        }
+      });
+
+      it('should create melt history entry when a melt operation is prepared', async () => {
+        const invoice = createFakeInvoice(15);
+        const historyPromise = waitForMeltHistoryState(mgr!, 'UNPAID');
+        const prepared = await mgr!.ops.melt.prepare({
+          mintUrl,
+          method: 'bolt11',
+          methodData: { invoice },
+        });
+
+        const historyEvent = await historyPromise;
+        expect(historyEvent.entry.quoteId).toBe(prepared.quoteId);
+        expect(historyEvent.entry.amount).toBe(prepared.amount);
+
+        const history = await mgr!.history.getPaginatedHistory(0, 10);
+        const meltEntry = history.find(
+          (entry) => entry.type === 'melt' && entry.quoteId === prepared.quoteId,
+        );
+
+        expect(meltEntry).toBeDefined();
+        if (meltEntry?.type === 'melt') {
+          expect(meltEntry.state).toBe('UNPAID');
+          expect(meltEntry.amount).toBe(prepared.amount);
         }
       });
 

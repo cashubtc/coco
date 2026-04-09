@@ -15,6 +15,7 @@ function makeFinalizedMeltOperation(): FinalizedMeltOperation {
     createdAt: 1_000,
     updatedAt: 2_000,
     quoteId: 'quote-1',
+    unit: 'sat',
     amount: 100,
     fee_reserve: 5,
     swap_fee: 0,
@@ -50,5 +51,41 @@ describe('SqliteMeltOperationRepository', () => {
     await expect(repositories.meltOperationRepository.getById(operation.id)).resolves.toEqual(
       operation,
     );
+  });
+
+  it('defaults legacy finalized rows without unit to sat', async () => {
+    await repositories.db.run(
+      `INSERT INTO coco_cashu_melt_operations
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'melt-op-legacy',
+        'https://mint.test',
+        'finalized',
+        1,
+        2,
+        null,
+        'bolt11',
+        JSON.stringify({ invoice: 'lnbc1test' }),
+        'quote-legacy',
+        100,
+        5,
+        0,
+        0,
+        105,
+        JSON.stringify(['secret-1']),
+        JSON.stringify({ keep: [], send: [] }),
+        null,
+        2,
+        3,
+        JSON.stringify({ preimage: '' }),
+      ],
+    );
+
+    await expect(
+      repositories.meltOperationRepository.getById('melt-op-legacy'),
+    ).resolves.toMatchObject({
+      unit: 'sat',
+    });
   });
 });

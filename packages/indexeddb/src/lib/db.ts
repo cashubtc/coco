@@ -223,6 +223,7 @@ export interface MeltOperationRow {
   method: string;
   methodDataJson: string;
   quoteId?: string | null;
+  unit?: string | null;
   amount?: number | null;
   fee_reserve?: number | null;
   swap_fee?: number | null;
