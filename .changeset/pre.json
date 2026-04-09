@@ -11,7 +11,9 @@
     "@cashu/coco-sqlite": "1.0.0-rc.0"
   },
   "changesets": [
+    "calm-squids-wait",
     "green-snakes-tickle",
+    "shaggy-falcons-march",
     "smooth-garlics-cheer",
     "young-pumas-float"
   ]

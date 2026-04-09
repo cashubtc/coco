@@ -1,5 +1,13 @@
 # @cashu/coco-expo-sqlite
 
+## 1.0.0-rc.3
+
+### Patch Changes
+
+- Updated dependencies [dabef01]
+- Updated dependencies [505e1af]
+  - @cashu/coco-core@1.0.0-rc.3
+
 ## 1.0.0-rc.1
 
 ### Patch Changes
