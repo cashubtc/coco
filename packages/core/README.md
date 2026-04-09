@@ -2,12 +2,14 @@
 
 Modular, storage-agnostic core for working with Cashu mints and wallets.
 
-> ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
+> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
+> still land before the final 1.0 release. Pin versions in production.
 
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
 - **High-level APIs**: `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
-  `SubscriptionApi`, and `manager.ops.*` for common flows.
+  `SubscriptionApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common
+  flows.
 - **Background watchers**: Optional services to track quote/payment and proof states.
 
 ## Install
@@ -18,7 +20,7 @@ npm install @cashu/coco-core
 
 For a real application you will usually install a storage adapter alongside the
 core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
-`@cashu/coco-expo-sqlite`.
+`@cashu/coco-expo-sqlite`. Bun applications can use `@cashu/coco-sqlite-bun`.
 
 ## Protocol Support
 
