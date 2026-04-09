@@ -2,7 +2,8 @@
 
 A modular, TypeScript-first toolkit for building Cashu wallets and applications.
 
-> ⚠️ Alpha software: This library is under active development and APIs may change. Use with caution in production and pin versions.
+> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
+> still land before the final 1.0 release. Pin versions in production.
 
 coco provides a complete foundation for Cashu development with a storage-agnostic
 core that handles proof management, mint synchronization, quote lifecycle,
@@ -31,15 +32,14 @@ Native via `@cashu/coco-expo-sqlite`.
         │  • Repository Interfaces         │
         │  • Plugin System (lifecycle)     │
         │                                  │
-        └────┬──────────┬──────────┬───────┘
-             │          │          │
-      depends│   depends│   depends│
-             ▼          ▼          ▼
-      ┌──────────┐ ┌──────────┐ ┌──────────┐
-      │ SQLite3  │ │ IndexedDB│ │  Expo    │
-      │ Adapter  │ │ Adapter  │ │  SQLite  │
-      └──────────┘ └──────────┘ └──────────┘
-         (Node)       (Web)       (Mobile)
+        └────┬──────────────┬──────────┬────────────┘
+             │              │          │
+      depends│       depends│   depends│
+             ▼              ▼          ▼
+   ┌────────────────┐ ┌──────────┐ ┌──────────────┐
+   │ SQLite Adapters│ │ IndexedDB│ │ Expo SQLite  │
+   │   Node + Bun   │ │ Adapter  │ │   Adapter    │
+   └────────────────┘ └──────────┘ └──────────────┘
 ```
 
 ## Packages
@@ -53,6 +53,7 @@ Native via `@cashu/coco-expo-sqlite`.
 - `@cashu/coco-expo-sqlite` — Expo SQLite adapter for React Native and Expo.
 - `@cashu/coco-sqlite-bun` — Bun adapter built on `bun:sqlite`.
 - `@cashu/coco-adapter-tests` — reusable storage adapter contract test helpers.
+- `packages/docs` — VitePress documentation site for the repository.
 
 ## Philosophy
 
@@ -69,7 +70,17 @@ The core exposes a minimal plugin API to hook into lifecycle events with access 
 
 ## Development
 
-Use TypeScript for type checking and `tsdown` to build packages. See `packages/core/README.md` for API details and usage.
+This repo uses Bun workspaces. Most packages build with `tsdown`; the React
+package builds with `tsc -b` and Vite, and the docs site uses VitePress.
+
+```bash
+bun install
+bun run build
+bun run typecheck
+bun run docs:dev
+```
+
+See `packages/core/README.md` for API details and package-level usage.
 
 ## Contributing
 
