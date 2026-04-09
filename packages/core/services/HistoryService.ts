@@ -83,21 +83,22 @@ export class HistoryService {
     return this.historyRepository.getHistoryEntryById(id);
   }
 
-  async getOperationIdForHistoryEntry(historyId: string): Promise<string | null> {
-    const entry = await this.historyRepository.getHistoryEntryById(historyId);
-
-    return entry?.operationId ?? null;
-  }
-
   /**
-   * @deprecated Prefer getOperationIdForHistoryEntry(), which returns null for legacy entries.
+   * Get the operationId for a send history entry.
+   * @throws Error if entry not found or is not a send entry
    */
   async getOperationIdFromHistoryEntry(historyId: string): Promise<string> {
-    const operationId = await this.getOperationIdForHistoryEntry(historyId);
-    if (!operationId) {
-      throw new Error(`History entry ${historyId} has no associated operationId`);
+    const entry = await this.historyRepository.getHistoryEntryById(historyId);
+
+    if (!entry) {
+      throw new Error(`History entry ${historyId} not found`);
     }
-    return operationId;
+
+    if (entry.type !== 'send') {
+      throw new Error(`History entry ${historyId} is not a send entry`);
+    }
+
+    return entry.operationId;
   }
 
   async handleSendPrepared(mintUrl: string, operationId: string, operation: SendOperation) {

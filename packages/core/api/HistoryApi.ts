@@ -17,6 +17,6 @@ export class HistoryApi {
   }
 
   async getOperationIdForHistoryEntry(id: string): Promise<string | null> {
-    return this.historyService.getOperationIdForHistoryEntry(id);
+    return this.historyService.getHistoryEntryById(id).then((entry) => entry?.operationId ?? null);
   }
 }

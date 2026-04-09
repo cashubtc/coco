@@ -526,38 +526,4 @@ describe('HistoryService', () => {
       expect(entry.operationId).toBeUndefined();
     });
   });
-
-  describe('operation lookup', () => {
-    it('returns the stored operationId for operation-backed history entries', async () => {
-      const entry = await mockRepo.addHistoryEntry({
-        type: 'melt',
-        mintUrl: 'https://mint.test',
-        quoteId: 'quote-1',
-        operationId: 'melt-op-1',
-        amount: 50,
-        state: 'UNPAID',
-        unit: 'sat',
-        createdAt: Date.now(),
-      } as Omit<MeltHistoryEntry, 'id'>);
-
-      await expect(service.getOperationIdForHistoryEntry(entry.id)).resolves.toBe('melt-op-1');
-    });
-
-    it('returns null for legacy history entries without an operationId', async () => {
-      const entry = await mockRepo.addHistoryEntry({
-        type: 'receive',
-        mintUrl: 'https://mint.test',
-        amount: 42,
-        unit: 'sat',
-        token: receiveToken,
-        createdAt: Date.now(),
-      } as Omit<ReceiveHistoryEntry, 'id'>);
-
-      await expect(service.getOperationIdForHistoryEntry(entry.id)).resolves.toBeNull();
-    });
-
-    it('returns null when the history entry does not exist', async () => {
-      await expect(service.getOperationIdForHistoryEntry('missing-id')).resolves.toBeNull();
-    });
-  });
 });
