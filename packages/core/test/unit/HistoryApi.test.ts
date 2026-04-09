@@ -39,4 +39,22 @@ describe('HistoryApi', () => {
     await expect(api.getOperationIdForHistoryEntry('history-2')).resolves.toBeNull();
     expect(historyService.getHistoryEntryById).toHaveBeenCalledWith('history-2');
   });
+
+  it('normalizes blank operationId lookups from the history service to null', async () => {
+    (
+      historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      id: 'history-3',
+      type: 'send',
+      mintUrl: 'https://mint.test',
+      operationId: '   ',
+      amount: 10,
+      state: 'pending',
+      unit: 'sat',
+      createdAt: Date.now(),
+    } as HistoryEntry);
+
+    await expect(api.getOperationIdForHistoryEntry('history-3')).resolves.toBeNull();
+    expect(historyService.getHistoryEntryById).toHaveBeenCalledWith('history-3');
+  });
 });
