@@ -102,6 +102,7 @@ export class IdbHistoryRepository {
         unit: history.unit,
         amount: history.amount,
         metadata: history.metadata ?? null,
+        operationId: history.operationId ?? null,
         state: history.state,
         paymentRequest: history.paymentRequest,
       };
@@ -120,6 +121,7 @@ export class IdbHistoryRepository {
         unit: history.unit,
         amount: history.amount,
         metadata: history.metadata ?? null,
+        operationId: history.operationId ?? null,
         state: history.state,
       };
       await coll.update(row.id, updated);
@@ -181,10 +183,12 @@ export class IdbHistoryRepository {
     } as any;
     if (history.type === 'mint') {
       base.quoteId = history.quoteId;
+      base.operationId = history.operationId ?? null;
       base.state = history.state as MintQuoteState;
       base.paymentRequest = history.paymentRequest;
     } else if (history.type === 'melt') {
       base.quoteId = history.quoteId;
+      base.operationId = history.operationId ?? null;
       base.state = history.state as MeltQuoteState;
     } else if (history.type === 'send') {
       base.tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
@@ -192,6 +196,7 @@ export class IdbHistoryRepository {
       base.state = history.state;
     } else if (history.type === 'receive') {
       base.tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
+      base.operationId = history.operationId ?? null;
     }
     return base;
   }
@@ -210,6 +215,7 @@ export class IdbHistoryRepository {
         type: 'mint',
         paymentRequest: row.paymentRequest ?? '',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
         amount: row.amount,
       };
@@ -219,6 +225,7 @@ export class IdbHistoryRepository {
         ...base,
         type: 'melt',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
         amount: row.amount,
       };
@@ -238,6 +245,7 @@ export class IdbHistoryRepository {
       ...base,
       type: 'receive',
       amount: row.amount,
+      operationId: row.operationId ?? undefined,
       token,
     } satisfies HistoryEntry;
   }

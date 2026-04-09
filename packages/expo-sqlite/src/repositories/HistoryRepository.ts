@@ -128,10 +128,12 @@ export class ExpoHistoryRepository {
         quoteId = history.quoteId;
         state = history.state;
         paymentRequest = history.paymentRequest;
+        operationId = history.operationId ?? null;
         break;
       case 'melt':
         quoteId = history.quoteId;
         state = history.state;
+        operationId = history.operationId ?? null;
         break;
       case 'send':
         tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
@@ -140,6 +142,7 @@ export class ExpoHistoryRepository {
         break;
       case 'receive':
         tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
+        operationId = history.operationId ?? null;
         break;
     }
 
@@ -201,7 +204,7 @@ export class ExpoHistoryRepository {
       paymentRequest = history.paymentRequest;
 
       await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?, operationId = ?
          WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
         [
           history.unit,
@@ -209,6 +212,7 @@ export class ExpoHistoryRepository {
           state,
           paymentRequest,
           history.metadata ? JSON.stringify(history.metadata) : null,
+          history.operationId ?? null,
           history.mintUrl,
           history.quoteId,
         ],
@@ -227,13 +231,14 @@ export class ExpoHistoryRepository {
       state = history.state;
 
       await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?, operationId = ?
          WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
         [
           history.unit,
           history.amount,
           state,
           history.metadata ? JSON.stringify(history.metadata) : null,
+          history.operationId ?? null,
           history.mintUrl,
           history.quoteId,
         ],
@@ -323,6 +328,7 @@ export class ExpoHistoryRepository {
         type: 'mint',
         paymentRequest: row.paymentRequest ?? '',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
         amount: row.amount,
       };
@@ -332,6 +338,7 @@ export class ExpoHistoryRepository {
         ...base,
         type: 'melt',
         quoteId: row.quoteId ?? '',
+        operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
         amount: row.amount,
       };
@@ -351,6 +358,7 @@ export class ExpoHistoryRepository {
       ...base,
       type: 'receive',
       amount: row.amount,
+      operationId: row.operationId ?? undefined,
       token,
     } satisfies HistoryEntry;
   }

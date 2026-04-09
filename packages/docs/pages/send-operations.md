@@ -73,8 +73,9 @@ await coco.ops.send.cancel(prepared.id);
 After executing a send, if the recipient never claims the token:
 
 ```ts
-// Get the operation (from history or stored operationId)
-const operation = await coco.ops.send.get(operationId);
+// Resolve the operationId from a history entry, then load the operation
+const operationId = await coco.history.getOperationIdForHistoryEntry(historyEntry.id);
+const operation = operationId ? await coco.ops.send.get(operationId) : null;
 
 if (operation?.state === 'pending') {
   // Reclaim the proofs

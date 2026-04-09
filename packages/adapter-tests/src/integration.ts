@@ -963,11 +963,29 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(sendEntry).toBeDefined();
         expect(sendEntry!.type).toBe('send');
         if (sendEntry!.type === 'send') {
+          expect(await mgr!.history.getOperationIdForHistoryEntry(sendEntry.id)).toBe(operation.id);
           expect(sendEntry.operationId).toBeDefined();
           expect(sendEntry.state).toBe('pending');
           expect(sendEntry.amount).toBe(sendAmount);
           expect(sendEntry.token).toBeDefined();
           expect(sendEntry.token!.proofs.length).toBeGreaterThan(0);
+        }
+      });
+
+      it('should store operationId for mint history entries', async () => {
+        const pendingMint = await prepareMintOperation(mgr!, mintUrl, 21);
+
+        const history = await mgr!.history.getPaginatedHistory(0, 20);
+        const mintEntry = history.find(
+          (entry) => entry.type === 'mint' && entry.quoteId === pendingMint.quoteId,
+        );
+
+        expect(mintEntry).toBeDefined();
+        if (mintEntry?.type === 'mint') {
+          expect(mintEntry.operationId).toBe(pendingMint.id);
+          expect(await mgr!.history.getOperationIdForHistoryEntry(mintEntry.id)).toBe(
+            pendingMint.id,
+          );
         }
       });
 
@@ -991,8 +1009,31 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         expect(meltEntry).toBeDefined();
         if (meltEntry?.type === 'melt') {
+          expect(meltEntry.operationId).toBe(prepared.id);
+          expect(await mgr!.history.getOperationIdForHistoryEntry(meltEntry.id)).toBe(prepared.id);
           expect(meltEntry.state).toBe('UNPAID');
           expect(meltEntry.amount).toBe(prepared.amount);
+        }
+      });
+
+      it('should store operationId for receive history entries created via ops.receive', async () => {
+        const preparedSend = await mgr!.ops.send.prepare({ mintUrl, amount: 18 });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
+
+        const preparedReceive = await mgr!.ops.receive.prepare({ token });
+        const finalizedReceive = await mgr!.ops.receive.execute(preparedReceive.id);
+
+        const history = await mgr!.history.getPaginatedHistory(0, 20);
+        const receiveEntry = history.find(
+          (entry) => entry.type === 'receive' && entry.operationId === finalizedReceive.id,
+        );
+
+        expect(receiveEntry).toBeDefined();
+        if (receiveEntry?.type === 'receive') {
+          expect(await mgr!.history.getOperationIdForHistoryEntry(receiveEntry.id)).toBe(
+            finalizedReceive.id,
+          );
+          expect(receiveEntry.amount).toBe(finalizedReceive.amount);
         }
       });
 

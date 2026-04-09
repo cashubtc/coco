@@ -1,9 +1,16 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
+import type { Token } from '@cashu/cashu-ts';
 import { HistoryService } from '../../services/HistoryService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { HistoryRepository } from '../../repositories';
-import type { HistoryEntry, MeltHistoryEntry, MintHistoryEntry } from '../../models/History';
+import type {
+  HistoryEntry,
+  MeltHistoryEntry,
+  MintHistoryEntry,
+  ReceiveHistoryEntry,
+  SendHistoryEntry,
+} from '../../models/History';
 import type {
   FinalizedMeltOperation,
   PendingMeltOperation,
@@ -18,6 +25,11 @@ describe('HistoryService', () => {
   let eventBus: EventBus<CoreEvents>;
   let historyEntries: Map<string, HistoryEntry>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
+  const receiveToken = {
+    mint: 'https://mint.test',
+    unit: 'sat',
+    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
+  } as Token;
 
   const makePendingOperation = (
     quoteId: string,
@@ -135,15 +147,23 @@ describe('HistoryService', () => {
       async getPaginatedHistoryEntries(): Promise<HistoryEntry[]> {
         return Array.from(historyEntries.values());
       },
-      async getSendHistoryEntry(): Promise<null> {
+      async getSendHistoryEntry(
+        mintUrl: string,
+        operationId: string,
+      ): Promise<SendHistoryEntry | null> {
+        for (const entry of historyEntries.values()) {
+          if (
+            entry.type === 'send' &&
+            entry.mintUrl === mintUrl &&
+            entry.operationId === operationId
+          ) {
+            return entry;
+          }
+        }
         return null;
       },
-      async getReceiveHistoryEntry(): Promise<null> {
-        return null;
-      },
-      async updateHistoryEntryState(): Promise<void> {},
-      async getHistoryEntryById(): Promise<null> {
-        return null;
+      async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+        return historyEntries.get(id) ?? null;
       },
       async updateHistoryEntry(entry: HistoryEntry): Promise<HistoryEntry> {
         historyEntries.set(entry.id, entry);
@@ -196,6 +216,7 @@ describe('HistoryService', () => {
       expect(entry.state).toBe('UNPAID');
       expect(entry.unit).toBe(operation.unit);
       expect(entry.paymentRequest).toBe(operation.request);
+      expect(entry.operationId).toBe(operation.id);
       expect(historyUpdateEvents.length).toBe(1);
     });
 
@@ -228,6 +249,7 @@ describe('HistoryService', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
+      expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PAID');
       expect(historyUpdateEvents.length).toBe(1);
       expect(historyUpdateEvents[0]?.entry.type).toBe('mint');
@@ -262,6 +284,7 @@ describe('HistoryService', () => {
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
       expect(entry.amount).toBe(operation.amount);
+      expect(entry.operationId).toBe(operation.id);
       expect(entry.paymentRequest).toBe(operation.request);
       expect(entry.state).toBe('PAID');
       expect(historyUpdateEvents.length).toBe(1);
@@ -286,6 +309,7 @@ describe('HistoryService', () => {
       expect(entry.mintUrl).toBe(operation.mintUrl);
       expect(entry.quoteId).toBe(operation.quoteId);
       expect(entry.amount).toBe(operation.amount);
+      expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('UNPAID');
       expect(entry.unit).toBe('sat');
       expect(historyUpdateEvents.length).toBe(1);
@@ -333,6 +357,7 @@ describe('HistoryService', () => {
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
       expect(entry.amount).toBe(operation.amount);
+      expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PENDING');
       expect(historyUpdateEvents.length).toBe(1);
       expect(historyUpdateEvents[0]?.entry.type).toBe('melt');
@@ -381,6 +406,7 @@ describe('HistoryService', () => {
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
       expect(entry.quoteId).toBe(operation.quoteId);
       expect(entry.amount).toBe(operation.amount);
+      expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PAID');
       expect(historyUpdateEvents.length).toBe(1);
     });
@@ -467,6 +493,37 @@ describe('HistoryService', () => {
 
       expect(historyUpdateEvents.length).toBe(1);
       expect(historyUpdateEvents[0]?.entry.type).toBe('melt');
+    });
+  });
+
+  describe('receive operations', () => {
+    it('creates history entry with operationId for operation-backed receives', async () => {
+      await eventBus.emit('receive:created', {
+        mintUrl: 'https://mint.test',
+        token: receiveToken,
+        operationId: 'receive-op-1',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(historyEntries.size).toBe(1);
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.type).toBe('receive');
+      expect(entry.amount).toBe(42);
+      expect(entry.unit).toBe('sat');
+      expect(entry.operationId).toBe('receive-op-1');
+    });
+
+    it('keeps legacy receives without an operationId', async () => {
+      await eventBus.emit('receive:created', {
+        mintUrl: 'https://mint.test',
+        token: receiveToken,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.operationId).toBeUndefined();
     });
   });
 });

@@ -70,8 +70,8 @@ export class HistoryService {
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
       this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
-    this.eventBus.on('receive:created', ({ mintUrl, token }) => {
-      this.handleReceiveCreated(mintUrl, token);
+    this.eventBus.on('receive:created', ({ mintUrl, token, operationId }) => {
+      this.handleReceiveCreated(mintUrl, token, operationId);
     });
   }
 
@@ -164,7 +164,7 @@ export class HistoryService {
     }
   }
 
-  async handleReceiveCreated(mintUrl: string, token: Token) {
+  async handleReceiveCreated(mintUrl: string, token: Token, operationId?: string) {
     const entry: Omit<ReceiveHistoryEntry, 'id'> = {
       type: 'receive',
       createdAt: Date.now(),
@@ -172,6 +172,7 @@ export class HistoryService {
       amount: token.proofs.reduce((acc, proof) => acc + proof.amount, 0),
       mintUrl,
       token,
+      operationId,
     };
     try {
       const entryRes = await this.historyRepository.addHistoryEntry(entry);
@@ -201,6 +202,7 @@ export class HistoryService {
         });
         return;
       }
+      entry.operationId = operationId;
       entry.state = state;
       await this.historyRepository.updateHistoryEntry(entry);
       await this.handleHistoryUpdated(mintUrl, { ...entry, state });
@@ -267,6 +269,7 @@ export class HistoryService {
     const entry: Omit<MeltHistoryEntry, 'id'> = {
       type: 'melt',
       mintUrl,
+      operationId: operation.id,
       quoteId: operation.quoteId,
       amount: operation.amount,
       state,
@@ -277,6 +280,7 @@ export class HistoryService {
     try {
       if (existing) {
         existing.amount = entry.amount;
+        existing.operationId = entry.operationId;
         existing.state = entry.state;
         existing.unit = entry.unit;
         const updated = await this.historyRepository.updateHistoryEntry(existing);
@@ -305,6 +309,7 @@ export class HistoryService {
     const entry: Omit<MintHistoryEntry, 'id'> = {
       type: 'mint',
       mintUrl,
+      operationId: operation.id,
       unit: operation.unit,
       paymentRequest: operation.request,
       quoteId: operation.quoteId,
@@ -316,6 +321,7 @@ export class HistoryService {
     try {
       const existing = await this.historyRepository.getMintHistoryEntry(mintUrl, operation.quoteId);
       if (existing) {
+        existing.operationId = entry.operationId;
         existing.unit = entry.unit;
         existing.paymentRequest = entry.paymentRequest;
         existing.state = entry.state;

@@ -260,6 +260,7 @@ Compatibility helpers retained for callers that want scalar values:
 
 - `getPaginatedHistory(offset?: number, limit?: number): Promise<HistoryEntry[]>`
 - `getHistoryEntryById(id: string): Promise<HistoryEntry | null>`
+- `getOperationIdForHistoryEntry(id: string): Promise<string | null>`
 
 ### KeyRingApi
 
@@ -302,7 +303,7 @@ include:
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`
 - `send:rolled-back` → `{ mintUrl, operationId, operation }`
-- `receive:created` → `{ mintUrl, token }`
+- `receive:created` → `{ mintUrl, token, operationId? }`
 - `history:updated` → `{ mintUrl, entry }`
 - `melt-op:prepared` → `{ mintUrl, operationId, operation }`
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`
