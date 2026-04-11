@@ -127,21 +127,23 @@ Breaking `WalletApi` balance changes:
 
 - Alpha balance APIs only exposed scalar totals such as
   `wallet.getBalance(mintUrl)` and `wallet.getBalances()`
-- The current release line keeps those scalar helpers, but also adds a
-  canonical structured balance surface so apps can distinguish `spendable`,
-  `reserved`, and `total`
-- The preferred structured entrypoints are:
-  `wallet.balances.byMint(scope?)`,
-  `wallet.balances.total(scope?)`,
-  `wallet.getBalancesByMint(scope?)`, and
-  `wallet.getBalanceTotal(scope?)`
-- `wallet.getSpendableBalance()`,
-  `wallet.getSpendableBalances()`, and
-  `wallet.getTrustedSpendableBalances()` are explicit opt-in helpers for the
-  narrower spendable-only view
-- `wallet.getBalanceBreakdown()`, `wallet.getBalancesBreakdown()`, and
-  `wallet.getTrustedBalancesBreakdown()` still exist as legacy compatibility
-  aliases using the older `ready/reserved/total` naming
+- v1 standardizes on a single structured balance surface so apps can
+  distinguish `spendable`, `reserved`, and `total`
+- Use these entrypoints:
+  `wallet.balances.byMint(scope?)` and
+  `wallet.balances.total(scope?)`
+- All scalar and breakdown helpers are removed, including
+  `wallet.getBalance()`,
+  `wallet.getBalances()`,
+  `wallet.getTrustedBalances()`,
+  `wallet.getSpendableBalance()`,
+  `wallet.getSpendableBalances()`,
+  `wallet.getTrustedSpendableBalances()`,
+  `wallet.getBalanceBreakdown()`,
+  `wallet.getBalancesBreakdown()`,
+  `wallet.getTrustedBalancesBreakdown()`,
+  `wallet.getBalancesByMint()`, and
+  `wallet.getBalanceTotal()`
 
 Use these forms after migrating:
 
@@ -159,11 +161,6 @@ await manager.ops.melt.prepare({
 const balancesByMint = await manager.wallet.balances.byMint();
 const trustedBalancesByMint = await manager.wallet.balances.byMint({ trustedOnly: true });
 const total = await manager.wallet.balances.total();
-
-// compatibility helpers still exist if you only want totals
-const balance = await manager.wallet.getBalance(mintUrl);
-const balances = await manager.wallet.getBalances();
-const trustedBalances = await manager.wallet.getTrustedBalances();
 ```
 
 Notes:
