@@ -125,10 +125,9 @@ Removed `WalletApi` compatibility wrappers:
 
 Breaking `WalletApi` balance changes:
 
-- Alpha balance APIs only exposed scalar totals such as
-  `wallet.getBalance(mintUrl)` and `wallet.getBalances()`
-- v1 standardizes on a single structured balance surface so apps can
-  distinguish `spendable`, `reserved`, and `total`
+- Alpha exposed only scalar balance totals; v1 removes them in favor of a
+  single structured balance surface that distinguishes `spendable`,
+  `reserved`, and `total`
 - Use these entrypoints:
   `wallet.balances.byMint(scope?)` and
   `wallet.balances.total(scope?)`
