@@ -789,7 +789,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should execute a melt operation (may skip swap if exact amount)', async () => {
         const invoice = createFakeInvoice(20);
-        const balanceBefore = await mgr!.wallet.getBalanceBreakdown(mintUrl);
+        const getMintBalance = async () =>
+          (await mgr!.wallet.balances.byMint({ mintUrls: [mintUrl] }))[mintUrl]!;
+        const balanceBefore = await getMintBalance();
         const prepared = await mgr!.ops.melt.prepare({
           mintUrl,
           method: 'bolt11',
@@ -799,7 +801,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(prepared.quoteId).toBeDefined();
         expect(prepared.amount).toBeGreaterThan(0);
 
-        const balanceAfterPrepare = await mgr!.wallet.getBalanceBreakdown(mintUrl);
+        const balanceAfterPrepare = await getMintBalance();
         expect(balanceAfterPrepare.reserved).toBeGreaterThan(0);
         expect(balanceAfterPrepare.total).toBe(balanceBefore.total);
 
@@ -815,7 +817,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           throw new Error(`Expected finalized melt result, got ${result.state}`);
         }
 
-        const balanceAfterExecute = await mgr!.wallet.getBalanceBreakdown(mintUrl);
+        const balanceAfterExecute = await getMintBalance();
         const expectedTotal =
           balanceBefore.total - result.amount - result.swap_fee - result.effectiveFee!;
 

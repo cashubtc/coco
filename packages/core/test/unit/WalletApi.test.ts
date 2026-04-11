@@ -152,14 +152,6 @@ describe('WalletApi - Trust Enforcement', () => {
         reserved: 5,
         total: 15,
       });
-      await expect(walletApi.getBalancesByMint()).resolves.toEqual({
-        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
-      });
-      await expect(walletApi.getBalanceTotal()).resolves.toEqual({
-        spendable: 10,
-        reserved: 5,
-        total: 15,
-      });
     });
 
     it('should reject tokens from untrusted mints', async () => {
