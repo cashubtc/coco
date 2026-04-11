@@ -1,6 +1,9 @@
 {
   "name": "@cashu/coco-react",
   "version": "1.0.0-rc.5",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
   "repository": {
     "type": "git",
