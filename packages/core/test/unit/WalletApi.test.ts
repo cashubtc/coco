@@ -4,7 +4,6 @@ import { MintService } from '../../services/MintService';
 import { WalletService } from '../../services/WalletService';
 import { ProofService } from '../../services/ProofService';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
-import { TransactionService } from '../../services/TransactionService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
@@ -21,7 +20,6 @@ describe('WalletApi - Trust Enforcement', () => {
   let mockWalletService: any;
   let mockProofService: any;
   let mockWalletRestoreService: any;
-  let transactionService: TransactionService;
   let eventBus: EventBus<CoreEvents>;
   let proofReceiveRepo: MemoryProofRepository;
   let receiveOpRepo: MemoryReceiveOperationRepository;
@@ -108,13 +106,6 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockWalletRestoreService = {};
 
-    transactionService = new TransactionService(
-      mockMintService,
-      mockWalletService,
-      mockProofService,
-      eventBus,
-    );
-
     receiveOpRepo = new MemoryReceiveOperationRepository();
     proofReceiveRepo = new MemoryProofRepository();
     tokenService = new TokenService(mockMintService);
@@ -136,7 +127,6 @@ describe('WalletApi - Trust Enforcement', () => {
       mockWalletService,
       mockProofService,
       mockWalletRestoreService,
-      transactionService,
       receiveOperationService,
       tokenService,
     );

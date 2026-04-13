@@ -8,7 +8,6 @@ export * from './MintService';
 export * from './PaymentRequestService';
 export * from './ProofService';
 export * from './SeedService';
-export * from './TransactionService';
 export * from './WalletRestoreService';
 export * from './WalletService';
 export * from './watchers';
