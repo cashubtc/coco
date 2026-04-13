@@ -243,6 +243,15 @@ describe('ReceiveOperationService', () => {
     expect(service.init(token)).rejects.toThrow(ProofValidationError);
   });
 
+  it('init rejects tokens with unsupported units', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs, unit: 'usd' } as Token;
+
+    expect(service.init(token)).rejects.toThrow(
+      "Unsupported mint unit 'usd'. Only 'sat' is currently supported.",
+    );
+  });
+
   it('prepare throws when operation has no input proofs', async () => {
     const initOp: InitReceiveOperation = {
       id: 'empty-op',

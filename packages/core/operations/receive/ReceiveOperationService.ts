@@ -104,6 +104,14 @@ export class ReceiveOperationService {
     return this.recoveryLock !== null;
   }
 
+  private assertSupportedUnit(unit: string): void {
+    if (unit !== 'sat') {
+      throw new ProofValidationError(
+        `Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`,
+      );
+    }
+  }
+
   /**
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
@@ -116,6 +124,7 @@ export class ReceiveOperationService {
     }
 
     const decodedToken = await this.tokenService.decodeToken(token, mintUrl);
+    this.assertSupportedUnit(decodedToken.unit || 'sat');
     const proofs = decodedToken.proofs;
 
     const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);

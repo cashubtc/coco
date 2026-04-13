@@ -30,6 +30,14 @@ export class TransactionService {
     this.logger = logger;
   }
 
+  private assertSupportedUnit(unit: string): void {
+    if (unit !== 'sat') {
+      throw new ProofValidationError(
+        `Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`,
+      );
+    }
+  }
+
   async receive(token: Token | string): Promise<void> {
     let mint: string;
     try {
@@ -46,10 +54,11 @@ export class TransactionService {
 
     try {
       const { keysets } = await this.mintService.ensureUpdatedMint(mint);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
       const keysetIds: string[] = keysets.map((keyset) => keyset.id);
-      let proofs =
-        typeof token === 'string' ? getDecodedToken(token, keysetIds).proofs : token.proofs;
+      const decodedToken = typeof token === 'string' ? getDecodedToken(token, keysetIds) : token;
+      this.assertSupportedUnit(decodedToken.unit || 'sat');
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mint);
+      let proofs = decodedToken.proofs;
       proofs = await this.proofService.prepareProofsForReceiving(proofs);
       if (!Array.isArray(proofs) || proofs.length === 0) {
         this.logger?.warn('Token contains no proofs', { mint });
