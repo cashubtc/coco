@@ -16,6 +16,7 @@ import {
 } from '../../utils';
 import {
   UnknownMintError,
+  MintOperationError,
   ProofValidationError,
   OperationInProgressError,
 } from '../../models/Error';
@@ -39,6 +40,20 @@ import type { WalletService } from '../../services/WalletService';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
+
+const TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
+  10001,
+  11001,
+  11005,
+  11007,
+  11008,
+  11009,
+  11010,
+  11014,
+  11015,
+  12001,
+  12002,
+]);
 
 /**
  * Service that manages receive operations as sagas.
@@ -268,6 +283,12 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
+        const terminalReason = this.getTerminalReceiveFailureReason(e);
+        if (terminalReason) {
+          await this.markAsRolledBack(executing, terminalReason);
+          throw e;
+        }
+
         await this.tryRecoverExecutingOperation(executing);
         throw e;
       }
@@ -534,6 +555,12 @@ export class ReceiveOperationService {
         try {
           await this.executeInternal(executing);
         } catch (e) {
+          const terminalReason = this.getTerminalReceiveFailureReason(e);
+          if (terminalReason) {
+            await this.markAsRolledBack(executing, terminalReason);
+            return;
+          }
+
           this.logger?.warn('Receive re-execution failed, will retry later', {
             operationId: executing.id,
             mintUrl: executing.mintUrl,
@@ -574,6 +601,12 @@ export class ReceiveOperationService {
           recoveredCount: recovered.length,
         });
       } catch (e) {
+        const terminalReason = this.getTerminalReceiveFailureReason(e);
+        if (terminalReason) {
+          await this.markAsRolledBack(executing, terminalReason);
+          return;
+        }
+
         this.logger?.warn('Recovering receive outputs failed, will retry later', {
           operationId: executing.id,
           mintUrl: executing.mintUrl,
@@ -600,6 +633,14 @@ export class ReceiveOperationService {
         error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
       });
     }
+  }
+
+  private getTerminalReceiveFailureReason(error: unknown): string | null {
+    if (error instanceof MintOperationError) {
+      return TERMINAL_RECEIVE_MINT_ERROR_CODES.has(error.code) ? error.message : null;
+    }
+
+    return null;
   }
 
   private async checkProofStatesWithMint(

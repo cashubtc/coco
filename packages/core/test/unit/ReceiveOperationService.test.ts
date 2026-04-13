@@ -14,7 +14,12 @@ import type { ProofService } from '../../services/ProofService';
 import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
-import { ProofValidationError, UnknownMintError } from '../../models/Error';
+import {
+  MintOperationError,
+  NetworkError,
+  ProofValidationError,
+  UnknownMintError,
+} from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
 import { MemoryHistoryRepository } from '../../repositories/memory/MemoryHistoryRepository';
@@ -358,6 +363,90 @@ describe('ReceiveOperationService', () => {
     await receiveOpRepo.update(brokenPrepared as unknown as ReceiveOperation);
 
     expect(service.execute(prepared)).rejects.toThrow('Missing output data');
+  });
+
+  it('rolls back executing receive operations on terminal NUT-03 mint errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+    let rolledBackEvent: CoreEvents['receive-op:rolled-back'] | undefined;
+
+    eventBus.on('receive-op:rolled-back', (payload) => {
+      rolledBackEvent = payload;
+    });
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11001, 'Proofs already spent');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Proofs already spent');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Proofs already spent');
+    expect(rolledBackEvent?.operation.state).toBe('rolled_back');
+    expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
+  });
+
+  it('rolls back executing receive operations on terminal NUT-03 keyset errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(12001, 'Keyset is not known');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset is not known');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset is not known');
+  });
+
+  it('keeps executing when receive fails with recovery-sensitive outputs already signed', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11003, 'Outputs already signed');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Outputs already signed');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  it('keeps executing on local validation failures after the mint call', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new ProofValidationError('Invalid signature in receive response');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Invalid signature in receive response');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  it('keeps executing on transient receive failures', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new NetworkError('network timeout');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('network timeout');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
   });
 
   it('finalize is idempotent on an already finalized operation', async () => {
