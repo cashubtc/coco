@@ -18,6 +18,11 @@ import type {
   RolledBackMeltOperation,
 } from '../../operations/melt';
 import type { PendingMintOperation } from '../../operations/mint';
+import type {
+  FinalizedReceiveOperation,
+  PreparedReceiveOperation,
+  RolledBackReceiveOperation,
+} from '../../operations/receive/ReceiveOperation';
 
 describe('HistoryService', () => {
   let service: HistoryService;
@@ -111,6 +116,44 @@ describe('HistoryService', () => {
       ...overrides,
     }) as RolledBackMeltOperation;
 
+  const makePreparedReceiveOperation = (
+    operationId: string,
+    overrides: Partial<PreparedReceiveOperation> = {},
+  ): PreparedReceiveOperation =>
+    ({
+      id: operationId,
+      state: 'prepared',
+      mintUrl: 'https://mint.test',
+      amount: 42,
+      fee: 1,
+      outputData: { keep: [], send: [] },
+      inputProofs: receiveToken.proofs,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...overrides,
+    }) as PreparedReceiveOperation;
+
+  const makeFinalizedReceiveOperation = (
+    operationId: string,
+    overrides: Partial<FinalizedReceiveOperation> = {},
+  ): FinalizedReceiveOperation =>
+    ({
+      ...makePreparedReceiveOperation(operationId),
+      state: 'finalized',
+      ...overrides,
+    }) as FinalizedReceiveOperation;
+
+  const makeRolledBackReceiveOperation = (
+    operationId: string,
+    overrides: Partial<RolledBackReceiveOperation> = {},
+  ): RolledBackReceiveOperation =>
+    ({
+      ...makePreparedReceiveOperation(operationId),
+      state: 'rolled_back',
+      error: 'Rolled back',
+      ...overrides,
+    }) as RolledBackReceiveOperation;
+
   beforeEach(() => {
     historyEntries = new Map();
     historyUpdateEvents = [];
@@ -162,6 +205,21 @@ describe('HistoryService', () => {
         }
         return null;
       },
+      async getReceiveHistoryEntry(
+        mintUrl: string,
+        operationId: string,
+      ): Promise<ReceiveHistoryEntry | null> {
+        for (const entry of historyEntries.values()) {
+          if (
+            entry.type === 'receive' &&
+            entry.mintUrl === mintUrl &&
+            entry.operationId === operationId
+          ) {
+            return entry;
+          }
+        }
+        return null;
+      },
       async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
         return historyEntries.get(id) ?? null;
       },
@@ -170,6 +228,7 @@ describe('HistoryService', () => {
         return entry;
       },
       async updateSendHistoryState(): Promise<void> {},
+      async updateReceiveHistoryState(): Promise<void> {},
       async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
         for (const [id, entry] of historyEntries.entries()) {
           if (
@@ -497,11 +556,13 @@ describe('HistoryService', () => {
   });
 
   describe('receive operations', () => {
-    it('creates history entry with operationId for operation-backed receives', async () => {
-      await eventBus.emit('receive:created', {
-        mintUrl: 'https://mint.test',
-        token: receiveToken,
-        operationId: 'receive-op-1',
+    it('creates history entry from receive-op:prepared', async () => {
+      const operation = makePreparedReceiveOperation('receive-op-1');
+
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation,
       });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -512,6 +573,60 @@ describe('HistoryService', () => {
       expect(entry.amount).toBe(42);
       expect(entry.unit).toBe('sat');
       expect(entry.operationId).toBe('receive-op-1');
+      expect(entry.state).toBe('prepared');
+      expect(entry.token).toBeUndefined();
+      expect(historyUpdateEvents.length).toBe(1);
+    });
+
+    it('updates receive history to finalized from receive-op:finalized and enriches it via receive:created', async () => {
+      const operation = makeFinalizedReceiveOperation('receive-op-2');
+
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: makePreparedReceiveOperation(operation.id),
+      });
+      await eventBus.emit('receive-op:finalized', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation,
+      });
+      await eventBus.emit('receive:created', {
+        mintUrl: operation.mintUrl,
+        token: receiveToken,
+        operationId: operation.id,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(historyEntries.size).toBe(1);
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.state).toBe('finalized');
+      expect(entry.operationId).toBe(operation.id);
+      expect(entry.token).toEqual(receiveToken);
+      expect(historyUpdateEvents.length).toBe(3);
+    });
+
+    it('updates receive history to rolledBack from receive-op:rolled-back', async () => {
+      const operation = makeRolledBackReceiveOperation('receive-op-3');
+
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: makePreparedReceiveOperation(operation.id),
+      });
+      await eventBus.emit('receive-op:rolled-back', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(historyEntries.size).toBe(1);
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.state).toBe('rolledBack');
+      expect(entry.operationId).toBe(operation.id);
     });
 
     it('keeps legacy receives without an operationId', async () => {
@@ -524,6 +639,8 @@ describe('HistoryService', () => {
 
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.operationId).toBeUndefined();
+      expect(entry.state).toBe('finalized');
+      expect(entry.token).toEqual(receiveToken);
     });
   });
 });

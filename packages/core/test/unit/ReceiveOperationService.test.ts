@@ -153,6 +153,65 @@ describe('ReceiveOperationService', () => {
     expect(prepared.outputData).toBeDefined();
   });
 
+  it('emits receive-op:prepared after the prepared state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:prepared', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const prepared = await service.prepare(initOp);
+
+    expect(prepared.state).toBe('prepared');
+    expect(persistedState).toBe('prepared');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits receive-op:finalized after the finalized state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:finalized', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const finalized = await service.execute(prepared);
+
+    expect(finalized.state).toBe('finalized');
+    expect(persistedState).toBe('finalized');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:rolled-back', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    await service.rollback(prepared.id);
+
+    expect(persistedState).toBe('rolled_back');
+    expect(lockedDuringEvent).toBe(true);
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+  });
+
   it('init rejects untrusted mints', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;

@@ -208,6 +208,11 @@ export class ReceiveOperationService {
     };
 
     await this.receiveOperationRepository.update(prepared);
+    await this.eventBus.emit('receive-op:prepared', {
+      mintUrl,
+      operationId: prepared.id,
+      operation: prepared,
+    });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,
@@ -627,6 +632,11 @@ export class ReceiveOperationService {
       updatedAt: Date.now(),
     };
     await this.receiveOperationRepository.update(finalized);
+    await this.eventBus.emit('receive-op:finalized', {
+      mintUrl: finalized.mintUrl,
+      operationId: finalized.id,
+      operation: finalized,
+    });
 
     const executing = current as ExecutingReceiveOperation;
     await this.eventBus.emit('receive:created', {
@@ -658,6 +668,11 @@ export class ReceiveOperationService {
       error,
     };
     await this.receiveOperationRepository.update(rolledBack);
+    await this.eventBus.emit('receive-op:rolled-back', {
+      mintUrl: rolledBack.mintUrl,
+      operationId: rolledBack.id,
+      operation: rolledBack,
+    });
 
     this.logger?.info('Receive operation rolled back', {
       operationId: op.id,

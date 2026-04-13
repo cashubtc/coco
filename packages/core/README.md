@@ -291,6 +291,9 @@ include:
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`
 - `send:rolled-back` → `{ mintUrl, operationId, operation }`
+- `receive-op:prepared` → `{ mintUrl, operationId, operation }`
+- `receive-op:finalized` → `{ mintUrl, operationId, operation }`
+- `receive-op:rolled-back` → `{ mintUrl, operationId, operation }`
 - `receive:created` → `{ mintUrl, token, operationId? }`
 - `history:updated` → `{ mintUrl, entry }`
 - `melt-op:prepared` → `{ mintUrl, operationId, operation }`

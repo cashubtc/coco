@@ -4,6 +4,7 @@ import type {
   MintHistoryEntry,
   MeltHistoryEntry,
   ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
@@ -66,11 +67,26 @@ export class MemoryHistoryRepository implements HistoryRepository {
     return null;
   }
 
+  async getReceiveHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<ReceiveHistoryEntry | null> {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (!e) continue;
+      if (e.type === 'receive' && e.mintUrl === mintUrl && e.operationId === operationId) {
+        return e;
+      }
+    }
+    return null;
+  }
+
   async updateHistoryEntry(
     history:
       | Omit<MintHistoryEntry, 'id' | 'createdAt'>
       | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
-      | Omit<SendHistoryEntry, 'id' | 'createdAt'>,
+      | Omit<SendHistoryEntry, 'id' | 'createdAt'>
+      | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>,
   ): Promise<HistoryEntry> {
     const idx = this.entries.findIndex((e) => {
       if (e.type === 'mint' && history.type === 'mint') {
@@ -80,6 +96,9 @@ export class MemoryHistoryRepository implements HistoryRepository {
         return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
       }
       if (e.type === 'send' && history.type === 'send') {
+        return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
+      }
+      if (e.type === 'receive' && history.type === 'receive') {
         return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
       }
       return false;
@@ -99,6 +118,18 @@ export class MemoryHistoryRepository implements HistoryRepository {
     const entry = await this.getSendHistoryEntry(mintUrl, operationId);
     if (!entry) {
       throw new Error(`Send history entry not found for operationId: ${operationId}`);
+    }
+    entry.state = state;
+  }
+
+  async updateReceiveHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: ReceiveHistoryState,
+  ): Promise<void> {
+    const entry = await this.getReceiveHistoryEntry(mintUrl, operationId);
+    if (!entry) {
+      throw new Error(`Receive history entry not found for operationId: ${operationId}`);
     }
     entry.state = state;
   }

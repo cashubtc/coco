@@ -3,6 +3,8 @@ import type {
   HistoryEntry,
   MeltHistoryEntry,
   MintHistoryEntry,
+  ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
@@ -133,11 +135,20 @@ export interface HistoryRepository {
   getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
   getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;
   getSendHistoryEntry(mintUrl: string, operationId: string): Promise<SendHistoryEntry | null>;
+  getReceiveHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<ReceiveHistoryEntry | null>;
   updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry>;
   updateSendHistoryState(
     mintUrl: string,
     operationId: string,
     state: SendHistoryState,
+  ): Promise<void>;
+  updateReceiveHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: ReceiveHistoryState,
   ): Promise<void>;
   deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void>;
 }

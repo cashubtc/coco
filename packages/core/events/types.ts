@@ -5,6 +5,7 @@ import type { HistoryEntry } from '../models/History';
 import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
 import type { MintQuoteState } from '../models/MintQuoteState';
+import type { ReceiveOperation } from '../operations/receive/ReceiveOperation';
 import type { SendOperation } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 import type { MintOperation } from '@core/operations/mint';
@@ -38,6 +39,25 @@ export interface CoreEvents {
   'send:finalized': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is rolled back */
   'send:rolled-back': { mintUrl: string; operationId: string; operation: SendOperation };
+  /** Emitted when receive operation is prepared */
+  'receive-op:prepared': {
+    mintUrl: string;
+    operationId: string;
+    operation: ReceiveOperation;
+  };
+  /** Emitted when receive operation is finalized */
+  'receive-op:finalized': {
+    mintUrl: string;
+    operationId: string;
+    operation: ReceiveOperation;
+  };
+  /** Emitted when receive operation is rolled back */
+  'receive-op:rolled-back': {
+    mintUrl: string;
+    operationId: string;
+    operation: ReceiveOperation;
+  };
+  /** Legacy receive completion event retained for compatibility */
   'receive:created': { mintUrl: string; token: Token; operationId?: string };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
   'melt-op:prepared': { mintUrl: string; operationId: string; operation: MeltOperation };

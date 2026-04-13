@@ -7,6 +7,7 @@ import type {
   MeltHistoryEntry,
   MintHistoryEntry,
   ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
@@ -14,6 +15,7 @@ import type { PreparedOrLaterOperation } from '@core/operations/melt';
 import type { PendingMintOperation } from '@core/operations/mint';
 import type { MintQuoteState } from '@core/models/MintQuoteState';
 import type { Logger } from '@core/logging';
+import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
 
 export class HistoryService {
@@ -69,6 +71,18 @@ export class HistoryService {
     });
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
       this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
+    });
+    this.eventBus.on('receive-op:prepared', ({ mintUrl, operation }) => {
+      if (operation.state !== 'prepared') return;
+      this.handleReceiveOperationUpdated(mintUrl, operation, 'prepared');
+    });
+    this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
+      if (operation.state !== 'finalized') return;
+      this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
+    });
+    this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
+      if (operation.state !== 'rolled_back') return;
+      this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
     });
     this.eventBus.on('receive:created', ({ mintUrl, token, operationId }) => {
       this.handleReceiveCreated(mintUrl, token, operationId);
@@ -165,22 +179,72 @@ export class HistoryService {
   }
 
   async handleReceiveCreated(mintUrl: string, token: Token, operationId?: string) {
-    const entry: Omit<ReceiveHistoryEntry, 'id'> = {
-      type: 'receive',
-      createdAt: Date.now(),
-      unit: token.unit || 'sat',
-      amount: token.proofs.reduce((acc, proof) => acc + proof.amount, 0),
-      mintUrl,
-      token,
-      operationId,
-    };
     try {
+      const amount = token.proofs.reduce((acc, proof) => acc + proof.amount, 0);
+      if (operationId) {
+        const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operationId);
+        if (existing) {
+          existing.amount = amount;
+          existing.unit = token.unit || existing.unit || 'sat';
+          existing.state = 'finalized';
+          existing.token = token;
+          await this.historyRepository.updateHistoryEntry(existing);
+          await this.handleHistoryUpdated(mintUrl, existing);
+          return;
+        }
+      }
+
+      const entry: Omit<ReceiveHistoryEntry, 'id'> = {
+        type: 'receive',
+        createdAt: Date.now(),
+        unit: token.unit || 'sat',
+        amount,
+        mintUrl,
+        token,
+        operationId,
+        state: 'finalized',
+      };
       const entryRes = await this.historyRepository.addHistoryEntry(entry);
       await this.handleHistoryUpdated(mintUrl, entryRes);
     } catch (err) {
       this.logger?.error('Failed to add receive created history entry', {
         mintUrl,
         token,
+        err,
+      });
+    }
+  }
+
+  async handleReceiveOperationUpdated(
+    mintUrl: string,
+    operation: ReceiveOperation,
+    state: ReceiveHistoryState,
+  ) {
+    try {
+      const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operation.id);
+      if (existing) {
+        existing.amount = operation.amount;
+        existing.state = state;
+        await this.historyRepository.updateHistoryEntry(existing);
+        await this.handleHistoryUpdated(mintUrl, existing);
+        return;
+      }
+
+      const entry = await this.historyRepository.addHistoryEntry({
+        type: 'receive',
+        createdAt: Date.now(),
+        unit: 'sat',
+        amount: operation.amount,
+        mintUrl,
+        operationId: operation.id,
+        state,
+      });
+      await this.handleHistoryUpdated(mintUrl, entry);
+    } catch (err) {
+      this.logger?.error('Failed to update receive history entry', {
+        mintUrl,
+        operationId: operation.id,
+        state,
         err,
       });
     }
