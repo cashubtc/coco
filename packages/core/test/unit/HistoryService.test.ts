@@ -36,6 +36,10 @@ describe('HistoryService', () => {
     proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
   } as Token;
   const receiveProofs = receiveToken.proofs;
+  const receiveTokenWithoutUnit = {
+    mint: 'https://mint.test',
+    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
+  } as Token;
   const makePendingOperation = (
     quoteId: string,
     overrides: Partial<PendingMintOperation> = {},
@@ -600,22 +604,27 @@ describe('HistoryService', () => {
       });
       await eventBus.emit('receive:created', {
         mintUrl: operation.mintUrl,
-        token: receiveToken,
+        token: receiveTokenWithoutUnit,
         operationId: operation.id,
       });
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.state).toBe('finalized');
+      expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
-      expect(entry.unit).toBe('sat');
-      expect(entry.token).toEqual(receiveToken);
+      expect(entry.token).toEqual(receiveTokenWithoutUnit);
       expect(historyUpdateEvents.length).toBe(3);
     });
 
-    it('creates receive history entry from receive-op:rolled-back', async () => {
+    it('updates receive history to rolledBack from receive-op:rolled-back', async () => {
       const operation = makeRolledBackReceiveOperation('receive-op-3');
 
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: makePreparedReceiveOperation(operation.id, { unit: 'usd' }),
+      });
       await eventBus.emit('receive-op:rolled-back', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
@@ -627,7 +636,7 @@ describe('HistoryService', () => {
       expect(entry.state).toBe('rolledBack');
       expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
-      expect(historyUpdateEvents.length).toBe(1);
+      expect(historyUpdateEvents.length).toBe(2);
     });
 
     it('keeps legacy receives without an operationId', async () => {
