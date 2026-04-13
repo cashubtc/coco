@@ -267,7 +267,6 @@ describe('ReceiveOperationService', () => {
     expect(rollbackResolved).toBe(true);
     expect(historyEntry?.state).toBe('rolledBack');
   });
-
   it('init rejects untrusted mints', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;

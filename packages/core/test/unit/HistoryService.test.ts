@@ -1,3 +1,4 @@
+import type { Token } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { HistoryService } from '../../services/HistoryService';
 import { EventBus } from '../../events/EventBus';
@@ -29,7 +30,12 @@ describe('HistoryService', () => {
   let eventBus: EventBus<CoreEvents>;
   let historyEntries: Map<string, HistoryEntry>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
-  const receiveProofs = [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }];
+  const receiveToken = {
+    mint: 'https://mint.test',
+    unit: 'sat',
+    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
+  } as Token;
+  const receiveProofs = receiveToken.proofs;
   const makePendingOperation = (
     quoteId: string,
     overrides: Partial<PendingMintOperation> = {},
@@ -542,9 +548,12 @@ describe('HistoryService', () => {
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.type).toBe('receive');
+      expect(entry.amount).toBe(42);
       expect(entry.state).toBe('prepared');
       expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
+      expect(entry.token).toBeUndefined();
       expect(historyUpdateEvents.length).toBe(1);
     });
 
@@ -576,6 +585,34 @@ describe('HistoryService', () => {
       expect(historyUpdateEvents.length).toBe(2);
     });
 
+    it('enriches finalized receive history via receive:created', async () => {
+      const operation = makeFinalizedReceiveOperation('receive-op-legacy');
+
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: makePreparedReceiveOperation(operation.id, { unit: 'usd' }),
+      });
+      await eventBus.emit('receive-op:finalized', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: { ...operation, unit: 'usd' },
+      });
+      await eventBus.emit('receive:created', {
+        mintUrl: operation.mintUrl,
+        token: receiveToken,
+        operationId: operation.id,
+      });
+
+      expect(historyEntries.size).toBe(1);
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.state).toBe('finalized');
+      expect(entry.operationId).toBe(operation.id);
+      expect(entry.unit).toBe('sat');
+      expect(entry.token).toEqual(receiveToken);
+      expect(historyUpdateEvents.length).toBe(3);
+    });
+
     it('creates receive history entry from receive-op:rolled-back', async () => {
       const operation = makeRolledBackReceiveOperation('receive-op-3');
 
@@ -591,6 +628,18 @@ describe('HistoryService', () => {
       expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
       expect(historyUpdateEvents.length).toBe(1);
+    });
+
+    it('keeps legacy receives without an operationId', async () => {
+      await eventBus.emit('receive:created', {
+        mintUrl: 'https://mint.test',
+        token: receiveToken,
+      });
+
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.operationId).toBeUndefined();
+      expect(entry.state).toBe('finalized');
+      expect(entry.token).toEqual(receiveToken);
     });
   });
 });

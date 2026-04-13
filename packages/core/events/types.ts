@@ -57,6 +57,8 @@ export interface CoreEvents {
     operationId: string;
     operation: ReceiveOperation;
   };
+  /** Legacy receive completion event retained for compatibility */
+  'receive:created': { mintUrl: string; token: Token; operationId?: string };
   'history:updated': { mintUrl: string; entry: HistoryEntry };
   'melt-op:prepared': { mintUrl: string; operationId: string; operation: MeltOperation };
   'melt-op:pending': { mintUrl: string; operationId: string; operation: MeltOperation };
