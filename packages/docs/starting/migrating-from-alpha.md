@@ -134,6 +134,15 @@ Receive compatibility note:
 - `receive:created` has been removed; completion listeners should use
   `receive-op:finalized`
 
+Removed public service surface:
+
+- `TransactionService` is no longer exported from `@cashu/coco-core`
+- The plugin `ServiceMap` no longer includes `transactionService`
+- Plugin and integration code that depended on `transactionService` should
+  migrate to the operation services that now own those flows:
+  `sendOperationService`, `receiveOperationService`, `mintOperationService`,
+  `meltOperationService`, and `paymentRequestService`
+
 Breaking `WalletApi` balance changes:
 
 - Alpha exposed only scalar balance totals; v1 removes them in favor of a
