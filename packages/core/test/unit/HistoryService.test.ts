@@ -1,5 +1,4 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
-import type { Token } from '@cashu/cashu-ts';
 import { HistoryService } from '../../services/HistoryService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -30,11 +29,7 @@ describe('HistoryService', () => {
   let eventBus: EventBus<CoreEvents>;
   let historyEntries: Map<string, HistoryEntry>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
-  const receiveToken = {
-    mint: 'https://mint.test',
-    unit: 'sat',
-    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
-  } as Token;
+  const receiveProofs = [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }];
   const makePendingOperation = (
     quoteId: string,
     overrides: Partial<PendingMintOperation> = {},
@@ -127,7 +122,7 @@ describe('HistoryService', () => {
       amount: 42,
       fee: 1,
       outputData: { keep: [], send: [] },
-      inputProofs: receiveToken.proofs,
+      inputProofs: receiveProofs,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       ...overrides,
@@ -596,18 +591,6 @@ describe('HistoryService', () => {
       expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
       expect(historyUpdateEvents.length).toBe(1);
-    });
-
-    it('keeps legacy receives without an operationId', async () => {
-      await eventBus.emit('receive:created', {
-        mintUrl: 'https://mint.test',
-        token: receiveToken,
-      });
-
-      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
-      expect(entry.operationId).toBeUndefined();
-      expect(entry.state).toBe('finalized');
-      expect(entry.token).toEqual(receiveToken);
     });
   });
 });

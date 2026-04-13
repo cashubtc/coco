@@ -294,7 +294,6 @@ include:
 - `receive-op:prepared` → `{ mintUrl, operationId, operation }`
 - `receive-op:finalized` → `{ mintUrl, operationId, operation }`
 - `receive-op:rolled-back` → `{ mintUrl, operationId, operation }`
-- `receive:created` → `{ mintUrl, token, operationId? }`
 - `history:updated` → `{ mintUrl, entry }`
 - `melt-op:prepared` → `{ mintUrl, operationId, operation }`
 - `melt-op:pending` → `{ mintUrl, operationId, operation }`

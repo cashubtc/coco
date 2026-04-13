@@ -131,9 +131,8 @@ Receive compatibility note:
   persisted operation directly
 - Event listeners that migrate to the operation API should subscribe to
   `receive-op:prepared`, `receive-op:finalized`, and `receive-op:rolled-back`
-- Existing code that still listens for `receive:created` after
-  `wallet.receive(...)` can keep doing so during migration; that legacy
-  completion event is retained for compatibility
+- `receive:created` has been removed; completion listeners should use
+  `receive-op:finalized`
 
 Breaking `WalletApi` balance changes:
 

@@ -84,9 +84,6 @@ export class HistoryService {
       if (operation.state !== 'rolled_back') return;
       return this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
     });
-    this.eventBus.on('receive:created', ({ mintUrl, token, operationId }) => {
-      return this.handleReceiveCreated(mintUrl, token, operationId);
-    });
   }
 
   async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
@@ -173,43 +170,6 @@ export class HistoryService {
         mintUrl,
         operationId,
         state,
-        err,
-      });
-    }
-  }
-
-  async handleReceiveCreated(mintUrl: string, token: Token, operationId?: string) {
-    try {
-      const amount = token.proofs.reduce((acc, proof) => acc + proof.amount, 0);
-      if (operationId) {
-        const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operationId);
-        if (existing) {
-          existing.amount = amount;
-          existing.unit = token.unit || existing.unit || 'sat';
-          existing.state = 'finalized';
-          existing.token = token;
-          await this.historyRepository.updateHistoryEntry(existing);
-          await this.handleHistoryUpdated(mintUrl, existing);
-          return;
-        }
-      }
-
-      const entry: Omit<ReceiveHistoryEntry, 'id'> = {
-        type: 'receive',
-        createdAt: Date.now(),
-        unit: token.unit || 'sat',
-        amount,
-        mintUrl,
-        token,
-        operationId,
-        state: 'finalized',
-      };
-      const entryRes = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, entryRes);
-    } catch (err) {
-      this.logger?.error('Failed to add receive created history entry', {
-        mintUrl,
-        token,
         err,
       });
     }

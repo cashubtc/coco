@@ -206,26 +206,6 @@ describe('ReceiveOperationService', () => {
     expect(lockedDuringEvent).toBe(true);
   });
 
-  it('emits receive:created for finalized receive operations', async () => {
-    const proofs = [makeProof('p1'), makeProof('p2')];
-    const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
-    const prepared = await service.prepare(initOp);
-    let payload: CoreEvents['receive:created'] | undefined;
-
-    eventBus.on('receive:created', (eventPayload) => {
-      payload = eventPayload;
-    });
-
-    const finalized = await service.execute(prepared);
-
-    expect(payload?.mintUrl).toBe(mintUrl);
-    expect(payload?.operationId).toBe(finalized.id);
-    expect(payload?.token.mint).toBe(mintUrl);
-    expect(payload?.token.proofs).toEqual(proofs);
-    expect(payload?.token.unit).toBe('sat');
-  });
-
   it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;

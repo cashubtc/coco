@@ -554,16 +554,14 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const amountAfterSend = await getMintSpendableBalance(mgr!, mintUrl);
 
-        const receivePromise = new Promise((resolve) => {
-          mgr!.once('receive:created', (payload) => {
-            expect(payload.mintUrl).toBe(mintUrl);
-            expect(payload.token.proofs.length).toBeGreaterThan(0);
-            resolve(payload);
-          });
+        const receivePromise = waitForEvent(mgr!, 'receive-op:finalized', (payload) => {
+          return payload.mintUrl === mintUrl && payload.operation.inputProofs.length > 0;
         });
 
         await mgr!.wallet.receive(token);
-        await receivePromise;
+        const payload = await receivePromise;
+        expect(payload.mintUrl).toBe(mintUrl);
+        expect(payload.operation.inputProofs.length).toBeGreaterThan(0);
 
         const amountAfterReceive = await getMintSpendableBalance(mgr!, mintUrl);
         expect(amountAfterReceive).toBeGreaterThan(amountAfterSend);
