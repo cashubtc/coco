@@ -269,8 +269,6 @@ describe('HistoryService', () => {
         operation,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
       expect(entry.type).toBe('mint');
@@ -310,8 +308,6 @@ describe('HistoryService', () => {
         state: 'PAID',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
       expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PAID');
@@ -343,8 +339,6 @@ describe('HistoryService', () => {
         operation,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
       expect(entry.amount).toBe(operation.amount);
@@ -364,8 +358,6 @@ describe('HistoryService', () => {
         operationId: operation.id,
         operation,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
@@ -391,8 +383,6 @@ describe('HistoryService', () => {
         operation,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
       expect(entry.unit).toBe('usd');
     });
@@ -415,8 +405,6 @@ describe('HistoryService', () => {
         operationId: operation.id,
         operation,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
@@ -449,8 +437,6 @@ describe('HistoryService', () => {
         operation,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
       expect(entry.unit).toBe('usd');
     });
@@ -463,8 +449,6 @@ describe('HistoryService', () => {
         operationId: operation.id,
         operation,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
@@ -493,8 +477,6 @@ describe('HistoryService', () => {
         operationId: operation.id,
         operation,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
@@ -536,8 +518,6 @@ describe('HistoryService', () => {
         operation,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       expect(historyEntries.size).toBe(2);
 
       const mintEntry = Array.from(historyEntries.values()).find(
@@ -570,8 +550,6 @@ describe('HistoryService', () => {
         operation: { ...operation, unit: 'usd' },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       expect(historyEntries.size).toBe(0);
       expect(historyUpdateEvents.length).toBe(0);
     });
@@ -589,8 +567,6 @@ describe('HistoryService', () => {
         token: receiveTokenWithoutUnit,
         operationId: operation.id,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
@@ -610,8 +586,6 @@ describe('HistoryService', () => {
         operation: { ...operation, unit: 'usd' },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.state).toBe('rolledBack');
@@ -625,8 +599,6 @@ describe('HistoryService', () => {
         mintUrl: 'https://mint.test',
         token: receiveToken,
       });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
 
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.operationId).toBeUndefined();

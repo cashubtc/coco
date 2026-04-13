@@ -9,6 +9,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { MintService } from '../../services/MintService';
+import { HistoryService } from '../../services/HistoryService';
 import type { ProofService } from '../../services/ProofService';
 import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
@@ -16,6 +17,7 @@ import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import { ProofValidationError, UnknownMintError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
+import { MemoryHistoryRepository } from '../../repositories/memory/MemoryHistoryRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -57,6 +59,16 @@ describe('ReceiveOperationService', () => {
           new TextEncoder().encode(secret),
         ),
     );
+
+  const createDeferred = <T>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
 
   const createMockMintAdapter = (): MintAdapter =>
     ({
@@ -211,6 +223,43 @@ describe('ReceiveOperationService', () => {
     expect(persistedState).toBe('rolled_back');
     expect(lockedDuringEvent).toBe(true);
     expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+  });
+
+  it('rollback waits for receive rolled-back history persistence', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    const historyRepo = new MemoryHistoryRepository();
+    const historyWriteStarted = createDeferred<void>();
+    const historyWriteRelease = createDeferred<void>();
+    const addHistoryEntry = historyRepo.addHistoryEntry.bind(historyRepo);
+
+    historyRepo.addHistoryEntry = mock(async (entry) => {
+      historyWriteStarted.resolve();
+      await historyWriteRelease.promise;
+      return addHistoryEntry(entry);
+    });
+
+    new HistoryService(historyRepo, eventBus);
+
+    let rollbackResolved = false;
+    const rollbackPromise = service.rollback(prepared.id).then(() => {
+      rollbackResolved = true;
+    });
+
+    await historyWriteStarted.promise;
+
+    expect(rollbackResolved).toBe(false);
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+    expect(await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id)).toBeNull();
+
+    historyWriteRelease.resolve();
+    await rollbackPromise;
+
+    const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
+    expect(rollbackResolved).toBe(true);
+    expect(historyEntry?.state).toBe('rolledBack');
   });
 
   it('init rejects untrusted mints', async () => {

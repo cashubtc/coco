@@ -33,55 +33,55 @@ export class HistoryService {
     this.eventBus = eventBus;
     this.eventBus.on('mint-op:pending', ({ mintUrl, operation }) => {
       if (operation.state !== 'pending') return;
-      this.handleMintOperationPending(mintUrl, operation as PendingMintOperation);
+      return this.handleMintOperationPending(mintUrl, operation as PendingMintOperation);
     });
     this.eventBus.on('mint-op:quote-state-changed', ({ mintUrl, operationId, quoteId, state }) => {
-      this.handleMintOperationQuoteStateChanged(mintUrl, operationId, quoteId, state);
+      return this.handleMintOperationQuoteStateChanged(mintUrl, operationId, quoteId, state);
     });
     this.eventBus.on('melt-quote:created', ({ mintUrl, quoteId, quote }) => {
-      this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
+      return this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
     });
     this.eventBus.on('melt-quote:state-changed', ({ mintUrl, quoteId, state }) => {
-      this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
+      return this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
     });
     this.eventBus.on('melt-op:prepared', ({ mintUrl, operation }) => {
       if (operation.state !== 'prepared') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
     });
     this.eventBus.on('melt-op:pending', ({ mintUrl, operation }) => {
       if (operation.state !== 'pending') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
     });
     this.eventBus.on('melt-op:finalized', ({ mintUrl, operation }) => {
       if (operation.state !== 'finalized') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
     });
     this.eventBus.on('melt-op:rolled-back', ({ mintUrl, operation }) => {
       if (operation.state !== 'rolled_back') return;
-      this.handleMeltOperationRolledBack(mintUrl, operation);
+      return this.handleMeltOperationRolledBack(mintUrl, operation);
     });
     this.eventBus.on('send:prepared', ({ mintUrl, operationId, operation }) => {
-      this.handleSendPrepared(mintUrl, operationId, operation);
+      return this.handleSendPrepared(mintUrl, operationId, operation);
     });
     this.eventBus.on('send:pending', ({ mintUrl, operationId, token }) => {
-      this.handleSendPending(mintUrl, operationId, token);
+      return this.handleSendPending(mintUrl, operationId, token);
     });
     this.eventBus.on('send:finalized', ({ mintUrl, operationId }) => {
-      this.handleSendStateChanged(mintUrl, operationId, 'finalized');
+      return this.handleSendStateChanged(mintUrl, operationId, 'finalized');
     });
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
-      this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
+      return this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
       if (operation.state !== 'finalized') return;
-      this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
     });
     this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
       if (operation.state !== 'rolled_back') return;
-      this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
     });
     this.eventBus.on('receive:created', ({ mintUrl, token, operationId }) => {
-      this.handleReceiveCreated(mintUrl, token, operationId);
+      return this.handleReceiveCreated(mintUrl, token, operationId);
     });
   }
 
