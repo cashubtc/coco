@@ -78,7 +78,7 @@ describe('ReceiveOperationService integration', () => {
     const receiveRepo = (receiver as any).receiveOperationRepository as ReceiveOperationRepository;
 
     const receiveEvent = new Promise((resolve) => {
-      receiver.once('receive:created', resolve);
+      receiver.once('receive-op:finalized', resolve);
     });
 
     await receiveService.receive(token);

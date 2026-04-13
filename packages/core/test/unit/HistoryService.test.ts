@@ -35,11 +35,6 @@ describe('HistoryService', () => {
     unit: 'sat',
     proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
   } as Token;
-  const receiveTokenWithoutUnit = {
-    mint: 'https://mint.test',
-    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
-  } as Token;
-
   const makePendingOperation = (
     quoteId: string,
     overrides: Partial<PendingMintOperation> = {},
@@ -541,7 +536,7 @@ describe('HistoryService', () => {
   });
 
   describe('receive operations', () => {
-    it('does not create history entry from receive-op:prepared', async () => {
+    it('creates receive history entry from receive-op:prepared', async () => {
       const operation = makePreparedReceiveOperation('receive-op-1');
 
       await eventBus.emit('receive-op:prepared', {
@@ -550,22 +545,27 @@ describe('HistoryService', () => {
         operation: { ...operation, unit: 'usd' },
       });
 
-      expect(historyEntries.size).toBe(0);
-      expect(historyUpdateEvents.length).toBe(0);
+      expect(historyEntries.size).toBe(1);
+      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
+      expect(entry.state).toBe('prepared');
+      expect(entry.unit).toBe('usd');
+      expect(entry.operationId).toBe(operation.id);
+      expect(historyUpdateEvents.length).toBe(1);
     });
 
-    it('creates receive history from receive-op:finalized and enriches it via receive:created', async () => {
+    it('finalizes prepared receive history via receive-op:finalized', async () => {
+      const preparedOperation = makePreparedReceiveOperation('receive-op-2');
       const operation = makeFinalizedReceiveOperation('receive-op-2');
 
+      await eventBus.emit('receive-op:prepared', {
+        mintUrl: preparedOperation.mintUrl,
+        operationId: preparedOperation.id,
+        operation: { ...preparedOperation, unit: 'usd' },
+      });
       await eventBus.emit('receive-op:finalized', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
         operation: { ...operation, unit: 'usd' },
-      });
-      await eventBus.emit('receive:created', {
-        mintUrl: operation.mintUrl,
-        token: receiveTokenWithoutUnit,
-        operationId: operation.id,
       });
 
       expect(historyEntries.size).toBe(1);
@@ -573,7 +573,11 @@ describe('HistoryService', () => {
       expect(entry.state).toBe('finalized');
       expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
-      expect(entry.token).toEqual(receiveTokenWithoutUnit);
+      expect(entry.token).toEqual({
+        mint: operation.mintUrl,
+        proofs: operation.inputProofs,
+        unit: 'usd',
+      });
       expect(historyUpdateEvents.length).toBe(2);
     });
 

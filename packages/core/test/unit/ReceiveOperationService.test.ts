@@ -135,8 +135,8 @@ describe('ReceiveOperationService', () => {
     const proofs = [makeProof('p1'), makeProof('p2')];
     const token: Token = { mint: mintUrl, proofs } as Token;
 
-    let eventPayload: CoreEvents['receive:created'] | undefined;
-    eventBus.on('receive:created', (payload) => {
+    let eventPayload: CoreEvents['receive-op:finalized'] | undefined;
+    eventBus.on('receive-op:finalized', (payload) => {
       eventPayload = payload;
     });
 
@@ -151,7 +151,8 @@ describe('ReceiveOperationService', () => {
     expect(op?.amount).toBe(20);
     expect(op?.outputData).toBeDefined();
     expect(eventPayload?.mintUrl).toBe(mintUrl);
-    expect(eventPayload?.token.proofs.length).toBe(2);
+    expect(eventPayload?.operation.state).toBe('finalized');
+    expect(eventPayload?.operation.inputProofs.length).toBe(2);
   });
 
   it('prepare() persists outputData and fee', async () => {

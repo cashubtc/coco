@@ -625,7 +625,7 @@ export class ReceiveOperationService {
   }
 
   /**
-   * Persist finalized state and emit receive event for history updates.
+   * Persist finalized state and emit the operation finalized event.
    */
   private async markAsFinalized(op: ExecutingReceiveOperation): Promise<FinalizedReceiveOperation> {
     const current = await this.receiveOperationRepository.getById(op.id);
@@ -654,17 +654,10 @@ export class ReceiveOperationService {
       operation: finalized,
     });
 
-    const executing = current as ExecutingReceiveOperation;
-    await this.eventBus.emit('receive:created', {
-      mintUrl: executing.mintUrl,
-      token: { mint: executing.mintUrl, proofs: executing.inputProofs },
-      operationId: executing.id,
-    });
-
     this.logger?.info('Receive operation finalized', {
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      proofCount: executing.inputProofs.length,
+      operationId: finalized.id,
+      mintUrl: finalized.mintUrl,
+      proofCount: finalized.inputProofs.length,
     });
 
     return finalized;

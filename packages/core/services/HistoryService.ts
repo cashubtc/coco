@@ -72,6 +72,10 @@ export class HistoryService {
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
       return this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
+    this.eventBus.on('receive-op:prepared', ({ mintUrl, operation }) => {
+      if (operation.state !== 'prepared') return;
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'prepared');
+    });
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
       if (operation.state !== 'finalized') return;
       return this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
@@ -217,17 +221,28 @@ export class HistoryService {
     state: ReceiveHistoryState,
   ) {
     try {
+      const token =
+        state === 'finalized'
+          ? {
+              mint: operation.mintUrl,
+              proofs: operation.inputProofs,
+              unit: operation.unit || 'sat',
+            }
+          : undefined;
       const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operation.id);
       if (existing) {
         existing.amount = operation.amount;
         existing.unit = operation.unit || existing.unit || 'sat';
         existing.state = state;
+        if (token) {
+          existing.token = token;
+        }
         await this.historyRepository.updateHistoryEntry(existing);
         await this.handleHistoryUpdated(mintUrl, existing);
         return;
       }
 
-      const entry = await this.historyRepository.addHistoryEntry({
+      const entryPayload: Omit<ReceiveHistoryEntry, 'id'> = {
         type: 'receive',
         createdAt: Date.now(),
         unit: operation.unit || 'sat',
@@ -235,7 +250,9 @@ export class HistoryService {
         mintUrl,
         operationId: operation.id,
         state,
-      });
+        token,
+      };
+      const entry = await this.historyRepository.addHistoryEntry(entryPayload);
       await this.handleHistoryUpdated(mintUrl, entry);
     } catch (err) {
       this.logger?.error('Failed to update receive history entry', {
