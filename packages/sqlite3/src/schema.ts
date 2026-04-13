@@ -540,6 +540,12 @@ const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE coco_cashu_melt_operations ADD COLUMN unit TEXT;
     `,
   },
+  {
+    id: '023_receive_operation_unit',
+    sql: `
+      ALTER TABLE coco_cashu_receive_operations ADD COLUMN unit TEXT NOT NULL DEFAULT 'sat';
+    `,
+  },
 ];
 
 // Export for testing

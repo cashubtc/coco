@@ -135,6 +135,7 @@ describe('ReceiveOperationService', () => {
     const op = finalized[0] as FinalizedReceiveOperation;
 
     expect(op?.mintUrl).toBe(mintUrl);
+    expect(op?.unit).toBe('sat');
     expect(op?.amount).toBe(20);
     expect(op?.outputData).toBeDefined();
     expect(eventPayload?.mintUrl).toBe(mintUrl);
@@ -247,6 +248,7 @@ describe('ReceiveOperationService', () => {
       id: 'empty-op',
       state: 'init',
       mintUrl,
+      unit: 'sat',
       amount: 0,
       inputProofs: [],
       createdAt: Date.now(),

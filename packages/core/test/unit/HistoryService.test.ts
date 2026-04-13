@@ -35,6 +35,10 @@ describe('HistoryService', () => {
     unit: 'sat',
     proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
   } as Token;
+  const receiveTokenWithoutUnit = {
+    mint: 'https://mint.test',
+    proofs: [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }],
+  } as Token;
 
   const makePendingOperation = (
     quoteId: string,
@@ -124,6 +128,7 @@ describe('HistoryService', () => {
       id: operationId,
       state: 'prepared',
       mintUrl: 'https://mint.test',
+      unit: 'sat',
       amount: 42,
       fee: 1,
       outputData: { keep: [], send: [] },
@@ -562,7 +567,7 @@ describe('HistoryService', () => {
       await eventBus.emit('receive-op:prepared', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
-        operation,
+        operation: { ...operation, unit: 'usd' },
       });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -571,7 +576,7 @@ describe('HistoryService', () => {
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.type).toBe('receive');
       expect(entry.amount).toBe(42);
-      expect(entry.unit).toBe('sat');
+      expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe('receive-op-1');
       expect(entry.state).toBe('prepared');
       expect(entry.token).toBeUndefined();
@@ -584,16 +589,16 @@ describe('HistoryService', () => {
       await eventBus.emit('receive-op:prepared', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
-        operation: makePreparedReceiveOperation(operation.id),
+        operation: makePreparedReceiveOperation(operation.id, { unit: 'usd' }),
       });
       await eventBus.emit('receive-op:finalized', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
-        operation,
+        operation: { ...operation, unit: 'usd' },
       });
       await eventBus.emit('receive:created', {
         mintUrl: operation.mintUrl,
-        token: receiveToken,
+        token: receiveTokenWithoutUnit,
         operationId: operation.id,
       });
 
@@ -602,8 +607,9 @@ describe('HistoryService', () => {
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.state).toBe('finalized');
+      expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
-      expect(entry.token).toEqual(receiveToken);
+      expect(entry.token).toEqual(receiveTokenWithoutUnit);
       expect(historyUpdateEvents.length).toBe(3);
     });
 
@@ -613,12 +619,12 @@ describe('HistoryService', () => {
       await eventBus.emit('receive-op:prepared', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
-        operation: makePreparedReceiveOperation(operation.id),
+        operation: makePreparedReceiveOperation(operation.id, { unit: 'usd' }),
       });
       await eventBus.emit('receive-op:rolled-back', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
-        operation,
+        operation: { ...operation, unit: 'usd' },
       });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -626,6 +632,7 @@ describe('HistoryService', () => {
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
       expect(entry.state).toBe('rolledBack');
+      expect(entry.unit).toBe('usd');
       expect(entry.operationId).toBe(operation.id);
     });
 

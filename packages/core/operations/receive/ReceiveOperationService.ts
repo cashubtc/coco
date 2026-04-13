@@ -115,7 +115,8 @@ export class ReceiveOperationService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    const proofs = (await this.tokenService.decodeToken(token, mintUrl)).proofs;
+    const decodedToken = await this.tokenService.decodeToken(token, mintUrl);
+    const proofs = decodedToken.proofs;
 
     const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
     if (!Array.isArray(preparedProofs) || preparedProofs.length === 0) {
@@ -130,7 +131,13 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(id, mintUrl, amount, preparedProofs);
+    const operation = createReceiveOperation(
+      id,
+      mintUrl,
+      amount,
+      preparedProofs,
+      decodedToken.unit || 'sat',
+    );
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {

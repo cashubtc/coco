@@ -224,6 +224,7 @@ export class HistoryService {
       const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operation.id);
       if (existing) {
         existing.amount = operation.amount;
+        existing.unit = operation.unit || existing.unit || 'sat';
         existing.state = state;
         await this.historyRepository.updateHistoryEntry(existing);
         await this.handleHistoryUpdated(mintUrl, existing);
@@ -233,7 +234,7 @@ export class HistoryService {
       const entry = await this.historyRepository.addHistoryEntry({
         type: 'receive',
         createdAt: Date.now(),
-        unit: 'sat',
+        unit: operation.unit || 'sat',
         amount: operation.amount,
         mintUrl,
         operationId: operation.id,

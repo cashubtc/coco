@@ -30,6 +30,9 @@ interface ReceiveOperationBase {
   /** The mint URL for this operation */
   mintUrl: string;
 
+  /** Unit declared by the received token */
+  unit: string;
+
   /** The amount received (sum of input proofs) */
   amount: number;
 
@@ -181,12 +184,14 @@ export function createReceiveOperation(
   mintUrl: string,
   amount: number,
   inputProofs: Proof[],
+  unit: string,
 ): InitReceiveOperation {
   const now = Date.now();
   return {
     id,
     state: 'init',
     mintUrl,
+    unit,
     amount,
     inputProofs,
     createdAt: now,
