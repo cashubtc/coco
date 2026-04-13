@@ -67,6 +67,10 @@ type SendHistoryUpdatedPayload = {
 };
 
 type PreparedMintOperation = Awaited<ReturnType<Manager['ops']['mint']['prepare']>>;
+type FinalizedReceiveEventPayload = {
+  mintUrl: string;
+  operation: Awaited<ReturnType<Manager['ops']['receive']['execute']>>;
+};
 
 const watcherTestSubscriptions = {
   slowPollingIntervalMs: 50,
@@ -554,9 +558,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const amountAfterSend = await getMintSpendableBalance(mgr!, mintUrl);
 
-        const receivePromise = waitForEvent(mgr!, 'receive-op:finalized', (payload) => {
-          return payload.mintUrl === mintUrl && payload.operation.inputProofs.length > 0;
-        });
+        const receivePromise = waitForEvent<FinalizedReceiveEventPayload>(
+          mgr!,
+          'receive-op:finalized',
+          (payload) => {
+            return payload.mintUrl === mintUrl && payload.operation.inputProofs.length > 0;
+          },
+        );
 
         await mgr!.wallet.receive(token);
         const payload = await receivePromise;
