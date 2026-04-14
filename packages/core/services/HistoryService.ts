@@ -7,6 +7,7 @@ import type {
   MeltHistoryEntry,
   MintHistoryEntry,
   ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
 } from '@core/models/History';
@@ -14,6 +15,7 @@ import type { PreparedOrLaterOperation } from '@core/operations/melt';
 import type { PendingMintOperation } from '@core/operations/mint';
 import type { MintQuoteState } from '@core/models/MintQuoteState';
 import type { Logger } from '@core/logging';
+import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
 
 export class HistoryService {
@@ -31,47 +33,56 @@ export class HistoryService {
     this.eventBus = eventBus;
     this.eventBus.on('mint-op:pending', ({ mintUrl, operation }) => {
       if (operation.state !== 'pending') return;
-      this.handleMintOperationPending(mintUrl, operation as PendingMintOperation);
+      return this.handleMintOperationPending(mintUrl, operation as PendingMintOperation);
     });
     this.eventBus.on('mint-op:quote-state-changed', ({ mintUrl, operationId, quoteId, state }) => {
-      this.handleMintOperationQuoteStateChanged(mintUrl, operationId, quoteId, state);
+      return this.handleMintOperationQuoteStateChanged(mintUrl, operationId, quoteId, state);
     });
     this.eventBus.on('melt-quote:created', ({ mintUrl, quoteId, quote }) => {
-      this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
+      return this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
     });
     this.eventBus.on('melt-quote:state-changed', ({ mintUrl, quoteId, state }) => {
-      this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
+      return this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
     });
     this.eventBus.on('melt-op:prepared', ({ mintUrl, operation }) => {
       if (operation.state !== 'prepared') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
     });
     this.eventBus.on('melt-op:pending', ({ mintUrl, operation }) => {
       if (operation.state !== 'pending') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
     });
     this.eventBus.on('melt-op:finalized', ({ mintUrl, operation }) => {
       if (operation.state !== 'finalized') return;
-      this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
+      return this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
     });
     this.eventBus.on('melt-op:rolled-back', ({ mintUrl, operation }) => {
       if (operation.state !== 'rolled_back') return;
-      this.handleMeltOperationRolledBack(mintUrl, operation);
+      return this.handleMeltOperationRolledBack(mintUrl, operation);
     });
     this.eventBus.on('send:prepared', ({ mintUrl, operationId, operation }) => {
-      this.handleSendPrepared(mintUrl, operationId, operation);
+      return this.handleSendPrepared(mintUrl, operationId, operation);
     });
     this.eventBus.on('send:pending', ({ mintUrl, operationId, token }) => {
-      this.handleSendPending(mintUrl, operationId, token);
+      return this.handleSendPending(mintUrl, operationId, token);
     });
     this.eventBus.on('send:finalized', ({ mintUrl, operationId }) => {
-      this.handleSendStateChanged(mintUrl, operationId, 'finalized');
+      return this.handleSendStateChanged(mintUrl, operationId, 'finalized');
     });
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
-      this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
+      return this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
-    this.eventBus.on('receive:created', ({ mintUrl, token, operationId }) => {
-      this.handleReceiveCreated(mintUrl, token, operationId);
+    this.eventBus.on('receive-op:prepared', ({ mintUrl, operation }) => {
+      if (operation.state !== 'prepared') return;
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'prepared');
+    });
+    this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
+      if (operation.state !== 'finalized') return;
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
+    });
+    this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
+      if (operation.state !== 'rolled_back') return;
+      return this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
     });
   }
 
@@ -164,23 +175,50 @@ export class HistoryService {
     }
   }
 
-  async handleReceiveCreated(mintUrl: string, token: Token, operationId?: string) {
-    const entry: Omit<ReceiveHistoryEntry, 'id'> = {
-      type: 'receive',
-      createdAt: Date.now(),
-      unit: token.unit || 'sat',
-      amount: token.proofs.reduce((acc, proof) => acc + proof.amount, 0),
-      mintUrl,
-      token,
-      operationId,
-    };
+  async handleReceiveOperationUpdated(
+    mintUrl: string,
+    operation: ReceiveOperation,
+    state: ReceiveHistoryState,
+  ) {
     try {
-      const entryRes = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, entryRes);
-    } catch (err) {
-      this.logger?.error('Failed to add receive created history entry', {
+      const token =
+        state === 'finalized'
+          ? {
+              mint: operation.mintUrl,
+              proofs: operation.inputProofs,
+              unit: operation.unit || 'sat',
+            }
+          : undefined;
+      const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operation.id);
+      if (existing) {
+        existing.amount = operation.amount;
+        existing.unit = operation.unit || existing.unit || 'sat';
+        existing.state = state;
+        if (token) {
+          existing.token = token;
+        }
+        await this.historyRepository.updateHistoryEntry(existing);
+        await this.handleHistoryUpdated(mintUrl, existing);
+        return;
+      }
+
+      const entryPayload: Omit<ReceiveHistoryEntry, 'id'> = {
+        type: 'receive',
+        createdAt: Date.now(),
+        unit: operation.unit || 'sat',
+        amount: operation.amount,
         mintUrl,
+        operationId: operation.id,
+        state,
         token,
+      };
+      const entry = await this.historyRepository.addHistoryEntry(entryPayload);
+      await this.handleHistoryUpdated(mintUrl, entry);
+    } catch (err) {
+      this.logger?.error('Failed to update receive history entry', {
+        mintUrl,
+        operationId: operation.id,
+        state,
         err,
       });
     }

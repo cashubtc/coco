@@ -9,13 +9,20 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { MintService } from '../../services/MintService';
+import { HistoryService } from '../../services/HistoryService';
 import type { ProofService } from '../../services/ProofService';
 import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
-import { ProofValidationError, UnknownMintError } from '../../models/Error';
+import {
+  MintOperationError,
+  NetworkError,
+  ProofValidationError,
+  UnknownMintError,
+} from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
+import { MemoryHistoryRepository } from '../../repositories/memory/MemoryHistoryRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -57,6 +64,16 @@ describe('ReceiveOperationService', () => {
           new TextEncoder().encode(secret),
         ),
     );
+
+  const createDeferred = <T>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
 
   const createMockMintAdapter = (): MintAdapter =>
     ({
@@ -123,8 +140,8 @@ describe('ReceiveOperationService', () => {
     const proofs = [makeProof('p1'), makeProof('p2')];
     const token: Token = { mint: mintUrl, proofs } as Token;
 
-    let eventPayload: CoreEvents['receive:created'] | undefined;
-    eventBus.on('receive:created', (payload) => {
+    let eventPayload: CoreEvents['receive-op:finalized'] | undefined;
+    eventBus.on('receive-op:finalized', (payload) => {
       eventPayload = payload;
     });
 
@@ -135,10 +152,12 @@ describe('ReceiveOperationService', () => {
     const op = finalized[0] as FinalizedReceiveOperation;
 
     expect(op?.mintUrl).toBe(mintUrl);
+    expect(op?.unit).toBe('sat');
     expect(op?.amount).toBe(20);
     expect(op?.outputData).toBeDefined();
     expect(eventPayload?.mintUrl).toBe(mintUrl);
-    expect(eventPayload?.token.proofs.length).toBe(2);
+    expect(eventPayload?.operation.state).toBe('finalized');
+    expect(eventPayload?.operation.inputProofs.length).toBe(2);
   });
 
   it('prepare() persists outputData and fee', async () => {
@@ -151,6 +170,102 @@ describe('ReceiveOperationService', () => {
     expect(prepared.state).toBe('prepared');
     expect(prepared.fee).toBe(0);
     expect(prepared.outputData).toBeDefined();
+  });
+
+  it('emits receive-op:prepared after the prepared state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:prepared', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const prepared = await service.prepare(initOp);
+
+    expect(prepared.state).toBe('prepared');
+    expect(persistedState).toBe('prepared');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits receive-op:finalized after the finalized state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:finalized', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    const finalized = await service.execute(prepared);
+
+    expect(finalized.state).toBe('finalized');
+    expect(persistedState).toBe('finalized');
+    expect(lockedDuringEvent).toBe(true);
+  });
+
+  it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    let persistedState: string | undefined;
+    let lockedDuringEvent = false;
+
+    eventBus.on('receive-op:rolled-back', async ({ operationId }) => {
+      persistedState = (await receiveOpRepo.getById(operationId))?.state;
+      lockedDuringEvent = service.isOperationLocked(operationId);
+    });
+
+    await service.rollback(prepared.id);
+
+    expect(persistedState).toBe('rolled_back');
+    expect(lockedDuringEvent).toBe(true);
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+  });
+
+  it('rollback waits for receive rolled-back history persistence', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const prepared = await service.prepare(initOp);
+    const historyRepo = new MemoryHistoryRepository();
+    const historyWriteStarted = createDeferred<void>();
+    const historyWriteRelease = createDeferred<void>();
+    const addHistoryEntry = historyRepo.addHistoryEntry.bind(historyRepo);
+
+    historyRepo.addHistoryEntry = mock(async (entry) => {
+      historyWriteStarted.resolve();
+      await historyWriteRelease.promise;
+      return addHistoryEntry(entry);
+    });
+
+    new HistoryService(historyRepo, eventBus);
+
+    let rollbackResolved = false;
+    const rollbackPromise = service.rollback(prepared.id).then(() => {
+      rollbackResolved = true;
+    });
+
+    await historyWriteStarted.promise;
+
+    expect(rollbackResolved).toBe(false);
+    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
+    expect(await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id)).toBeNull();
+
+    historyWriteRelease.resolve();
+    await rollbackPromise;
+
+    const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
+    expect(rollbackResolved).toBe(true);
+    expect(historyEntry?.state).toBe('rolledBack');
   });
 
   it('init rejects untrusted mints', async () => {
@@ -183,11 +298,21 @@ describe('ReceiveOperationService', () => {
     expect(service.init(token)).rejects.toThrow(ProofValidationError);
   });
 
+  it('init rejects tokens with unsupported units', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs, unit: 'usd' } as Token;
+
+    expect(service.init(token)).rejects.toThrow(
+      "Unsupported mint unit 'usd'. Only 'sat' is currently supported.",
+    );
+  });
+
   it('prepare throws when operation has no input proofs', async () => {
     const initOp: InitReceiveOperation = {
       id: 'empty-op',
       state: 'init',
       mintUrl,
+      unit: 'sat',
       amount: 0,
       inputProofs: [],
       createdAt: Date.now(),
@@ -238,6 +363,152 @@ describe('ReceiveOperationService', () => {
     await receiveOpRepo.update(brokenPrepared as unknown as ReceiveOperation);
 
     expect(service.execute(prepared)).rejects.toThrow('Missing output data');
+  });
+
+  it('rolls back executing receive operations on terminal NUT-03 mint errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+    let rolledBackEvent: CoreEvents['receive-op:rolled-back'] | undefined;
+
+    eventBus.on('receive-op:rolled-back', (payload) => {
+      rolledBackEvent = payload;
+    });
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11001, 'Proofs already spent');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Proofs already spent');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Proofs already spent');
+    expect(rolledBackEvent?.operation.state).toBe('rolled_back');
+    expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
+  });
+
+  it('rolls back executing receive operations on terminal NUT-03 keyset errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(12001, 'Keyset is not known');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset is not known');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset is not known');
+  });
+
+  it('rolls back executing receive operations on generic mint protocol errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset unknown');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset unknown');
+  });
+
+  it('updates receive history to rolledBack on generic mint protocol errors', async () => {
+    const proofs = [makeProof('p1')];
+    const historyRepo = new MemoryHistoryRepository();
+    new HistoryService(historyRepo, eventBus);
+
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    expect((await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id))?.state).toBe(
+      'prepared',
+    );
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset unknown');
+
+    const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
+    expect(historyEntry?.state).toBe('rolledBack');
+    expect(historyEntry?.amount).toBe(prepared.amount);
+  });
+
+  it('keeps executing when receive fails with recovery-sensitive outputs already signed', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11003, 'Outputs already signed');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Outputs already signed');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  for (const { code, message } of [
+    { code: 11002, message: 'Proofs are pending' },
+    { code: 11004, message: 'Outputs are pending' },
+  ]) {
+    it(`rolls back when receive fails with non-spendable NUT-03 state ${code}`, async () => {
+      const proofs = [makeProof('p1')];
+      const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+      const prepared = await service.prepare(initOp);
+
+      mockWalletReceive.mockImplementation(async () => {
+        throw new MintOperationError(code, message);
+      });
+
+      await expect(service.execute(prepared)).rejects.toThrow(message);
+
+      const stored = await receiveOpRepo.getById(prepared.id);
+      expect(stored?.state).toBe('rolled_back');
+      expect(stored?.error).toBe(message);
+    });
+  }
+
+  it('keeps executing on local validation failures after the mint call', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new ProofValidationError('Invalid signature in receive response');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow(
+      'Invalid signature in receive response',
+    );
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  it('keeps executing on transient receive failures', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new NetworkError('network timeout');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('network timeout');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('executing');
   });
 
   it('finalize is idempotent on an already finalized operation', async () => {

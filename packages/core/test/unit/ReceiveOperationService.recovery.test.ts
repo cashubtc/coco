@@ -13,6 +13,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
 import type { CoreProof } from '../../types';
+import { MintOperationError, ProofValidationError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
@@ -61,6 +62,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     id,
     state: 'init',
     mintUrl,
+    unit: 'sat',
     amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
@@ -75,6 +77,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     id,
     state: 'prepared',
     mintUrl,
+    unit: 'sat',
     amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
@@ -243,6 +246,123 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     );
     (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
       throw new Error('Mint restore failed');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  it('rolls back when re-execution fails with a terminal NUT-03 mint error', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-terminal-retry', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+    );
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11001, 'Proofs already spent');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Proofs already spent');
+  });
+
+  it('rolls back when re-execution fails with a terminal NUT-03 keyset error', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-terminal-keyset-retry', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+    );
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(12002, 'Keyset is inactive');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset is inactive');
+  });
+
+  it('rolls back when re-execution fails with a generic mint protocol error', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-generic-mint-error', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+    );
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset unknown');
+  });
+
+  it('keeps executing when re-execution hits recovery-sensitive outputs already signed', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-already-signed', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+    );
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(11003, 'Outputs already signed');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('executing');
+  });
+
+  for (const { code, message } of [
+    { code: 11002, message: 'Proofs are pending' },
+    { code: 11004, message: 'Outputs are pending' },
+  ]) {
+    it(`rolls back when re-execution hits non-spendable NUT-03 state ${code}`, async () => {
+      const proofs = [makeProof('p1')];
+      const op = makeExecutingOp(`exec-op-pending-${code}`, proofs);
+      await receiveOpRepo.create(op);
+
+      mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+        ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+      );
+      mockWalletReceive.mockImplementation(async () => {
+        throw new MintOperationError(code, message);
+      });
+
+      await service.recoverPendingOperations();
+
+      const stored = await receiveOpRepo.getById(op.id);
+      expect(stored?.state).toBe('rolled_back');
+      expect(stored?.error).toBe(message);
+    });
+  }
+
+  it('keeps executing when spent-proof recovery fails with a local validation error', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-terminal-restore', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
+    );
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(async () => {
+      throw new ProofValidationError('Invalid signature in recovered outputs');
     });
 
     await service.recoverPendingOperations();

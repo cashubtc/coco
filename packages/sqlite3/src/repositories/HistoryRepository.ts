@@ -1,11 +1,12 @@
 import type {
   HistoryEntry,
+  HistoryRepository,
   MintHistoryEntry,
   MeltHistoryEntry,
   ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
-  HistoryRepository,
 } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
@@ -100,6 +101,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
         const h = history as Omit<ReceiveHistoryEntry, 'id'>;
         tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
         operationId = h.operationId ?? null;
+        state = h.state;
         break;
       }
     }
@@ -156,6 +158,21 @@ export class SqliteHistoryRepository implements HistoryRepository {
     if (!row) return null;
     const entry = this.rowToEntry(row);
     return entry.type === 'send' ? entry : null;
+  }
+
+  async getReceiveHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<ReceiveHistoryEntry | null> {
+    const row = await this.db.get<Row>(
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'receive'
+       ORDER BY createdAt DESC, id DESC LIMIT 1`,
+      [mintUrl, operationId],
+    );
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'receive' ? entry : null;
   }
 
   async updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry> {
@@ -248,8 +265,36 @@ export class SqliteHistoryRepository implements HistoryRepository {
       );
       if (!row) throw new Error('Updated history entry not found');
       return this.rowToEntry(row);
+    } else if (history.type === 'receive') {
+      const h = history as Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
+      if (!h.operationId) throw new Error('operationId required for receive entry');
+      state = h.state;
+      tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
+
+      await this.db.run(
+        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, tokenJson = ?, metadata = ?
+         WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
+        [
+          history.unit,
+          history.amount,
+          state,
+          tokenJson,
+          history.metadata ? JSON.stringify(history.metadata) : null,
+          history.mintUrl,
+          h.operationId,
+        ],
+      );
+
+      const row = await this.db.get<Row>(
+        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+         FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'receive'
+         ORDER BY createdAt DESC, id DESC LIMIT 1`,
+        [history.mintUrl, h.operationId],
+      );
+      if (!row) throw new Error('Updated history entry not found');
+      return this.rowToEntry(row);
     } else {
-      throw new Error('updateHistoryEntry does not support receive entries');
+      throw new Error(`Unsupported history entry type: ${String((history as HistoryEntry).type)}`);
     }
   }
 
@@ -261,6 +306,18 @@ export class SqliteHistoryRepository implements HistoryRepository {
     await this.db.run(
       `UPDATE coco_cashu_history SET state = ?
        WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
+      [state, mintUrl, operationId],
+    );
+  }
+
+  async updateReceiveHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: ReceiveHistoryState,
+  ): Promise<void> {
+    await this.db.run(
+      `UPDATE coco_cashu_history SET state = ?
+       WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
       [state, mintUrl, operationId],
     );
   }
@@ -318,6 +375,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       type: 'receive',
       amount: row.amount,
       operationId: row.operationId ?? undefined,
+      state: (row.state ?? 'finalized') as ReceiveHistoryState,
       token,
     } satisfies HistoryEntry;
   }

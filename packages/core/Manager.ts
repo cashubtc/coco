@@ -19,7 +19,6 @@ import {
   MeltQuoteService,
   HistoryService,
   KeyRingService,
-  TransactionService,
   PaymentRequestService,
   AuthSessionService,
   AuthService,
@@ -216,7 +215,6 @@ export class Manager {
   private seedService: SeedService;
   private counterService: CounterService;
   private tokenService: TokenService;
-  private transactionService: TransactionService;
   private paymentRequestService: PaymentRequestService;
   private authSessionService: AuthSessionService;
   private authService: AuthService;
@@ -274,7 +272,6 @@ export class Manager {
     this.mintQuoteRepository = core.mintQuoteRepository;
     this.meltQuoteService = core.meltQuoteService;
     this.historyService = core.historyService;
-    this.transactionService = core.transactionService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
     this.tokenService = core.tokenService;
@@ -325,7 +322,6 @@ export class Manager {
       counterService: this.counterService,
       meltQuoteService: this.meltQuoteService,
       historyService: this.historyService,
-      transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
       receiveOperationService: this.receiveOperationService,
       paymentRequestService: this.paymentRequestService,
@@ -381,7 +377,6 @@ export class Manager {
       meltOperationService: this.meltOperationService,
       mintOperationService: this.mintOperationService,
       historyService: this.historyService,
-      transactionService: this.transactionService,
       sendOperationService: this.sendOperationService,
       receiveOperationService: this.receiveOperationService,
       tokenService: this.tokenService,
@@ -682,7 +677,6 @@ export class Manager {
     mintQuoteRepository: MintQuoteRepository;
     meltQuoteService: MeltQuoteService;
     historyService: HistoryService;
-    transactionService: TransactionService;
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
     sendOperationRepository: SendOperationRepository;
@@ -760,15 +754,6 @@ export class Manager {
       repositories.historyRepository,
       this.eventBus,
       historyLogger,
-    );
-
-    const transactionLogger = this.getChildLogger('TransactionService');
-    const transactionService = new TransactionService(
-      mintService,
-      walletService,
-      proofService,
-      this.eventBus,
-      transactionLogger,
     );
 
     const mintScopedLock = new MintScopedLock();
@@ -874,7 +859,6 @@ export class Manager {
       mintQuoteRepository,
       meltQuoteService,
       historyService,
-      transactionService,
       paymentRequestService,
       sendOperationService,
       sendOperationRepository,
@@ -907,7 +891,6 @@ export class Manager {
       this.walletService,
       this.proofService,
       this.walletRestoreService,
-      this.transactionService,
       this.receiveOperationService,
       this.tokenService,
       walletApiLogger,

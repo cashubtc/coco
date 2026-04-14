@@ -9,7 +9,6 @@ import type {
   WalletService,
   ProofService,
   WalletRestoreService,
-  TransactionService,
   TokenService,
 } from '@core/services';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
@@ -21,7 +20,6 @@ export class WalletApi {
   private walletService: WalletService;
   private proofService: ProofService;
   private walletRestoreService: WalletRestoreService;
-  private transactionService: TransactionService;
   private receiveOperationService: ReceiveOperationService;
   private readonly tokenService: TokenService;
   private readonly logger?: Logger;
@@ -32,7 +30,6 @@ export class WalletApi {
     walletService: WalletService,
     proofService: ProofService,
     walletRestoreService: WalletRestoreService,
-    transactionService: TransactionService,
     receiveOperationService: ReceiveOperationService,
     tokenService: TokenService,
     logger?: Logger,
@@ -41,7 +38,6 @@ export class WalletApi {
     this.walletService = walletService;
     this.proofService = proofService;
     this.walletRestoreService = walletRestoreService;
-    this.transactionService = transactionService;
     this.receiveOperationService = receiveOperationService;
     this.tokenService = tokenService;
     this.logger = logger;

@@ -40,9 +40,12 @@ export type SendHistoryEntry = BaseHistoryEntry & {
   token?: Token;
 };
 
+export type ReceiveHistoryState = 'prepared' | 'finalized' | 'rolledBack';
+
 export type ReceiveHistoryEntry = BaseHistoryEntry & {
   type: 'receive';
   amount: number;
+  state: ReceiveHistoryState;
   token?: Token;
 };
 

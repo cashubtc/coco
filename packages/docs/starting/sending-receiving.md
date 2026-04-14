@@ -22,8 +22,8 @@ await coco.wallet.receive(token);
 You can listen for receive events:
 
 ```ts
-coco.on('receive:created', ({ mintUrl, token }) => {
-  console.log(`Received ${token.proofs.reduce((a, p) => a + p.amount, 0)} sats from ${mintUrl}`);
+coco.on('receive-op:finalized', ({ mintUrl, operation }) => {
+  console.log(`Received ${operation.amount} sats from ${mintUrl}`);
 });
 ```
 

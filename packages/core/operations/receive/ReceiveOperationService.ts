@@ -16,6 +16,7 @@ import {
 } from '../../utils';
 import {
   UnknownMintError,
+  MintOperationError,
   ProofValidationError,
   OperationInProgressError,
 } from '../../models/Error';
@@ -39,6 +40,17 @@ import type { WalletService } from '../../services/WalletService';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
+
+const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
+  // 11003 is special for receive recovery: the mint may already have accepted and
+  // signed our outputs even though the client saw an error, so we keep executing
+  // and let recovery reconcile persisted outputs.
+  //
+  // We intentionally do not treat 11002/11004 as recoverable here. In the receive
+  // flow they indicate inputs or outputs that are not currently spendable, so the
+  // operation is rejected and a fresh receive should be started if the user retries.
+  11003,
+]);
 
 /**
  * Service that manages receive operations as sagas.
@@ -104,6 +116,14 @@ export class ReceiveOperationService {
     return this.recoveryLock !== null;
   }
 
+  private assertSupportedUnit(unit: string): void {
+    if (unit !== 'sat') {
+      throw new ProofValidationError(
+        `Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`,
+      );
+    }
+  }
+
   /**
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
@@ -115,7 +135,9 @@ export class ReceiveOperationService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    const proofs = (await this.tokenService.decodeToken(token, mintUrl)).proofs;
+    const decodedToken = await this.tokenService.decodeToken(token, mintUrl);
+    this.assertSupportedUnit(decodedToken.unit || 'sat');
+    const proofs = decodedToken.proofs;
 
     const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
     if (!Array.isArray(preparedProofs) || preparedProofs.length === 0) {
@@ -130,7 +152,13 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(id, mintUrl, amount, preparedProofs);
+    const operation = createReceiveOperation(
+      id,
+      mintUrl,
+      amount,
+      preparedProofs,
+      decodedToken.unit || 'sat',
+    );
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {
@@ -208,6 +236,11 @@ export class ReceiveOperationService {
     };
 
     await this.receiveOperationRepository.update(prepared);
+    await this.eventBus.emit('receive-op:prepared', {
+      mintUrl,
+      operationId: prepared.id,
+      operation: prepared,
+    });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,
@@ -247,6 +280,12 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
+        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+        if (rollbackReason) {
+          await this.markAsRolledBack(executing, rollbackReason);
+          throw e;
+        }
+
         await this.tryRecoverExecutingOperation(executing);
         throw e;
       }
@@ -513,6 +552,12 @@ export class ReceiveOperationService {
         try {
           await this.executeInternal(executing);
         } catch (e) {
+          const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+          if (rollbackReason) {
+            await this.markAsRolledBack(executing, rollbackReason);
+            return;
+          }
+
           this.logger?.warn('Receive re-execution failed, will retry later', {
             operationId: executing.id,
             mintUrl: executing.mintUrl,
@@ -553,6 +598,12 @@ export class ReceiveOperationService {
           recoveredCount: recovered.length,
         });
       } catch (e) {
+        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+        if (rollbackReason) {
+          await this.markAsRolledBack(executing, rollbackReason);
+          return;
+        }
+
         this.logger?.warn('Recovering receive outputs failed, will retry later', {
           operationId: executing.id,
           mintUrl: executing.mintUrl,
@@ -581,6 +632,14 @@ export class ReceiveOperationService {
     }
   }
 
+  private getRollbackReasonForReceiveFailure(error: unknown): string | null {
+    if (error instanceof MintOperationError) {
+      return NON_TERMINAL_RECEIVE_MINT_ERROR_CODES.has(error.code) ? null : error.message;
+    }
+
+    return null;
+  }
+
   private async checkProofStatesWithMint(
     mintUrl: string,
     proofs: Proof[],
@@ -604,7 +663,7 @@ export class ReceiveOperationService {
   }
 
   /**
-   * Persist finalized state and emit receive event for history updates.
+   * Persist finalized state and emit the operation finalized event.
    */
   private async markAsFinalized(op: ExecutingReceiveOperation): Promise<FinalizedReceiveOperation> {
     const current = await this.receiveOperationRepository.getById(op.id);
@@ -627,18 +686,16 @@ export class ReceiveOperationService {
       updatedAt: Date.now(),
     };
     await this.receiveOperationRepository.update(finalized);
-
-    const executing = current as ExecutingReceiveOperation;
-    await this.eventBus.emit('receive:created', {
-      mintUrl: executing.mintUrl,
-      token: { mint: executing.mintUrl, proofs: executing.inputProofs },
-      operationId: executing.id,
+    await this.eventBus.emit('receive-op:finalized', {
+      mintUrl: finalized.mintUrl,
+      operationId: finalized.id,
+      operation: finalized,
     });
 
     this.logger?.info('Receive operation finalized', {
-      operationId: executing.id,
-      mintUrl: executing.mintUrl,
-      proofCount: executing.inputProofs.length,
+      operationId: finalized.id,
+      mintUrl: finalized.mintUrl,
+      proofCount: finalized.inputProofs.length,
     });
 
     return finalized;
@@ -658,6 +715,11 @@ export class ReceiveOperationService {
       error,
     };
     await this.receiveOperationRepository.update(rolledBack);
+    await this.eventBus.emit('receive-op:rolled-back', {
+      mintUrl: rolledBack.mintUrl,
+      operationId: rolledBack.id,
+      operation: rolledBack,
+    });
 
     this.logger?.info('Receive operation rolled back', {
       operationId: op.id,

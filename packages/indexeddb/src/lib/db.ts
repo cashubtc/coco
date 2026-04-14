@@ -196,6 +196,7 @@ export interface SendOperationRow {
 export interface ReceiveOperationRow {
   id: string;
   mintUrl: string;
+  unit?: string | null;
   amount: number;
   state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
   createdAt: number;

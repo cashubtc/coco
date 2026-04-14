@@ -58,23 +58,26 @@ manager.use(myPlugin);
 
 Plugins can request access to internal services by declaring them in the `required` array. The following services are available:
 
-| Service                | Description                               |
-| ---------------------- | ----------------------------------------- |
-| `mintService`          | Manage mints (add, update, trust/untrust) |
-| `walletService`        | Low-level wallet operations               |
-| `proofService`         | Manage proofs (save, delete, query)       |
-| `keyRingService`       | P2PK key management                       |
-| `seedService`          | Access the wallet seed                    |
-| `walletRestoreService` | Restore wallet from seed                  |
-| `counterService`       | Keyset counter management                 |
-| `mintQuoteService`     | Mint quote operations                     |
-| `meltQuoteService`     | Melt quote operations                     |
-| `historyService`       | Transaction history                       |
-| `transactionService`   | Send/receive transactions                 |
-| `sendOperationService` | Send operation lifecycle                  |
-| `subscriptions`        | WebSocket subscription manager            |
-| `eventBus`             | Event pub/sub system                      |
-| `logger`               | Logging interface                         |
+| Service                   | Description                               |
+| ------------------------- | ----------------------------------------- |
+| `mintService`             | Manage mints (add, update, trust/untrust) |
+| `walletService`           | Low-level wallet operations               |
+| `proofService`            | Manage proofs (save, delete, query)       |
+| `keyRingService`          | P2PK key management                       |
+| `seedService`             | Access the wallet seed                    |
+| `walletRestoreService`    | Restore wallet from seed                  |
+| `counterService`          | Keyset counter management                 |
+| `tokenService`            | Token decoding and encoding helpers       |
+| `meltQuoteService`        | Melt quote operations                     |
+| `historyService`          | Transaction history                       |
+| `sendOperationService`    | Send operation lifecycle                  |
+| `receiveOperationService` | Receive operation lifecycle               |
+| `meltOperationService`    | Melt operation lifecycle                  |
+| `mintOperationService`    | Mint operation lifecycle                  |
+| `paymentRequestService`   | Payment request helpers                   |
+| `subscriptions`           | WebSocket subscription manager            |
+| `eventBus`                | Event pub/sub system                      |
+| `logger`                  | Logging interface                         |
 
 ## Plugin Extensions
 

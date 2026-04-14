@@ -6,10 +6,15 @@ import type {
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
+function getOperationUnit(op: ReceiveOperation): string {
+  return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
+}
+
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
     amount: row.amount,
     inputProofs: row.inputProofsJson ? JSON.parse(row.inputProofsJson) : [],
     createdAt: row.createdAt * 1000,
@@ -48,6 +53,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     return {
       id: op.id,
       mintUrl: op.mintUrl,
+      unit: getOperationUnit(op),
       amount: op.amount,
       state: op.state,
       createdAt: createdAtSeconds,
@@ -62,6 +68,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
   return {
     id: op.id,
     mintUrl: op.mintUrl,
+    unit: getOperationUnit(op),
     amount: op.amount,
     state: op.state,
     createdAt: createdAtSeconds,

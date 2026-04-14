@@ -12,7 +12,6 @@ import type {
   ProofService,
   SeedService,
   TokenService,
-  TransactionService,
   WalletRestoreService,
   WalletService,
 } from '../services';
@@ -34,7 +33,6 @@ export interface ServiceMap {
   tokenService: TokenService;
   meltQuoteService: MeltQuoteService;
   historyService: HistoryService;
-  transactionService: TransactionService;
   sendOperationService: SendOperationService;
   receiveOperationService: ReceiveOperationService;
   meltOperationService: MeltOperationService;

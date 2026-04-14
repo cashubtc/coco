@@ -4,6 +4,7 @@ import type {
   MintHistoryEntry,
   MeltHistoryEntry,
   ReceiveHistoryEntry,
+  ReceiveHistoryState,
   SendHistoryEntry,
   SendHistoryState,
 } from '@cashu/coco-core';
@@ -23,7 +24,8 @@ type NewHistoryEntry =
 type UpdatableHistoryEntry =
   | Omit<MintHistoryEntry, 'id' | 'createdAt'>
   | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
-  | Omit<SendHistoryEntry, 'id' | 'createdAt'>;
+  | Omit<SendHistoryEntry, 'id' | 'createdAt'>
+  | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
 
 export class IdbHistoryRepository {
   private readonly db: IdbDb;
@@ -87,6 +89,20 @@ export class IdbHistoryRepository {
     return entry.type === 'send' ? entry : null;
   }
 
+  async getReceiveHistoryEntry(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<ReceiveHistoryEntry | null> {
+    const row = await (this.db as any)
+      .table('coco_cashu_history')
+      .where('[mintUrl+operationId]')
+      .equals([mintUrl, operationId])
+      .last();
+    if (!row || row.type !== 'receive') return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'receive' ? entry : null;
+  }
+
   async updateHistoryEntry(history: UpdatableHistoryEntry): Promise<HistoryEntry> {
     const coll = (this.db as any).table('coco_cashu_history');
 
@@ -145,8 +161,26 @@ export class IdbHistoryRepository {
       await coll.update(row.id, updated);
       const fresh = await coll.get(row.id);
       return this.rowToEntry(fresh);
+    } else if (history.type === 'receive') {
+      const rows = await coll
+        .where('[mintUrl+operationId]')
+        .equals([history.mintUrl, history.operationId])
+        .toArray();
+      if (!rows.length) throw new Error('History entry not found');
+      const row = rows[rows.length - 1];
+      const updated = {
+        ...row,
+        unit: history.unit,
+        amount: history.amount,
+        metadata: history.metadata ?? null,
+        state: history.state,
+        tokenJson: history.token ? JSON.stringify(history.token as ReceiveToken) : row.tokenJson,
+      };
+      await coll.update(row.id, updated);
+      const fresh = await coll.get(row.id);
+      return this.rowToEntry(fresh);
     } else {
-      throw new Error('updateHistoryEntry does not support receive entries');
+      throw new Error(`Unsupported history entry type: ${String((history as HistoryEntry).type)}`);
     }
   }
 
@@ -154,6 +188,18 @@ export class IdbHistoryRepository {
     mintUrl: string,
     operationId: string,
     state: SendHistoryState,
+  ): Promise<void> {
+    const coll = (this.db as any).table('coco_cashu_history');
+    const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
+    if (!rows.length) return;
+    const row = rows[rows.length - 1];
+    await coll.update(row.id, { state });
+  }
+
+  async updateReceiveHistoryState(
+    mintUrl: string,
+    operationId: string,
+    state: ReceiveHistoryState,
   ): Promise<void> {
     const coll = (this.db as any).table('coco_cashu_history');
     const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
@@ -197,6 +243,7 @@ export class IdbHistoryRepository {
     } else if (history.type === 'receive') {
       base.tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
       base.operationId = history.operationId ?? null;
+      base.state = history.state;
     }
     return base;
   }
@@ -246,6 +293,7 @@ export class IdbHistoryRepository {
       type: 'receive',
       amount: row.amount,
       operationId: row.operationId ?? undefined,
+      state: (row.state ?? 'finalized') as ReceiveHistoryState,
       token,
     } satisfies HistoryEntry;
   }
