@@ -531,7 +531,7 @@ describe('HistoryService', () => {
   });
 
   describe('receive operations', () => {
-    it('creates receive history entry from receive-op:prepared', async () => {
+    it('does not create history entry from receive-op:prepared', async () => {
       const operation = makePreparedReceiveOperation('receive-op-1');
 
       await eventBus.emit('receive-op:prepared', {
@@ -540,23 +540,12 @@ describe('HistoryService', () => {
         operation: { ...operation, unit: 'usd' },
       });
 
-      expect(historyEntries.size).toBe(1);
-      const entry = Array.from(historyEntries.values())[0] as ReceiveHistoryEntry;
-      expect(entry.state).toBe('prepared');
-      expect(entry.unit).toBe('usd');
-      expect(entry.operationId).toBe(operation.id);
-      expect(historyUpdateEvents.length).toBe(1);
+      expect(historyEntries.size).toBe(0);
+      expect(historyUpdateEvents.length).toBe(0);
     });
 
-    it('finalizes prepared receive history via receive-op:finalized', async () => {
-      const preparedOperation = makePreparedReceiveOperation('receive-op-2');
+    it('creates receive history from receive-op:finalized', async () => {
       const operation = makeFinalizedReceiveOperation('receive-op-2');
-
-      await eventBus.emit('receive-op:prepared', {
-        mintUrl: preparedOperation.mintUrl,
-        operationId: preparedOperation.id,
-        operation: { ...preparedOperation, unit: 'usd' },
-      });
       await eventBus.emit('receive-op:finalized', {
         mintUrl: operation.mintUrl,
         operationId: operation.id,
@@ -573,7 +562,7 @@ describe('HistoryService', () => {
         proofs: operation.inputProofs,
         unit: 'usd',
       });
-      expect(historyUpdateEvents.length).toBe(2);
+      expect(historyUpdateEvents.length).toBe(1);
     });
 
     it('creates receive history entry from receive-op:rolled-back', async () => {

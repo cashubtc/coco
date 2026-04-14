@@ -1,8 +1,13 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { OperationBinding, OperationHookStatus } from './operation-types';
 
 type ReplaceCurrentOperationOptions = {
   clearExecuteResult?: boolean;
+};
+
+type BindableOperation = {
+  id: string;
+  updatedAt: number;
 };
 
 export function normalizeHookError(error: unknown): Error {
@@ -19,6 +24,27 @@ export function getInitialOperationFromBinding<TOperation extends { id: string }
   return null;
 }
 
+export function getInitialOperationIdFromBinding<TOperation extends { id: string }>(
+  binding: OperationBinding<TOperation> | null | undefined,
+): string | null {
+  if (typeof binding === 'string') {
+    return binding;
+  }
+
+  return binding?.id ?? null;
+}
+
+export function useInitialOperationHydration<TOperation extends { id: string }>(
+  binding: OperationBinding<TOperation> | null | undefined,
+  hydrateOperation: (operationId: string) => Promise<void>,
+): void {
+  useEffect(() => {
+    if (typeof binding === 'string') {
+      void hydrateOperation(binding).catch(() => {});
+    }
+  }, [binding, hydrateOperation]);
+}
+
 export function requireCurrentOperationId<TOperation extends { id: string }>(
   currentOperation: TOperation | null,
   actionName: string,
@@ -28,7 +54,20 @@ export function requireCurrentOperationId<TOperation extends { id: string }>(
   }
 
   throw new Error(
-    `No current operation available for ${actionName}. Call prepare(), load(operationId), or initialize the hook with an operation first.`,
+    `No current operation available for ${actionName}. Initialize the hook with an operation first or create one before calling ${actionName}.`,
+  );
+}
+
+export function requireUnboundOperationCreation(
+  boundOperationId: string | null,
+  actionName: string,
+): void {
+  if (!boundOperationId) {
+    return;
+  }
+
+  throw new Error(
+    `Cannot call ${actionName} while this hook is bound to operation ${boundOperationId}. Remount the hook with a new React key or call reset() first.`,
   );
 }
 
@@ -44,6 +83,21 @@ export async function requireOperation<TOperation>(
   return operation;
 }
 
+export function shouldReplaceBoundOperation<TOperation extends BindableOperation>(
+  currentOperation: TOperation | null,
+  incomingOperation: TOperation,
+): boolean {
+  if (!currentOperation) {
+    return true;
+  }
+
+  if (currentOperation.id !== incomingOperation.id) {
+    return true;
+  }
+
+  return incomingOperation.updatedAt >= currentOperation.updatedAt;
+}
+
 export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(
   initialOperation: TOperation | null = null,
 ) {
@@ -55,6 +109,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
   const mountedRef = useRef(true);
   const statefulActionInProgressRef = useRef(false);
   const currentOperationRef = useRef<TOperation | null>(initialOperation);
+  const actionEpochRef = useRef(0);
 
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -101,6 +156,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
       }
 
       statefulActionInProgressRef.current = true;
+      const actionEpoch = actionEpochRef.current;
       if (mountedRef.current) {
         setStatus('loading');
         setError(null);
@@ -108,16 +164,16 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
 
       try {
         const result = await action();
-        if (onSuccess) {
+        if (onSuccess && actionEpoch === actionEpochRef.current) {
           await onSuccess(result);
         }
-        if (mountedRef.current) {
+        if (mountedRef.current && actionEpoch === actionEpochRef.current) {
           setStatus('success');
         }
         return result;
       } catch (error) {
         const normalizedError = normalizeHookError(error);
-        if (mountedRef.current) {
+        if (mountedRef.current && actionEpoch === actionEpochRef.current) {
           setError(normalizedError);
           setStatus('error');
         }
@@ -134,6 +190,7 @@ export function useOperationHookState<TOperation extends { id: string }, TExecut
       return;
     }
 
+    actionEpochRef.current += 1;
     currentOperationRef.current = null;
     setCurrentOperation(null);
     setExecuteResult(null);

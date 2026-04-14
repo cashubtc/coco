@@ -72,10 +72,6 @@ export class HistoryService {
     this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
       return this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
     });
-    this.eventBus.on('receive-op:prepared', ({ mintUrl, operation }) => {
-      if (operation.state !== 'prepared') return;
-      return this.handleReceiveOperationUpdated(mintUrl, operation, 'prepared');
-    });
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
       if (operation.state !== 'finalized') return;
       return this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');

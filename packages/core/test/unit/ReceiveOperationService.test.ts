@@ -267,7 +267,6 @@ describe('ReceiveOperationService', () => {
     expect(rollbackResolved).toBe(true);
     expect(historyEntry?.state).toBe('rolledBack');
   });
-
   it('init rejects untrusted mints', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
@@ -428,9 +427,7 @@ describe('ReceiveOperationService', () => {
     const initOp = await service.init({ mint: mintUrl, proofs } as Token);
     const prepared = await service.prepare(initOp);
 
-    expect((await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id))?.state).toBe(
-      'prepared',
-    );
+    expect(await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id)).toBeNull();
 
     mockWalletReceive.mockImplementation(async () => {
       throw new MintOperationError(0, 'Keyset unknown');

@@ -8,7 +8,6 @@ export interface OperationHookResult<TOperation extends { id: string }, TExecute
   error: Error | null;
   isLoading: boolean;
   isError: boolean;
-  load(operationId: string): Promise<TOperation>;
   refresh(): Promise<TOperation>;
   reset(): void;
 }

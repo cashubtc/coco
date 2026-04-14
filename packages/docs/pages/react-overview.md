@@ -17,13 +17,12 @@ Each hook exposes the same durable-operation story:
 - `currentOperation` for the persisted operation state you should render from
 - `executeResult` for the last execute-specific result
 - optional initial binding via an operation or `operationId` on first render
-- `load(operationId)` for resume flows and explicit rebinding
+- internal mount-time hydration when initialized with an `operationId`
 - no-arg follow-up actions that operate on the currently bound operation
 - `status`, `error`, `isLoading`, and `isError` for local async state
 
 The optional hook argument is initial-only. If your UI stays mounted while the
-target operation changes, call `load(operationId)` to switch the hook to the
-new operation.
+target operation changes, remount the hook or component with a new React `key`.
 
 ## Installation
 

@@ -206,14 +206,15 @@ calling convention also changed:
   promises and expose hook-managed `status`, `error`, `isLoading`, and
   `isError` state.
 - Each hook binds to one operation after `prepare(...)`, `importQuote(...)`, or
-  `load(operationId)`.
+  initial mount-time hydration from `useXOperation(operationId)`.
 - Follow-up methods such as `execute()`, `refresh()`, `cancel()`, `reclaim()`,
   `finalize()`, and `checkPayment()` act on the currently bound operation, so
   you do not pass the operation id to those methods anymore.
 - Hook state is now split between `currentOperation` for the persisted
   operation record and `executeResult` for execute-specific return data.
 - The optional hook argument is initial-only. If a mounted component needs to
-  switch to a different operation later, call `load(operationId)` explicitly.
+  switch to a different operation later, remount the hook or component with a
+  new React `key`.
 
 The derived balance surfaces also changed:
 
