@@ -42,17 +42,7 @@ import type { ReceiveOperationRepository, ProofRepository } from '../../reposito
 import { OperationIdLock } from '../OperationIdLock';
 
 const TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
-  10001,
-  11001,
-  11005,
-  11007,
-  11008,
-  11009,
-  11010,
-  11014,
-  11015,
-  12001,
-  12002,
+  10001, 11001, 11005, 11007, 11008, 11009, 11010, 11014, 11015, 12001, 12002,
 ]);
 
 /**

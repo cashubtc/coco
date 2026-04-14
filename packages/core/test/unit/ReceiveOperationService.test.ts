@@ -428,7 +428,9 @@ describe('ReceiveOperationService', () => {
       throw new ProofValidationError('Invalid signature in receive response');
     });
 
-    await expect(service.execute(prepared)).rejects.toThrow('Invalid signature in receive response');
+    await expect(service.execute(prepared)).rejects.toThrow(
+      'Invalid signature in receive response',
+    );
 
     const stored = await receiveOpRepo.getById(prepared.id);
     expect(stored?.state).toBe('executing');
