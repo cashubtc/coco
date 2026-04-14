@@ -7,6 +7,7 @@ import {
   getInitialOperationFromBinding,
   requireCurrentOperationId,
   requireOperation,
+  shouldReplaceBoundOperation,
   useInitialOperationHydration,
   useOperationHookState,
 } from './operationHookUtils';
@@ -66,10 +67,14 @@ export function useMeltOperation(
         return;
       }
 
+      if (!shouldReplaceBoundOperation(getCurrentOperation(), operation)) {
+        return;
+      }
+
       boundOperationIdRef.current = operation.id;
       replaceCurrentOperation(operation, options);
     },
-    [replaceCurrentOperation],
+    [getCurrentOperation, replaceCurrentOperation],
   );
 
   const handleObservedOperation = useCallback(

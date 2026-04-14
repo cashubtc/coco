@@ -219,6 +219,7 @@ function createPendingSendOperation(
   return {
     ...createPreparedSendOperation(),
     state: 'pending',
+    updatedAt: 1_700_000_001_000,
     token: {} as SendExecuteResult['token'],
     ...overrides,
   };
@@ -230,6 +231,7 @@ function createFinalizedSendOperation(
   return {
     ...createPendingSendOperation(),
     state: 'finalized',
+    updatedAt: 1_700_000_002_000,
     ...overrides,
   } as SendOperationRecord;
 }
@@ -282,6 +284,7 @@ function createFinalizedReceiveOperation(
   return {
     ...createPreparedReceiveOperation(),
     state: 'finalized',
+    updatedAt: 1_700_000_001_000,
     ...overrides,
   };
 }
@@ -292,6 +295,7 @@ function createRolledBackReceiveOperation(
   return {
     ...createPreparedReceiveOperation(),
     state: 'rolled_back',
+    updatedAt: 1_700_000_001_000,
     ...overrides,
   } as ReceiveOperationRecord;
 }
@@ -323,6 +327,7 @@ function createFinalizedMintOperation(
     state: 'finalized',
     lastObservedRemoteState: 'ISSUED',
     lastObservedRemoteStateAt: 1_700_000_020_000,
+    updatedAt: 1_700_000_020_000,
     ...overrides,
   } as MintExecuteResult;
 }
@@ -341,6 +346,7 @@ function createMintCheckPaymentResult(
 function createMintOperation(overrides: Partial<MintOperationRecord> = {}): MintOperationRecord {
   return {
     ...createPendingMintOperation(),
+    updatedAt: 1_700_000_010_000,
     ...overrides,
   } as MintOperationRecord;
 }
@@ -375,6 +381,7 @@ function createPendingMeltOperation(
   return {
     ...createPreparedMeltOperation(),
     state: 'pending',
+    updatedAt: 1_700_000_001_000,
     ...overrides,
   } as MeltOperationRecord;
 }
@@ -385,6 +392,7 @@ function createFinalizedMeltOperation(
   return {
     ...createPendingMeltOperation(),
     state: 'finalized',
+    updatedAt: 1_700_000_002_000,
     ...overrides,
   } as MeltOperationRecord;
 }
@@ -395,6 +403,7 @@ function createRolledBackMeltOperation(
   return {
     ...createPreparedMeltOperation(),
     state: 'rolled_back',
+    updatedAt: 1_700_000_002_000,
     ...overrides,
   } as MeltOperationRecord;
 }
@@ -513,6 +522,69 @@ describe('useSendOperation', () => {
       mintUrl: loaded.mintUrl,
       operationId: 'send-op-other',
       operation: createFinalizedSendOperation({ id: 'send-op-other' }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
+  });
+
+  it('keeps the newer send operation when hydration resolves with an older snapshot', async () => {
+    const { manager, send, emit } = createSendManagerMock();
+    const loaded = createPreparedSendOperation({ id: 'send-op-hydrate', updatedAt: 10 });
+    const finalized = createFinalizedSendOperation({ id: loaded.id, updatedAt: 20 });
+    const deferredLoad = createDeferred<SendOperationRecord | null>();
+
+    send.get.mockReturnValue(deferredLoad.promise);
+
+    const { result } = renderHook(() => useSendOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await emit('send:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    deferredLoad.resolve(loaded);
+    await act(async () => {
+      await deferredLoad.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
+    expect(send.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts same-id send updates when updatedAt is equal', async () => {
+    const { manager, send, emit } = createSendManagerMock();
+    const loaded = createPreparedSendOperation({ id: 'send-op-equal', updatedAt: 10 });
+    const finalized = createFinalizedSendOperation({ id: loaded.id, updatedAt: loaded.updatedAt });
+
+    send.get.mockResolvedValueOnce(loaded);
+
+    const { result } = renderHook(() => useSendOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
+
+    await emit('send:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
     });
 
     await act(async () => {
@@ -786,6 +858,41 @@ describe('useReceiveOperation', () => {
 
     expect(result.current.currentOperation).toEqual(finalized);
   });
+
+  it('keeps the newer receive operation when hydration resolves with an older snapshot', async () => {
+    const { manager, receive, emit } = createReceiveManagerMock();
+    const loaded = createPreparedReceiveOperation({ id: 'receive-op-hydrate', updatedAt: 10 });
+    const finalized = createFinalizedReceiveOperation({ id: loaded.id, updatedAt: 20 });
+    const deferredLoad = createDeferred<ReceiveOperationRecord | null>();
+
+    receive.get.mockReturnValue(deferredLoad.promise);
+
+    const { result } = renderHook(() => useReceiveOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await emit('receive-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    deferredLoad.resolve(loaded);
+    await act(async () => {
+      await deferredLoad.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
+    expect(receive.get).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('useMintOperation', () => {
@@ -893,14 +1000,15 @@ describe('useMintOperation', () => {
     expect(result.current.currentOperation).toEqual(pending);
   });
 
-  it('prefers event updates over a stale mount-time hydration result for the bound operation id', async () => {
+  it('keeps the newer mint operation when hydration resolves with an older snapshot', async () => {
     const { manager, mint, emit } = createMintManagerMock();
-    const pending = createPendingMintOperation({ id: 'mint-op-hydrate' });
+    const pending = createPendingMintOperation({ id: 'mint-op-hydrate', updatedAt: 10 });
     const executing = createMintOperation({
       id: pending.id,
       state: 'executing',
       lastObservedRemoteState: 'PAID',
       lastObservedRemoteStateAt: 1_700_000_010_000,
+      updatedAt: 20,
     });
     const deferredLoad = createDeferred<MintOperationRecord | null>();
 
@@ -946,6 +1054,7 @@ describe('useMintOperation', () => {
       state: 'executing',
       lastObservedRemoteState: 'PAID',
       lastObservedRemoteStateAt: 1_700_000_010_000,
+      updatedAt: 1_700_000_015_000,
     });
     const finalized = createFinalizedMintOperation({ id: pending.id });
 
@@ -1140,5 +1249,40 @@ describe('useMeltOperation', () => {
     });
 
     expect(result.current.currentOperation).toEqual(finalized);
+  });
+
+  it('keeps the newer melt operation when hydration resolves with an older snapshot', async () => {
+    const { manager, melt, emit } = createMeltManagerMock();
+    const loaded = createPreparedMeltOperation({ id: 'melt-op-hydrate', updatedAt: 10 });
+    const finalized = createFinalizedMeltOperation({ id: loaded.id, updatedAt: 20 });
+    const deferredLoad = createDeferred<MeltOperationRecord | null>();
+
+    melt.get.mockReturnValue(deferredLoad.promise);
+
+    const { result } = renderHook(() => useMeltOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await emit('melt-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    deferredLoad.resolve(loaded);
+    await act(async () => {
+      await deferredLoad.promise;
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
+    expect(melt.get).toHaveBeenCalledTimes(1);
   });
 });

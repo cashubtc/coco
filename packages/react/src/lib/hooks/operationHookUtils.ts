@@ -5,6 +5,11 @@ type ReplaceCurrentOperationOptions = {
   clearExecuteResult?: boolean;
 };
 
+type BindableOperation = {
+  id: string;
+  updatedAt: number;
+};
+
 export function normalizeHookError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -63,6 +68,21 @@ export async function requireOperation<TOperation>(
   }
 
   return operation;
+}
+
+export function shouldReplaceBoundOperation<TOperation extends BindableOperation>(
+  currentOperation: TOperation | null,
+  incomingOperation: TOperation,
+): boolean {
+  if (!currentOperation) {
+    return true;
+  }
+
+  if (currentOperation.id !== incomingOperation.id) {
+    return true;
+  }
+
+  return incomingOperation.updatedAt >= currentOperation.updatedAt;
 }
 
 export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(

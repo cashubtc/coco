@@ -7,13 +7,13 @@ import {
   getInitialOperationFromBinding,
   requireCurrentOperationId,
   requireOperation,
+  shouldReplaceBoundOperation,
   useInitialOperationHydration,
   useOperationHookState,
 } from './operationHookUtils';
 
 type MintOps = Manager['ops']['mint'];
 type MintOperation = NonNullable<Awaited<ReturnType<MintOps['get']>>>;
-type BindSource = 'action' | 'event' | 'hydrate';
 
 export type MintOperationPrepareInput = Parameters<MintOps['prepare']>[0];
 export type MintOperationImportQuoteInput = Parameters<MintOps['importQuote']>[0];
@@ -22,65 +22,6 @@ export type MintOperationExecuteResult = Awaited<ReturnType<MintOps['execute']>>
 export type MintOperationCheckPaymentResult = Awaited<ReturnType<MintOps['checkPayment']>>;
 export type MintOperationFinalizeResult = Awaited<ReturnType<MintOps['finalize']>>;
 export type MintOperationPendingList = Awaited<ReturnType<MintOps['listPending']>>;
-
-function isTerminalMintOperation(operation: MintOperation | null): boolean {
-  return operation?.state === 'finalized' || operation?.state === 'failed';
-}
-
-function getObservedRemoteStateAt(operation: MintOperation | null): number {
-  if (!operation || !('lastObservedRemoteStateAt' in operation)) {
-    return 0;
-  }
-
-  return operation.lastObservedRemoteStateAt ?? 0;
-}
-
-function selectPreferredMintOperation(
-  current: MintOperation | null,
-  incoming: MintOperation | null,
-  options: { preferCurrentOnTie?: boolean } = {},
-): MintOperation | null {
-  if (!current) {
-    return incoming;
-  }
-
-  if (!incoming) {
-    return current;
-  }
-
-  if (current.id !== incoming.id) {
-    return incoming;
-  }
-
-  if (current.updatedAt > incoming.updatedAt) {
-    return current;
-  }
-
-  if (current.updatedAt < incoming.updatedAt) {
-    return incoming;
-  }
-
-  const currentObservedRemoteStateAt = getObservedRemoteStateAt(current);
-  const incomingObservedRemoteStateAt = getObservedRemoteStateAt(incoming);
-
-  if (currentObservedRemoteStateAt > incomingObservedRemoteStateAt) {
-    return current;
-  }
-
-  if (currentObservedRemoteStateAt < incomingObservedRemoteStateAt) {
-    return incoming;
-  }
-
-  if (isTerminalMintOperation(current) && !isTerminalMintOperation(incoming)) {
-    return current;
-  }
-
-  if (!isTerminalMintOperation(current) && isTerminalMintOperation(incoming)) {
-    return incoming;
-  }
-
-  return options.preferCurrentOnTie ? current : incoming;
-}
 
 export interface UseMintOperationResult extends OperationHookResult<
   MintOperation,
@@ -119,11 +60,7 @@ export function useMintOperation(
   } = useOperationHookState<MintOperation, MintOperationExecuteResult>(initialOperation);
 
   const bindOperation = useCallback(
-    (
-      operation: MintOperation | null,
-      options?: Parameters<typeof replaceCurrentOperation>[1],
-      source: BindSource = 'action',
-    ) => {
+    (operation: MintOperation | null, options?: Parameters<typeof replaceCurrentOperation>[1]) => {
       if (!operation) {
         boundOperationIdRef.current = null;
         replaceCurrentOperation(null, options);
@@ -134,12 +71,7 @@ export function useMintOperation(
         return;
       }
 
-      const current = getCurrentOperation();
-      const preferredOperation = selectPreferredMintOperation(current, operation, {
-        preferCurrentOnTie: source === 'hydrate',
-      });
-
-      if (!preferredOperation || preferredOperation !== operation) {
+      if (!shouldReplaceBoundOperation(getCurrentOperation(), operation)) {
         return;
       }
 
@@ -152,7 +84,7 @@ export function useMintOperation(
   const handleObservedOperation = useCallback(
     (operation: MintOperation) => {
       if (operation.id === boundOperationIdRef.current) {
-        bindOperation(operation, undefined, 'event');
+        bindOperation(operation);
       }
     },
     [bindOperation],
@@ -168,7 +100,7 @@ export function useMintOperation(
               return;
             }
 
-            bindOperation(operation, { clearExecuteResult: true }, 'hydrate');
+            bindOperation(operation, { clearExecuteResult: true });
           },
         );
       } catch (error) {
