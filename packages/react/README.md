@@ -55,10 +55,11 @@ export function App({ manager }: { manager: Manager }) {
 }
 ```
 
-Each operation hook stays bound to one local operation flow. It starts unbound
-until you call `prepare()` or `load(operationId)`, and you can also initialize
-it from an existing operation or operation id for resume screens. That initial
-hook argument is only used on the first render; if a mounted component needs to
-switch to a different operation, call `load(operationId)` explicitly.
+Each operation hook stays bound to one local operation flow for the lifetime of
+that hook instance. It starts unbound until you call the hook's creation action
+such as `prepare()`, and you can also initialize it from an existing operation
+or operation id for resume screens. That initial hook argument is only used on
+the first render; if a mounted component needs to switch to a different
+operation, remount the hook or component with a new React `key`.
 
 See the docs in `packages/docs` for provider composition and hook usage details.

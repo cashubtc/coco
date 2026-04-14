@@ -83,6 +83,32 @@ const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
   methodData: { invoice: 'lnbc1meltinvoice' },
 };
 
+function createEventBusMock() {
+  const listeners = new Map<string, Set<(payload: unknown) => void | Promise<void>>>();
+
+  const on = vi.fn((event: string, handler: (payload: unknown) => void | Promise<void>) => {
+    const handlers = listeners.get(event) ?? new Set();
+    handlers.add(handler);
+    listeners.set(event, handlers);
+
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        listeners.delete(event);
+      }
+    };
+  });
+
+  const emit = async (event: string, payload: unknown): Promise<void> => {
+    const handlers = Array.from(listeners.get(event) ?? []);
+    for (const handler of handlers) {
+      await handler(payload);
+    }
+  };
+
+  return { on, emit };
+}
+
 function createSendManagerMock() {
   const send = {
     prepare: vi.fn(),
@@ -95,10 +121,12 @@ function createSendManagerMock() {
     reclaim: vi.fn(),
     finalize: vi.fn(),
   };
+  const { on, emit } = createEventBusMock();
 
   return {
-    manager: { ops: { send } } as unknown as Manager,
+    manager: { ops: { send }, on } as unknown as Manager,
     send,
+    emit,
   };
 }
 
@@ -112,10 +140,12 @@ function createReceiveManagerMock() {
     refresh: vi.fn(),
     cancel: vi.fn(),
   };
+  const { on, emit } = createEventBusMock();
 
   return {
-    manager: { ops: { receive } } as unknown as Manager,
+    manager: { ops: { receive }, on } as unknown as Manager,
     receive,
+    emit,
   };
 }
 
@@ -132,10 +162,12 @@ function createMintManagerMock() {
     refresh: vi.fn(),
     finalize: vi.fn(),
   };
+  const { on, emit } = createEventBusMock();
 
   return {
-    manager: { ops: { mint } } as unknown as Manager,
+    manager: { ops: { mint }, on } as unknown as Manager,
     mint,
+    emit,
   };
 }
 
@@ -152,10 +184,12 @@ function createMeltManagerMock() {
     reclaim: vi.fn(),
     finalize: vi.fn(),
   };
+  const { on, emit } = createEventBusMock();
 
   return {
-    manager: { ops: { melt } } as unknown as Manager,
+    manager: { ops: { melt }, on } as unknown as Manager,
     melt,
+    emit,
   };
 }
 
@@ -406,18 +440,17 @@ describe('useSendOperation', () => {
     expect(result.current.executeResult).toEqual(executeResult);
   });
 
-  it('supports initial operation-id binding, rebinds through load, and reset clears only local state', async () => {
+  it('supports initial operation-id binding and reset clears only local state', async () => {
     const { manager, send } = createSendManagerMock();
     const loaded = createPreparedSendOperation({ id: 'send-op-load' });
-    const rebound = createPreparedSendOperation({ id: 'send-op-rebound' });
-    const reboundExecuteResult = createSendExecuteResult({
-      operation: createPendingSendOperation({ id: rebound.id }),
+    const executeResult = createSendExecuteResult({
+      operation: createPendingSendOperation({ id: loaded.id }),
     });
 
-    send.get.mockResolvedValueOnce(loaded).mockResolvedValueOnce(rebound);
-    send.execute.mockResolvedValue(reboundExecuteResult);
+    send.get.mockResolvedValue(loaded);
+    send.execute.mockResolvedValue(executeResult);
     send.listPrepared.mockResolvedValue([loaded]);
-    send.listInFlight.mockResolvedValue([reboundExecuteResult.operation]);
+    send.listInFlight.mockResolvedValue([executeResult.operation]);
 
     const { result } = renderHook(() => useSendOperation(loaded.id), {
       wrapper: createHookWrapper(manager),
@@ -431,21 +464,15 @@ describe('useSendOperation', () => {
     const inFlightList = await result.current.listInFlight();
 
     expect(preparedList).toEqual([loaded]);
-    expect(inFlightList).toEqual([reboundExecuteResult.operation]);
+    expect(inFlightList).toEqual([executeResult.operation]);
     expect(result.current.currentOperation).toEqual(loaded);
-
-    await act(async () => {
-      await result.current.load(rebound.id);
-    });
-
-    expect(result.current.currentOperation).toEqual(rebound);
 
     await act(async () => {
       await result.current.execute();
     });
 
-    expect(send.execute).toHaveBeenCalledWith(rebound.id);
-    expect(result.current.currentOperation).toEqual(reboundExecuteResult.operation);
+    expect(send.execute).toHaveBeenCalledWith(loaded.id);
+    expect(result.current.currentOperation).toEqual(executeResult.operation);
 
     act(() => {
       result.current.reset();
@@ -455,6 +482,44 @@ describe('useSendOperation', () => {
     expect(result.current.executeResult).toBeNull();
     expect(result.current.status).toBe('idle');
     expect(result.current.error).toBeNull();
+  });
+
+  it('reacts to background events for the bound send operation id and ignores others', async () => {
+    const { manager, send, emit } = createSendManagerMock();
+    const loaded = createPreparedSendOperation({ id: 'send-op-events' });
+    const finalized = createFinalizedSendOperation({ id: loaded.id });
+
+    send.get.mockResolvedValueOnce(loaded);
+
+    const { result } = renderHook(() => useSendOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
+
+    await emit('send:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    await emit('send:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: 'send-op-other',
+      operation: createFinalizedSendOperation({ id: 'send-op-other' }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
   });
 
   it('rejects concurrent stateful actions immediately', async () => {
@@ -473,7 +538,9 @@ describe('useSendOperation', () => {
       firstPreparePromise = result.current.prepare(SEND_PREPARE_INPUT);
     });
 
-    await expect(result.current.load('send-op-2')).rejects.toThrow('Operation already in progress');
+    await expect(result.current.prepare(SEND_PREPARE_INPUT)).rejects.toThrow(
+      'Operation already in progress',
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -624,19 +691,21 @@ describe('useReceiveOperation', () => {
     expect(result.current.executeResult).toEqual(finalized);
   });
 
-  it('accepts an initial operation binding, synchronizes after cancel, and surfaces errors', async () => {
+  it('accepts an initial operation-id binding, synchronizes after cancel, and surfaces errors', async () => {
     const { manager, receive } = createReceiveManagerMock();
     const loaded = createPreparedReceiveOperation({ id: 'receive-op-load' });
     const rolledBack = createRolledBackReceiveOperation({ id: loaded.id });
 
-    receive.get.mockResolvedValue(rolledBack);
+    receive.get.mockResolvedValueOnce(loaded).mockResolvedValueOnce(rolledBack);
     receive.cancel.mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useReceiveOperation(loaded), {
+    const { result } = renderHook(() => useReceiveOperation(loaded.id), {
       wrapper: createHookWrapper(manager),
     });
 
-    expect(result.current.currentOperation).toEqual(loaded);
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
 
     await act(async () => {
       await result.current.cancel();
@@ -679,10 +748,48 @@ describe('useReceiveOperation', () => {
     expect(result.current.status).toBe('success');
     expect(result.current.error).toBeNull();
   });
+
+  it('reacts to background events for the bound receive operation id and ignores others', async () => {
+    const { manager, receive, emit } = createReceiveManagerMock();
+    const loaded = createPreparedReceiveOperation({ id: 'receive-op-events' });
+    const finalized = createFinalizedReceiveOperation({ id: loaded.id });
+
+    receive.get.mockResolvedValueOnce(loaded);
+
+    const { result } = renderHook(() => useReceiveOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
+
+    await emit('receive-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    await emit('receive-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: 'receive-op-other',
+      operation: createFinalizedReceiveOperation({ id: 'receive-op-other' }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
+  });
 });
 
 describe('useMintOperation', () => {
-  it('prepares and imports quotes into currentOperation', async () => {
+  it('binds newly prepared and imported quotes when starting unbound', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation();
     const imported = createPendingMintOperation({ id: 'mint-op-imported' });
@@ -690,22 +797,26 @@ describe('useMintOperation', () => {
     mint.prepare.mockResolvedValue(pending);
     mint.importQuote.mockResolvedValue(imported);
 
-    const { result } = renderHook(() => useMintOperation(), {
+    const { result: prepareResult } = renderHook(() => useMintOperation(), {
       wrapper: createHookWrapper(manager),
     });
 
     await act(async () => {
-      await result.current.prepare(MINT_PREPARE_INPUT);
+      await prepareResult.current.prepare(MINT_PREPARE_INPUT);
     });
 
-    expect(result.current.currentOperation).toEqual(pending);
+    expect(prepareResult.current.currentOperation).toEqual(pending);
+
+    const { result: importResult } = renderHook(() => useMintOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
 
     await act(async () => {
-      await result.current.importQuote(MINT_IMPORT_QUOTE_INPUT);
+      await importResult.current.importQuote(MINT_IMPORT_QUOTE_INPUT);
     });
 
-    expect(result.current.currentOperation).toEqual(imported);
-    expect(result.current.executeResult).toBeNull();
+    expect(importResult.current.currentOperation).toEqual(imported);
+    expect(importResult.current.executeResult).toBeNull();
   });
 
   it('accepts an initial operation-id binding and synchronizes after checkPayment and execute', async () => {
@@ -745,36 +856,171 @@ describe('useMintOperation', () => {
     expect(result.current.executeResult).toEqual(finalized);
   });
 
-  it('loads persisted operations and rebinds before execute', async () => {
+  it('surfaces an error when an initial operation-id binding is missing', async () => {
     const { manager, mint } = createMintManagerMock();
-    const loaded = createMintOperation({ id: 'mint-op-load' });
-    const rebound = createMintOperation({ id: 'mint-op-rebound' });
-    const executeResult = createFinalizedMintOperation({ id: rebound.id });
 
-    mint.get.mockResolvedValueOnce(loaded).mockResolvedValueOnce(rebound);
-    mint.execute.mockResolvedValue(executeResult);
+    mint.get.mockResolvedValue(null);
 
-    const { result } = renderHook(() => useMintOperation(), {
+    const { result } = renderHook(() => useMintOperation('missing-mint-op'), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.status).toBe('error');
+      expect(result.current.error?.message).toContain('Operation missing-mint-op not found');
+    });
+  });
+
+  it('can prepare after a missing initial operation-id binding', async () => {
+    const { manager, mint } = createMintManagerMock();
+    const pending = createPendingMintOperation({ id: 'mint-op-recovered' });
+
+    mint.get.mockResolvedValue(null);
+    mint.prepare.mockResolvedValue(pending);
+
+    const { result } = renderHook(() => useMintOperation('missing-mint-op'), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.status).toBe('error');
+    });
+
+    await act(async () => {
+      await result.current.prepare(MINT_PREPARE_INPUT);
+    });
+
+    expect(result.current.currentOperation).toEqual(pending);
+  });
+
+  it('prefers event updates over a stale mount-time hydration result for the bound operation id', async () => {
+    const { manager, mint, emit } = createMintManagerMock();
+    const pending = createPendingMintOperation({ id: 'mint-op-hydrate' });
+    const executing = createMintOperation({
+      id: pending.id,
+      state: 'executing',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: 1_700_000_010_000,
+    });
+    const deferredLoad = createDeferred<MintOperationRecord | null>();
+
+    mint.get.mockReturnValue(deferredLoad.promise);
+
+    const { result } = renderHook(() => useMintOperation(pending.id), {
       wrapper: createHookWrapper(manager),
     });
 
     await act(async () => {
-      await result.current.load(loaded.id);
+      await Promise.resolve();
     });
 
+    await emit('mint-op:executing', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: executing,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(executing);
+    });
+
+    deferredLoad.resolve(pending);
     await act(async () => {
-      await result.current.load(rebound.id);
+      await deferredLoad.promise;
     });
 
-    expect(result.current.currentOperation).toEqual(rebound);
-
-    await act(async () => {
-      await result.current.execute();
-    });
-
-    expect(mint.execute).toHaveBeenCalledWith(rebound.id);
-    expect(result.current.currentOperation).toEqual(executeResult);
+    expect(result.current.currentOperation).toEqual(executing);
+    expect(mint.get).toHaveBeenCalledTimes(1);
   });
+
+  it('reacts to background quote, executing, and finalized events for the bound operation id', async () => {
+    const { manager, mint, emit } = createMintManagerMock();
+    const pending = createPendingMintOperation();
+    const observed = createMintOperation({
+      id: pending.id,
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: 1_700_000_010_000,
+    });
+    const executing = createMintOperation({
+      id: pending.id,
+      state: 'executing',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: 1_700_000_010_000,
+    });
+    const finalized = createFinalizedMintOperation({ id: pending.id });
+
+    mint.get.mockResolvedValueOnce(pending);
+
+    const { result } = renderHook(() => useMintOperation(pending.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(pending);
+    });
+
+    await emit('mint-op:quote-state-changed', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: observed,
+      quoteId: pending.quoteId,
+      state: 'PAID',
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(observed);
+    });
+
+    await emit('mint-op:executing', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: executing,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(executing);
+    });
+
+    await emit('mint-op:finalized', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+    expect(mint.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores background events for other operation ids', async () => {
+    const { manager, mint, emit } = createMintManagerMock();
+    const pending = createPendingMintOperation();
+
+    mint.get.mockResolvedValueOnce(pending);
+
+    const { result } = renderHook(() => useMintOperation(pending.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(pending);
+    });
+
+    await emit('mint-op:finalized', {
+      mintUrl: pending.mintUrl,
+      operationId: 'mint-op-other',
+      operation: createFinalizedMintOperation({ id: 'mint-op-other' }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mint.get).toHaveBeenCalledTimes(1);
+    expect(result.current.currentOperation).toEqual(pending);
+  });
+
 });
 
 describe('useMeltOperation', () => {
@@ -816,55 +1062,84 @@ describe('useMeltOperation', () => {
     expect(result.current.executeResult).toEqual(executeResult);
   });
 
-  it('loads operations, keeps query helpers stateless, and clears executeResult on reclaim', async () => {
+  it('supports initial operation-id binding, keeps query helpers stateless, and clears executeResult on reclaim', async () => {
     const { manager, melt } = createMeltManagerMock();
     const loaded = createPreparedMeltOperation({ id: 'melt-op-load' });
-    const overrideResult = createPendingMeltOperation({ id: 'melt-op-override' });
-    const rolledBack = createRolledBackMeltOperation({ id: overrideResult.id });
+    const executeResult = createPendingMeltOperation({ id: loaded.id });
+    const rolledBack = createRolledBackMeltOperation({ id: loaded.id });
 
-    melt.get
-      .mockResolvedValueOnce(loaded)
-      .mockResolvedValueOnce(overrideResult)
-      .mockResolvedValueOnce(rolledBack);
-    melt.execute.mockResolvedValue(overrideResult);
+    melt.get.mockResolvedValueOnce(loaded).mockResolvedValueOnce(rolledBack);
+    melt.execute.mockResolvedValue(executeResult);
     melt.listPrepared.mockResolvedValue([loaded]);
-    melt.listInFlight.mockResolvedValue([overrideResult]);
+    melt.listInFlight.mockResolvedValue([executeResult]);
     melt.reclaim.mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useMeltOperation(), {
+    const { result } = renderHook(() => useMeltOperation(loaded.id), {
       wrapper: createHookWrapper(manager),
     });
 
-    await act(async () => {
-      await result.current.load(loaded.id);
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
     });
 
     const preparedList = await result.current.listPrepared();
     const inFlightList = await result.current.listInFlight();
 
     expect(preparedList).toEqual([loaded]);
-    expect(inFlightList).toEqual([overrideResult]);
+    expect(inFlightList).toEqual([executeResult]);
     expect(result.current.currentOperation).toEqual(loaded);
-
-    await act(async () => {
-      await result.current.load(overrideResult.id);
-    });
-
-    expect(result.current.currentOperation).toEqual(overrideResult);
 
     await act(async () => {
       await result.current.execute();
     });
 
-    expect(result.current.currentOperation).toEqual(overrideResult);
-    expect(result.current.executeResult).toEqual(overrideResult);
+    expect(result.current.currentOperation).toEqual(executeResult);
+    expect(result.current.executeResult).toEqual(executeResult);
 
     await act(async () => {
       await result.current.reclaim();
     });
 
-    expect(melt.reclaim).toHaveBeenCalledWith(overrideResult.id);
+    expect(melt.reclaim).toHaveBeenCalledWith(loaded.id);
     expect(result.current.currentOperation).toEqual(rolledBack);
     expect(result.current.executeResult).toBeNull();
+  });
+
+  it('reacts to background events for the bound melt operation id and ignores others', async () => {
+    const { manager, melt, emit } = createMeltManagerMock();
+    const loaded = createPreparedMeltOperation({ id: 'melt-op-events' });
+    const finalized = createFinalizedMeltOperation({ id: loaded.id });
+
+    melt.get.mockResolvedValueOnce(loaded);
+
+    const { result } = renderHook(() => useMeltOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
+
+    await emit('melt-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
+
+    await emit('melt-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: 'melt-op-other',
+      operation: createFinalizedMeltOperation({ id: 'melt-op-other' }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentOperation).toEqual(finalized);
   });
 });
