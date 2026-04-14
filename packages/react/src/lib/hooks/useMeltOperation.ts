@@ -7,6 +7,7 @@ import {
   getInitialOperationFromBinding,
   requireCurrentOperationId,
   requireOperation,
+  requireUnboundOperationCreation,
   shouldReplaceBoundOperation,
   useInitialOperationHydration,
   useOperationHookState,
@@ -136,6 +137,8 @@ export function useMeltOperation(
 
   const prepare = useCallback(
     async (input: MeltOperationPrepareInput): Promise<MeltOperationPrepareResult> => {
+      requireUnboundOperationCreation(boundOperationIdRef.current, 'prepare');
+
       return runStatefulAction(
         async () => manager.ops.melt.prepare(input),
         async (operation) => {

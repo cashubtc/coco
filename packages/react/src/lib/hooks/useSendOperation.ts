@@ -7,6 +7,7 @@ import {
   getInitialOperationFromBinding,
   requireCurrentOperationId,
   requireOperation,
+  requireUnboundOperationCreation,
   shouldReplaceBoundOperation,
   useInitialOperationHydration,
   useOperationHookState,
@@ -135,6 +136,8 @@ export function useSendOperation(
 
   const prepare = useCallback(
     async (input: SendOperationPrepareInput): Promise<PreparedSendOperation> => {
+      requireUnboundOperationCreation(boundOperationIdRef.current, 'prepare');
+
       return runStatefulAction(
         async () => manager.ops.send.prepare(input),
         async (operation) => {

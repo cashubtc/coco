@@ -58,6 +58,19 @@ export function requireCurrentOperationId<TOperation extends { id: string }>(
   );
 }
 
+export function requireUnboundOperationCreation(
+  boundOperationId: string | null,
+  actionName: string,
+): void {
+  if (!boundOperationId) {
+    return;
+  }
+
+  throw new Error(
+    `Cannot call ${actionName} while this hook is bound to operation ${boundOperationId}. Remount the hook with a new React key or call reset() first.`,
+  );
+}
+
 export async function requireOperation<TOperation>(
   loadOperation: (operationId: string) => Promise<TOperation | null>,
   operationId: string,

@@ -7,6 +7,7 @@ import {
   getInitialOperationFromBinding,
   requireCurrentOperationId,
   requireOperation,
+  requireUnboundOperationCreation,
   shouldReplaceBoundOperation,
   useInitialOperationHydration,
   useOperationHookState,
@@ -143,6 +144,8 @@ export function useMintOperation(
 
   const prepare = useCallback(
     async (input: MintOperationPrepareInput): Promise<MintOperationPrepareResult> => {
+      requireUnboundOperationCreation(boundOperationIdRef.current, 'prepare');
+
       return runStatefulAction(
         async () => manager.ops.mint.prepare(input),
         async (operation) => {
@@ -155,6 +158,8 @@ export function useMintOperation(
 
   const importQuote = useCallback(
     async (input: MintOperationImportQuoteInput): Promise<MintOperationPrepareResult> => {
+      requireUnboundOperationCreation(boundOperationIdRef.current, 'importQuote');
+
       return runStatefulAction(
         async () => manager.ops.mint.importQuote(input),
         async (operation) => {

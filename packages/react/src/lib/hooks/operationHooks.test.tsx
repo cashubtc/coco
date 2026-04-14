@@ -531,6 +531,21 @@ describe('useSendOperation', () => {
     expect(result.current.currentOperation).toEqual(finalized);
   });
 
+  it('rejects prepare when the hook is already bound to a send operation', async () => {
+    const { manager, send } = createSendManagerMock();
+    const loaded = createPreparedSendOperation({ id: 'send-op-bound' });
+
+    const { result } = renderHook(() => useSendOperation(loaded), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await expect(result.current.prepare(SEND_PREPARE_INPUT)).rejects.toThrow(
+      `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    expect(send.prepare).not.toHaveBeenCalled();
+    expect(result.current.currentOperation).toEqual(loaded);
+  });
+
   it('keeps the newer send operation when hydration resolves with an older snapshot', async () => {
     const { manager, send, emit } = createSendManagerMock();
     const loaded = createPreparedSendOperation({ id: 'send-op-hydrate', updatedAt: 10 });
@@ -763,7 +778,7 @@ describe('useReceiveOperation', () => {
     expect(result.current.executeResult).toEqual(finalized);
   });
 
-  it('accepts an initial operation-id binding, synchronizes after cancel, and surfaces errors', async () => {
+  it('accepts an initial operation-id binding, synchronizes after cancel, and surfaces errors after reset', async () => {
     const { manager, receive } = createReceiveManagerMock();
     const loaded = createPreparedReceiveOperation({ id: 'receive-op-load' });
     const rolledBack = createRolledBackReceiveOperation({ id: loaded.id });
@@ -785,6 +800,19 @@ describe('useReceiveOperation', () => {
 
     expect(receive.cancel).toHaveBeenCalledWith(loaded.id);
     expect(result.current.currentOperation).toEqual(rolledBack);
+
+    await expect(result.current.prepare(RECEIVE_PREPARE_INPUT)).rejects.toThrow(
+      `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.status).toBe('success');
+    expect(result.current.error).toBeNull();
+
+    act(() => {
+      result.current.reset();
+    });
 
     receive.prepare.mockRejectedValueOnce(new Error('Invalid token'));
 
@@ -857,6 +885,21 @@ describe('useReceiveOperation', () => {
     });
 
     expect(result.current.currentOperation).toEqual(finalized);
+  });
+
+  it('rejects prepare when the hook is already bound to a receive operation', async () => {
+    const { manager, receive } = createReceiveManagerMock();
+    const loaded = createPreparedReceiveOperation({ id: 'receive-op-bound' });
+
+    const { result } = renderHook(() => useReceiveOperation(loaded), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await expect(result.current.prepare(RECEIVE_PREPARE_INPUT)).rejects.toThrow(
+      `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    expect(receive.prepare).not.toHaveBeenCalled();
+    expect(result.current.currentOperation).toEqual(loaded);
   });
 
   it('keeps the newer receive operation when hydration resolves with an older snapshot', async () => {
@@ -998,6 +1041,25 @@ describe('useMintOperation', () => {
     });
 
     expect(result.current.currentOperation).toEqual(pending);
+  });
+
+  it('rejects prepare and importQuote when the hook is already bound to a mint operation', async () => {
+    const { manager, mint } = createMintManagerMock();
+    const loaded = createPendingMintOperation({ id: 'mint-op-bound' });
+
+    const { result } = renderHook(() => useMintOperation(loaded), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await expect(result.current.prepare(MINT_PREPARE_INPUT)).rejects.toThrow(
+      `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    await expect(result.current.importQuote(MINT_IMPORT_QUOTE_INPUT)).rejects.toThrow(
+      `Cannot call importQuote while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    expect(mint.prepare).not.toHaveBeenCalled();
+    expect(mint.importQuote).not.toHaveBeenCalled();
+    expect(result.current.currentOperation).toEqual(loaded);
   });
 
   it('keeps the newer mint operation when hydration resolves with an older snapshot', async () => {
@@ -1249,6 +1311,21 @@ describe('useMeltOperation', () => {
     });
 
     expect(result.current.currentOperation).toEqual(finalized);
+  });
+
+  it('rejects prepare when the hook is already bound to a melt operation', async () => {
+    const { manager, melt } = createMeltManagerMock();
+    const loaded = createPreparedMeltOperation({ id: 'melt-op-bound' });
+
+    const { result } = renderHook(() => useMeltOperation(loaded), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await expect(result.current.prepare(MELT_PREPARE_INPUT)).rejects.toThrow(
+      `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
+    );
+    expect(melt.prepare).not.toHaveBeenCalled();
+    expect(result.current.currentOperation).toEqual(loaded);
   });
 
   it('keeps the newer melt operation when hydration resolves with an older snapshot', async () => {

@@ -692,12 +692,6 @@ export class ReceiveOperationService {
       operation: finalized,
     });
 
-    await this.eventBus.emit('receive:created', {
-      mintUrl: finalized.mintUrl,
-      token: { mint: finalized.mintUrl, proofs: finalized.inputProofs, unit: finalized.unit },
-      operationId: finalized.id,
-    });
-
     this.logger?.info('Receive operation finalized', {
       operationId: finalized.id,
       mintUrl: finalized.mintUrl,
