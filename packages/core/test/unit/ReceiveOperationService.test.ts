@@ -404,6 +404,45 @@ describe('ReceiveOperationService', () => {
     expect(stored?.error).toBe('Keyset is not known');
   });
 
+  it('rolls back executing receive operations on generic mint protocol errors', async () => {
+    const proofs = [makeProof('p1')];
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset unknown');
+
+    const stored = await receiveOpRepo.getById(prepared.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset unknown');
+  });
+
+  it('updates receive history to rolledBack on generic mint protocol errors', async () => {
+    const proofs = [makeProof('p1')];
+    const historyRepo = new MemoryHistoryRepository();
+    new HistoryService(historyRepo, eventBus);
+
+    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const prepared = await service.prepare(initOp);
+
+    expect((await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id))?.state).toBe(
+      'prepared',
+    );
+
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await expect(service.execute(prepared)).rejects.toThrow('Keyset unknown');
+
+    const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
+    expect(historyEntry?.state).toBe('rolledBack');
+    expect(historyEntry?.amount).toBe(prepared.amount);
+  });
+
   it('keeps executing when receive fails with recovery-sensitive outputs already signed', async () => {
     const proofs = [makeProof('p1')];
     const initOp = await service.init({ mint: mintUrl, proofs } as Token);
@@ -418,6 +457,27 @@ describe('ReceiveOperationService', () => {
     const stored = await receiveOpRepo.getById(prepared.id);
     expect(stored?.state).toBe('executing');
   });
+
+  for (const { code, message } of [
+    { code: 11002, message: 'Proofs are pending' },
+    { code: 11004, message: 'Outputs are pending' },
+  ]) {
+    it(`rolls back when receive fails with non-spendable NUT-03 state ${code}`, async () => {
+      const proofs = [makeProof('p1')];
+      const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+      const prepared = await service.prepare(initOp);
+
+      mockWalletReceive.mockImplementation(async () => {
+        throw new MintOperationError(code, message);
+      });
+
+      await expect(service.execute(prepared)).rejects.toThrow(message);
+
+      const stored = await receiveOpRepo.getById(prepared.id);
+      expect(stored?.state).toBe('rolled_back');
+      expect(stored?.error).toBe(message);
+    });
+  }
 
   it('keeps executing on local validation failures after the mint call', async () => {
     const proofs = [makeProof('p1')];

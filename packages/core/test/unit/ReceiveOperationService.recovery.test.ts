@@ -292,6 +292,25 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect(stored?.error).toBe('Keyset is inactive');
   });
 
+  it('rolls back when re-execution fails with a generic mint protocol error', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-generic-mint-error', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+    );
+    mockWalletReceive.mockImplementation(async () => {
+      throw new MintOperationError(0, 'Keyset unknown');
+    });
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Keyset unknown');
+  });
+
   it('keeps executing when re-execution hits recovery-sensitive outputs already signed', async () => {
     const proofs = [makeProof('p1')];
     const op = makeExecutingOp('exec-op-already-signed', proofs);
@@ -309,6 +328,30 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     const stored = await receiveOpRepo.getById(op.id);
     expect(stored?.state).toBe('executing');
   });
+
+  for (const { code, message } of [
+    { code: 11002, message: 'Proofs are pending' },
+    { code: 11004, message: 'Outputs are pending' },
+  ]) {
+    it(`rolls back when re-execution hits non-spendable NUT-03 state ${code}`, async () => {
+      const proofs = [makeProof('p1')];
+      const op = makeExecutingOp(`exec-op-pending-${code}`, proofs);
+      await receiveOpRepo.create(op);
+
+      mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+        ys.map(() => ({ state: 'UNSPENT' }) as CashuProofState),
+      );
+      mockWalletReceive.mockImplementation(async () => {
+        throw new MintOperationError(code, message);
+      });
+
+      await service.recoverPendingOperations();
+
+      const stored = await receiveOpRepo.getById(op.id);
+      expect(stored?.state).toBe('rolled_back');
+      expect(stored?.error).toBe(message);
+    });
+  }
 
   it('keeps executing when spent-proof recovery fails with a local validation error', async () => {
     const proofs = [makeProof('p1')];

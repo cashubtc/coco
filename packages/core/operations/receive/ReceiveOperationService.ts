@@ -41,8 +41,15 @@ import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperatio
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
 
-const TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
-  10001, 11001, 11005, 11007, 11008, 11009, 11010, 11014, 11015, 12001, 12002,
+const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
+  // 11003 is special for receive recovery: the mint may already have accepted and
+  // signed our outputs even though the client saw an error, so we keep executing
+  // and let recovery reconcile persisted outputs.
+  //
+  // We intentionally do not treat 11002/11004 as recoverable here. In the receive
+  // flow they indicate inputs or outputs that are not currently spendable, so the
+  // operation is rejected and a fresh receive should be started if the user retries.
+  11003,
 ]);
 
 /**
@@ -273,9 +280,9 @@ export class ReceiveOperationService {
       try {
         return await this.executeInternal(executing);
       } catch (e) {
-        const terminalReason = this.getTerminalReceiveFailureReason(e);
-        if (terminalReason) {
-          await this.markAsRolledBack(executing, terminalReason);
+        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+        if (rollbackReason) {
+          await this.markAsRolledBack(executing, rollbackReason);
           throw e;
         }
 
@@ -545,9 +552,9 @@ export class ReceiveOperationService {
         try {
           await this.executeInternal(executing);
         } catch (e) {
-          const terminalReason = this.getTerminalReceiveFailureReason(e);
-          if (terminalReason) {
-            await this.markAsRolledBack(executing, terminalReason);
+          const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+          if (rollbackReason) {
+            await this.markAsRolledBack(executing, rollbackReason);
             return;
           }
 
@@ -591,9 +598,9 @@ export class ReceiveOperationService {
           recoveredCount: recovered.length,
         });
       } catch (e) {
-        const terminalReason = this.getTerminalReceiveFailureReason(e);
-        if (terminalReason) {
-          await this.markAsRolledBack(executing, terminalReason);
+        const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+        if (rollbackReason) {
+          await this.markAsRolledBack(executing, rollbackReason);
           return;
         }
 
@@ -625,9 +632,9 @@ export class ReceiveOperationService {
     }
   }
 
-  private getTerminalReceiveFailureReason(error: unknown): string | null {
+  private getRollbackReasonForReceiveFailure(error: unknown): string | null {
     if (error instanceof MintOperationError) {
-      return TERMINAL_RECEIVE_MINT_ERROR_CODES.has(error.code) ? error.message : null;
+      return NON_TERMINAL_RECEIVE_MINT_ERROR_CODES.has(error.code) ? null : error.message;
     }
 
     return null;
