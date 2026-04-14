@@ -55,10 +55,7 @@ export function useMeltOperation(
   );
 
   const bindOperation = useCallback(
-    (
-      operation: MeltOperation | null,
-      options?: Parameters<typeof replaceCurrentOperation>[1],
-    ) => {
+    (operation: MeltOperation | null, options?: Parameters<typeof replaceCurrentOperation>[1]) => {
       if (!operation) {
         boundOperationIdRef.current = null;
         replaceCurrentOperation(null, options);
@@ -165,13 +162,7 @@ export function useMeltOperation(
         replaceExecuteResult(operation);
       },
     );
-  }, [
-    bindOperation,
-    getCurrentOperation,
-    manager,
-    replaceExecuteResult,
-    runStatefulAction,
-  ]);
+  }, [bindOperation, getCurrentOperation, manager, replaceExecuteResult, runStatefulAction]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'cancel');

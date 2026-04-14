@@ -1020,7 +1020,6 @@ describe('useMintOperation', () => {
     expect(mint.get).toHaveBeenCalledTimes(1);
     expect(result.current.currentOperation).toEqual(pending);
   });
-
 });
 
 describe('useMeltOperation', () => {

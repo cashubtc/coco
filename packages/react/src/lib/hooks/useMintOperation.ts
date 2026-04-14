@@ -116,9 +116,7 @@ export function useMintOperation(
     getCurrentOperation,
     runStatefulAction,
     reset: resetState,
-  } = useOperationHookState<MintOperation, MintOperationExecuteResult>(
-    initialOperation,
-  );
+  } = useOperationHookState<MintOperation, MintOperationExecuteResult>(initialOperation);
 
   const bindOperation = useCallback(
     (
@@ -256,13 +254,7 @@ export function useMintOperation(
         replaceExecuteResult(operation);
       },
     );
-  }, [
-    bindOperation,
-    getCurrentOperation,
-    manager,
-    replaceExecuteResult,
-    runStatefulAction,
-  ]);
+  }, [bindOperation, getCurrentOperation, manager, replaceExecuteResult, runStatefulAction]);
 
   const checkPayment = useCallback(async (): Promise<MintOperationCheckPaymentResult> => {
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'checkPayment');

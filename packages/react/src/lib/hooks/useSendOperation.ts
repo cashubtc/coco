@@ -54,10 +54,7 @@ export function useSendOperation(
   );
 
   const bindOperation = useCallback(
-    (
-      operation: SendOperation | null,
-      options?: Parameters<typeof replaceCurrentOperation>[1],
-    ) => {
+    (operation: SendOperation | null, options?: Parameters<typeof replaceCurrentOperation>[1]) => {
       if (!operation) {
         boundOperationIdRef.current = null;
         replaceCurrentOperation(null, options);
@@ -164,13 +161,7 @@ export function useSendOperation(
         replaceExecuteResult(result);
       },
     );
-  }, [
-    bindOperation,
-    getCurrentOperation,
-    manager,
-    replaceExecuteResult,
-    runStatefulAction,
-  ]);
+  }, [bindOperation, getCurrentOperation, manager, replaceExecuteResult, runStatefulAction]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'cancel');

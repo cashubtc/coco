@@ -122,9 +122,12 @@ export function useReceiveOperation(
     const unsubscribePrepared = onReceiveOperationEvent('receive-op:prepared', ({ operation }) => {
       handleObservedOperation(operation);
     });
-    const unsubscribeFinalized = onReceiveOperationEvent('receive-op:finalized', ({ operation }) => {
-      handleObservedOperation(operation);
-    });
+    const unsubscribeFinalized = onReceiveOperationEvent(
+      'receive-op:finalized',
+      ({ operation }) => {
+        handleObservedOperation(operation);
+      },
+    );
     const unsubscribeRolledBack = onReceiveOperationEvent(
       'receive-op:rolled-back',
       ({ operation }) => {
@@ -172,13 +175,7 @@ export function useReceiveOperation(
         replaceExecuteResult(operation);
       },
     );
-  }, [
-    bindOperation,
-    getCurrentOperation,
-    manager,
-    replaceExecuteResult,
-    runStatefulAction,
-  ]);
+  }, [bindOperation, getCurrentOperation, manager, replaceExecuteResult, runStatefulAction]);
 
   const cancel = useCallback(async (): Promise<void> => {
     const currentOperation = getCurrentOperation();
