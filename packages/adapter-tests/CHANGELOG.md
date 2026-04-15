@@ -1,5 +1,14 @@
 # @cashu/coco-adapter-tests
 
+## 1.0.0-rc.4
+
+### Patch Changes
+
+- Updated dependencies [7f9cd39]
+- Updated dependencies [1daa3ce]
+- Updated dependencies [660cb8e]
+  - @cashu/coco-core@1.0.0-rc.4
+
 ## 1.0.0-rc.3
 
 ### Patch Changes

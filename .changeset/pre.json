@@ -11,8 +11,11 @@
     "@cashu/coco-sqlite": "1.0.0-rc.0"
   },
   "changesets": [
+    "bright-lamps-march",
     "calm-squids-wait",
+    "fair-students-relax",
     "green-snakes-tickle",
+    "remove-walletapi-balance-helpers",
     "shaggy-falcons-march",
     "smooth-garlics-cheer",
     "young-pumas-float"
