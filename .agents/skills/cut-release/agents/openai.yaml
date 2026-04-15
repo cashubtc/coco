@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Cut Release'
+  short_description: 'Version, tag, and push a coco release from master'
+  default_prompt: 'Use $cut-release to sync master, run changeset version, verify the coco package version bump, derive the release tag from the latest repo tag, commit the release, create the tag, and either push both or stop before push in dry-run mode.'
