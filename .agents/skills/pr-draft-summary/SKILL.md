@@ -1,62 +1,158 @@
 ---
 name: pr-draft-summary
-description: Create the required PR-ready summary block, branch suggestion, title, and draft description for openai-agents-js. Use in the final handoff after moderate-or-larger changes to runtime code, tests, examples, build/test configuration, or docs with behavior impact; skip only for trivial or conversation-only tasks, repo-meta/doc-only tasks without behavior impact, or when the user explicitly says not to include the PR draft block.
+description: Create the repo-ready PR draft block, branch suggestion, Conventional Commit-style title, and concise PR description for cashubtc/coco after substantive code changes. Use in the final handoff for runtime, test, docs-with-impact, or build/config work; skip only for trivial or conversation-only tasks, repo-meta or docs-only changes without behavior impact, or when the user explicitly says not to include it.
 ---
 
 # PR Draft Summary
 
 ## Purpose
 
-Produce the PR-ready summary required in this repository after substantive code work is complete: a concise change summary plus a PR-ready title and draft description for openai-agents-js.
+Produce the PR-ready summary for `cashubtc/coco` after substantive work is complete:
+a branch suggestion, a Conventional Commit-style PR title, and a concise PR
+description aligned with `CONTRIBUTING.md`.
 
 ## When to Trigger
 
-- The task for this repo is finished (or ready for review) and it touched runtime code, tests, examples, docs with behavior impact, or build/test configuration.
-- Treat this as the default final handoff step for substantive code work. Run it after any required verification or changeset work and before sending the "work complete" response.
-- Skip only for trivial or conversation-only tasks, repo-meta/doc-only tasks without behavior impact, or when the user explicitly says not to include the PR draft block.
+- The task is finished or ready for review and it touched runtime code, tests,
+  docs with behavior impact, examples, or build/test/release configuration.
+- Treat this as the default final handoff step for substantive code work. Run it
+  after verification and after any needed changeset work.
+- Skip only for trivial or conversation-only tasks, repo-meta/doc-only changes
+  without behavior impact, or when the user explicitly says not to include it.
 
 ## Inputs to Collect Automatically (do not ask the user)
 
-- Current branch: `git rev-parse --abbrev-ref HEAD`.
-- Working tree: `git status -sb`.
-- Untracked files: `git ls-files --others --exclude-standard` (use with `git status -sb`; `--stat` omits them).
-- Changed files: `git diff --name-only` (unstaged) and `git diff --name-only --cached` (staged); sizes via `git diff --stat` and `git diff --stat --cached`.
-- Base reference (use the branch's upstream, fallback to `origin/main`):
-  - `BASE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || echo origin/main)`.
-  - `BASE_COMMIT=$(git merge-base --fork-point "$BASE_REF" HEAD || git merge-base "$BASE_REF" HEAD || echo "$BASE_REF")`.
-- Commits ahead of the base fork point: `git log --oneline --no-merges ${BASE_COMMIT}..HEAD`.
-- Category signals for this repo: runtime (`packages/`, `examples/`, `helpers/`, `scripts/`), tests (`packages/**/test`, `integration-tests/`), docs (`docs/`, `README.md`, `AGENTS.md`, `.github/`), build/test config (`package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig*.json`, `tsc-multi.json`, `eslint.config.*`, `vitest*.ts`).
+- Current branch: `git rev-parse --abbrev-ref HEAD`
+- Working tree: `git status -sb`
+- Untracked files: `git ls-files --others --exclude-standard`
+- Changed files:
+  - unstaged: `git diff --name-only`
+  - staged: `git diff --name-only --cached`
+  - stats: `git diff --stat` and `git diff --stat --cached`
+- Base reference:
+  - `BASE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/master)`
+  - `BASE_COMMIT=$(git merge-base --fork-point "$BASE_REF" HEAD || git merge-base "$BASE_REF" HEAD || echo "$BASE_REF")`
+- Commits ahead of the base fork point:
+  `git log --oneline --no-merges ${BASE_COMMIT}..HEAD`
+- Category signals for this repo:
+  - runtime: `packages/core/**`, `packages/react/**`, `packages/indexeddb/**`,
+    `packages/expo-sqlite/**`, `packages/sqlite3/**`,
+    `packages/sqlite-bun/**`, `packages/adapter-tests/**`, `scripts/**`
+  - tests: `packages/core/test/**`, `packages/*/src/test/**`,
+    `scripts/test-integration.sh`, `scripts/auth_mint/**`
+  - docs: `packages/docs/**`, `README.md`, `CONTRIBUTING.md`, `AGENTS.md`
+  - build/test/release config: `package.json`, `bun.lock`, `.changeset/**`,
+    `.github/workflows/**`, `tsconfig*.json`, `packages/*/tsconfig*.json`,
+    `packages/*/vitest.config.ts`, `packages/react/eslint.config.js`,
+    `.prettierrc`, `.prettierignore`
+- Title scope mapping:
+  - `core` -> `packages/core/**`
+  - `react` -> `packages/react/**`
+  - `indexeddb` -> `packages/indexeddb/**`
+  - `expo-sqlite` -> `packages/expo-sqlite/**`
+  - `sqlite3` -> `packages/sqlite3/**`
+  - `sqlite-bun` -> `packages/sqlite-bun/**`
+  - `adapter-tests` -> `packages/adapter-tests/**`
+  - `docs` -> `packages/docs/**`
+  - use no scope for repo-wide or multi-area changes
 
 ## Workflow
 
-1. Run the commands above without asking the user; compute `BASE_REF`/`BASE_COMMIT` first so later commands reuse them.
-2. If there are no staged/unstaged/untracked changes and no commits ahead of `${BASE_COMMIT}`, reply briefly that no code changes were detected and skip emitting the PR block.
-3. Infer change type from the touched paths listed under "Category signals"; classify as feature, fix, refactor, or docs-with-impact, and flag backward-compatibility risk only when the diff changes released public APIs, external config, persisted data, or wire protocols. Judge that risk against the latest release tag, not unreleased branch-only churn.
-4. Summarize changes in 1–3 short sentences using the key paths (top 5) and `git diff --stat` output; explicitly call out untracked files from `git status -sb`/`git ls-files --others --exclude-standard` because `--stat` does not include them. If the working tree is clean but there are commits ahead of `${BASE_COMMIT}`, summarize using those commit messages.
-5. Choose the lead verb for the description: feature → `adds`, bug fix → `fixes`, refactor/perf → `improves` or `updates`, docs-only → `updates`.
-6. Suggest a branch name. If already off `main`, keep it; otherwise propose `feat/<slug>`, `fix/<slug>`, or `docs/<slug>` based on the primary area (for example `docs/pr-draft-summary-guidance`).
-7. If the current branch matches `issue-<number>` (digits only), keep that branch suggestion. When an issue number is present, reference `https://github.com/openai/openai-agents-js/issues/<number>` and include an auto-closing line such as `This pull request resolves #<number>.` Do not block if the issue cannot be fetched.
-8. Draft the PR title and description using the template below.
-9. Output only the block in "Output Format". Keep any surrounding status note minimal and in English.
+1. Run the commands above without asking the user.
+2. If there are no staged, unstaged, or untracked changes and no commits ahead
+   of `${BASE_COMMIT}`, reply briefly that no code changes were detected and do
+   not emit the PR block.
+3. Infer the change type from the touched paths:
+   - `feat` for new user-facing or public functionality
+   - `fix` for bug fixes or correctness issues
+   - `docs` for documentation-only changes
+   - `test` for test-only changes
+   - `refactor` for internal cleanup without intended behavior change
+   - `chore` for maintenance, tooling, workflow, or release housekeeping
+4. Pick the title scope from the mapping above when one package or area clearly
+   dominates. If the diff spans multiple major areas, omit the scope.
+5. Summarize the change in 1-3 short sentences using the most important paths
+   and `git diff --stat`. Explicitly mention untracked files because `--stat`
+   does not include them. If the worktree is clean but there are commits ahead
+   of `${BASE_COMMIT}`, summarize from those commit messages.
+6. Explain the problem being solved, not just the implementation. For bug fixes,
+   include the symptom, failure mode, or repro. For features, explain the user
+   or maintainer need.
+7. Include verification steps in the PR description. Prefer the smallest
+   relevant commands that were actually run. If no verification was run, say so
+   plainly rather than inventing coverage.
+8. If the change touches a published package or public docs for a published
+   package, check whether a new file was added under `.changeset/`. Mention the
+   changeset in the draft description when relevant; if none was added, call
+   that out briefly instead of guessing.
+9. Flag compatibility risk only when the diff changes released public APIs,
+   package exports, persisted data, release configuration, or wire/protocol
+   behavior.
+10. Suggest a branch name. If already off `master`, keep the current branch.
+    Otherwise propose `feat/<slug>`, `fix/<slug>`, `docs/<slug>`,
+    `refactor/<slug>`, `test/<slug>`, or `chore/<slug>`.
+11. If the current branch matches `issue-<number>` (digits only), keep that
+    branch suggestion. When an issue number is present, reference
+    `https://github.com/cashubtc/coco/issues/<number>` and include
+    `This pull request resolves #<number>.`
+12. If the change affects UI or docs visuals, add a short reminder in the
+    description to attach screenshots or preview images.
+13. Draft the PR title and description using the template below.
+14. Output only the block in "Output Format", with at most a very short status
+    note before it.
+
+## Title guidance
+
+- Use an imperative Conventional Commit-style title.
+- Prefer a scope when the affected package or area is clear:
+  - `fix(core): prevent duplicate quote sync`
+  - `feat(react): add wallet provider reset hook`
+  - `docs(docs): clarify adapter setup`
+- Use an unscoped title for repo-wide work:
+  - `chore: update release workflow`
+- Keep the title specific to the user-visible or reviewer-relevant outcome, not
+  the internal mechanism.
 
 ## Output Format
 
-When closing out a task, add this concise Markdown block (English only) after any brief status note unless the task falls under the documented skip cases or the user says they do not want it.
+When closing out a task, add this concise Markdown block after any brief status
+note unless the task falls under the documented skip cases or the user says they
+do not want it.
 
-```
+```md
 # Pull Request Draft
 
 ## Branch name suggestion
 
-git checkout -b <kebab-case suggestion, e.g., feat/pr-draft-summary-skill>
+git checkout -b <branch-name>
 
 ## Title
 
-<single-line imperative title, which can be a commit message; if a common prefix like chore: or feat: etc., having them is preferred>
+<type[(scope)] : imperative summary>
 
 ## Description
 
-<include what you changed plus a draft pull request title and description for your local changes; start the description with prose such as "This pull request resolves/updates/adds ..." using a verb that matches the change (you can use bullets later), explain the change background (for bugs, clearly describe the bug, symptoms, or repro; for features, what is needed and why), any behavior changes or considerations to be aware of, and you do not need to mention any tests you ran.>
+This pull request <adds|fixes|updates|improves> ...
+
+## Problem
+
+<what was broken, missing, unclear, or risky, and why this change was needed>
+
+## Summary
+
+- <key change>
+- <key change>
+- <optional compatibility note, screenshot reminder, or follow-up note>
+
+## Verification
+
+- <command actually run>
+- <command actually run>
+
+## Changeset
+
+- <added `.changeset/...md` or explain why one was not added when relevant>
 ```
 
-Keep it tight—no redundant prose around the block, and avoid repeating details between `Changes` and the description. Tests do not need to be listed unless specifically requested.
+Keep it tight. Do not pad the description with generic filler, and do not claim
+tests or screenshots that were not actually produced.
