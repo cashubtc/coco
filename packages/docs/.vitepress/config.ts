@@ -35,6 +35,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: 'Storage Adapters', link: '/pages/storage-adapters' },
+          { text: 'Consumer Skills', link: '/pages/consumer-skills' },
           { text: 'Bip39', link: '/pages/bip39' },
           { text: 'KeyRing (P2PK)', link: '/pages/keyring' },
           { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
