@@ -6,10 +6,12 @@ on:
       - master
     paths:
       - 'packages/**'
+      - 'scripts/build.ts'
       - '.github/workflows/build-packages.yml'
   pull_request:
     paths:
       - 'packages/**'
+      - 'scripts/build.ts'
       - '.github/workflows/build-packages.yml'
 
 jobs:
