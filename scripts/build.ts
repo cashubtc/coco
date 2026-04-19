@@ -25,7 +25,7 @@ function getInternalDeps(pkg: PackageJson): string[] {
   const buildDeps = {
     ...pkg.peerDependencies,
   };
-  return Object.keys(buildDeps).filter((dep) => dep.startsWith('coco-cashu-'));
+  return Object.keys(buildDeps).filter((dep) => dep.startsWith('@cashu/coco-'));
 }
 
 function topologicalSort(packages: Map<string, string[]>): string[] {
