@@ -14,11 +14,6 @@ import {
 } from './operationHookUtils';
 
 type ReceiveOps = Manager['ops']['receive'];
-type ReceiveOperationEventName =
-  | 'receive-op:prepared'
-  | 'receive-op:finalized'
-  | 'receive-op:rolled-back';
-type ReceiveOperationEventPayload = { operation: ReceiveOperation };
 
 export type ReceiveOperationPrepareInput = Parameters<ReceiveOps['prepare']>[0];
 export type ReceiveOperationPrepareResult = Awaited<ReturnType<ReceiveOps['prepare']>>;
@@ -120,26 +115,15 @@ export function useReceiveOperation(
   useInitialOperationHydration(initialBindingRef.current, hydrateInitialOperation);
 
   useEffect(() => {
-    const onReceiveOperationEvent = manager.on as (
-      event: ReceiveOperationEventName,
-      handler: (payload: ReceiveOperationEventPayload) => void | Promise<void>,
-    ) => () => void;
-
-    const unsubscribePrepared = onReceiveOperationEvent('receive-op:prepared', ({ operation }) => {
+    const unsubscribePrepared = manager.on('receive-op:prepared', ({ operation }) => {
       handleObservedOperation(operation);
     });
-    const unsubscribeFinalized = onReceiveOperationEvent(
-      'receive-op:finalized',
-      ({ operation }) => {
-        handleObservedOperation(operation);
-      },
-    );
-    const unsubscribeRolledBack = onReceiveOperationEvent(
-      'receive-op:rolled-back',
-      ({ operation }) => {
-        handleObservedOperation(operation);
-      },
-    );
+    const unsubscribeFinalized = manager.on('receive-op:finalized', ({ operation }) => {
+      handleObservedOperation(operation);
+    });
+    const unsubscribeRolledBack = manager.on('receive-op:rolled-back', ({ operation }) => {
+      handleObservedOperation(operation);
+    });
 
     return () => {
       unsubscribePrepared();
