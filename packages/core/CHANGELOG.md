@@ -1,5 +1,7 @@
 # @cashu/coco-core
 
+## 1.0.0-rc.5
+
 ## 1.0.0-rc.4
 
 ### Patch Changes

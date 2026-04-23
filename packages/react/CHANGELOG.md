@@ -1,5 +1,18 @@
 # @cashu/coco-react
 
+## 1.0.0-rc.5
+
+### Patch Changes
+
+- b662f28: Fix `useReceiveOperation` so it subscribes to manager events with a bound
+  `Manager.on` call, preventing the hook from crashing when receive operation
+  listeners are registered.
+
+  Add a regression test that uses a `Manager.on` mock with real `this` semantics
+  so detached invocation failures are caught in the React hook test suite.
+
+  - @cashu/coco-core@1.0.0-rc.5
+
 ## 1.0.0-rc.4
 
 ### Patch Changes
@@ -50,6 +63,7 @@
 - 2df62d5: Document the React package's operation-oriented API more clearly.
 
   This updates the React README and docs to explain:
+
   - the `useSendOperation()`, `useReceiveOperation()`, `useMintOperation()`, and
     `useMeltOperation()` hooks
   - how `currentOperation`, `executeResult`, `load()`, and bound follow-up

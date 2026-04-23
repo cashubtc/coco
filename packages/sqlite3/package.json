@@ -1,6 +1,6 @@
 {
   "name": "@cashu/coco-sqlite",
-  "version": "1.0.0-rc.4",
+  "version": "1.0.0-rc.5",
   "module": "index.ts",
   "type": "module",
   "repository": {
@@ -14,7 +14,7 @@
   ],
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
-    "@cashu/coco-adapter-tests": "1.0.0-rc.4",
+    "@cashu/coco-adapter-tests": "1.0.0-rc.5",
     "vitest": "^2.1.9"
   },
   "exports": {
@@ -33,7 +33,7 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@cashu/coco-core": "1.0.0-rc.4",
+    "@cashu/coco-core": "1.0.0-rc.5",
     "typescript": "^5"
   }
 }
