@@ -149,6 +149,37 @@ function createReceiveManagerMock() {
   };
 }
 
+function createReceiveManagerWithBoundOnMock() {
+  const receive = {
+    prepare: vi.fn(),
+    execute: vi.fn(),
+    get: vi.fn(),
+    listPrepared: vi.fn(),
+    listInFlight: vi.fn(),
+    refresh: vi.fn(),
+    cancel: vi.fn(),
+  };
+  const eventBus = createEventBusMock();
+  type EventBusMock = ReturnType<typeof createEventBusMock>;
+  const manager = {
+    ops: { receive },
+    eventBus,
+    on(
+      this: { eventBus: EventBusMock },
+      event: string,
+      handler: (payload: unknown) => void | Promise<void>,
+    ) {
+      return this.eventBus.on(event, handler);
+    },
+  } as unknown as Manager & { eventBus: EventBusMock };
+
+  return {
+    manager,
+    receive,
+    emit: eventBus.emit,
+  };
+}
+
 function createMintManagerMock() {
   const mint = {
     prepare: vi.fn(),
@@ -885,6 +916,32 @@ describe('useReceiveOperation', () => {
     });
 
     expect(result.current.currentOperation).toEqual(finalized);
+  });
+
+  it('subscribes to receive events without detaching manager.on', async () => {
+    const { manager, receive, emit } = createReceiveManagerWithBoundOnMock();
+    const loaded = createPreparedReceiveOperation({ id: 'receive-op-bound-on' });
+    const finalized = createFinalizedReceiveOperation({ id: loaded.id });
+
+    receive.get.mockResolvedValueOnce(loaded);
+
+    const { result } = renderHook(() => useReceiveOperation(loaded.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(loaded);
+    });
+
+    await emit('receive-op:finalized', {
+      mintUrl: loaded.mintUrl,
+      operationId: loaded.id,
+      operation: finalized,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(finalized);
+    });
   });
 
   it('rejects prepare when the hook is already bound to a receive operation', async () => {
