@@ -1,13 +1,14 @@
 ---
 name: cut-release
-description: Cut a coco release from master by fast-forwarding master, running `bunx changeset version`, verifying the fixed package versions and changelogs, deriving the release commit/tag name from the latest repo tag, committing the versioned files, creating the tag, and pushing both the commit and tag.
+description: Cut a coco release from a dedicated `master` worktree by fast-forwarding `master`, running `bunx changeset version`, verifying the fixed package versions and changelogs, deriving the release commit/tag name from the latest repo tag, committing the versioned files, creating the tag, and pushing both the commit and tag.
 ---
 
 # Cut Release
 
 ## Purpose
 
-Run the git-side release flow for `cashubtc/coco` from `master`:
+Run the git-side release flow for `cashubtc/coco` from a dedicated `master`
+worktree:
 sync `master` with `origin/master`, apply pending changesets, verify the fixed
 release group was bumped together, derive the release commit/tag name from the
 latest repo tag, commit the versioned files, create the release tag, and push
@@ -31,6 +32,12 @@ stops before pushing the commit and tag to `origin`.
 
 - Start from a clean worktree. If `git status -sb` shows changes, stop and tell
   the user instead of trying to carry local edits through the release.
+- Do not switch a feature worktree to `master` just to cut the release. This
+  repo commonly uses one worktree per feature branch, so repurposing the
+  current worktree can fail or disturb ongoing work.
+- If the current branch is not `master`, stop and tell the user to rerun the
+  release from a dedicated `master` worktree, or create one only if the user
+  explicitly asks you to do that.
 - Use non-interactive git commands only.
 - Networked git commands often need escalation. Request approval for `git fetch`,
   `git pull`, and `git push` when sandboxing blocks them.
@@ -84,24 +91,33 @@ to skip the push step while still creating the local release commit and tag.
 
    If this is empty, stop rather than creating a no-op version commit.
 
-3. Sync `master` to the remote release base.
+3. Confirm this worktree is already on `master`.
+
+   ```bash
+   git branch --show-current
+   ```
+
+   If the current branch is not `master`, stop and tell the user to rerun the
+   release from a dedicated `master` worktree rather than switching branches in
+   place.
+
+4. Sync `master` to the remote release base.
 
    ```bash
    git fetch origin master --tags
-   git checkout master
    git pull --ff-only origin master
    git status -sb
    ```
 
    If `master` cannot fast-forward cleanly, stop and surface the conflict.
 
-4. Apply the pending changesets.
+5. Apply the pending changesets.
 
    ```bash
    bunx changeset version
    ```
 
-5. Validate the release metadata and derive the release tag.
+6. Validate the release metadata and derive the release tag.
 
    ```bash
    eval "$(.agents/skills/cut-release/scripts/derive-release-metadata.sh)"
@@ -109,14 +125,13 @@ to skip the push step while still creating the local release commit and tag.
    ```
 
    The script exports:
-
    - `LAST_TAG`
    - `LAST_TAG_TYPE`
    - `NEW_PACKAGE_VERSION`
    - `NEW_RELEASE_TAG`
    - `COMMIT_MESSAGE`
 
-6. Verify the versioned files look right before committing.
+7. Verify the versioned files look right before committing.
 
    ```bash
    git diff --name-only
@@ -124,21 +139,20 @@ to skip the push step while still creating the local release commit and tag.
    ```
 
    Expect versioning changes in:
-
    - `.changeset/` including consumed changeset deletions and `pre.json`
    - `packages/*/package.json`
    - `packages/*/CHANGELOG.md`
 
    If unrelated files changed, stop and inspect before committing.
 
-7. Commit the versioning output with the repo’s release commit format.
+8. Commit the versioning output with the repo’s release commit format.
 
    ```bash
    git add .changeset packages/*/package.json packages/*/CHANGELOG.md
    git commit -m "$COMMIT_MESSAGE"
    ```
 
-8. Reuse the latest tag style.
+9. Reuse the latest tag style.
 
    Inspect the latest tag object type:
 
@@ -160,29 +174,29 @@ to skip the push step while still creating the local release commit and tag.
 
    In the current repo state, annotated tags are expected.
 
-9. Finish in normal mode or dry-run mode.
+10. Finish in normal mode or dry-run mode.
 
-   Normal mode:
+Normal mode:
 
-   ```bash
-   git push origin master
-   git push origin "$NEW_RELEASE_TAG"
-   ```
+```bash
+git push origin master
+git push origin "$NEW_RELEASE_TAG"
+```
 
-   Dry-run mode: stop before pushing and show the local result instead.
+Dry-run mode: stop before pushing and show the local result instead.
 
-   ```bash
-   git status -sb
-   git log --decorate --oneline -1
-   git show --stat --decorate --no-patch HEAD
-   git tag --list "$NEW_RELEASE_TAG"
-   ```
+```bash
+git status -sb
+git log --decorate --oneline -1
+git show --stat --decorate --no-patch HEAD
+git tag --list "$NEW_RELEASE_TAG"
+```
 
-10. Report the release result.
+11. Report the release result.
 
-   Include the new package version, new tag, commit SHA, and whether you pushed
-   or intentionally stopped in dry-run mode. If any step was skipped or
-   blocked, say so plainly.
+Include the new package version, new tag, commit SHA, and whether you pushed
+or intentionally stopped in dry-run mode. If any step was skipped or
+blocked, say so plainly.
 
 ## Notes
 
