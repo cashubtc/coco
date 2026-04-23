@@ -7,11 +7,13 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'package.json'
       - '.github/workflows/build-packages.yml'
   pull_request:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'package.json'
       - '.github/workflows/build-packages.yml'
 
 jobs:
