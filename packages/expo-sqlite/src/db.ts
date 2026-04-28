@@ -8,6 +8,11 @@ export interface ExpoSqliteDbOptions {
   database: ExpoSqliteDatabaseLike;
 }
 
+function isWebRuntime(): boolean {
+  const runtime = globalThis as { window?: unknown; document?: unknown };
+  return typeof runtime.window === 'object' && typeof runtime.document === 'object';
+}
+
 /**
  * Shared state for transaction management across all ExpoSqliteDb instances.
  * All instances created from the same root share this state to coordinate transactions.
@@ -33,12 +38,14 @@ interface ExpoSqliteDbRootState {
  */
 export class ExpoSqliteDb {
   private readonly root: ExpoSqliteDbRootState;
+  private readonly operationDb: ExpoSqliteDatabaseLike;
   /** Unique identifier for this instance's transaction scope (null for root instances) */
   private readonly scopeToken: symbol | null;
 
   constructor(
     optionsOrRoot: ExpoSqliteDbOptions | ExpoSqliteDbRootState,
     scopeToken: symbol | null = null,
+    operationDb?: ExpoSqliteDatabaseLike,
   ) {
     if ('database' in optionsOrRoot) {
       // Creating a root instance - initialize the shared state
@@ -49,34 +56,49 @@ export class ExpoSqliteDb {
         scopeDepth: 0,
       } satisfies ExpoSqliteDbRootState;
       this.scopeToken = null;
+      this.operationDb = optionsOrRoot.database;
     } else {
       // Creating a scoped instance - share the root state
       this.root = optionsOrRoot;
       this.scopeToken = scopeToken;
+      this.operationDb = operationDb ?? optionsOrRoot.db;
     }
   }
 
   get raw(): ExpoSqliteDatabaseLike {
-    return this.root.db;
+    return this.operationDb;
+  }
+
+  private async waitForActiveTransaction(): Promise<void> {
+    while (
+      this.root.currentScope !== null &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    ) {
+      await this.root.transactionQueue;
+    }
   }
 
   async exec(sql: string): Promise<void> {
+    await this.waitForActiveTransaction();
     // execAsync can run multiple statements separated by semicolons
-    await (this.root.db as any).execAsync(sql);
+    await (this.operationDb as any).execAsync(sql);
   }
 
   async run(sql: string, params: unknown[] = []): Promise<{ lastID: number; changes: number }> {
-    const result = await (this.root.db as any).runAsync(sql, ...(params ?? []));
+    await this.waitForActiveTransaction();
+    const result = await (this.operationDb as any).runAsync(sql, ...(params ?? []));
     return { lastID: result.lastInsertRowId ?? 0, changes: result.changes ?? 0 };
   }
 
   async get<T = unknown>(sql: string, params: unknown[] = []): Promise<T | undefined> {
-    const row = await (this.root.db as any).getFirstAsync(sql, ...(params ?? []));
+    await this.waitForActiveTransaction();
+    const row = await (this.operationDb as any).getFirstAsync(sql, ...(params ?? []));
     return (row ?? undefined) as T | undefined;
   }
 
   async all<T = unknown>(sql: string, params: unknown[] = []): Promise<T[]> {
-    const rows = await (this.root.db as any).getAllAsync(sql, ...(params ?? []));
+    await this.waitForActiveTransaction();
+    const rows = await (this.operationDb as any).getAllAsync(sql, ...(params ?? []));
     return (rows ?? []) as T[];
   }
 
@@ -122,8 +144,6 @@ export class ExpoSqliteDb {
 
     // NEW TRANSACTION: Create a unique scope token and scoped instance
     const scopeToken = Symbol('expo-sqlite-transaction');
-    const scopedDb = new ExpoSqliteDb(root, scopeToken);
-
     // TRANSACTION QUEUE SETUP:
     // Save reference to the previous transaction's completion promise
     const previousTransaction = root.transactionQueue;
@@ -146,9 +166,18 @@ export class ExpoSqliteDb {
       root.currentScope = scopeToken;
       root.scopeDepth = 1;
 
-      // Prefer withTransactionAsync if available (newer expo-sqlite versions)
-      // This provides better transaction handling with automatic rollback on error
+      // Prefer exclusive transactions when available. Expo documents withTransactionAsync as
+      // interruptible by other async queries, so transaction-scoped operations must use txn.
+      if (typeof dbAny.withExclusiveTransactionAsync === 'function' && !isWebRuntime()) {
+        let result!: T;
+        await dbAny.withExclusiveTransactionAsync(async (txn: ExpoSqliteDatabaseLike) => {
+          result = await fn(new ExpoSqliteDb(root, scopeToken, txn));
+        });
+        return result;
+      }
+
       if (typeof dbAny.withTransactionAsync === 'function') {
+        const scopedDb = new ExpoSqliteDb(root, scopeToken);
         let result!: T;
         await dbAny.withTransactionAsync(async () => {
           result = await fn(scopedDb);
@@ -157,6 +186,7 @@ export class ExpoSqliteDb {
       }
 
       // Fallback to manual BEGIN/COMMIT for older versions
+      const scopedDb = new ExpoSqliteDb(root, scopeToken);
       await dbAny.execAsync('BEGIN');
       try {
         // Execute user code within the transaction

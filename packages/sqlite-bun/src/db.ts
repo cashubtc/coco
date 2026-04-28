@@ -73,7 +73,17 @@ export class SqliteDb {
     return statement;
   }
 
-  exec(sql: string): Promise<void> {
+  private async waitForActiveTransaction(): Promise<void> {
+    while (
+      this.root.currentScope !== null &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    ) {
+      await this.root.transactionQueue;
+    }
+  }
+
+  async exec(sql: string): Promise<void> {
+    await this.waitForActiveTransaction();
     return new Promise((resolve, reject) => {
       try {
         this.root.db.exec(sql);
@@ -84,7 +94,8 @@ export class SqliteDb {
     });
   }
 
-  run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    await this.waitForActiveTransaction();
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
@@ -99,7 +110,8 @@ export class SqliteDb {
     });
   }
 
-  get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+    await this.waitForActiveTransaction();
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
@@ -111,7 +123,8 @@ export class SqliteDb {
     });
   }
 
-  all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+    await this.waitForActiveTransaction();
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);

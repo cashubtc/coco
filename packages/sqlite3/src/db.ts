@@ -56,11 +56,22 @@ export class SqliteDb {
     return this.root.db;
   }
 
+  private async waitForActiveTransaction(): Promise<void> {
+    while (
+      this.root.currentScope !== null &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    ) {
+      await this.root.transactionQueue;
+    }
+  }
+
   async exec(sql: string): Promise<void> {
+    await this.waitForActiveTransaction();
     this.root.db.exec(sql);
   }
 
   async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    await this.waitForActiveTransaction();
     const result = this.root.db.prepare(sql).run(params);
     return {
       lastID: Number(result.lastInsertRowid),
@@ -69,10 +80,12 @@ export class SqliteDb {
   }
 
   async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+    await this.waitForActiveTransaction();
     return this.root.db.prepare(sql).get(params) as T | undefined;
   }
 
   async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+    await this.waitForActiveTransaction();
     return this.root.db.prepare(sql).all(params) as T[];
   }
 
