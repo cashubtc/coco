@@ -34,14 +34,14 @@ init ──► prepared ──► executing ──► pending ──► finalize
 
 ## Lifecycle Actions
 
-| Action | Valid input state | Resulting state | Use when |
-| ------ | ----------------- | --------------- | -------- |
-| `prepare({ mintUrl, amount, target? })` | none | `prepared` | You want to reserve proofs and show fees before creating a token. |
-| `execute(operationOrId)` | `prepared` | `pending` | The user confirmed the send and you need the shareable token. |
-| `refresh(operationId)` | any, actively checks `pending` | latest stored state | You are resuming stale persisted state or building recovery UI. |
-| `cancel(operationId)` | `prepared` | `rolled_back` | The user abandons the send before a token is created. |
-| `reclaim(operationId)` | `pending` | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt. |
-| `finalize(operationId)` | `pending` | `finalized` | You know the token was claimed and want to finalize explicitly. |
+| Action                                  | Valid input state              | Resulting state                        | Use when                                                          |
+| --------------------------------------- | ------------------------------ | -------------------------------------- | ----------------------------------------------------------------- |
+| `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                             | You want to reserve proofs and show fees before creating a token. |
+| `execute(operationOrId)`                | `prepared`                     | `pending`                              | The user confirmed the send and you need the shareable token.     |
+| `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                    | You are resuming stale persisted state or building recovery UI.   |
+| `cancel(operationId)`                   | `prepared`                     | `rolled_back`                          | The user abandons the send before a token is created.             |
+| `reclaim(operationId)`                  | `pending`                      | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt.     |
+| `finalize(operationId)`                 | `pending`                      | `finalized`                            | You know the token was claimed and want to finalize explicitly.   |
 
 With the default proof-state watcher enabled, most apps do not need to poll
 `refresh()` during the happy path. Render from the operation returned by

@@ -26,13 +26,13 @@ The canonical API is exposed through `coco.ops.mint`:
 
 Mint operations progress through the following states:
 
-| State | Description |
-| ----- | ----------- |
-| `init` | Local mint intent exists before a quote snapshot is attached |
-| `pending` | Quote and deterministic output data are persisted; payment may settle remotely |
-| `executing` | Quote redemption or recovery is in progress |
-| `finalized` | Quote was issued and proofs were saved or recovered |
-| `failed` | Quote reached a terminal non-issued state, such as expiry |
+| State       | Description                                                                    |
+| ----------- | ------------------------------------------------------------------------------ |
+| `init`      | Local mint intent exists before a quote snapshot is attached                   |
+| `pending`   | Quote and deterministic output data are persisted; payment may settle remotely |
+| `executing` | Quote redemption or recovery is in progress                                    |
+| `finalized` | Quote was issued and proofs were saved or recovered                            |
+| `failed`    | Quote reached a terminal non-issued state, such as expiry                      |
 
 ```
 init -> pending -> executing -> finalized
@@ -42,14 +42,14 @@ init -> pending -> executing -> finalized
 
 ## Lifecycle Actions
 
-| Action | Valid input state | Resulting state | Use when |
-| ------ | ----------------- | --------------- | -------- |
-| `prepare(...)` | none | `pending` | You need a new quote and invoice request to show the payer. |
-| `importQuote(...)` | none | `pending` | You already have a remote quote and want Coco to track it. |
-| `checkPayment(operationId)` | `pending` | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid. |
-| `execute(operationOrId)` | `pending` | `finalized` or `failed` | You know the quote is payable and want to redeem it now. |
-| `refresh(operationId)` | any, actively checks `pending` and recovers `executing` | latest stored state | You are showing stale persisted state or a recovery screen. |
-| `finalize(operationId)` | `pending`, `executing`, or terminal | terminal state when possible | You want one explicit call to settle or recover the operation. |
+| Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
+| --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
+| `prepare(...)`              | none                                                    | `pending`                                       | You need a new quote and invoice request to show the payer.    |
+| `importQuote(...)`          | none                                                    | `pending`                                       | You already have a remote quote and want Coco to track it.     |
+| `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
+| `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
+| `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                             | You are showing stale persisted state or a recovery screen.    |
+| `finalize(operationId)`     | `pending`, `executing`, or terminal                     | terminal state when possible                    | You want one explicit call to settle or recover the operation. |
 
 With the default mint watcher and processor enabled, apps usually do not need to
 poll `refresh()` in the happy path. Show the payment request from the pending

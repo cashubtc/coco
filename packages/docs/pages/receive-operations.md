@@ -22,13 +22,13 @@ The canonical API is exposed through `coco.ops.receive`:
 
 Receive operations progress through the following states:
 
-| State | Description |
-| ----- | ----------- |
-| `init` | Token decoded and validated, but outputs are not prepared yet |
-| `prepared` | Fees calculated, output data persisted, ready to execute |
-| `executing` | Receive request is in progress at the mint |
-| `finalized` | New proofs were saved locally |
-| `rolled_back` | Operation was cancelled or could not be recovered |
+| State         | Description                                                   |
+| ------------- | ------------------------------------------------------------- |
+| `init`        | Token decoded and validated, but outputs are not prepared yet |
+| `prepared`    | Fees calculated, output data persisted, ready to execute      |
+| `executing`   | Receive request is in progress at the mint                    |
+| `finalized`   | New proofs were saved locally                                 |
+| `rolled_back` | Operation was cancelled or could not be recovered             |
 
 ```
 init -> prepared -> executing -> finalized
@@ -38,12 +38,12 @@ init -> prepared -> executing -> finalized
 
 ## Lifecycle Actions
 
-| Action | Valid input state | Resulting state | Use when |
-| ------ | ----------------- | --------------- | -------- |
-| `prepare({ token })` | none | `prepared` | You want to inspect token amount, mint, unit, and fees before receiving. |
-| `execute(operationOrId)` | `prepared` | `finalized` | The user confirmed the receive and proofs should be saved. |
-| `refresh(operationId)` | any, actively recovers `executing` | latest stored state | You are resuming an operation after a crash or stale UI state. |
-| `cancel(operationId, reason?)` | `init`, `prepared` | `rolled_back` or deleted when still `init` | The user abandons the receive before it completes. |
+| Action                         | Valid input state                  | Resulting state                            | Use when                                                                 |
+| ------------------------------ | ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
+| `prepare({ token })`           | none                               | `prepared`                                 | You want to inspect token amount, mint, unit, and fees before receiving. |
+| `execute(operationOrId)`       | `prepared`                         | `finalized`                                | The user confirmed the receive and proofs should be saved.               |
+| `refresh(operationId)`         | any, actively recovers `executing` | latest stored state                        | You are resuming an operation after a crash or stale UI state.           |
+| `cancel(operationId, reason?)` | `init`, `prepared`                 | `rolled_back` or deleted when still `init` | The user abandons the receive before it completes.                       |
 
 ## Prepare -> Execute Flow
 
