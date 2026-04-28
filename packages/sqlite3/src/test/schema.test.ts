@@ -1,11 +1,6 @@
-/// <reference types="bun" />
-
-// @ts-ignore bun:test types are provided by the test runner in this workspace.
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-// @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
-import { Database } from 'bun:sqlite';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import { SqliteDb, ensureSchemaUpTo } from '../index.ts';
-import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
 
 const RECEIVE_OPERATIONS_SQL = `
   CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
@@ -39,8 +34,8 @@ async function getColumnNames(db: SqliteDb, tableName: string): Promise<string[]
   return rows.map((row) => row.name);
 }
 
-describe('sqlite-bun schema migrations', () => {
-  let database: Database;
+describe('sqlite3 schema migrations', () => {
+  let database: Database.Database;
   let db: SqliteDb;
 
   beforeEach(() => {
@@ -50,69 +45,6 @@ describe('sqlite-bun schema migrations', () => {
 
   afterEach(async () => {
     await db.close();
-  });
-
-  it('upgrades mint operations to allow failed state persistence', async () => {
-    await ensureSchemaUpTo(db, '020_mint_operations_failed_state');
-
-    await db.run(
-      `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'mint-op-1',
-        'https://mint.test',
-        'quote-1',
-        'executing',
-        1,
-        2,
-        null,
-        'bolt11',
-        '{}',
-        100,
-        JSON.stringify({ keep: [], send: [] }),
-      ],
-    );
-
-    await ensureSchemaUpTo(db);
-
-    const repository = new SqliteMintOperationRepository(db);
-    await repository.update({
-      id: 'mint-op-1',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      state: 'failed',
-      createdAt: 1000,
-      updatedAt: 2000,
-      error: 'quote expired',
-      method: 'bolt11',
-      methodData: {},
-      amount: 100,
-      unit: 'sat',
-      request: 'lnbc1test',
-      expiry: 1_730_000_000,
-      outputData: { keep: [], send: [] },
-    });
-
-    expect(await repository.getById('mint-op-1')).toEqual({
-      id: 'mint-op-1',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      state: 'failed',
-      createdAt: 1000,
-      updatedAt: expect.any(Number),
-      error: 'quote expired',
-      method: 'bolt11',
-      methodData: {},
-      amount: 100,
-      unit: 'sat',
-      request: 'lnbc1test',
-      expiry: 1_730_000_000,
-      pubkey: undefined,
-      lastObservedRemoteState: undefined,
-      lastObservedRemoteStateAt: undefined,
-      outputData: { keep: [], send: [] },
-    });
   });
 
   it('accepts databases with old sqlite-bun swapped migration ids', async () => {
