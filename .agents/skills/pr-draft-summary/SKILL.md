@@ -30,7 +30,10 @@ description aligned with `CONTRIBUTING.md`.
   - staged: `git diff --name-only --cached`
   - stats: `git diff --stat` and `git diff --stat --cached`
 - Base reference:
-  - `BASE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/master)`
+  - Prefer the PR base branch, not the current branch's upstream.
+  - Use `BASE_REF=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/master)` by default.
+  - If the PR base branch is known and differs from the default branch, use that explicit base instead.
+  - Only fall back to `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}` when the upstream branch is intentionally the PR base.
   - `BASE_COMMIT=$(git merge-base --fork-point "$BASE_REF" HEAD || git merge-base "$BASE_REF" HEAD || echo "$BASE_REF")`
 - Commits ahead of the base fork point:
   `git log --oneline --no-merges ${BASE_COMMIT}..HEAD`
@@ -62,43 +65,45 @@ description aligned with `CONTRIBUTING.md`.
 2. If there are no staged, unstaged, or untracked changes and no commits ahead
    of `${BASE_COMMIT}`, reply briefly that no code changes were detected and do
    not emit the PR block.
-3. Infer the change type from the touched paths:
+3. Treat `${BASE_REF}` as the intended PR target branch. Do not default to the
+   current branch's upstream when it merely points to the same branch on origin.
+4. Infer the change type from the touched paths:
    - `feat` for new user-facing or public functionality
    - `fix` for bug fixes or correctness issues
    - `docs` for documentation-only changes
    - `test` for test-only changes
    - `refactor` for internal cleanup without intended behavior change
    - `chore` for maintenance, tooling, workflow, or release housekeeping
-4. Pick the title scope from the mapping above when one package or area clearly
+5. Pick the title scope from the mapping above when one package or area clearly
    dominates. If the diff spans multiple major areas, omit the scope.
-5. Summarize the change in 1-3 short sentences using the most important paths
+6. Summarize the change in 1-3 short sentences using the most important paths
    and `git diff --stat`. Explicitly mention untracked files because `--stat`
    does not include them. If the worktree is clean but there are commits ahead
    of `${BASE_COMMIT}`, summarize from those commit messages.
-6. Explain the problem being solved, not just the implementation. For bug fixes,
+7. Explain the problem being solved, not just the implementation. For bug fixes,
    include the symptom, failure mode, or repro. For features, explain the user
    or maintainer need.
-7. Include verification steps in the PR description. Prefer the smallest
+8. Include verification steps in the PR description. Prefer the smallest
    relevant commands that were actually run. If no verification was run, say so
    plainly rather than inventing coverage.
-8. If the change touches a published package or public docs for a published
+9. If the change touches a published package or public docs for a published
    package, check whether a new file was added under `.changeset/`. Mention the
    changeset in the draft description when relevant; if none was added, call
    that out briefly instead of guessing.
-9. Flag compatibility risk only when the diff changes released public APIs,
-   package exports, persisted data, release configuration, or wire/protocol
-   behavior.
-10. Suggest a branch name. If already off `master`, keep the current branch.
+10. Flag compatibility risk only when the diff changes released public APIs,
+    package exports, persisted data, release configuration, or wire/protocol
+    behavior.
+11. Suggest a branch name. If already off `master`, keep the current branch.
     Otherwise propose `feat/<slug>`, `fix/<slug>`, `docs/<slug>`,
     `refactor/<slug>`, `test/<slug>`, or `chore/<slug>`.
-11. If the current branch matches `issue-<number>` (digits only), keep that
+12. If the current branch matches `issue-<number>` (digits only), keep that
     branch suggestion. When an issue number is present, reference
     `https://github.com/cashubtc/coco/issues/<number>` and include
     `This pull request resolves #<number>.`
-12. If the change affects UI or docs visuals, add a short reminder in the
+13. If the change affects UI or docs visuals, add a short reminder in the
     description to attach screenshots or preview images.
-13. Draft the PR title and description using the template below.
-14. Output only the block in "Output Format", with at most a very short status
+14. Draft the PR title and description using the template below.
+15. Output only the block in "Output Format", with at most a very short status
     note before it.
 
 ## Title guidance
