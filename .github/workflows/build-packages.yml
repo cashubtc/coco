@@ -6,10 +6,14 @@ on:
       - master
     paths:
       - 'packages/**'
+      - 'scripts/build.ts'
+      - 'package.json'
       - '.github/workflows/build-packages.yml'
   pull_request:
     paths:
       - 'packages/**'
+      - 'scripts/build.ts'
+      - 'package.json'
       - '.github/workflows/build-packages.yml'
 
 jobs:
@@ -28,21 +32,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build packages in dependency order
-        run: |
-          # Build core first (base dependency)
-          cd packages/core && bun run build && cd ../..
-
-          # Build adapter-tests (depends on core)
-          cd packages/adapter-tests && bun run build && cd ../..
-
-          # Build storage adapters (depend on core and adapter-tests)
-          cd packages/indexeddb && bun run build && cd ../..
-          cd packages/expo-sqlite && bun run build && cd ../..
-          cd packages/sqlite3 && bun run build && cd ../..
-          cd packages/sqlite-bun && bun run build && cd ../..
-
-          # Build react (depends on core)
-          cd packages/react && bun run build && cd ../..
+        run: bun run build
 
       - name: Typecheck packages in dependency order
         run: bun run typecheck
