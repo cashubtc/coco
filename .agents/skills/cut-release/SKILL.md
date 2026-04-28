@@ -66,7 +66,8 @@ stops before pushing the commit and tag to `origin`.
   `bunx changeset version`.
 - It validates that every package in the fixed release group shares the same
   version, checks that the derived release tag is ahead of the latest repo tag,
-  and prints shell-ready variables such as `NEW_RELEASE_TAG`.
+  detects whether the latest release tag is signed, and prints shell-ready
+  variables such as `NEW_RELEASE_TAG`.
 
 ## Workflow
 
@@ -121,12 +122,14 @@ to skip the push step while still creating the local release commit and tag.
 
    ```bash
    eval "$(.agents/skills/cut-release/scripts/derive-release-metadata.sh)"
-   printf '%s\n' "$NEW_PACKAGE_VERSION" "$NEW_RELEASE_TAG" "$COMMIT_MESSAGE"
+   printf '%s\n' \
+     "$NEW_PACKAGE_VERSION" "$NEW_RELEASE_TAG" "$LAST_TAG_SIGNED" "$COMMIT_MESSAGE"
    ```
 
    The script exports:
    - `LAST_TAG`
    - `LAST_TAG_TYPE`
+   - `LAST_TAG_SIGNED`
    - `NEW_PACKAGE_VERSION`
    - `NEW_RELEASE_TAG`
    - `COMMIT_MESSAGE`
@@ -160,7 +163,14 @@ to skip the push step while still creating the local release commit and tag.
    git cat-file -t "refs/tags/$LAST_TAG"
    ```
 
-   If the latest tag is an annotated tag object, create an annotated tag:
+   If the latest tag is a signed annotated tag object, create a signed tag:
+
+   ```bash
+   git tag -s "$NEW_RELEASE_TAG" -m "$NEW_RELEASE_TAG"
+   ```
+
+   If the latest tag is an unsigned annotated tag object, create an unsigned
+   annotated tag:
 
    ```bash
    git tag -a "$NEW_RELEASE_TAG" -m "$NEW_RELEASE_TAG"
@@ -172,15 +182,15 @@ to skip the push step while still creating the local release commit and tag.
    git tag "$NEW_RELEASE_TAG"
    ```
 
-   In the current repo state, annotated tags are expected.
+   In the current repo state, signed annotated tags are expected. Preserve that
+   style when `LAST_TAG_TYPE=tag` and `LAST_TAG_SIGNED=true`.
 
 10. Finish in normal mode or dry-run mode.
 
 Normal mode:
 
 ```bash
-git push origin master
-git push origin "$NEW_RELEASE_TAG"
+git push --atomic origin master "refs/tags/$NEW_RELEASE_TAG"
 ```
 
 Dry-run mode: stop before pushing and show the local result instead.

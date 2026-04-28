@@ -40,6 +40,11 @@ fi
 new_package_version="$unique_versions"
 last_tag="$(git describe --tags --abbrev=0)"
 last_tag_type="$(git cat-file -t "refs/tags/$last_tag" 2>/dev/null || echo commit)"
+last_tag_signed=false
+if [[ "$last_tag_type" == "tag" ]] && \
+  grep -q -- 'BEGIN .* SIGNATURE' < <(git cat-file -p "refs/tags/$last_tag"); then
+  last_tag_signed=true
+fi
 
 if [[ "$new_package_version" =~ ^([0-9]+)\.0\.0-rc\.([0-9]+)$ ]]; then
   new_major="${BASH_REMATCH[1]}"
@@ -69,6 +74,7 @@ commit_message="version: $new_release_tag"
 
 printf 'LAST_TAG=%q\n' "$last_tag"
 printf 'LAST_TAG_TYPE=%q\n' "$last_tag_type"
+printf 'LAST_TAG_SIGNED=%q\n' "$last_tag_signed"
 printf 'NEW_PACKAGE_VERSION=%q\n' "$new_package_version"
 printf 'NEW_RELEASE_TAG=%q\n' "$new_release_tag"
 printf 'COMMIT_MESSAGE=%q\n' "$commit_message"
