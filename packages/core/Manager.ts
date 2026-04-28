@@ -311,33 +311,6 @@ export class Manager {
     this.eventBus.on('auth-session:updated', clearWalletCache);
     this.eventBus.on('auth-session:deleted', clearWalletCache);
 
-    // Initialize plugins asynchronously to keep constructor sync
-    const services: ServiceMap = {
-      mintService: this.mintService,
-      walletService: this.walletService,
-      proofService: this.proofService,
-      keyRingService: this.keyRingService,
-      seedService: this.seedService,
-      walletRestoreService: this.walletRestoreService,
-      counterService: this.counterService,
-      meltQuoteService: this.meltQuoteService,
-      historyService: this.historyService,
-      sendOperationService: this.sendOperationService,
-      receiveOperationService: this.receiveOperationService,
-      paymentRequestService: this.paymentRequestService,
-      meltOperationService: this.meltOperationService,
-      mintOperationService: this.mintOperationService,
-      tokenService: this.tokenService,
-      subscriptions: this.subscriptions,
-      eventBus: this.eventBus,
-      logger: this.logger,
-    };
-    void this.pluginHost
-      .init(services)
-      .then(() => this.pluginHost.ready())
-      .catch((err) => {
-        this.logger.error('Plugin system initialization failed', err);
-      });
   }
 
   on<E extends keyof CoreEvents>(
