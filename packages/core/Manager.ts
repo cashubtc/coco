@@ -310,7 +310,6 @@ export class Manager {
     };
     this.eventBus.on('auth-session:updated', clearWalletCache);
     this.eventBus.on('auth-session:deleted', clearWalletCache);
-
   }
 
   on<E extends keyof CoreEvents>(
