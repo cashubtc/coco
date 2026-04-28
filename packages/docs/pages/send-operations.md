@@ -20,17 +20,33 @@ Send operations progress through the following states:
 | `prepared`     | Proofs reserved, fee calculated, ready to execute |
 | `executing`    | Swap in progress (if needed)                      |
 | `pending`      | Token created, waiting for recipient to claim     |
-| `completed`    | Recipient claimed, operation finalized            |
+| `finalized`    | Recipient claimed, operation finalized            |
 | `rolling_back` | Rollback in progress                              |
 | `rolled_back`  | Operation cancelled, proofs reclaimed             |
 
 ```
-init ──► prepared ──► executing ──► pending ──► completed
+init ──► prepared ──► executing ──► pending ──► finalized
   │         │            │            │
   │         │            │            └──► rolling_back ──► rolled_back
   │         │            │                      │
   └─────────┴────────────┴──────────────────────┴──► rolled_back
 ```
+
+## Lifecycle Actions
+
+| Action | Valid input state | Resulting state | Use when |
+| ------ | ----------------- | --------------- | -------- |
+| `prepare({ mintUrl, amount, target? })` | none | `prepared` | You want to reserve proofs and show fees before creating a token. |
+| `execute(operationOrId)` | `prepared` | `pending` | The user confirmed the send and you need the shareable token. |
+| `refresh(operationId)` | any, actively checks `pending` | latest stored state | You are resuming stale persisted state or building recovery UI. |
+| `cancel(operationId)` | `prepared` | `rolled_back` | The user abandons the send before a token is created. |
+| `reclaim(operationId)` | `pending` | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt. |
+| `finalize(operationId)` | `pending` | `finalized` | You know the token was claimed and want to finalize explicitly. |
+
+With the default proof-state watcher enabled, most apps do not need to poll
+`refresh()` during the happy path. Render from the operation returned by
+`execute()` and react to `send:finalized` or history updates when the recipient
+claims the token.
 
 ## Using the Send API
 
