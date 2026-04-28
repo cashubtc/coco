@@ -71,6 +71,50 @@ describe('PluginHost', () => {
     expect(order).toEqual(['init', 'ready']);
   });
 
+  it('does not rerun hooks when init and ready are called repeatedly', async () => {
+    const calls = { init: 0, ready: 0 };
+    const plugin: Plugin<['logger']> = {
+      name: 'idempotent',
+      required: ['logger'],
+      onInit: () => {
+        calls.init += 1;
+      },
+      onReady: () => {
+        calls.ready += 1;
+      },
+    };
+
+    host.use(plugin);
+    await host.init(services);
+    await host.init(services);
+    await host.ready();
+    await host.ready();
+
+    expect(calls).toEqual({ init: 1, ready: 1 });
+  });
+
+  it('coalesces concurrent init and ready calls', async () => {
+    const calls = { init: 0, ready: 0 };
+    const plugin: Plugin<['logger']> = {
+      name: 'concurrent',
+      required: ['logger'],
+      onInit: async () => {
+        calls.init += 1;
+        await Promise.resolve();
+      },
+      onReady: async () => {
+        calls.ready += 1;
+        await Promise.resolve();
+      },
+    };
+
+    host.use(plugin);
+    await Promise.all([host.init(services), host.init(services)]);
+    await Promise.all([host.ready(), host.ready()]);
+
+    expect(calls).toEqual({ init: 1, ready: 1 });
+  });
+
   it('supports only return-style cleanup from onInit', async () => {
     const flags = { cleaned: 0 };
     const plugin: Plugin<['logger']> = {
@@ -123,22 +167,29 @@ describe('PluginHost', () => {
 
   it('late registration after init+ready runs both hooks', async () => {
     const order: string[] = [];
+    let resolveReady!: () => void;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+
     await host.init(services);
     await host.ready();
     const plugin: Plugin<['logger']> = {
       name: 'late',
       required: ['logger'],
-      onInit: () => {
+      onInit: async () => {
         order.push('init');
+        await Promise.resolve();
       },
       onReady: () => {
         order.push('ready');
+        resolveReady();
       },
     };
+
     host.use(plugin);
-    // hooks execute automatically on use()
-    // give microtask queue a tick to settle any async voids
-    await Promise.resolve();
+    await readyPromise;
+
     expect(order).toEqual(['init', 'ready']);
   });
 
