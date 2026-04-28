@@ -82,16 +82,7 @@ to skip the push step while still creating the local release commit and tag.
 
    If the tree is not clean, stop.
 
-2. Confirm there are pending changesets to consume.
-
-   ```bash
-   find .changeset -maxdepth 1 -type f -name '*.md' \
-     ! -name 'README.md' | sort
-   ```
-
-   If this is empty, stop rather than creating a no-op version commit.
-
-3. Confirm this worktree is already on `master`.
+2. Confirm this worktree is already on `master`.
 
    ```bash
    git branch --show-current
@@ -101,7 +92,7 @@ to skip the push step while still creating the local release commit and tag.
    release from a dedicated `master` worktree rather than switching branches in
    place.
 
-4. Sync `master` to the remote release base.
+3. Sync `master` to the remote release base.
 
    ```bash
    git fetch origin master --tags
@@ -110,6 +101,15 @@ to skip the push step while still creating the local release commit and tag.
    ```
 
    If `master` cannot fast-forward cleanly, stop and surface the conflict.
+
+4. Confirm there are pending changesets to consume from the synced release base.
+
+   ```bash
+   find .changeset -maxdepth 1 -type f -name '*.md' \
+     ! -name 'README.md' | sort
+   ```
+
+   If this is empty, stop rather than creating a no-op version commit.
 
 5. Apply the pending changesets.
 
