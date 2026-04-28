@@ -26,6 +26,8 @@ interface ExpoSqliteDbRootState {
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
   scopeDepth: number;
+  /** Number of top-level transactions currently active or queued */
+  pendingTransactionCount: number;
 }
 
 /**
@@ -54,6 +56,7 @@ export class ExpoSqliteDb {
         transactionQueue: Promise.resolve(),
         currentScope: null,
         scopeDepth: 0,
+        pendingTransactionCount: 0,
       } satisfies ExpoSqliteDbRootState;
       this.scopeToken = null;
       this.operationDb = optionsOrRoot.database;
@@ -69,9 +72,16 @@ export class ExpoSqliteDb {
     return this.operationDb;
   }
 
+  private shouldWaitForTransaction(): boolean {
+    return (
+      this.root.pendingTransactionCount > 0 &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    );
+  }
+
   private async waitForActiveTransaction(): Promise<void> {
     while (
-      this.root.currentScope !== null &&
+      this.root.pendingTransactionCount > 0 &&
       (!this.scopeToken || this.root.currentScope !== this.scopeToken)
     ) {
       await this.root.transactionQueue;
@@ -79,25 +89,33 @@ export class ExpoSqliteDb {
   }
 
   async exec(sql: string): Promise<void> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     // execAsync can run multiple statements separated by semicolons
     await (this.operationDb as any).execAsync(sql);
   }
 
   async run(sql: string, params: unknown[] = []): Promise<{ lastID: number; changes: number }> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     const result = await (this.operationDb as any).runAsync(sql, ...(params ?? []));
     return { lastID: result.lastInsertRowId ?? 0, changes: result.changes ?? 0 };
   }
 
   async get<T = unknown>(sql: string, params: unknown[] = []): Promise<T | undefined> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     const row = await (this.operationDb as any).getFirstAsync(sql, ...(params ?? []));
     return (row ?? undefined) as T | undefined;
   }
 
   async all<T = unknown>(sql: string, params: unknown[] = []): Promise<T[]> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     const rows = await (this.operationDb as any).getAllAsync(sql, ...(params ?? []));
     return (rows ?? []) as T[];
   }
@@ -154,6 +172,7 @@ export class ExpoSqliteDb {
     root.transactionQueue = new Promise<void>((resolve) => {
       resolver = resolve;
     });
+    root.pendingTransactionCount++;
 
     try {
       // SERIALIZATION: Wait for the previous transaction to complete
@@ -208,6 +227,7 @@ export class ExpoSqliteDb {
       // This allows the next queued transaction to proceed
       root.scopeDepth = 0;
       root.currentScope = null;
+      root.pendingTransactionCount--;
       resolver(); // Critical: This unblocks the next transaction in the queue
     }
   }

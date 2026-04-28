@@ -17,6 +17,8 @@ interface SqliteDbRootState {
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
   scopeDepth: number;
+  /** Number of top-level transactions currently active or queued */
+  pendingTransactionCount: number;
 }
 
 /**
@@ -43,6 +45,7 @@ export class SqliteDb {
         transactionQueue: Promise.resolve(),
         currentScope: null,
         scopeDepth: 0,
+        pendingTransactionCount: 0,
       } satisfies SqliteDbRootState;
       this.scopeToken = null;
     } else {
@@ -56,9 +59,16 @@ export class SqliteDb {
     return this.root.db;
   }
 
+  private shouldWaitForTransaction(): boolean {
+    return (
+      this.root.pendingTransactionCount > 0 &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    );
+  }
+
   private async waitForActiveTransaction(): Promise<void> {
     while (
-      this.root.currentScope !== null &&
+      this.root.pendingTransactionCount > 0 &&
       (!this.scopeToken || this.root.currentScope !== this.scopeToken)
     ) {
       await this.root.transactionQueue;
@@ -66,12 +76,16 @@ export class SqliteDb {
   }
 
   async exec(sql: string): Promise<void> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     this.root.db.exec(sql);
   }
 
   async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     const result = this.root.db.prepare(sql).run(params);
     return {
       lastID: Number(result.lastInsertRowid),
@@ -80,12 +94,16 @@ export class SqliteDb {
   }
 
   async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return this.root.db.prepare(sql).get(params) as T | undefined;
   }
 
   async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
-    await this.waitForActiveTransaction();
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return this.root.db.prepare(sql).all(params) as T[];
   }
 
@@ -143,6 +161,7 @@ export class SqliteDb {
     root.transactionQueue = new Promise<void>((resolve) => {
       resolver = resolve;
     });
+    root.pendingTransactionCount++;
 
     try {
       // SERIALIZATION: Wait for the previous transaction to complete
@@ -175,6 +194,7 @@ export class SqliteDb {
       // This allows the next queued transaction to proceed
       root.scopeDepth = 0;
       root.currentScope = null;
+      root.pendingTransactionCount--;
       resolver(); // Critical: This unblocks the next transaction in the queue
     }
   }
