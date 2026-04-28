@@ -4,8 +4,54 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import { SqliteDb, ensureSchemaUpTo } from '../index.ts';
-import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
+import { ExpoSqliteDb, ensureSchemaUpTo } from '../index.ts';
+import type { ExpoSqliteDbOptions } from '../db.ts';
+
+type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
+
+class BunExpoSqliteDatabaseShim {
+  private readonly db: Database;
+
+  constructor(filename = ':memory:') {
+    this.db = new Database(filename);
+  }
+
+  async execAsync(sql: string): Promise<void> {
+    const statements = sql
+      .split(';')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+
+    for (const statementSql of statements) {
+      this.db.prepare(statementSql).run();
+    }
+  }
+
+  async runAsync(sql: string, ...params: any[]): Promise<RunResult> {
+    const result = this.db.prepare(sql).run(...params) as unknown as {
+      changes?: number;
+      lastInsertRowid?: number;
+    };
+
+    const changes = Number(result?.changes ?? 0);
+    const lastInsertRowId = Number(result?.lastInsertRowid ?? 0);
+    return { changes, lastInsertRowId, lastInsertRowid: lastInsertRowId };
+  }
+
+  async getFirstAsync<T = unknown>(sql: string, ...params: any[]): Promise<T | null> {
+    const row = this.db.prepare(sql).get(...params) as T | undefined;
+    return row ?? null;
+  }
+
+  async getAllAsync<T = unknown>(sql: string, ...params: any[]): Promise<T[]> {
+    const rows = this.db.prepare(sql).all(...params) as T[] | undefined;
+    return rows ?? [];
+  }
+
+  async closeAsync(): Promise<void> {
+    this.db.close();
+  }
+}
 
 const RECEIVE_OPERATIONS_SQL = `
   CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
@@ -27,92 +73,31 @@ const RECEIVE_OPERATIONS_SQL = `
     ON coco_cashu_receive_operations(mintUrl);
 `;
 
-async function getMigrationIds(db: SqliteDb): Promise<string[]> {
+async function getMigrationIds(db: ExpoSqliteDb): Promise<string[]> {
   const rows = await db.all<{ id: string }>('SELECT id FROM coco_cashu_migrations ORDER BY id ASC');
 
   return rows.map((row) => row.id);
 }
 
-async function getColumnNames(db: SqliteDb, tableName: string): Promise<string[]> {
+async function getColumnNames(db: ExpoSqliteDb, tableName: string): Promise<string[]> {
   const rows = await db.all<{ name: string }>(`PRAGMA table_info(${tableName})`);
 
   return rows.map((row) => row.name);
 }
 
-describe('sqlite-bun schema migrations', () => {
-  let database: Database;
-  let db: SqliteDb;
+describe('expo-sqlite schema migrations', () => {
+  let database: BunExpoSqliteDatabaseShim;
+  let db: ExpoSqliteDb;
 
   beforeEach(() => {
-    database = new Database(':memory:');
-    db = new SqliteDb({ database });
+    database = new BunExpoSqliteDatabaseShim();
+    db = new ExpoSqliteDb({
+      database: database as unknown as ExpoSqliteDbOptions['database'],
+    });
   });
 
   afterEach(async () => {
-    await db.close();
-  });
-
-  it('upgrades mint operations to allow failed state persistence', async () => {
-    await ensureSchemaUpTo(db, '020_mint_operations_failed_state');
-
-    await db.run(
-      `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'mint-op-1',
-        'https://mint.test',
-        'quote-1',
-        'executing',
-        1,
-        2,
-        null,
-        'bolt11',
-        '{}',
-        100,
-        JSON.stringify({ keep: [], send: [] }),
-      ],
-    );
-
-    await ensureSchemaUpTo(db);
-
-    const repository = new SqliteMintOperationRepository(db);
-    await repository.update({
-      id: 'mint-op-1',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      state: 'failed',
-      createdAt: 1000,
-      updatedAt: 2000,
-      error: 'quote expired',
-      method: 'bolt11',
-      methodData: {},
-      amount: 100,
-      unit: 'sat',
-      request: 'lnbc1test',
-      expiry: 1_730_000_000,
-      outputData: { keep: [], send: [] },
-    });
-
-    expect(await repository.getById('mint-op-1')).toEqual({
-      id: 'mint-op-1',
-      mintUrl: 'https://mint.test',
-      quoteId: 'quote-1',
-      state: 'failed',
-      createdAt: 1000,
-      updatedAt: expect.any(Number),
-      error: 'quote expired',
-      method: 'bolt11',
-      methodData: {},
-      amount: 100,
-      unit: 'sat',
-      request: 'lnbc1test',
-      expiry: 1_730_000_000,
-      pubkey: undefined,
-      lastObservedRemoteState: undefined,
-      lastObservedRemoteStateAt: undefined,
-      outputData: { keep: [], send: [] },
-    });
+    await database.closeAsync();
   });
 
   it('accepts databases with old sqlite-bun swapped migration ids', async () => {

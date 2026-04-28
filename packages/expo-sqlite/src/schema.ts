@@ -7,6 +7,74 @@ interface Migration {
   run?: (db: ExpoSqliteDb) => Promise<void>;
 }
 
+type TableInfoRow = {
+  name: string;
+};
+
+const SEND_OPERATION_METHOD_MIGRATION_IDS = [
+  '012_send_operations_method',
+  '013_send_operations_method',
+] as const;
+
+const RECEIVE_OPERATION_MIGRATION_IDS = [
+  '013_receive_operations',
+  '012_receive_operations',
+] as const;
+
+async function tableExists(db: ExpoSqliteDb, tableName: string): Promise<boolean> {
+  const row = await db.get<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    [tableName],
+  );
+
+  return !!row;
+}
+
+async function getTableColumns(db: ExpoSqliteDb, tableName: string): Promise<Set<string>> {
+  const rows = await db.all<TableInfoRow>(`PRAGMA table_info(${tableName})`);
+  return new Set(rows.map((row) => row.name));
+}
+
+async function insertMigrationIds(db: ExpoSqliteDb, ids: readonly string[]): Promise<void> {
+  const appliedAt = getUnixTimeSeconds();
+
+  for (const id of ids) {
+    await db.run('INSERT OR IGNORE INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
+      id,
+      appliedAt,
+    ]);
+  }
+}
+
+async function addSendOperationMethodColumns(db: ExpoSqliteDb): Promise<void> {
+  const columns = await getTableColumns(db, 'coco_cashu_send_operations');
+
+  if (!columns.has('method')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default'`,
+    );
+  }
+
+  if (!columns.has('methodDataJson')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+}
+
+async function reconcileMigrationAliases(db: ExpoSqliteDb): Promise<void> {
+  if (await tableExists(db, 'coco_cashu_send_operations')) {
+    const sendColumns = await getTableColumns(db, 'coco_cashu_send_operations');
+    if (sendColumns.has('method') && sendColumns.has('methodDataJson')) {
+      await insertMigrationIds(db, SEND_OPERATION_METHOD_MIGRATION_IDS);
+    }
+  }
+
+  if (await tableExists(db, 'coco_cashu_receive_operations')) {
+    await insertMigrationIds(db, RECEIVE_OPERATION_MIGRATION_IDS);
+  }
+}
+
 const MIGRATIONS: readonly Migration[] = [
   {
     id: '001_initial',
@@ -309,10 +377,7 @@ const MIGRATIONS: readonly Migration[] = [
   },
   {
     id: '012_send_operations_method',
-    sql: `
-      ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default';
-      ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
-    `,
+    run: addSendOperationMethodColumns,
   },
   {
     id: '013_receive_operations',
@@ -573,6 +638,8 @@ export async function ensureSchemaUpTo(db: ExpoSqliteDb, stopBeforeId?: string):
     );
   `);
 
+  await reconcileMigrationAliases(db);
+
   const appliedRows = await db.all<{ id: string }>(
     'SELECT id FROM coco_cashu_migrations ORDER BY id ASC',
   );
@@ -597,4 +664,6 @@ export async function ensureSchemaUpTo(db: ExpoSqliteDb, stopBeforeId?: string):
       ]);
     });
   }
+
+  await reconcileMigrationAliases(db);
 }

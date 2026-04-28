@@ -24,5 +24,20 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build local test dependencies
+        run: |
+          cd packages/core && bun run build && cd ../..
+          cd packages/adapter-tests && bun run build && cd ../..
+
+      - name: Run expo-sqlite local adapter tests
+        run: |
+          cd packages/expo-sqlite
+          bun test \
+            src/test/MintOperationRepository.test.ts \
+            src/test/SendOperationRepository.test.ts \
+            src/test/MeltOperationRepository.test.ts \
+            src/test/contract.test.ts \
+            src/test/schema.test.ts
+
       - name: Run expo-sqlite integration tests
         run: ./scripts/test-integration.sh expo-sqlite

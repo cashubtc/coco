@@ -7,6 +7,74 @@ interface Migration {
   run?: (db: SqliteDb) => Promise<void>;
 }
 
+type TableInfoRow = {
+  name: string;
+};
+
+const SEND_OPERATION_METHOD_MIGRATION_IDS = [
+  '012_send_operations_method',
+  '013_send_operations_method',
+] as const;
+
+const RECEIVE_OPERATION_MIGRATION_IDS = [
+  '013_receive_operations',
+  '012_receive_operations',
+] as const;
+
+async function tableExists(db: SqliteDb, tableName: string): Promise<boolean> {
+  const row = await db.get<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    [tableName],
+  );
+
+  return !!row;
+}
+
+async function getTableColumns(db: SqliteDb, tableName: string): Promise<Set<string>> {
+  const rows = await db.all<TableInfoRow>(`PRAGMA table_info(${tableName})`);
+  return new Set(rows.map((row) => row.name));
+}
+
+async function insertMigrationIds(db: SqliteDb, ids: readonly string[]): Promise<void> {
+  const appliedAt = getUnixTimeSeconds();
+
+  for (const id of ids) {
+    await db.run('INSERT OR IGNORE INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
+      id,
+      appliedAt,
+    ]);
+  }
+}
+
+async function addSendOperationMethodColumns(db: SqliteDb): Promise<void> {
+  const columns = await getTableColumns(db, 'coco_cashu_send_operations');
+
+  if (!columns.has('method')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default'`,
+    );
+  }
+
+  if (!columns.has('methodDataJson')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+}
+
+async function reconcileMigrationAliases(db: SqliteDb): Promise<void> {
+  if (await tableExists(db, 'coco_cashu_send_operations')) {
+    const sendColumns = await getTableColumns(db, 'coco_cashu_send_operations');
+    if (sendColumns.has('method') && sendColumns.has('methodDataJson')) {
+      await insertMigrationIds(db, SEND_OPERATION_METHOD_MIGRATION_IDS);
+    }
+  }
+
+  if (await tableExists(db, 'coco_cashu_receive_operations')) {
+    await insertMigrationIds(db, RECEIVE_OPERATION_MIGRATION_IDS);
+  }
+}
+
 const MIGRATIONS: readonly Migration[] = [
   {
     id: '001_initial',
@@ -308,7 +376,11 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
-    id: '012_receive_operations',
+    id: '012_send_operations_method',
+    run: addSendOperationMethodColumns,
+  },
+  {
+    id: '013_receive_operations',
     sql: `
       CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
         id TEXT PRIMARY KEY,
@@ -327,13 +399,6 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_receive_operations(state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_mint
         ON coco_cashu_receive_operations(mintUrl);
-    `,
-  },
-  {
-    id: '013_send_operations_method',
-    sql: `
-      ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default';
-      ALTER TABLE coco_cashu_send_operations ADD COLUMN methodDataJson TEXT NOT NULL DEFAULT '{}';
     `,
   },
   {
@@ -579,6 +644,8 @@ export async function ensureSchemaUpTo(db: SqliteDb, stopBeforeId?: string): Pro
     );
   `);
 
+  await reconcileMigrationAliases(db);
+
   const appliedRows = await db.all<{ id: string }>(
     'SELECT id FROM coco_cashu_migrations ORDER BY id ASC',
   );
@@ -602,4 +669,6 @@ export async function ensureSchemaUpTo(db: SqliteDb, stopBeforeId?: string): Pro
       ]);
     });
   }
+
+  await reconcileMigrationAliases(db);
 }
