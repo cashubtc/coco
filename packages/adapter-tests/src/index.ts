@@ -14,6 +14,7 @@ type TransactionFactory<TRepositories extends Repositories = Repositories> = () 
 
 type ContractOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: TransactionFactory<TRepositories>;
+  testConcurrentRootOperationIsolation?: boolean;
 };
 
 export async function runRepositoryTransactionContract(
@@ -61,6 +62,56 @@ export async function runRepositoryTransactionContract(
         await dispose();
       }
     });
+
+    if (options.testConcurrentRootOperationIsolation) {
+      it('does not include concurrent root repository writes in active transactions', async () => {
+        const { repositories, dispose } = await options.createRepositories();
+        try {
+          const transactionEntered = createDeferred();
+          const releaseTransaction = createDeferred();
+          const mintInTransaction = {
+            ...createDummyMint(),
+            mintUrl: 'https://mint-in-transaction.test',
+          };
+          const outsideMint = {
+            ...createDummyMint(),
+            mintUrl: 'https://outside-mint.test',
+          };
+
+          const transactionPromise = repositories.withTransaction(async (tx) => {
+            await tx.mintRepository.addOrUpdateMint(mintInTransaction);
+            transactionEntered.resolve();
+            await releaseTransaction.promise;
+            throw new Error('rollback transaction');
+          });
+
+          await transactionEntered.promise;
+
+          let outsideWriteResolved = false;
+          const outsideWritePromise = repositories.mintRepository
+            .addOrUpdateMint(outsideMint)
+            .then(() => {
+              outsideWriteResolved = true;
+            });
+
+          await Promise.race([
+            outsideWritePromise,
+            new Promise((resolve) => setTimeout(resolve, 25)),
+          ]);
+          expect(outsideWriteResolved).toBe(false);
+
+          releaseTransaction.resolve();
+          await expectThrows(() => transactionPromise, expect);
+          await outsideWritePromise;
+
+          const mints = await repositories.mintRepository.getAllMints();
+          expect(mints).toHaveLength(1);
+          expect(mints[0]?.mintUrl).toBe(outsideMint.mintUrl);
+        } finally {
+          await dispose();
+        }
+      });
+    }
   });
 }
 
@@ -89,6 +140,16 @@ async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
     didThrow = true;
   }
   expect(didThrow).toBe(true);
+}
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject } as const;
 }
 
 export function createDummyMint(): Mint {

@@ -17,6 +17,8 @@ interface SqliteDbRootState {
   currentScope: symbol | null;
   /** Current nesting depth of transactions (1 = top-level, 2+ = nested) */
   scopeDepth: number;
+  /** Number of top-level transactions currently active or queued */
+  pendingTransactionCount: number;
   /** Cache of prepared statements for frequently-used queries */
   statementCache: Map<string, Statement>;
 }
@@ -45,6 +47,7 @@ export class SqliteDb {
         transactionQueue: Promise.resolve(),
         currentScope: null,
         scopeDepth: 0,
+        pendingTransactionCount: 0,
         statementCache: new Map(),
       } satisfies SqliteDbRootState;
       this.scopeToken = null;
@@ -73,7 +76,26 @@ export class SqliteDb {
     return statement;
   }
 
-  exec(sql: string): Promise<void> {
+  private shouldWaitForTransaction(): boolean {
+    return (
+      this.root.pendingTransactionCount > 0 &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    );
+  }
+
+  private async waitForActiveTransaction(): Promise<void> {
+    while (
+      this.root.pendingTransactionCount > 0 &&
+      (!this.scopeToken || this.root.currentScope !== this.scopeToken)
+    ) {
+      await this.root.transactionQueue;
+    }
+  }
+
+  async exec(sql: string): Promise<void> {
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return new Promise((resolve, reject) => {
       try {
         this.root.db.exec(sql);
@@ -84,7 +106,10 @@ export class SqliteDb {
     });
   }
 
-  run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
@@ -99,7 +124,10 @@ export class SqliteDb {
     });
   }
 
-  get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
@@ -111,7 +139,10 @@ export class SqliteDb {
     });
   }
 
-  all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+    if (this.shouldWaitForTransaction()) {
+      await this.waitForActiveTransaction();
+    }
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
@@ -177,6 +208,7 @@ export class SqliteDb {
     root.transactionQueue = new Promise<void>((resolve) => {
       resolver = resolve;
     });
+    root.pendingTransactionCount++;
 
     try {
       // SERIALIZATION: Wait for the previous transaction to complete
@@ -214,6 +246,7 @@ export class SqliteDb {
       // This allows the next queued transaction to proceed
       root.scopeDepth = 0;
       root.currentScope = null;
+      root.pendingTransactionCount--;
       resolver(); // Critical: This unblocks the next transaction in the queue
     }
   }

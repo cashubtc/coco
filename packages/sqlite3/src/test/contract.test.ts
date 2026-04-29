@@ -35,6 +35,7 @@ async function createRepositories() {
 runRepositoryTransactionContract(
   {
     createRepositories,
+    testConcurrentRootOperationIsolation: true,
   },
   { describe, it, expect },
 );

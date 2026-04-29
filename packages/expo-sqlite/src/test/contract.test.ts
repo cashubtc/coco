@@ -60,6 +60,28 @@ class BunExpoSqliteDatabaseShim {
   }
 }
 
+class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
+  exclusiveTransactionCalls = 0;
+  transactionCalls = 0;
+
+  async withExclusiveTransactionAsync(): Promise<void> {
+    this.exclusiveTransactionCalls++;
+    throw new Error('withExclusiveTransactionAsync is not supported on web');
+  }
+
+  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
+    this.transactionCalls++;
+    await this.execAsync('BEGIN');
+    try {
+      await fn();
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -87,6 +109,7 @@ async function createRepositories() {
 runRepositoryTransactionContract(
   {
     createRepositories,
+    testConcurrentRootOperationIsolation: true,
   },
   { describe, it, expect },
 );
@@ -185,3 +208,43 @@ describe('expo-sqlite adapter transactions', () => {
     }
   });
 });
+
+describe('expo-sqlite web transaction compatibility', () => {
+  it('uses withTransactionAsync when exclusive transactions are unavailable on web', async () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+    Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
+    const database = new WebExpoSqliteDatabaseShim();
+    const repositories = new Repositories({
+      database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await repositories.init();
+      database.exclusiveTransactionCalls = 0;
+      database.transactionCalls = 0;
+
+      await repositories.withTransaction(async (tx) => {
+        await tx.mintRepository.addOrUpdateMint(createDummyMint());
+      });
+
+      expect(database.exclusiveTransactionCalls).toBe(0);
+      expect(database.transactionCalls).toBe(1);
+      await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
+    } finally {
+      await repositories.db.raw.closeAsync?.();
+      restoreGlobalProperty('window', windowDescriptor);
+      restoreGlobalProperty('document', documentDescriptor);
+    }
+  });
+});
+
+function restoreGlobalProperty(name: string, descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) {
+    Object.defineProperty(globalThis, name, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(globalThis, name);
+}
