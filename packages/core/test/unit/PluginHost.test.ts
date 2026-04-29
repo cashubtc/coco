@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { PluginHost } from '../../plugins/PluginHost.ts';
+import { DuplicatePluginRegistrationError } from '../../plugins/types.ts';
 import type { Plugin } from '../../plugins/types.ts';
 
 describe('PluginHost', () => {
@@ -91,6 +92,34 @@ describe('PluginHost', () => {
     await host.ready();
 
     expect(calls).toEqual({ init: 1, ready: 1 });
+  });
+
+  it('rejects duplicate plugin instance registration', async () => {
+    const calls = { init: 0, ready: 0, dispose: 0 };
+    const plugin: Plugin<['logger']> = {
+      name: 'duplicate',
+      required: ['logger'],
+      onInit: () => {
+        calls.init += 1;
+      },
+      onReady: () => {
+        calls.ready += 1;
+      },
+      onDispose: () => {
+        calls.dispose += 1;
+      },
+    };
+
+    host.use(plugin);
+
+    expect(() => host.use(plugin)).toThrow(DuplicatePluginRegistrationError);
+    expect(() => host.use(plugin)).toThrow('Plugin "duplicate" is already registered');
+
+    await host.init(services);
+    await host.ready();
+    await host.dispose();
+
+    expect(calls).toEqual({ init: 1, ready: 1, dispose: 1 });
   });
 
   it('coalesces concurrent init and ready calls', async () => {

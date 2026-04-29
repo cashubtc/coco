@@ -331,6 +331,27 @@ describe('initializeCoco', () => {
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
     });
+
+    it('should reject duplicate plugin instance registration', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+      const plugin = {
+        name: 'duplicate-plugin',
+        required: [] as const,
+      };
+
+      manager.use(plugin);
+
+      expect(() => manager.use(plugin)).toThrow('Plugin "duplicate-plugin" is already registered');
+    });
   });
 
   describe('edge cases', () => {
