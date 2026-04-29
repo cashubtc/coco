@@ -1,10 +1,11 @@
 import type { Plugin, ServiceKey, ServiceMap } from './types.ts';
-import { ExtensionRegistrationError } from './types.ts';
+import { DuplicatePluginRegistrationError, ExtensionRegistrationError } from './types.ts';
 
 export class PluginHost {
   private readonly plugins: Plugin[] = [];
   private readonly cleanups: Array<() => void | Promise<void>> = [];
   private readonly extensions: Record<string, unknown> = {};
+  private readonly registeredPlugins = new WeakSet<Plugin>();
   private readonly initializedPlugins = new WeakSet<Plugin>();
   private readonly readyPlugins = new WeakSet<Plugin>();
   private readonly initPromises = new WeakMap<Plugin, Promise<void>>();
@@ -14,6 +15,11 @@ export class PluginHost {
   private readyPhase = false;
 
   use(plugin: Plugin): void {
+    if (this.registeredPlugins.has(plugin)) {
+      throw new DuplicatePluginRegistrationError(plugin.name);
+    }
+
+    this.registeredPlugins.add(plugin);
     this.plugins.push(plugin);
     if (this.initialized && this.services) {
       const services = this.services;

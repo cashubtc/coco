@@ -90,3 +90,13 @@ export class ExtensionRegistrationError extends Error {
     this.name = 'ExtensionRegistrationError';
   }
 }
+
+/**
+ * Error thrown when the same plugin instance is registered more than once.
+ */
+export class DuplicatePluginRegistrationError extends Error {
+  constructor(pluginName: string) {
+    super(`Plugin "${pluginName}" is already registered`);
+    this.name = 'DuplicatePluginRegistrationError';
+  }
+}
