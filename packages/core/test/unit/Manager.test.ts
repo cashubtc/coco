@@ -88,6 +88,38 @@ describe('initializeCoco', () => {
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
     });
+
+    it('should initialize plugins once before returning', async () => {
+      const counters = { init: 0, ready: 0 };
+      const extension = { ok: true };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [
+          {
+            name: 'plugin-init',
+            required: [],
+            onInit: (ctx) => {
+              counters.init += 1;
+              ctx.registerExtension('pluginInit', extension);
+            },
+            onReady: () => {
+              counters.ready += 1;
+            },
+          },
+        ],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      expect(counters).toEqual({ init: 1, ready: 1 });
+      expect((manager.ext as Record<string, unknown>).pluginInit).toBe(extension);
+    });
   });
 
   describe('watchers configuration', () => {

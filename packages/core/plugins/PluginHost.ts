@@ -5,6 +5,10 @@ export class PluginHost {
   private readonly plugins: Plugin[] = [];
   private readonly cleanups: Array<() => void | Promise<void>> = [];
   private readonly extensions: Record<string, unknown> = {};
+  private readonly initializedPlugins = new WeakSet<Plugin>();
+  private readonly readyPlugins = new WeakSet<Plugin>();
+  private readonly initPromises = new WeakMap<Plugin, Promise<void>>();
+  private readonly readyPromises = new WeakMap<Plugin, Promise<void>>();
   private services?: ServiceMap;
   private initialized = false;
   private readyPhase = false;
@@ -12,8 +16,11 @@ export class PluginHost {
   use(plugin: Plugin): void {
     this.plugins.push(plugin);
     if (this.initialized && this.services) {
-      void this.runInit(plugin, this.services);
-      if (this.readyPhase) void this.runReady(plugin, this.services);
+      const services = this.services;
+      const initPromise = this.ensureInitialized(plugin, services);
+      if (this.readyPhase) {
+        void initPromise.then(() => this.ensureReady(plugin, services));
+      }
     }
   }
 
@@ -21,7 +28,7 @@ export class PluginHost {
     this.services = services;
     this.initialized = true;
     for (const p of this.plugins) {
-      await this.runInit(p, services);
+      await this.ensureInitialized(p, services);
     }
   }
 
@@ -29,7 +36,7 @@ export class PluginHost {
     if (!this.services) return;
     this.readyPhase = true;
     for (const p of this.plugins) {
-      await this.runReady(p, this.services);
+      await this.ensureReady(p, this.services);
     }
   }
 
@@ -63,6 +70,49 @@ export class PluginHost {
    */
   getExtensions(): Record<string, unknown> {
     return this.extensions;
+  }
+
+  private async ensureInitialized(plugin: Plugin, services: ServiceMap): Promise<void> {
+    if (this.initializedPlugins.has(plugin)) return;
+
+    const existing = this.initPromises.get(plugin);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const promise = this.runInit(plugin, services)
+      .then(() => {
+        this.initializedPlugins.add(plugin);
+      })
+      .finally(() => {
+        this.initPromises.delete(plugin);
+      });
+
+    this.initPromises.set(plugin, promise);
+    await promise;
+  }
+
+  private async ensureReady(plugin: Plugin, services: ServiceMap): Promise<void> {
+    await this.ensureInitialized(plugin, services);
+    if (this.readyPlugins.has(plugin)) return;
+
+    const existing = this.readyPromises.get(plugin);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const promise = this.runReady(plugin, services)
+      .then(() => {
+        this.readyPlugins.add(plugin);
+      })
+      .finally(() => {
+        this.readyPromises.delete(plugin);
+      });
+
+    this.readyPromises.set(plugin, promise);
+    await promise;
   }
 
   private async runInit(plugin: Plugin, services: ServiceMap): Promise<void> {
