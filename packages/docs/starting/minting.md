@@ -37,3 +37,6 @@ coco.on('mint-op:finalized', (payload) => {
   }
 });
 ```
+
+For the full state machine and action reference, see
+[Mint Operations](../pages/mint-operations.md).

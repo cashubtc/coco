@@ -4,18 +4,23 @@ Cashu tokens can be sent between users as encoded strings. Coco provides simple 
 
 ## Receiving Tokens
 
-To receive a Cashu token, use the `receive` method. The token can be passed as either an encoded string or a parsed `Token` object:
+For app flows that need review, cancellation, or crash recovery, prefer
+`coco.ops.receive.prepare()` and `coco.ops.receive.execute()`. The token can be
+passed as either an encoded string or a parsed `Token` object:
 
 ```ts
-// Receive an encoded token string
-await coco.wallet.receive('cashuBpGF0gaJhaUgA...');
+const prepared = await coco.ops.receive.prepare({ token: 'cashuBpGF0gaJhaUgA...' });
 
-// Or receive a parsed token object
-const token = { mint: 'https://mint.url', proofs: [...] };
-await coco.wallet.receive(token);
+if (userConfirmed) {
+  await coco.ops.receive.execute(prepared.id);
+} else {
+  await coco.ops.receive.cancel(prepared.id);
+}
 ```
 
 > **Note:** The mint must be trusted before receiving tokens. See [Adding a Mint](./adding-mints.md).
+
+For the full receive lifecycle, see [Receive Operations](../pages/receive-operations.md).
 
 ### Events
 
@@ -52,6 +57,7 @@ if (userConfirmed) {
 ```
 
 `coco.ops.send` and `coco.ops.receive` are the canonical workflow APIs.
+For send state details, see [Send Operations](../pages/send-operations.md).
 
 ### Understanding Fees
 
@@ -102,6 +108,7 @@ Use melt operations to pay BOLT11 invoices via `coco.ops.melt`:
 - `refresh(operationId: string): Promise<MeltOperation>`
 
 Finalized melt operations include `changeAmount` and `effectiveFee` when that settlement data is available.
+For the full melt lifecycle, see [Melt Operations](../pages/melt-operations.md).
 
 ## Events
 

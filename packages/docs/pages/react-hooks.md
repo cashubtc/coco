@@ -4,15 +4,35 @@ Hooks are built on top of the providers and the core `Manager` API. Make sure
 your component tree is wrapped with `ManagerProvider` or
 `CocoCashuProvider`.
 
-The operation hooks intentionally mirror `manager.ops.*` instead of inventing a
-separate React-only workflow model:
+## Operation Hook Contract
 
-- render from `currentOperation`
-- use `executeResult` for execute-specific output only
-- optionally initialize a hook with an operation or `operationId` on first render
-- hydrate persisted work on mount when initialized with an `operationId`
-- call follow-up methods on the currently bound operation
-- use `status`, `error`, `isLoading`, and `isError` for local hook state
+The operation hooks intentionally mirror `manager.ops.*` instead of inventing a
+separate React-only workflow model. One hook instance owns one active operation.
+
+- `currentOperation` is the authoritative operation record to render from.
+- `executeResult` is only for execute-specific returned data, such as the token
+  returned by `useSendOperation().execute()`.
+- Creation methods such as `prepare(...)` and `importQuote(...)` bind the hook to
+  the operation they create.
+- Follow-up methods such as `execute()`, `checkPayment()`, `finalize()`,
+  `cancel()`, `reclaim()`, and `refresh()` operate on the currently bound
+  operation, so app code should not pass an `operationId` to those methods.
+- The optional hook argument is initial-only. Use it to seed a resume screen from
+  an operation object or load one persisted operation by id on mount.
+- The hooks subscribe to lifecycle events and update the bound operation when the
+  manager emits a newer state for that operation id.
+- `refresh()` is for stale persisted operations, recovery screens, or explicit
+  user refresh actions. It is not needed as happy-path polling.
+- `reset()` clears the hook's local binding, `executeResult`, `status`, and
+  `error`. It does not roll back or delete the persisted operation.
+- `status`, `error`, `isLoading`, and `isError` describe the hook's current local
+  async action. If a second stateful action is started while one is already
+  running, the second call rejects and does not replace the loading/error state
+  from the first action.
+
+For state-machine details, see [Send Operations](./send-operations.md),
+[Receive Operations](./receive-operations.md), [Mint Operations](./mint-operations.md),
+and [Melt Operations](./melt-operations.md).
 
 ## useSendOperation
 
@@ -65,8 +85,11 @@ import { useReceiveOperation } from '@cashu/coco-react';
 
 const { prepare, execute, currentOperation, refresh, cancel } = useReceiveOperation();
 
-await prepare({ token });
-await execute();
+const preparedReceive = await prepare({ token });
+
+if (preparedReceive.state === 'prepared') {
+  await execute();
+}
 ```
 
 ## useMintOperation
@@ -89,8 +112,11 @@ const {
   listInFlight,
 } = useMintOperation();
 
-await prepare({ mintUrl, amount: 100, method: 'bolt11' });
-await checkPayment();
+const pendingMint = await prepare({ mintUrl, amount: 100, method: 'bolt11' });
+
+if (pendingMint.state === 'pending') {
+  await checkPayment();
+}
 ```
 
 `prepare()` and `importQuote()` both create a pending mint operation.
@@ -104,12 +130,15 @@ import { useMeltOperation } from '@cashu/coco-react';
 
 const { prepare, execute, refresh, finalize, reclaim, currentOperation } = useMeltOperation();
 
-await prepare({
+const preparedMelt = await prepare({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
 });
-await execute();
+
+if (preparedMelt.state === 'prepared') {
+  await execute();
+}
 ```
 
 ## Derived-data Hooks

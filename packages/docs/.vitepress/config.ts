@@ -40,6 +40,8 @@ export default defineConfig({
           { text: 'KeyRing (P2PK)', link: '/pages/keyring' },
           { text: 'Watchers & Processors', link: '/pages/watchers-processors' },
           { text: 'Send Operations', link: '/pages/send-operations' },
+          { text: 'Receive Operations', link: '/pages/receive-operations' },
+          { text: 'Mint Operations', link: '/pages/mint-operations' },
           { text: 'Melt Operations', link: '/pages/melt-operations' },
           { text: 'Coco Config', link: '/pages/coco-config' },
           { text: 'Plugins', link: '/pages/plugins' },

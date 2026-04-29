@@ -15,7 +15,8 @@ package mirrors that model directly with:
 Each hook exposes the same durable-operation story:
 
 - `currentOperation` for the persisted operation state you should render from
-- `executeResult` for the last execute-specific result
+- `executeResult` for the last execute-specific result, not the general
+  operation state
 - optional initial binding via an operation or `operationId` on first render
 - internal mount-time hydration when initialized with an `operationId`
 - no-arg follow-up actions that operate on the currently bound operation
@@ -23,6 +24,9 @@ Each hook exposes the same durable-operation story:
 
 The optional hook argument is initial-only. If your UI stays mounted while the
 target operation changes, remount the hook or component with a new React `key`.
+Use `refresh()` for stale persisted operations or recovery UI, not as normal
+happy-path polling. Lifecycle events update the bound `currentOperation`
+automatically when watchers, processors, or explicit actions move it forward.
 
 ## Installation
 
