@@ -1,7 +1,9 @@
 {
   "name": "@cashu/coco-indexeddb",
   "version": "1.0.0-rc.5",
-  "module": "index.ts",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
   "repository": {
     "type": "git",

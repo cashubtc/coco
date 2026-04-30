@@ -2,7 +2,7 @@
   "name": "@cashu/coco-core",
   "version": "1.0.0-rc.5",
   "main": "dist/index.cjs",
-  "module": "dist/index.mjs",
+  "module": "dist/index.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/cashubtc/coco",
