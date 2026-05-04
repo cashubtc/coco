@@ -14,6 +14,7 @@ import {
   type HasKeysetKeys,
   parseP2PKSecret,
   type Secret,
+  JSONInt,
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
@@ -78,6 +79,51 @@ const watcherTestSubscriptions = {
   slowPollingIntervalMs: 50,
   fastPollingIntervalMs: 50,
 };
+
+type TestWalletOptions = ConstructorParameters<typeof Wallet>[1];
+
+async function browserSafeMintRequest<T>(options: {
+  endpoint: string;
+  requestBody?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  method?: string;
+}): Promise<T> {
+  const body =
+    options.requestBody === undefined ? undefined : JSONInt.stringify(options.requestBody);
+  const headers = new Headers({
+    Accept: 'application/json, text/plain, */*',
+    ...(options.headers ?? {}),
+  });
+
+  if (body !== undefined) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const response = await fetch(options.endpoint, {
+    method: options.method ?? (body === undefined ? 'GET' : 'POST'),
+    headers,
+    body,
+    cache: 'no-store',
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  if (!text) {
+    throw new Error('Empty response body');
+  }
+
+  return JSONInt.parse(text) as T;
+}
+
+function createTestMint(mintUrl: string): Mint {
+  return new Mint(mintUrl, { customRequest: browserSafeMintRequest });
+}
+
+function createTestWallet(mintUrl: string, options?: TestWalletOptions): Wallet {
+  return new Wallet(createTestMint(mintUrl), options);
+}
 
 function waitForEvent<TPayload = unknown>(
   manager: Manager,
@@ -876,7 +922,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             effectiveFee?: number;
             finalizedData?: { preimage?: string };
           };
-          const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
+          const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
           const expectedPreimage = meltQuote.payment_preimage ?? undefined;
           expect(settlement.changeAmount).toBeDefined();
           expect(settlement.effectiveFee).toBeDefined();
@@ -911,7 +957,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               effectiveFee?: number;
               finalizedData?: { preimage?: string };
             };
-            const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
+            const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
             const expectedPreimage = meltQuote.payment_preimage ?? undefined;
             expect(operationAfterRetry!.state).toBe('finalized');
             expect(settlement.changeAmount).toBeDefined();
@@ -2138,7 +2184,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(keypair.publicKeyHex).toBeDefined();
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = createTestWallet(mintUrl);
         await senderWallet.loadMint();
 
         // Fund the sender wallet
@@ -2199,7 +2245,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect('secretKey' in keypair).toBe(false);
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = createTestWallet(mintUrl);
         await senderWallet.loadMint();
 
         // Fund the sender wallet
@@ -2256,7 +2302,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should fail to receive P2PK token without the private key', async () => {
         // Create a sender wallet with cashu-ts
         const senderSeed = crypto.getRandomValues(new Uint8Array(64));
-        const senderWallet = new Wallet(new Mint(mintUrl), {
+        const senderWallet = createTestWallet(mintUrl, {
           bip39seed: senderSeed,
         });
         await senderWallet.loadMint();
@@ -2412,7 +2458,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const keypair2 = await mgr!.keyring.generateKeyPair();
 
         // Create sender wallet
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = createTestWallet(mintUrl);
         await senderWallet.loadMint();
         const keyset = senderWallet.keyChain.getCheapestKeyset();
 
@@ -2481,7 +2527,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           // Create a separate wallet with a different seed that has funds
           const toBeSweptSeed = crypto.getRandomValues(new Uint8Array(64));
-          const baseWallet = new Wallet(new Mint(mintUrl), {
+          const baseWallet = createTestWallet(mintUrl, {
             bip39seed: toBeSweptSeed,
           });
           await baseWallet.loadMint();
