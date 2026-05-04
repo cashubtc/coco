@@ -15,9 +15,9 @@ import { TokenValidationError } from './models/Error.ts';
 // ============================================================================
 
 /**
- * Serialized form of a BlindedMessage (JSON-safe)
+ * Stored form of a BlindedMessage (JSON-safe)
  */
-export interface SerializedBlindedMessage {
+export interface StoredBlindedMessage {
   amount: string | number;
   id: string;
   B_: string;
@@ -27,7 +27,7 @@ export interface SerializedBlindedMessage {
  * Serialized form of a single OutputData entry (JSON-safe)
  */
 export interface SerializedOutput {
-  blindedMessage: SerializedBlindedMessage;
+  blindedMessage: StoredBlindedMessage;
   blindingFactor: string; // hex-encoded bigint
   secret: string; // hex-encoded Uint8Array
 }

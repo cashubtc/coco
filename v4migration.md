@@ -382,7 +382,7 @@ Implementation notes for IndexedDB:
 
 Helper and UI-facing derived values need explicit `Amount` behavior:
 
-- `packages/core/utils.ts:13` - `SerializedBlindedMessage.amount`.
+- `packages/core/utils.ts:13` - `StoredBlindedMessage.amount`.
 - `packages/core/utils.ts:63` - `serializeOutput()` should serialize `Amount` as decimal text.
 - `packages/core/utils.ts:78` - `deserializeOutput()` should rehydrate with `Amount.from(...)`.
 - `packages/core/index.ts:7` - exported `CoreProof`, `BalanceSnapshot`, `BalanceBreakdown`, and
