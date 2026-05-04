@@ -6,6 +6,6 @@ export default defineConfig([
     platform: 'browser',
     target: 'esnext',
     dts: true,
-    format: ['esm', 'cjs'],
+    format: ['esm'],
   },
 ]);

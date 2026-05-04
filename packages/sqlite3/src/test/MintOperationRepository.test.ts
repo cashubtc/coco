@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
+import { Amount } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 import { ensureSchema } from '../schema.ts';
 import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
@@ -31,7 +32,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
     });
 
@@ -45,7 +46,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -64,7 +65,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'already issued',
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
@@ -83,7 +84,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
@@ -105,7 +106,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
     });
 
@@ -119,7 +120,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -138,7 +139,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'already issued',
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
@@ -157,7 +158,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
@@ -182,7 +183,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -199,7 +200,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1executing',
       expiry: quoteExpiry + 1,
@@ -216,7 +217,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 2,

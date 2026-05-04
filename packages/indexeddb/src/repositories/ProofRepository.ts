@@ -1,10 +1,11 @@
 import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function rowToProof(r: ProofRow): CoreProof {
   const base = {
     id: r.id,
-    amount: r.amount,
+    amount: deserializeAmount(r.amount),
     secret: r.secret,
     C: r.C,
     ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
@@ -41,7 +42,7 @@ export class IdbProofRepository implements ProofRepository {
         const row: ProofRow = {
           mintUrl,
           id: p.id,
-          amount: p.amount,
+          amount: serializeAmount(p.amount),
           secret: p.secret,
           C: p.C,
           dleqJson: p.dleq ? JSON.stringify(p.dleq) : null,

@@ -1,10 +1,11 @@
-import type {
-  Mint,
-  Keyset,
-  CoreProof,
-  Repositories,
-  MeltOperation,
-  AuthSession,
+import {
+  Amount,
+  type Mint,
+  type Keyset,
+  type CoreProof,
+  type Repositories,
+  type MeltOperation,
+  type AuthSession,
 } from '@cashu/coco-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -184,7 +185,7 @@ export function createDummyKeyset(): Keyset {
 export function createDummyProof(overrides?: Partial<CoreProof>): CoreProof {
   return {
     id: 'proof-id',
-    amount: 1,
+    amount: Amount.from(1),
     secret: 'secret',
     C: 'C',
     mintUrl: 'https://mint.test',
@@ -305,8 +306,8 @@ export async function runAuthSessionRepositoryContract(
           refreshToken: 'refresh-xyz',
           scope: 'read write',
           batPool: [
-            { id: 'proof-1', amount: 1, secret: 's1', C: 'C1' },
-            { id: 'proof-2', amount: 2, secret: 's2', C: 'C2' },
+            { id: 'proof-1', amount: Amount.from(1), secret: 's1', C: 'C1' },
+            { id: 'proof-2', amount: Amount.from(2), secret: 's2', C: 'C2' },
           ] as AuthSession['batPool'],
         });
         await repo.saveSession(session);

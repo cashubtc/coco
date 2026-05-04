@@ -8,6 +8,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -20,7 +21,7 @@ type Row = {
   mintUrl: string;
   type: 'mint' | 'melt' | 'send' | 'receive';
   unit: string;
-  amount: number;
+  amount: string | number;
   createdAt: number;
   quoteId: string | null;
   state: string | null;
@@ -63,7 +64,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
       history.mintUrl,
       history.type,
       history.unit,
-      history.amount,
+      serializeAmount(history.amount),
       history.createdAt,
     ];
 
@@ -191,7 +192,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
          WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           paymentRequest,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -219,7 +220,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
          WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           history.metadata ? JSON.stringify(history.metadata) : null,
           h.operationId ?? null,
@@ -247,7 +248,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
          WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           tokenJson,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -275,7 +276,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
          WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           tokenJson,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -345,7 +346,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'melt') {
@@ -355,14 +356,14 @@ export class SqliteHistoryRepository implements HistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'send') {
       return {
         ...base,
         type: 'send',
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
         token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
@@ -372,7 +373,7 @@ export class SqliteHistoryRepository implements HistoryRepository {
     return {
       ...base,
       type: 'receive',
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       operationId: row.operationId ?? undefined,
       state: (row.state ?? 'finalized') as ReceiveHistoryState,
       token,

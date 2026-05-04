@@ -1,5 +1,9 @@
-import type { MintQuoteRepository } from '@cashu/coco-core';
-import type { MintQuote } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  serializeAmount,
+  type MintQuoteRepository,
+  type MintQuote,
+} from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 export class ExpoMintQuoteRepository implements MintQuoteRepository {
@@ -15,9 +19,9 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
       quote: string;
       state: string;
       request: string;
-      amount: number;
+      amount: string | number;
       unit: string;
-      expiry: number;
+      expiry: number | null;
       pubkey?: string | null;
     }>(
       `SELECT mintUrl, quote, state, request, amount, unit, expiry, pubkey
@@ -30,7 +34,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
       quote: row.quote,
       state: row.state as MintQuote['state'],
       request: row.request,
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       unit: row.unit,
       expiry: row.expiry,
       pubkey: row.pubkey ?? undefined,
@@ -53,7 +57,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
         quote.quote,
         quote.state,
         quote.request,
-        quote.amount,
+        serializeAmount(quote.amount),
         quote.unit,
         quote.expiry,
         quote.pubkey ?? null,
@@ -78,9 +82,9 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
       quote: string;
       state: string;
       request: string;
-      amount: number;
+      amount: string | number;
       unit: string;
-      expiry: number;
+      expiry: number | null;
       pubkey?: string | null;
     }>(
       `SELECT mintUrl, quote, state, request, amount, unit, expiry, pubkey
@@ -93,7 +97,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
           quote: row.quote,
           state: row.state as MintQuote['state'],
           request: row.request,
-          amount: row.amount,
+          amount: deserializeAmount(row.amount),
           unit: row.unit,
           expiry: row.expiry,
           pubkey: row.pubkey ?? undefined,

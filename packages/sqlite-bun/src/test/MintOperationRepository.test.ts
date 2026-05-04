@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
+import { Amount } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 describe('SqliteMintOperationRepository', () => {
@@ -31,7 +32,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
     });
 
@@ -45,7 +46,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -64,7 +65,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'already issued',
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
@@ -83,7 +84,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
@@ -105,7 +106,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
     });
 
@@ -119,7 +120,7 @@ describe('SqliteMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -138,7 +139,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'already issued',
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
@@ -157,7 +158,7 @@ describe('SqliteMintOperationRepository', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,

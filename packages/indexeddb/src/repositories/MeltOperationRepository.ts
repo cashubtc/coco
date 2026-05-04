@@ -1,4 +1,5 @@
 import type { MeltOperationRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, MeltOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -6,8 +7,8 @@ type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['get
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethodData = MeltOperation['methodData'];
 type MeltSettlementData = {
-  changeAmount?: number;
-  effectiveFee?: number;
+  changeAmount?: MeltOperation extends { changeAmount?: infer A } ? A : never;
+  effectiveFee?: MeltOperation extends { effectiveFee?: infer A } ? A : never;
   finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
 };
 
@@ -40,11 +41,11 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const preparedData = {
     quoteId: row.quoteId ?? '',
     unit: row.unit ?? 'sat',
-    amount: row.amount ?? 0,
-    fee_reserve: row.fee_reserve ?? 0,
-    swap_fee: row.swap_fee ?? 0,
+    amount: deserializeAmount(row.amount ?? 0),
+    fee_reserve: deserializeAmount(row.fee_reserve ?? 0),
+    swap_fee: deserializeAmount(row.swap_fee ?? 0),
     needsSwap: row.needsSwap === 1,
-    inputAmount: row.inputAmount ?? 0,
+    inputAmount: deserializeAmount(row.inputAmount ?? 0),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     changeOutputData: row.changeOutputDataJson
       ? JSON.parse(row.changeOutputDataJson)
@@ -61,8 +62,14 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   if (row.state === 'finalized') {
     return {
       ...operation,
-      changeAmount: row.changeAmount ?? undefined,
-      effectiveFee: row.effectiveFee ?? undefined,
+      changeAmount:
+        row.changeAmount !== null && row.changeAmount !== undefined
+          ? deserializeAmount(row.changeAmount)
+          : undefined,
+      effectiveFee:
+        row.effectiveFee !== null && row.effectiveFee !== undefined
+          ? deserializeAmount(row.effectiveFee)
+          : undefined,
       finalizedData: row.finalizedDataJson ? JSON.parse(row.finalizedDataJson) : undefined,
     } as MeltOperation;
   }
@@ -115,16 +122,22 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
     methodDataJson,
     quoteId: operation.quoteId,
     unit: operation.unit,
-    amount: operation.amount,
-    fee_reserve: operation.fee_reserve,
-    swap_fee: operation.swap_fee,
+    amount: serializeAmount(operation.amount),
+    fee_reserve: serializeAmount(operation.fee_reserve),
+    swap_fee: serializeAmount(operation.swap_fee),
     needsSwap: operation.needsSwap ? 1 : 0,
-    inputAmount: operation.inputAmount,
+    inputAmount: serializeAmount(operation.inputAmount),
     inputProofSecretsJson: JSON.stringify(operation.inputProofSecrets),
     changeOutputDataJson: JSON.stringify(operation.changeOutputData),
     swapOutputDataJson: operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
-    changeAmount: operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null,
-    effectiveFee: operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null,
+    changeAmount:
+      operation.state === 'finalized' && settlement.changeAmount !== undefined
+        ? serializeAmount(settlement.changeAmount)
+        : null,
+    effectiveFee:
+      operation.state === 'finalized' && settlement.effectiveFee !== undefined
+        ? serializeAmount(settlement.effectiveFee)
+        : null,
     finalizedDataJson:
       operation.state === 'finalized' && settlement.finalizedData !== undefined
         ? JSON.stringify(settlement.finalizedData)

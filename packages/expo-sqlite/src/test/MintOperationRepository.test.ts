@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import type { MintOperation } from '@cashu/coco-core';
+import { Amount, type MintOperation } from '@cashu/coco-core';
 import { ExpoSqliteRepositories, type ExpoSqliteRepositoriesOptions } from '../index.ts';
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
@@ -65,7 +65,7 @@ function makePendingMintOperation(): PendingMintOperation {
     methodData: {},
     createdAt: 1_000,
     updatedAt: 2_000,
-    amount: 100,
+    amount: Amount.from(100),
     unit: 'sat',
     request: 'lnbc1test',
     expiry: 1_730_000_000,

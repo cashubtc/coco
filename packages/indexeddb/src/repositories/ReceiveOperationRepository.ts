@@ -3,6 +3,7 @@ import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -15,7 +16,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     id: row.id,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
-    amount: row.amount,
+    amount: deserializeAmount(row.amount),
     inputProofs: row.inputProofsJson ? JSON.parse(row.inputProofsJson) : [],
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
@@ -27,7 +28,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 
   const preparedData = {
-    fee: row.fee ?? 0,
+    fee: deserializeAmount(row.fee ?? 0),
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
 
@@ -54,7 +55,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
       id: op.id,
       mintUrl: op.mintUrl,
       unit: getOperationUnit(op),
-      amount: op.amount,
+      amount: serializeAmount(op.amount),
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
@@ -69,12 +70,12 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     id: op.id,
     mintUrl: op.mintUrl,
     unit: getOperationUnit(op),
-    amount: op.amount,
+    amount: serializeAmount(op.amount),
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
     error: op.error ?? null,
-    fee: op.fee,
+    fee: serializeAmount(op.fee),
     inputProofsJson: JSON.stringify(op.inputProofs),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
   };

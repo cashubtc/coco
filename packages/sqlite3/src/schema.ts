@@ -62,6 +62,339 @@ async function addSendOperationMethodColumns(db: SqliteDb): Promise<void> {
   }
 }
 
+async function migrateAmountColumnsToText(db: SqliteDb): Promise<void> {
+  if (await tableExists(db, 'coco_cashu_proofs')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_proofs RENAME TO coco_cashu_proofs_legacy_amounts;
+
+      CREATE TABLE coco_cashu_proofs (
+        mintUrl   TEXT NOT NULL,
+        id        TEXT NOT NULL,
+        amount    TEXT NOT NULL,
+        secret    TEXT NOT NULL,
+        C         TEXT NOT NULL,
+        dleqJson  TEXT,
+        witnessJson   TEXT,
+        state     TEXT NOT NULL CHECK (state IN ('inflight', 'ready', 'spent')),
+        createdAt INTEGER NOT NULL,
+        usedByOperationId TEXT,
+        createdByOperationId TEXT,
+        PRIMARY KEY (mintUrl, secret)
+      );
+
+      INSERT INTO coco_cashu_proofs (
+        mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt,
+        usedByOperationId, createdByOperationId
+      )
+      SELECT
+        mintUrl, id, CAST(amount AS TEXT), secret, C, dleqJson, witnessJson, state, createdAt,
+        usedByOperationId, createdByOperationId
+      FROM coco_cashu_proofs_legacy_amounts;
+
+      DROP TABLE coco_cashu_proofs_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_state ON coco_cashu_proofs(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_state ON coco_cashu_proofs(mintUrl, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_id_state ON coco_cashu_proofs(mintUrl, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_usedByOp ON coco_cashu_proofs(usedByOperationId) WHERE usedByOperationId IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_mint_quotes')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_mint_quotes RENAME TO coco_cashu_mint_quotes_legacy_amounts;
+
+      CREATE TABLE coco_cashu_mint_quotes (
+        mintUrl TEXT NOT NULL,
+        quote   TEXT NOT NULL,
+        state   TEXT NOT NULL CHECK (state IN ('UNPAID','PAID','ISSUED')),
+        request TEXT NOT NULL,
+        amount  TEXT NOT NULL,
+        unit    TEXT NOT NULL,
+        expiry  INTEGER,
+        pubkey  TEXT,
+        PRIMARY KEY (mintUrl, quote)
+      );
+
+      INSERT INTO coco_cashu_mint_quotes (
+        mintUrl, quote, state, request, amount, unit, expiry, pubkey
+      )
+      SELECT mintUrl, quote, state, request, CAST(amount AS TEXT), unit, expiry, pubkey
+      FROM coco_cashu_mint_quotes_legacy_amounts;
+
+      DROP TABLE coco_cashu_mint_quotes_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_quotes_state ON coco_cashu_mint_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_quotes_mint ON coco_cashu_mint_quotes(mintUrl);
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_melt_quotes')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_melt_quotes RENAME TO coco_cashu_melt_quotes_legacy_amounts;
+
+      CREATE TABLE coco_cashu_melt_quotes (
+        mintUrl TEXT NOT NULL,
+        quote   TEXT NOT NULL,
+        state   TEXT NOT NULL CHECK (state IN ('UNPAID','PENDING','PAID')),
+        request TEXT NOT NULL,
+        amount  TEXT NOT NULL,
+        unit    TEXT NOT NULL,
+        expiry  INTEGER NOT NULL,
+        fee_reserve TEXT NOT NULL,
+        payment_preimage TEXT,
+        PRIMARY KEY (mintUrl, quote)
+      );
+
+      INSERT INTO coco_cashu_melt_quotes (
+        mintUrl, quote, state, request, amount, unit, expiry, fee_reserve, payment_preimage
+      )
+      SELECT
+        mintUrl, quote, state, request, CAST(amount AS TEXT), unit, expiry,
+        CAST(fee_reserve AS TEXT), payment_preimage
+      FROM coco_cashu_melt_quotes_legacy_amounts;
+
+      DROP TABLE coco_cashu_melt_quotes_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_state ON coco_cashu_melt_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint ON coco_cashu_melt_quotes(mintUrl);
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_history')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_history RENAME TO coco_cashu_history_legacy_amounts;
+
+      CREATE TABLE coco_cashu_history (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        mintUrl   TEXT NOT NULL,
+        type      TEXT NOT NULL CHECK (type IN ('mint','melt','send','receive')),
+        unit      TEXT NOT NULL,
+        amount    TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        quoteId   TEXT,
+        state     TEXT,
+        paymentRequest TEXT,
+        tokenJson TEXT,
+        metadata  TEXT,
+        operationId TEXT
+      );
+
+      INSERT INTO coco_cashu_history (
+        id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest,
+        tokenJson, metadata, operationId
+      )
+      SELECT
+        id, mintUrl, type, unit, CAST(amount AS TEXT), createdAt, quoteId, state,
+        paymentRequest, tokenJson, metadata, operationId
+      FROM coco_cashu_history_legacy_amounts;
+
+      DROP TABLE coco_cashu_history_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_mint_createdAt
+        ON coco_cashu_history(mintUrl, createdAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_mint_quote
+        ON coco_cashu_history(mintUrl, quoteId);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_type
+        ON coco_cashu_history(type);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_quote_mint
+        ON coco_cashu_history(mintUrl, quoteId, type)
+        WHERE type = 'mint' AND quoteId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_quote_melt
+        ON coco_cashu_history(mintUrl, quoteId, type)
+        WHERE type = 'melt' AND quoteId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_history_mint_operation_send
+        ON coco_cashu_history(mintUrl, operationId)
+        WHERE type = 'send' AND operationId IS NOT NULL;
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_send_operations')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_send_operations RENAME TO coco_cashu_send_operations_legacy_amounts;
+
+      CREATE TABLE coco_cashu_send_operations (
+        id         TEXT PRIMARY KEY,
+        mintUrl    TEXT NOT NULL,
+        amount     TEXT NOT NULL,
+        state      TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')),
+        createdAt  INTEGER NOT NULL,
+        updatedAt  INTEGER NOT NULL,
+        error      TEXT,
+        needsSwap  INTEGER,
+        fee        TEXT,
+        inputAmount TEXT,
+        inputProofSecretsJson TEXT,
+        outputDataJson TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        tokenJson TEXT
+      );
+
+      INSERT INTO coco_cashu_send_operations (
+        id, mintUrl, amount, state, createdAt, updatedAt, error, needsSwap, fee,
+        inputAmount, inputProofSecretsJson, outputDataJson, method, methodDataJson, tokenJson
+      )
+      SELECT
+        id, mintUrl, CAST(amount AS TEXT), state, createdAt, updatedAt, error, needsSwap,
+        CASE WHEN fee IS NULL THEN NULL ELSE CAST(fee AS TEXT) END,
+        CASE WHEN inputAmount IS NULL THEN NULL ELSE CAST(inputAmount AS TEXT) END,
+        inputProofSecretsJson, outputDataJson, method, methodDataJson, tokenJson
+      FROM coco_cashu_send_operations_legacy_amounts;
+
+      DROP TABLE coco_cashu_send_operations_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_state ON coco_cashu_send_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_mint ON coco_cashu_send_operations(mintUrl);
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_melt_operations')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_melt_operations RENAME TO coco_cashu_melt_operations_legacy_amounts;
+
+      CREATE TABLE coco_cashu_melt_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        quoteId TEXT,
+        amount TEXT,
+        fee_reserve TEXT,
+        swap_fee TEXT,
+        needsSwap INTEGER,
+        inputAmount TEXT,
+        inputProofSecretsJson TEXT,
+        changeOutputDataJson TEXT,
+        swapOutputDataJson TEXT,
+        changeAmount TEXT,
+        effectiveFee TEXT,
+        finalizedDataJson TEXT,
+        unit TEXT
+      );
+
+      INSERT INTO coco_cashu_melt_operations (
+        id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId,
+        amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson,
+        changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson, unit
+      )
+      SELECT
+        id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId,
+        CASE WHEN amount IS NULL THEN NULL ELSE CAST(amount AS TEXT) END,
+        CASE WHEN fee_reserve IS NULL THEN NULL ELSE CAST(fee_reserve AS TEXT) END,
+        CASE WHEN swap_fee IS NULL THEN NULL ELSE CAST(swap_fee AS TEXT) END,
+        needsSwap,
+        CASE WHEN inputAmount IS NULL THEN NULL ELSE CAST(inputAmount AS TEXT) END,
+        inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson,
+        CASE WHEN changeAmount IS NULL THEN NULL ELSE CAST(changeAmount AS TEXT) END,
+        CASE WHEN effectiveFee IS NULL THEN NULL ELSE CAST(effectiveFee AS TEXT) END,
+        finalizedDataJson, unit
+      FROM coco_cashu_melt_operations_legacy_amounts;
+
+      DROP TABLE coco_cashu_melt_operations_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_state
+        ON coco_cashu_melt_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_mint
+        ON coco_cashu_melt_operations(mintUrl);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_operations_mint_quote
+        ON coco_cashu_melt_operations(mintUrl, quoteId)
+        WHERE quoteId IS NOT NULL;
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_receive_operations')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_receive_operations RENAME TO coco_cashu_receive_operations_legacy_amounts;
+
+      CREATE TABLE coco_cashu_receive_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'finalized', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        fee TEXT,
+        inputProofsJson TEXT NOT NULL,
+        outputDataJson TEXT,
+        unit TEXT NOT NULL DEFAULT 'sat'
+      );
+
+      INSERT INTO coco_cashu_receive_operations (
+        id, mintUrl, amount, state, createdAt, updatedAt, error, fee,
+        inputProofsJson, outputDataJson, unit
+      )
+      SELECT
+        id, mintUrl, CAST(amount AS TEXT), state, createdAt, updatedAt, error,
+        CASE WHEN fee IS NULL THEN NULL ELSE CAST(fee AS TEXT) END,
+        inputProofsJson, outputDataJson, unit
+      FROM coco_cashu_receive_operations_legacy_amounts;
+
+      DROP TABLE coco_cashu_receive_operations_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_state
+        ON coco_cashu_receive_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_mint
+        ON coco_cashu_receive_operations(mintUrl);
+    `);
+  }
+
+  if (await tableExists(db, 'coco_cashu_mint_operations')) {
+    await db.exec(`
+      ALTER TABLE coco_cashu_mint_operations RENAME TO coco_cashu_mint_operations_legacy_amounts;
+
+      CREATE TABLE coco_cashu_mint_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        quoteId TEXT,
+        state TEXT NOT NULL CHECK (state IN ('init', 'pending', 'executing', 'finalized', 'failed')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        amount TEXT,
+        unit TEXT,
+        request TEXT,
+        expiry INTEGER,
+        pubkey TEXT,
+        lastObservedRemoteState TEXT,
+        lastObservedRemoteStateAt INTEGER,
+        terminalFailureJson TEXT,
+        outputDataJson TEXT
+      );
+
+      INSERT INTO coco_cashu_mint_operations (
+        id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson,
+        amount, unit, request, expiry, pubkey, lastObservedRemoteState,
+        lastObservedRemoteStateAt, terminalFailureJson, outputDataJson
+      )
+      SELECT
+        id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson,
+        CASE WHEN amount IS NULL THEN NULL ELSE CAST(amount AS TEXT) END,
+        unit, request, expiry, pubkey, lastObservedRemoteState,
+        lastObservedRemoteStateAt, terminalFailureJson, outputDataJson
+      FROM coco_cashu_mint_operations_legacy_amounts;
+
+      DROP TABLE coco_cashu_mint_operations_legacy_amounts;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_state
+        ON coco_cashu_mint_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint
+        ON coco_cashu_mint_operations(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint_quote
+        ON coco_cashu_mint_operations(mintUrl, quoteId)
+        WHERE quoteId IS NOT NULL;
+    `);
+  }
+}
+
 async function reconcileMigrationAliases(db: SqliteDb): Promise<void> {
   if (await tableExists(db, 'coco_cashu_send_operations')) {
     const sendColumns = await getTableColumns(db, 'coco_cashu_send_operations');
@@ -610,6 +943,10 @@ const MIGRATIONS: readonly Migration[] = [
     sql: `
       ALTER TABLE coco_cashu_receive_operations ADD COLUMN unit TEXT NOT NULL DEFAULT 'sat';
     `,
+  },
+  {
+    id: '024_amount_columns_text',
+    run: migrateAmountColumnsToText,
   },
 ];
 

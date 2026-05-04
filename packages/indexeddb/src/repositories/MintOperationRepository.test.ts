@@ -2,6 +2,7 @@
 
 // @ts-ignore bun:test types are provided by the test runner in this workspace.
 import { describe, expect, it } from 'bun:test';
+import { Amount } from '@cashu/coco-core';
 import { IdbMintOperationRepository } from './MintOperationRepository.ts';
 import type { MintOperationRow } from '../lib/db.ts';
 
@@ -109,7 +110,7 @@ describe('IdbMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
     });
 
@@ -123,7 +124,7 @@ describe('IdbMintOperationRepository', () => {
       error: undefined,
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
@@ -142,7 +143,7 @@ describe('IdbMintOperationRepository', () => {
       error: 'already issued',
       method: 'bolt11',
       methodData: {},
-      amount: 200,
+      amount: Amount.from(200),
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
@@ -161,7 +162,7 @@ describe('IdbMintOperationRepository', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 300,
+      amount: Amount.from(300),
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,

@@ -1,4 +1,4 @@
-import { initializeCoco, type Repositories } from '@cashu/coco-core';
+import { Amount, initializeCoco, type Repositories } from '@cashu/coco-core';
 
 /**
  * Test runner interface for migration tests.
@@ -179,7 +179,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           await repositories.proofRepository.saveProofs(testMintUrl, [
             {
               id: 'test-keyset-001',
-              amount: 100,
+              amount: Amount.from(100),
               secret: 'migration-test-secret-1',
               C: 'C1',
               mintUrl: testMintUrl,
@@ -187,7 +187,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
             },
             {
               id: 'test-keyset-001',
-              amount: 50,
+              amount: Amount.from(50),
               secret: 'migration-test-secret-2',
               C: 'C2',
               mintUrl: testMintUrl,
@@ -236,8 +236,8 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
 
           // Proofs preserved (CRITICAL!)
           expect(proofsAfter.length).toBe(proofsBefore.length);
-          const totalBefore = proofsBefore.reduce((sum, p) => sum + p.amount, 0);
-          const totalAfter = proofsAfter.reduce((sum, p) => sum + p.amount, 0);
+          const totalBefore = Amount.sum(proofsBefore.map((p) => p.amount)).toNumber();
+          const totalAfter = Amount.sum(proofsAfter.map((p) => p.amount)).toNumber();
           expect(totalAfter).toBe(totalBefore);
 
           // Counter preserved

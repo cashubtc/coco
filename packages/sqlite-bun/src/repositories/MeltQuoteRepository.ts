@@ -1,5 +1,9 @@
-import type { MeltQuoteRepository } from '@cashu/coco-core';
-import type { MeltQuote } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  serializeAmount,
+  type MeltQuoteRepository,
+  type MeltQuote,
+} from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
@@ -15,10 +19,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
       quote: string;
       state: string;
       request: string;
-      amount: number;
+      amount: string | number;
       unit: string;
       expiry: number;
-      fee_reserve: number;
+      fee_reserve: string | number;
       payment_preimage: string | null;
     }>(
       `SELECT mintUrl, quote, state, request, amount, unit, expiry, fee_reserve, payment_preimage
@@ -31,10 +35,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
       quote: row.quote,
       state: row.state as MeltQuote['state'],
       request: row.request,
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       unit: row.unit,
       expiry: row.expiry,
-      fee_reserve: row.fee_reserve,
+      fee_reserve: deserializeAmount(row.fee_reserve),
       payment_preimage: row.payment_preimage,
     } satisfies MeltQuote;
   }
@@ -56,10 +60,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
         quote.quote,
         quote.state,
         quote.request,
-        quote.amount,
+        serializeAmount(quote.amount),
         quote.unit,
         quote.expiry,
-        quote.fee_reserve,
+        serializeAmount(quote.fee_reserve),
         quote.payment_preimage ?? null,
       ],
     );
@@ -82,10 +86,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
       quote: string;
       state: string;
       request: string;
-      amount: number;
+      amount: string | number;
       unit: string;
       expiry: number;
-      fee_reserve: number;
+      fee_reserve: string | number;
       payment_preimage: string | null;
     }>(
       `SELECT mintUrl, quote, state, request, amount, unit, expiry, fee_reserve, payment_preimage
@@ -98,10 +102,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
           quote: row.quote,
           state: row.state as MeltQuote['state'],
           request: row.request,
-          amount: row.amount,
+          amount: deserializeAmount(row.amount),
           unit: row.unit,
           expiry: row.expiry,
-          fee_reserve: row.fee_reserve,
+          fee_reserve: deserializeAmount(row.fee_reserve),
           payment_preimage: row.payment_preimage,
         }) satisfies MeltQuote,
     );

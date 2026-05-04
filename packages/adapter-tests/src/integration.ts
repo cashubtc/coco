@@ -4,6 +4,8 @@ import {
   Mint,
   Wallet,
   OutputData,
+  Amount,
+  type AmountLike,
   type OutputConfig,
   PaymentRequest,
   PaymentRequestTransportType,
@@ -15,7 +17,7 @@ import {
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
-export type OutputDataFactory = (amount: number, keys: MintKeys | HasKeysetKeys) => OutputData;
+export type OutputDataFactory = (amount: AmountLike, keys: MintKeys | HasKeysetKeys) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -61,7 +63,7 @@ type SendHistoryUpdatedPayload = {
     state?: string;
     operationId?: string;
     quoteId?: string;
-    amount?: number;
+    amount?: Amount;
     token?: Token;
   };
 };
@@ -106,7 +108,10 @@ function waitForSendHistoryState(
     if (options?.operationId && payload.entry.operationId !== options.operationId) {
       return false;
     }
-    if (options?.amount !== undefined && payload.entry.amount !== options.amount) {
+    if (
+      options?.amount !== undefined &&
+      !payload.entry.amount?.equals(Amount.from(options.amount))
+    ) {
       return false;
     }
     return true;
@@ -125,7 +130,10 @@ function waitForMeltHistoryState(
     if (options?.quoteId && payload.entry.quoteId !== options.quoteId) {
       return false;
     }
-    if (options?.amount !== undefined && payload.entry.amount !== options.amount) {
+    if (
+      options?.amount !== undefined &&
+      !payload.entry.amount?.equals(Amount.from(options.amount))
+    ) {
       return false;
     }
     return true;
@@ -134,12 +142,12 @@ function waitForMeltHistoryState(
 
 async function getMintTotalBalance(manager: Manager, mintUrl: string): Promise<number> {
   const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
-  return balances[mintUrl]?.total ?? 0;
+  return balances[mintUrl]?.total.toNumber() ?? 0;
 }
 
 async function getMintSpendableBalance(manager: Manager, mintUrl: string): Promise<number> {
   const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
-  return balances[mintUrl]?.spendable ?? 0;
+  return balances[mintUrl]?.spendable.toNumber() ?? 0;
 }
 
 async function prepareMintOperation(
@@ -495,7 +503,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           mgr!.once('send:pending', (payload) => {
             expect(payload.mintUrl).toBe(mintUrl);
             expect(payload.token.proofs.length).toBeGreaterThan(0);
-            const tokenAmount = payload.token.proofs.reduce((sum, p) => sum + p.amount, 0);
+            const tokenAmount = Amount.sum(payload.token.proofs.map((p) => p.amount)).toNumber();
             expect(tokenAmount).toBeGreaterThanOrEqual(sendAmount);
             resolve(payload);
           });
@@ -586,14 +594,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const op = await mgr!.ops.receive.execute(prepOp.id);
 
-        const tokenAmount = token.proofs.reduce((sum: number, proof: { amount: number }) => {
-          return sum + proof.amount;
-        }, 0);
+        const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount)).toNumber();
         expect(op.state).toBe('finalized');
 
         expect(await getMintSpendableBalance(mgr!, mintUrl)).toBeGreaterThan(preBalance);
 
-        expect(op.amount).toBe(tokenAmount);
+        expect(op.amount.toNumber()).toBe(tokenAmount);
         expect(op.outputData).toBeDefined();
       });
 
@@ -626,9 +632,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(decodedToken.mint).toBe(token.mint);
         expect(decodedToken.proofs).toHaveLength(token.proofs.length);
 
-        const decodedAmount = decodedToken.proofs.reduce((sum, proof) => sum + proof.amount, 0);
-        const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
-        expect(decodedAmount).toBe(tokenAmount);
+        const decodedAmount = Amount.sum(decodedToken.proofs.map((proof) => proof.amount));
+        const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount));
+        expect(decodedAmount.toNumber()).toBe(tokenAmount.toNumber());
       });
 
       it('should handle multiple send/receive operations', async () => {
@@ -758,7 +764,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         expect(prepared.quoteId).toBeDefined();
-        expect(prepared.amount).toBeGreaterThan(0);
+        expect(prepared.amount.toNumber()).toBeGreaterThan(0);
         expect(prepared.state).toBe('prepared');
 
         const stored = await repositories!.meltOperationRepository.getById(prepared.id);
@@ -808,8 +814,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(prepared.amount).toBeGreaterThan(0);
 
         const balanceAfterPrepare = await getMintBalance();
-        expect(balanceAfterPrepare.reserved).toBeGreaterThan(0);
-        expect(balanceAfterPrepare.total).toBe(balanceBefore.total);
+        expect(balanceAfterPrepare.reserved.toNumber()).toBeGreaterThan(0);
+        expect(balanceAfterPrepare.total.toNumber()).toBe(balanceBefore.total.toNumber());
 
         const result = await mgr!.ops.melt.execute(prepared.id);
         expect(result.id).toBe(prepared.id);
@@ -824,11 +830,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
 
         const balanceAfterExecute = await getMintBalance();
-        const expectedTotal =
-          balanceBefore.total - result.amount - result.swap_fee - result.effectiveFee!;
+        const expectedTotal = balanceBefore.total
+          .subtract(result.amount)
+          .subtract(result.swap_fee)
+          .subtract(result.effectiveFee!);
 
-        expect(balanceAfterExecute.reserved).toBe(0);
-        expect(balanceAfterExecute.total).toBe(expectedTotal);
+        expect(balanceAfterExecute.reserved.toNumber()).toBe(0);
+        expect(balanceAfterExecute.total.toNumber()).toBe(expectedTotal.toNumber());
       });
 
       it('should execute a melt operation by quote params', async () => {
@@ -2642,7 +2650,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(receivedToken!.mint).toBe(mintUrl);
         expect(receivedToken!.proofs.length).toBeGreaterThan(0);
 
-        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        const tokenAmount = Amount.sum(receivedToken!.proofs.map((p) => p.amount)).toNumber();
         expect(tokenAmount).toBeGreaterThanOrEqual(30);
 
         // Balance should have decreased
@@ -2679,7 +2687,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(receivedToken).toBeDefined();
         expect(receivedToken!.mint).toBe(mintUrl);
 
-        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        const tokenAmount = Amount.sum(receivedToken!.proofs.map((p) => p.amount)).toNumber();
         expect(tokenAmount).toBeGreaterThanOrEqual(25);
       });
 

@@ -1,4 +1,5 @@
 import type { MintOperationRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -34,7 +35,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
   };
 
   const intent = {
-    amount: row.amount ?? 0,
+    amount: deserializeAmount(row.amount ?? 0),
     unit: row.unit ?? '',
   };
 
@@ -77,7 +78,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       error: operation.error ?? null,
       method: operation.method,
       methodDataJson,
-      amount: operation.amount,
+      amount: serializeAmount(operation.amount),
       unit: operation.unit,
       terminalFailureJson: operation.terminalFailure
         ? JSON.stringify(operation.terminalFailure)
@@ -96,7 +97,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     error: operation.error ?? null,
     method: operation.method,
     methodDataJson,
-    amount: operation.amount,
+    amount: serializeAmount(operation.amount),
     unit: operation.unit,
     request: operation.request,
     expiry: operation.expiry,

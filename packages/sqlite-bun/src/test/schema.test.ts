@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
+import { Amount } from '@cashu/coco-core';
 import { SqliteDb, ensureSchemaUpTo } from '../index.ts';
 import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
 
@@ -87,7 +88,7 @@ describe('sqlite-bun schema migrations', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1test',
       expiry: 1_730_000_000,
@@ -104,7 +105,7 @@ describe('sqlite-bun schema migrations', () => {
       error: 'quote expired',
       method: 'bolt11',
       methodData: {},
-      amount: 100,
+      amount: Amount.from(100),
       unit: 'sat',
       request: 'lnbc1test',
       expiry: 1_730_000_000,

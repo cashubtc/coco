@@ -134,7 +134,7 @@ export interface CounterRow {
 export interface ProofRow {
   mintUrl: string;
   id: string;
-  amount: number;
+  amount: string | number;
   secret: string;
   C: string;
   dleqJson?: string | null;
@@ -150,9 +150,9 @@ export interface MintQuoteRow {
   quote: string;
   state: 'UNPAID' | 'PAID' | 'ISSUED';
   request: string;
-  amount: number;
+  amount: string | number;
   unit: string;
-  expiry: number;
+  expiry: number | null;
   pubkey?: string | null;
 }
 
@@ -161,17 +161,17 @@ export interface MeltQuoteRow {
   quote: string;
   state: 'UNPAID' | 'PENDING' | 'PAID';
   request: string;
-  amount: number;
+  amount: string | number;
   unit: string;
   expiry: number;
-  fee_reserve: number;
+  fee_reserve: string | number;
   payment_preimage: string | null;
 }
 
 export interface SendOperationRow {
   id: string;
   mintUrl: string;
-  amount: number;
+  amount: string | number;
   state:
     | 'init'
     | 'prepared'
@@ -186,8 +186,8 @@ export interface SendOperationRow {
   method: string;
   methodDataJson: string;
   needsSwap?: number | null;
-  fee?: number | null;
-  inputAmount?: number | null;
+  fee?: string | number | null;
+  inputAmount?: string | number | null;
   inputProofSecretsJson?: string | null;
   outputDataJson?: string | null;
   tokenJson?: string | null;
@@ -197,12 +197,12 @@ export interface ReceiveOperationRow {
   id: string;
   mintUrl: string;
   unit?: string | null;
-  amount: number;
+  amount: string | number;
   state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
   createdAt: number;
   updatedAt: number;
   error?: string | null;
-  fee?: number | null;
+  fee?: string | number | null;
   inputProofsJson?: string | null;
   outputDataJson?: string | null;
 }
@@ -225,16 +225,16 @@ export interface MeltOperationRow {
   methodDataJson: string;
   quoteId?: string | null;
   unit?: string | null;
-  amount?: number | null;
-  fee_reserve?: number | null;
-  swap_fee?: number | null;
+  amount?: string | number | null;
+  fee_reserve?: string | number | null;
+  swap_fee?: string | number | null;
   needsSwap?: number | null;
-  inputAmount?: number | null;
+  inputAmount?: string | number | null;
   inputProofSecretsJson?: string | null;
   changeOutputDataJson?: string | null;
   swapOutputDataJson?: string | null;
-  changeAmount?: number | null;
-  effectiveFee?: number | null;
+  changeAmount?: string | number | null;
+  effectiveFee?: string | number | null;
   finalizedDataJson?: string | null;
 }
 
@@ -257,7 +257,7 @@ export interface MintOperationRow {
   error?: string | null;
   method: string;
   methodDataJson: string;
-  amount?: number | null;
+  amount?: string | number | null;
   unit?: string | null;
   request?: string | null;
   expiry?: number | null;

@@ -8,6 +8,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb } from '../lib/db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -116,7 +117,7 @@ export class IdbHistoryRepository {
       const updated = {
         ...row,
         unit: history.unit,
-        amount: history.amount,
+        amount: serializeAmount(history.amount),
         metadata: history.metadata ?? null,
         operationId: history.operationId ?? null,
         state: history.state,
@@ -135,7 +136,7 @@ export class IdbHistoryRepository {
       const updated = {
         ...row,
         unit: history.unit,
-        amount: history.amount,
+        amount: serializeAmount(history.amount),
         metadata: history.metadata ?? null,
         operationId: history.operationId ?? null,
         state: history.state,
@@ -153,7 +154,7 @@ export class IdbHistoryRepository {
       const updated = {
         ...row,
         unit: history.unit,
-        amount: history.amount,
+        amount: serializeAmount(history.amount),
         metadata: history.metadata ?? null,
         state: history.state,
         tokenJson: history.token ? JSON.stringify(history.token) : row.tokenJson,
@@ -171,7 +172,7 @@ export class IdbHistoryRepository {
       const updated = {
         ...row,
         unit: history.unit,
-        amount: history.amount,
+        amount: serializeAmount(history.amount),
         metadata: history.metadata ?? null,
         state: history.state,
         tokenJson: history.token ? JSON.stringify(history.token as ReceiveToken) : row.tokenJson,
@@ -223,7 +224,7 @@ export class IdbHistoryRepository {
       mintUrl: history.mintUrl,
       type: history.type,
       unit: history.unit,
-      amount: history.amount,
+      amount: serializeAmount(history.amount),
       createdAt: history.createdAt,
       metadata: history.metadata ?? null,
     } as any;
@@ -264,7 +265,7 @@ export class IdbHistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'melt') {
@@ -274,14 +275,14 @@ export class IdbHistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'send') {
       return {
         ...base,
         type: 'send',
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
         token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
@@ -291,7 +292,7 @@ export class IdbHistoryRepository {
     return {
       ...base,
       type: 'receive',
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       operationId: row.operationId ?? undefined,
       state: (row.state ?? 'finalized') as ReceiveHistoryState,
       token,

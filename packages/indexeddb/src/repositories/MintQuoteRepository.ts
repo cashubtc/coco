@@ -1,4 +1,5 @@
 import type { MintQuoteRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { MintQuote } from '@cashu/coco-core';
 import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 
@@ -19,7 +20,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       quote: row.quote,
       state: row.state,
       request: row.request,
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       unit: row.unit,
       expiry: row.expiry,
       pubkey: row.pubkey ?? undefined,
@@ -33,7 +34,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       quote: quote.quote,
       state: quote.state,
       request: quote.request,
-      amount: quote.amount,
+      amount: serializeAmount(quote.amount),
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.pubkey ?? null,
@@ -66,7 +67,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
         quote: row.quote,
         state: row.state,
         request: row.request,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
         unit: row.unit,
         expiry: row.expiry,
         pubkey: row.pubkey ?? undefined,
