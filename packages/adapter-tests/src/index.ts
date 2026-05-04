@@ -5,6 +5,7 @@ import {
   type CoreProof,
   type Repositories,
   type MeltOperation,
+  type ReceiveOperation,
   type AuthSession,
 } from '@cashu/coco-core';
 
@@ -206,6 +207,22 @@ export function createDummyMeltOperation(): MeltOperation {
   } satisfies MeltOperation;
 }
 
+export function createDummyReceiveOperation(): ReceiveOperation {
+  return {
+    id: 'receive-op',
+    state: 'init',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    amount: Amount.from(3),
+    inputProofs: [
+      { id: 'keyset-id', amount: Amount.from(1), secret: 'receive-secret-1', C: 'C1' },
+      { id: 'keyset-id', amount: Amount.from(2), secret: 'receive-secret-2', C: 'C2' },
+    ],
+    createdAt: 0,
+    updatedAt: 0,
+  } satisfies ReceiveOperation;
+}
+
 export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSession {
   return {
     mintUrl: 'https://mint.test',
@@ -213,6 +230,32 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
   };
+}
+
+export async function runReceiveOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('ReceiveOperationRepository contract', () => {
+    it('rehydrates persisted input proof amounts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.inputProofs).toHaveLength(2);
+        expect(stored!.inputProofs[0]!.amount.equals(Amount.from(1))).toBe(true);
+        expect(stored!.inputProofs[1]!.amount.equals(Amount.from(2))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }
 
 export async function runAuthSessionRepositoryContract(

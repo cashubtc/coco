@@ -3,6 +3,7 @@ import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
+  runReceiveOperationRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -28,3 +29,5 @@ runRepositoryTransactionContract(
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, expect });

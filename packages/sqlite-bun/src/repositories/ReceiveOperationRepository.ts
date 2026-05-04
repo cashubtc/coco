@@ -24,13 +24,23 @@ interface ReceiveOperationRow {
   outputDataJson: string | null;
 }
 
+function parseInputProofs(inputProofsJson: string | null): ReceiveOperation['inputProofs'] {
+  const proofs = inputProofsJson
+    ? (JSON.parse(inputProofsJson) as ReceiveOperation['inputProofs'])
+    : [];
+  return proofs.map((proof) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
+}
+
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
     amount: deserializeAmount(row.amount),
-    inputProofs: row.inputProofsJson ? JSON.parse(row.inputProofsJson) : [],
+    inputProofs: parseInputProofs(row.inputProofsJson),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
