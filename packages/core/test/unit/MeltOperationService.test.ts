@@ -382,7 +382,7 @@ describe('MeltOperationService', () => {
         failed: { error: 'nope' },
       });
 
-      expect(service.execute('op-6')).rejects.toThrow('nope');
+      await expect(service.execute('op-6')).rejects.toThrow('nope');
       expect(handler.recoverExecuting).toHaveBeenCalled();
     });
   });
@@ -494,6 +494,108 @@ describe('MeltOperationService', () => {
 
       expect(result).toBe('finalize');
       expect((service as any).finalize).toHaveBeenCalledWith('op-11');
+    });
+  });
+
+  describe('recoverExecutingOperation', () => {
+    it('finalizes when handler reports PAID', async () => {
+      const executing = makeExecutingOp('recover-paid');
+      await meltOperationRepository.create(executing);
+      (handler.recoverExecuting as Mock<any>).mockResolvedValue({
+        status: 'PAID',
+        finalized: makeFinalizedOp('recover-paid'),
+      });
+
+      const events: any[] = [];
+      eventBus.on('melt-op:finalized', (payload) => void events.push(payload));
+
+      await service.recoverExecutingOperation(executing);
+
+      const stored = await meltOperationRepository.getById('recover-paid');
+      expect(stored?.state).toBe('finalized');
+      expect(events.length).toBe(1);
+    });
+
+    it('moves to pending when handler reports PENDING', async () => {
+      const executing = makeExecutingOp('recover-pending');
+      await meltOperationRepository.create(executing);
+      (handler.recoverExecuting as Mock<any>).mockResolvedValue({
+        status: 'PENDING',
+        pending: makePendingOp('recover-pending'),
+      });
+
+      const events: any[] = [];
+      eventBus.on('melt-op:pending', (payload) => void events.push(payload));
+
+      await service.recoverExecutingOperation(executing);
+
+      const stored = await meltOperationRepository.getById('recover-pending');
+      expect(stored?.state).toBe('pending');
+      expect(events.length).toBe(1);
+    });
+
+    it('rolls back when handler reports FAILED', async () => {
+      const executing = makeExecutingOp('recover-failed');
+      await meltOperationRepository.create(executing);
+      (handler.recoverExecuting as Mock<any>).mockResolvedValue({
+        status: 'FAILED',
+        failed: { error: 'quote unpaid' },
+      });
+
+      const events: any[] = [];
+      eventBus.on('melt-op:rolled-back', (payload) => void events.push(payload));
+
+      await service.recoverExecutingOperation(executing);
+
+      const stored = await meltOperationRepository.getById('recover-failed');
+      expect(stored?.state).toBe('rolled_back');
+      expect((stored as RolledBackMeltOperation).error).toBe('quote unpaid');
+      expect(events.length).toBe(1);
+    });
+
+    it('ignores operations that are no longer executing', async () => {
+      const staleExecuting = makeExecutingOp('recover-stale');
+      await meltOperationRepository.create(makePendingOp('recover-stale'));
+
+      await service.recoverExecutingOperation(staleExecuting);
+
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+      const stored = await meltOperationRepository.getById('recover-stale');
+      expect(stored?.state).toBe('pending');
+    });
+
+    it('throws when recovery is already in progress for the operation', async () => {
+      const executing = makeExecutingOp('recover-locked');
+      await meltOperationRepository.create(executing);
+
+      let releaseRecovery: () => void;
+      const recoveryBlocked = new Promise<void>((resolve) => {
+        releaseRecovery = resolve;
+      });
+      let recoveryStarted: () => void;
+      const recoveryStartedPromise = new Promise<void>((resolve) => {
+        recoveryStarted = resolve;
+      });
+      (handler.recoverExecuting as Mock<any>).mockImplementation(
+        async ({ operation }: { operation: ExecutingMeltOperation }) => {
+          recoveryStarted();
+          await recoveryBlocked;
+          return {
+            status: 'PENDING',
+            pending: makePendingOp(operation.id),
+          };
+        },
+      );
+
+      const first = service.recoverExecutingOperation(executing);
+      await recoveryStartedPromise;
+
+      await expect(service.recoverExecutingOperation(executing)).rejects.toThrow(
+        OperationInProgressError,
+      );
+
+      releaseRecovery!();
+      await first;
     });
   });
 

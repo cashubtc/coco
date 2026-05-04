@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type {
+  ExecutingMeltOperation,
   FinalizedMeltOperation,
   MeltOperation,
   PendingMeltOperation,
@@ -47,6 +48,7 @@ describe('MeltOpsApi', () => {
   let api: MeltOpsApi;
   let meltOperationService: MeltOperationService;
   let preparedOperation: PreparedMeltOperation;
+  let executingOperation: ExecutingMeltOperation;
   let pendingOperation: PendingMeltOperation;
 
   beforeEach(() => {
@@ -54,6 +56,10 @@ describe('MeltOpsApi', () => {
     pendingOperation = {
       ...preparedOperation,
       state: 'pending',
+    };
+    executingOperation = {
+      ...preparedOperation,
+      state: 'executing',
     };
 
     meltOperationService = {
@@ -67,6 +73,7 @@ describe('MeltOpsApi', () => {
       rollback: mock(async () => {}),
       finalize: mock(async () => {}),
       recoverPendingOperations: mock(async () => {}),
+      recoverExecutingOperation: mock(async () => {}),
       checkPendingOperation: mock(async () => 'finalize'),
       isOperationLocked: mock(() => false),
       isRecoveryInProgress: mock(() => false),
@@ -126,6 +133,22 @@ describe('MeltOpsApi', () => {
     const result = await api.refresh(pendingOperation.id);
 
     expect(meltOperationService.checkPendingOperation).toHaveBeenCalledWith(pendingOperation.id);
+    expect(result).toBe(finalizedOperation);
+  });
+
+  it('refresh recovers executing operations and re-reads the latest state', async () => {
+    const finalizedOperation: FinalizedMeltOperation = {
+      ...pendingOperation,
+      state: 'finalized',
+      updatedAt: Date.now(),
+    };
+    (meltOperationService.getOperation as unknown as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(executingOperation as MeltOperation)
+      .mockResolvedValueOnce(finalizedOperation as MeltOperation);
+
+    const result = await api.refresh(executingOperation.id);
+
+    expect(meltOperationService.recoverExecutingOperation).toHaveBeenCalledWith(executingOperation);
     expect(result).toBe(finalizedOperation);
   });
 

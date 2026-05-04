@@ -608,54 +608,90 @@ export class MeltOperationService {
    * Delegates to handler for proof cleanup and state determination.
    * Updates operation state based on handler result (finalized, pending, or failed).
    */
-  private async recoverExecutingOperation(op: ExecutingMeltOperation): Promise<void> {
-    const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
-
-    const result = await handler.recoverExecuting({
-      ...this.buildDeps(),
-      operation: op,
-      wallet,
-    });
-
-    switch (result.status) {
-      case 'PAID': {
-        const finalizedOp: FinalizedMeltOperation = {
-          ...result.finalized,
-          state: 'finalized',
-          updatedAt: Date.now(),
-        };
-        await this.meltOperationRepository.update(finalizedOp);
-        await this.eventBus.emit('melt-op:finalized', {
-          mintUrl: finalizedOp.mintUrl,
-          operationId: finalizedOp.id,
-          operation: finalizedOp,
-        });
-        this.logger?.info('Recovered executing operation as finalized', {
-          operationId: op.id,
-        });
-        break;
+  async recoverExecutingOperation(
+    op: ExecutingMeltOperation,
+    options?: { skipLock?: boolean },
+  ): Promise<void> {
+    const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
+    try {
+      const current = await this.meltOperationRepository.getById(op.id);
+      if (!current) {
+        this.logger?.warn('Melt operation missing during recovery', { operationId: op.id });
+        return;
       }
-      case 'PENDING': {
-        const pendingOp: PendingMeltOperation = {
-          ...result.pending,
-          state: 'pending',
-          updatedAt: Date.now(),
-        };
-        await this.meltOperationRepository.update(pendingOp);
-        await this.eventBus.emit('melt-op:pending', {
-          mintUrl: pendingOp.mintUrl,
-          operationId: pendingOp.id,
-          operation: pendingOp,
-        });
-        this.logger?.info('Recovered executing operation as pending', {
-          operationId: op.id,
-        });
-        break;
+
+      if (
+        current.state === 'finalized' ||
+        current.state === 'failed' ||
+        current.state === 'rolled_back'
+      ) {
+        return;
       }
-      case 'FAILED': {
-        await this.markAsRolledBack(op, result.failed.error ?? 'Recovered: operation failed');
-        break;
+
+      if (current.state !== 'executing') {
+        this.logger?.debug('Melt operation not executing during recovery', {
+          operationId: current.id,
+          state: current.state,
+        });
+        return;
+      }
+
+      const executing = current as ExecutingMeltOperation;
+      const handler = this.handlerProvider.get(executing.method);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+
+      const result = await handler.recoverExecuting({
+        ...this.buildDeps(),
+        operation: executing,
+        wallet,
+      });
+
+      switch (result.status) {
+        case 'PAID': {
+          const finalizedOp: FinalizedMeltOperation = {
+            ...result.finalized,
+            state: 'finalized',
+            updatedAt: Date.now(),
+          };
+          await this.meltOperationRepository.update(finalizedOp);
+          await this.eventBus.emit('melt-op:finalized', {
+            mintUrl: finalizedOp.mintUrl,
+            operationId: finalizedOp.id,
+            operation: finalizedOp,
+          });
+          this.logger?.info('Recovered executing operation as finalized', {
+            operationId: executing.id,
+          });
+          break;
+        }
+        case 'PENDING': {
+          const pendingOp: PendingMeltOperation = {
+            ...result.pending,
+            state: 'pending',
+            updatedAt: Date.now(),
+          };
+          await this.meltOperationRepository.update(pendingOp);
+          await this.eventBus.emit('melt-op:pending', {
+            mintUrl: pendingOp.mintUrl,
+            operationId: pendingOp.id,
+            operation: pendingOp,
+          });
+          this.logger?.info('Recovered executing operation as pending', {
+            operationId: executing.id,
+          });
+          break;
+        }
+        case 'FAILED': {
+          await this.markAsRolledBack(
+            executing,
+            result.failed.error ?? 'Recovered: operation failed',
+          );
+          break;
+        }
+      }
+    } finally {
+      if (releaseLock) {
+        releaseLock();
       }
     }
   }
@@ -667,7 +703,7 @@ export class MeltOperationService {
    */
   private async tryRecoverExecutingOperation(op: ExecutingMeltOperation): Promise<void> {
     try {
-      await this.recoverExecutingOperation(op);
+      await this.recoverExecutingOperation(op, { skipLock: true });
       this.logger?.info('Recovered executing operation after failure', { operationId: op.id });
     } catch (recoveryError) {
       this.logger?.warn('Failed to recover executing operation, will retry on next startup', {

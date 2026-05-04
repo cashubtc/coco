@@ -111,12 +111,18 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * Re-checks a melt operation and returns its latest persisted state.
    *
    * Pending operations are actively checked with the service before the updated
-   * operation is returned.
+   * operation is returned. Executing operations are recovered before returning
+   * the updated state.
    */
   async refresh(operationId: string): Promise<MeltOperation> {
     const operation = await this.requireOperation(operationId);
     if (operation.state === 'pending') {
       await this.meltOperationService.checkPendingOperation(operation.id);
+      return this.requireOperation(operationId);
+    }
+
+    if (operation.state === 'executing') {
+      await this.meltOperationService.recoverExecutingOperation(operation);
       return this.requireOperation(operationId);
     }
 
