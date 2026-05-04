@@ -29,7 +29,8 @@ import {
   type SerializedOutputData,
 } from '@core/utils';
 import {
-  SWAP_THRESHOLD_RATIO,
+  SWAP_THRESHOLD_DENOMINATOR,
+  SWAP_THRESHOLD_NUMERATOR,
   buildFailedResult,
   buildPaidResult,
   buildPendingResult,
@@ -129,11 +130,16 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = sumProofs(selectedProofs);
-    const needsSwap = selectedAmount.greaterThanOrEqual(totalAmount.scaledBy(11, 10));
+    const swapThreshold = totalAmount.scaledBy(
+      SWAP_THRESHOLD_NUMERATOR,
+      SWAP_THRESHOLD_DENOMINATOR,
+    );
+    const needsSwap = selectedAmount.greaterThanOrEqual(swapThreshold);
 
     ctx.logger?.debug('Proofs selected for melt', {
       operationId,
       selectedAmount,
+      swapThreshold,
       proofCount: selectedProofs.length,
       needsSwap,
     });

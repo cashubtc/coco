@@ -38,9 +38,10 @@ export interface MeltQuoteData {
  * larger change amounts and potential privacy/fee implications.
  *
  * Example: If we need 100 sats but selected proofs total 115 sats,
- * that's 1.15x (15% over) which exceeds 1.1x, so we swap first.
+ * that's 1.15x (15% over) which exceeds 11/10, so we swap first.
  */
-export const SWAP_THRESHOLD_RATIO = 1.1;
+export const SWAP_THRESHOLD_NUMERATOR = 11;
+export const SWAP_THRESHOLD_DENOMINATOR = 10;
 
 /**
  * Extract the send proof secrets from serialized swap output data.

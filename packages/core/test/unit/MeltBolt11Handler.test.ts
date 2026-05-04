@@ -5,7 +5,10 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
-import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
+import {
+  SWAP_THRESHOLD_DENOMINATOR,
+  SWAP_THRESHOLD_NUMERATOR,
+} from '../../infra/handlers/melt/MeltBolt11Handler.utils';
 import type { Logger } from '../../logging/Logger';
 import { MintOperationError } from '../../models/Error';
 import type {
@@ -1257,8 +1260,9 @@ describe('MeltBolt11Handler', () => {
   // ============================================================================
 
   describe('constants', () => {
-    it('should use correct SWAP_THRESHOLD_RATIO', () => {
-      expect(SWAP_THRESHOLD_RATIO).toBe(1.1);
+    it('should use a 10% integer swap threshold', () => {
+      expect(SWAP_THRESHOLD_NUMERATOR).toBe(11);
+      expect(SWAP_THRESHOLD_DENOMINATOR).toBe(10);
     });
   });
 });
