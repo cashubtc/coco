@@ -422,6 +422,24 @@ describe('MeltBolt11Handler', () => {
         // Change = 120 - 100 = 20
         expect(proofService.createBlankOutputs).toHaveBeenCalledWith(Amount.from(20), mintUrl);
       });
+
+      it('should pass amountless invoice amount to cashu-ts in millisatoshis', async () => {
+        const operation = makeInitOp('op-1', {
+          methodData: { invoice, amountSats: Amount.from(1000) },
+        });
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 55), makeProof('input-2', 55)]),
+        );
+
+        await handler.prepare(ctx);
+
+        expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(
+          invoice,
+          Amount.from(1_000_000),
+        );
+      });
     });
 
     describe('swap-then-melt (excess proofs)', () => {

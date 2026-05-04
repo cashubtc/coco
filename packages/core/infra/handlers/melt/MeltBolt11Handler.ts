@@ -107,9 +107,14 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl, id: operationId } = ctx.operation;
     ctx.logger?.debug('Preparing bolt11 melt operation', { operationId, mintUrl });
 
+    const amountMsat =
+      ctx.operation.methodData.amountSats === undefined
+        ? undefined
+        : Amount.from(ctx.operation.methodData.amountSats).multiplyBy(1000);
+
     const quote = await ctx.wallet.createMeltQuoteBolt11(
       ctx.operation.methodData.invoice,
-      ctx.operation.methodData.amountSats,
+      amountMsat,
     );
     const { amount, fee_reserve } = quote;
     const totalAmount = amount.add(fee_reserve);
