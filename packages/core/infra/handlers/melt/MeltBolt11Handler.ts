@@ -1,6 +1,7 @@
 import {
   Amount,
   OutputData,
+  sumProofs,
   type OutputConfig,
   type Proof,
   type SerializedBlindedSignature,
@@ -33,7 +34,6 @@ import {
   buildPaidResult,
   buildPendingResult,
   getSwapSendSecrets,
-  sumProofs,
   type MeltQuoteData,
 } from './MeltBolt11Handler.utils.ts';
 

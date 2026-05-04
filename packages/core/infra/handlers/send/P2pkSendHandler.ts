@@ -1,4 +1,4 @@
-import { type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
+import { sumProofs, type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -20,7 +20,6 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
-  sumAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -46,7 +45,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
     const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
-    const selectedAmount = sumAmounts(selected.map((p) => p.amount));
+    const selectedAmount = sumProofs(selected);
     const fee = wallet.getFeesForProofs(selected);
     const keepAmount = selectedAmount.subtract(amount).subtract(fee);
 

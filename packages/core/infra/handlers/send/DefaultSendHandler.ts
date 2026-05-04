@@ -1,4 +1,4 @@
-import { Amount, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
+import { Amount, sumProofs, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -19,7 +19,6 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
-  sumAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -37,7 +36,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Try exact match first (no swap needed)
     const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
-    const exactAmount = sumAmounts(exactProofs.map((p) => p.amount));
+    const exactAmount = sumProofs(exactProofs);
     const needsSwap = !exactAmount.equals(amount) || exactProofs.length === 0;
 
     let selectedProofs: Proof[];
@@ -57,7 +56,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
       const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
       selectedProofs = selected;
-      const selectedAmount = sumAmounts(selectedProofs.map((p) => p.amount));
+      const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);
       const keepAmount = selectedAmount.subtract(amount).subtract(fee);
 
@@ -100,7 +99,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       error: operation.error,
       needsSwap,
       fee,
-      inputAmount: sumAmounts(selectedProofs.map((p) => p.amount)),
+      inputAmount: sumProofs(selectedProofs),
       inputProofSecrets: inputSecrets,
       outputData: serializedOutputData,
       method: operation.method,
@@ -248,7 +247,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         );
 
         if (sendProofs.length > 0) {
-          const totalAmount = sumAmounts(sendProofs.map((p) => p.amount));
+          const totalAmount = sumProofs(sendProofs);
           const fee = wallet.getFeesForProofs(sendProofs);
           const reclaimAmount = totalAmount.subtract(fee);
 

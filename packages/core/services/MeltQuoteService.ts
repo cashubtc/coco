@@ -1,4 +1,9 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, OutputConfig } from '@cashu/cashu-ts';
+import {
+  sumProofs,
+  type MeltQuoteBolt11Response,
+  type MeltQuoteState,
+  type OutputConfig,
+} from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
@@ -6,7 +11,7 @@ import type { WalletService } from './WalletService';
 import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
-import { mapProofToCoreProof, sumAmounts } from '@core/utils';
+import { mapProofToCoreProof } from '@core/utils';
 import { UnknownMintError } from '../models/Error';
 
 export class MeltQuoteService {
@@ -91,7 +96,7 @@ export class MeltQuoteService {
       const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount);
       const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
       targetAmount = targetAmount.add(selectedInputFee);
-      const selectedAmount = sumAmounts(selectedProofs.map((proof) => proof.amount));
+      const selectedAmount = sumProofs(selectedProofs);
       if (selectedAmount.lessThan(targetAmount)) {
         this.logger?.warn('Insufficient proofs to cover melt amount with fee', {
           mintUrl,

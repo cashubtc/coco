@@ -1,6 +1,7 @@
 import {
   getDecodedToken,
   getTokenMetadata,
+  sumProofs,
   type Proof,
   type ProofState as CashuProofState,
   type Token,
@@ -13,7 +14,6 @@ import {
   serializeOutputData,
   deserializeOutputData,
   computeYHexForSecrets,
-  sumAmounts,
 } from '../../utils';
 import {
   UnknownMintError,
@@ -146,7 +146,7 @@ export class ReceiveOperationService {
       throw new ProofValidationError('Token contains no proofs');
     }
 
-    const amount = sumAmounts(preparedProofs.map((proof) => proof.amount));
+    const amount = sumProofs(preparedProofs);
     if (amount.isZero()) {
       this.logger?.warn('Token has invalid or non-positive amount', { mintUrl, amount });
       throw new ProofValidationError('Token amount must be a positive integer');

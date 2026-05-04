@@ -2,6 +2,7 @@ import {
   Amount,
   OutputData,
   splitAmount,
+  sumProofs,
   type AmountLike,
   type Keys,
   type MintKeys,
@@ -29,7 +30,6 @@ import type { KeyRingService } from './KeyRingService.ts';
 import {
   deserializeOutputData,
   mapProofToCoreProof,
-  sumAmounts,
   toAmount,
   type SerializedOutputData,
 } from '../utils';
@@ -525,7 +525,7 @@ export class ProofService {
 
     // Calculate the reserved amount for the event
     const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
-    const amount = sumAmounts(reservedProofs.map((p) => p.amount));
+    const amount = sumProofs(reservedProofs);
 
     await this.eventBus?.emit('proofs:reserved', {
       mintUrl,
@@ -619,7 +619,7 @@ export class ProofService {
   ): Promise<Proof[]> {
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
     const requestedAmount = toAmount(amount);
-    const totalAmount = sumAmounts(proofs.map((proof) => proof.amount));
+    const totalAmount = sumProofs(proofs);
     if (totalAmount.lessThan(requestedAmount)) {
       throw new ProofValidationError('Not enough proofs to send');
     }
