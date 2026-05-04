@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { PaymentRequest } from '@cashu/cashu-ts';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
@@ -16,7 +17,7 @@ describe('PaymentRequestsApi', () => {
     paymentRequest: new PaymentRequest([], 'request-id', 100, 'sat', ['https://mint.test']),
     payableMints: ['https://mint.test'],
     allowedMints: ['https://mint.test'],
-    amount: 100,
+    amount: Amount.from(100),
     transport: { type: 'inband' },
   };
 
@@ -25,12 +26,12 @@ describe('PaymentRequestsApi', () => {
       id: 'operation-id',
       state: 'prepared',
       mintUrl: 'https://mint.test',
-      amount: 100,
+      amount: Amount.from(100),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,
-      fee: 0,
-      inputAmount: 100,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
       inputProofSecrets: ['secret-1'],
       method: 'default',
       methodData: {},
@@ -68,13 +69,13 @@ describe('PaymentRequestsApi', () => {
   it('should prepare a payment request', async () => {
     const result = await api.prepare(resolvedRequest, {
       mintUrl: 'https://mint.test',
-      amount: 100,
+      amount: Amount.from(100),
     });
 
     expect(result).toBe(preparedRequest);
     expect(service.prepare).toHaveBeenCalledWith(resolvedRequest, {
       mintUrl: 'https://mint.test',
-      amount: 100,
+      amount: Amount.from(100),
     });
   });
 

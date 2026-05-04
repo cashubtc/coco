@@ -1,7 +1,7 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
-import type { MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type { MintService } from '../MintService';
 import type { MintOperationService, PendingMintOperation } from '@core/operations/mint';
 
@@ -238,7 +238,7 @@ export class MintOperationWatcherService {
         const operationIdByQuote = new Map(
           batch.map((operation) => [operation.quoteId, operation.id]),
         );
-        const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteResponse>(
+        const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteBolt11Response>(
           mintUrl,
           'bolt11_mint_quote',
           quoteIds,

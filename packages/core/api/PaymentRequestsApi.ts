@@ -1,3 +1,4 @@
+import type { AmountLike } from '@cashu/cashu-ts';
 import type {
   PaymentRequestExecutionResult,
   PaymentRequestService,
@@ -27,7 +28,7 @@ export class PaymentRequestsApi {
    */
   async prepare(
     request: ResolvedPaymentRequest,
-    options: { mintUrl: string; amount?: number },
+    options: { mintUrl: string; amount?: AmountLike },
   ): Promise<PreparedPaymentRequest> {
     return this.paymentRequestService.prepare(request, options);
   }

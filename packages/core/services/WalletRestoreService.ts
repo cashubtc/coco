@@ -1,5 +1,5 @@
 import { type Proof, Mint, Wallet, type OutputConfig } from '@cashu/cashu-ts';
-import { mapProofToCoreProof } from '@core/utils';
+import { mapProofToCoreProof, sumAmounts } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
 import type { Logger } from '../logging/Logger.ts';
@@ -99,19 +99,19 @@ export class WalletRestoreService {
     }
 
     const sweepFee = sweepWallet.getFeesForProofs(checkedProofs.ready);
-    const sweepAmount = checkedProofs.ready.reduce((acc, proof) => acc + proof.amount, 0);
-    const sweepTotalAmount = sweepAmount - sweepFee;
+    const sweepAmount = sumAmounts(checkedProofs.ready.map((proof) => proof.amount));
 
-    if (sweepTotalAmount < 0) {
+    if (sweepAmount.lessThanOrEqual(sweepFee)) {
       this.logger?.warn('Sweep amount is less than fee', {
         mintUrl,
         keysetId,
         amount: sweepAmount,
         fee: sweepFee,
-        total: sweepTotalAmount,
       });
       return;
     }
+
+    const sweepTotalAmount = sweepAmount.subtract(sweepFee);
 
     this.logger?.debug('Sweep calculation', {
       mintUrl,

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
@@ -103,11 +104,17 @@ export class MeltOperationService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (
-      methodData.amountSats &&
-      (!Number.isFinite(methodData.amountSats) || methodData.amountSats <= 0)
-    ) {
-      throw new ProofValidationError('Amount must be a positive number');
+    if (methodData.amountSats !== undefined) {
+      try {
+        if (Amount.from(methodData.amountSats).isZero()) {
+          throw new ProofValidationError('Amount must be a positive number');
+        }
+      } catch (error) {
+        if (error instanceof ProofValidationError) {
+          throw error;
+        }
+        throw new ProofValidationError('Amount must be a positive number');
+      }
     }
 
     const id = generateSubId();

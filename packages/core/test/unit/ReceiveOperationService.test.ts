@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
@@ -50,7 +51,7 @@ describe('ReceiveOperationService', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -59,7 +60,7 @@ describe('ReceiveOperationService', () => {
     secrets.map(
       (secret) =>
         new OutputData(
-          { amount: 10, id: keysetId, B_: `B_${secret}` },
+          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
           BigInt(1),
           new TextEncoder().encode(secret),
         ),
@@ -92,7 +93,7 @@ describe('ReceiveOperationService', () => {
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
           unit: 'sat',
-          getFeesForProofs: mock(() => 0),
+          getFeesForProofs: mock(() => Amount.zero()),
           receive: mockWalletReceive,
         },
       })),
@@ -153,7 +154,7 @@ describe('ReceiveOperationService', () => {
 
     expect(op?.mintUrl).toBe(mintUrl);
     expect(op?.unit).toBe('sat');
-    expect(op?.amount).toBe(20);
+    expect(op?.amount).toEqual(Amount.from(20));
     expect(op?.outputData).toBeDefined();
     expect(eventPayload?.mintUrl).toBe(mintUrl);
     expect(eventPayload?.operation.state).toBe('finalized');
@@ -168,7 +169,7 @@ describe('ReceiveOperationService', () => {
     const prepared = await service.prepare(initOp);
 
     expect(prepared.state).toBe('prepared');
-    expect(prepared.fee).toBe(0);
+    expect(prepared.fee).toEqual(Amount.from(0));
     expect(prepared.outputData).toBeDefined();
   });
 
@@ -291,7 +292,7 @@ describe('ReceiveOperationService', () => {
   });
 
   it('init rejects tokens with non-positive amount', async () => {
-    const zeroProof = { ...makeProof('p1'), amount: 0 } as Proof;
+    const zeroProof = { ...makeProof('p1'), amount: Amount.from(0) } as Proof;
     const token: Token = { mint: mintUrl, proofs: [zeroProof] } as Token;
 
     expect(service.init(token)).rejects.toThrow(ProofValidationError);
@@ -312,7 +313,7 @@ describe('ReceiveOperationService', () => {
       state: 'init',
       mintUrl,
       unit: 'sat',
-      amount: 0,
+      amount: Amount.from(0),
       inputProofs: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -522,7 +523,7 @@ describe('ReceiveOperationService', () => {
     const outputSecrets = getOutputProofSecrets(executing as PreparedReceiveOperation);
     const savedProofs: CoreProof[] = outputSecrets.map((secret) => ({
       id: keysetId,
-      amount: 1,
+      amount: Amount.from(1),
       secret,
       C: `C_${secret}`,
       mintUrl,
@@ -552,7 +553,7 @@ describe('ReceiveOperationService', () => {
     const outputSecrets = getOutputProofSecrets(executing as PreparedReceiveOperation);
     const savedProofs: CoreProof[] = outputSecrets.map((secret) => ({
       id: keysetId,
-      amount: 1,
+      amount: Amount.from(1),
       secret,
       C: `C_${secret}`,
       mintUrl,

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import type {
@@ -14,14 +15,14 @@ const makePreparedOperation = (): PreparedSendOperation => ({
   id: 'op-1',
   state: 'prepared',
   mintUrl,
-  amount: 20,
+  amount: Amount.from(20),
   method: 'default',
   methodData: {},
   createdAt: Date.now(),
   updatedAt: Date.now(),
   needsSwap: false,
-  fee: 0,
-  inputAmount: 20,
+  fee: Amount.from(0),
+  inputAmount: Amount.from(20),
   inputProofSecrets: [],
 });
 
@@ -58,9 +59,9 @@ describe('SendOpsApi', () => {
   });
 
   it('prepare calls init and prepare with default target', async () => {
-    const result = await api.prepare({ mintUrl, amount: 20 });
+    const result = await api.prepare({ mintUrl, amount: Amount.from(20) });
 
-    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, 20, {
+    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, Amount.from(20), {
       method: 'default',
       methodData: {},
     });
@@ -71,11 +72,11 @@ describe('SendOpsApi', () => {
   it('prepare maps p2pk target to send method options', async () => {
     await api.prepare({
       mintUrl,
-      amount: 20,
+      amount: Amount.from(20),
       target: { type: 'p2pk', pubkey: 'pubkey-1' },
     });
 
-    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, 20, {
+    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, Amount.from(20), {
       method: 'p2pk',
       methodData: { pubkey: 'pubkey-1' },
     });

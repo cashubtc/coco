@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
@@ -334,7 +335,7 @@ describe('KeyRingService', () => {
 
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'my-secret-string',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -357,7 +358,7 @@ describe('KeyRingService', () => {
 
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'my-secret-string',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -373,7 +374,7 @@ describe('KeyRingService', () => {
 
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'test-secret',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -404,7 +405,7 @@ describe('KeyRingService', () => {
     it('throws when keypair not found', async () => {
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'my-secret-string',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -419,7 +420,7 @@ describe('KeyRingService', () => {
     it('includes public key preview in error message', async () => {
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'my-secret-string',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -436,14 +437,14 @@ describe('KeyRingService', () => {
 
       const proof1: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'secret-1',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
 
       const proof2: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 'secret-2',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -459,7 +460,7 @@ describe('KeyRingService', () => {
 
       const proof: Proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: '',
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       };
@@ -474,7 +475,7 @@ describe('KeyRingService', () => {
 
       const proof = {
         id: 'keyset123',
-        amount: 64,
+        amount: Amount.from(64),
         secret: 123,
         C: '0000000000000000000000000000000000000000000000000000000000000000',
       } as unknown as Proof;

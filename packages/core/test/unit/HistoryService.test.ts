@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { HistoryService } from '../../services/HistoryService';
 import { EventBus } from '../../events/EventBus';
@@ -29,7 +30,7 @@ describe('HistoryService', () => {
   let eventBus: EventBus<CoreEvents>;
   let historyEntries: Map<string, HistoryEntry>;
   let historyUpdateEvents: Array<{ mintUrl: string; entry: HistoryEntry }>;
-  const receiveProofs = [{ id: 'keyset-1', amount: 42, secret: 'secret-1', C: 'C-1' }];
+  const receiveProofs = [{ id: 'keyset-1', amount: Amount.from(42), secret: 'secret-1', C: 'C-1' }];
   const makePendingOperation = (
     quoteId: string,
     overrides: Partial<PendingMintOperation> = {},
@@ -40,7 +41,7 @@ describe('HistoryService', () => {
       mintUrl: 'https://mint.test',
       method: 'bolt11',
       methodData: {},
-      amount: 1000,
+      amount: Amount.from(1000),
       unit: 'sat',
       quoteId,
       request: `request-${quoteId}`,
@@ -63,12 +64,12 @@ describe('HistoryService', () => {
       mintUrl: 'https://mint.test',
       method: 'bolt11',
       methodData: { invoice: `lnbc-${quoteId}` },
-      amount: 900,
+      amount: Amount.from(900),
       unit: 'sat',
-      fee_reserve: 10,
+      fee_reserve: Amount.from(10),
       quoteId,
-      swap_fee: 0,
-      inputAmount: 910,
+      swap_fee: Amount.from(0),
+      inputAmount: Amount.from(910),
       inputProofSecrets: ['proof-secret-1'],
       changeOutputData: { keep: [], send: [] },
       needsSwap: false,
@@ -94,8 +95,8 @@ describe('HistoryService', () => {
     ({
       ...makePreparedMeltOperation(quoteId),
       state: 'finalized',
-      changeAmount: 0,
-      effectiveFee: 10,
+      changeAmount: Amount.from(0),
+      effectiveFee: Amount.from(10),
       ...overrides,
     }) as FinalizedMeltOperation;
 
@@ -119,8 +120,8 @@ describe('HistoryService', () => {
       state: 'prepared',
       mintUrl: 'https://mint.test',
       unit: 'sat',
-      amount: 42,
-      fee: 1,
+      amount: Amount.from(42),
+      fee: Amount.from(1),
       outputData: { keep: [], send: [] },
       inputProofs: receiveProofs,
       createdAt: Date.now(),
@@ -248,7 +249,7 @@ describe('HistoryService', () => {
   describe('mint operations', () => {
     it('creates history entry for mint-op:pending', async () => {
       const operation = makePendingOperation('pending-quote', {
-        amount: 1000,
+        amount: Amount.from(1000),
         request: 'lnbc1000...',
         lastObservedRemoteState: 'UNPAID',
       });
@@ -274,7 +275,7 @@ describe('HistoryService', () => {
 
     it('updates existing history entry on mint-op:quote-state-changed', async () => {
       const operation = makePendingOperation('stateful-quote', {
-        amount: 500,
+        amount: Amount.from(500),
         request: 'lnbc500...',
         lastObservedRemoteState: 'UNPAID',
       });
@@ -307,7 +308,7 @@ describe('HistoryService', () => {
 
     it('updates an existing history entry instead of creating a duplicate pending entry', async () => {
       const operation = makePendingOperation('existing-quote', {
-        amount: 750,
+        amount: Amount.from(750),
         request: 'lnbc750...',
         lastObservedRemoteState: 'PAID',
       });
@@ -316,7 +317,7 @@ describe('HistoryService', () => {
         type: 'mint',
         mintUrl: operation.mintUrl,
         quoteId: operation.quoteId,
-        amount: 10,
+        amount: Amount.from(10),
         state: 'UNPAID',
         unit: operation.unit,
         paymentRequest: 'old-request',
@@ -341,7 +342,7 @@ describe('HistoryService', () => {
 
   describe('melt operations', () => {
     it('creates history entry for melt-op:prepared', async () => {
-      const operation = makePreparedMeltOperation('melt-prepared', { amount: 250 });
+      const operation = makePreparedMeltOperation('melt-prepared', { amount: Amount.from(250) });
 
       await eventBus.emit('melt-op:prepared', {
         mintUrl: operation.mintUrl,
@@ -363,7 +364,7 @@ describe('HistoryService', () => {
 
     it('preserves non-sat unit when creating melt history from an operation event', async () => {
       const operation = makePreparedMeltOperation('melt-usd', {
-        amount: 250,
+        amount: Amount.from(250),
         unit: 'usd',
       });
 
@@ -378,13 +379,13 @@ describe('HistoryService', () => {
     });
 
     it('updates an existing melt history entry on melt-op:pending', async () => {
-      const operation = makePendingMeltOperation('melt-pending', { amount: 275 });
+      const operation = makePendingMeltOperation('melt-pending', { amount: Amount.from(275) });
 
       await mockRepo.addHistoryEntry({
         type: 'melt',
         mintUrl: operation.mintUrl,
         quoteId: operation.quoteId,
-        amount: 100,
+        amount: Amount.from(100),
         state: 'UNPAID',
         unit: 'sat',
         createdAt: operation.createdAt,
@@ -407,7 +408,7 @@ describe('HistoryService', () => {
 
     it('preserves an existing non-sat unit when the operation payload omits it', async () => {
       const operation = makePendingMeltOperation('melt-pending-usd', {
-        amount: 275,
+        amount: Amount.from(275),
         unit: undefined as unknown as string,
       });
 
@@ -415,7 +416,7 @@ describe('HistoryService', () => {
         type: 'melt',
         mintUrl: operation.mintUrl,
         quoteId: operation.quoteId,
-        amount: 100,
+        amount: Amount.from(100),
         state: 'UNPAID',
         unit: 'usd',
         createdAt: operation.createdAt,
@@ -432,7 +433,7 @@ describe('HistoryService', () => {
     });
 
     it('creates history entry for immediate melt-op:finalized results', async () => {
-      const operation = makeFinalizedMeltOperation('melt-finalized', { amount: 300 });
+      const operation = makeFinalizedMeltOperation('melt-finalized', { amount: Amount.from(300) });
 
       await eventBus.emit('melt-op:finalized', {
         mintUrl: operation.mintUrl,
@@ -450,7 +451,9 @@ describe('HistoryService', () => {
     });
 
     it('updates melt history entries to UNPAID on melt-op:rolled-back and emits an update', async () => {
-      const operation = makeRolledBackMeltOperation('melt-rolled-back', { amount: 325 });
+      const operation = makeRolledBackMeltOperation('melt-rolled-back', {
+        amount: Amount.from(325),
+      });
 
       await mockRepo.addHistoryEntry({
         type: 'melt',
@@ -479,13 +482,15 @@ describe('HistoryService', () => {
     });
 
     it('does not remove mint history entries that share a quoteId with a rolled back melt', async () => {
-      const operation = makeRolledBackMeltOperation('shared-quote-id', { amount: 325 });
+      const operation = makeRolledBackMeltOperation('shared-quote-id', {
+        amount: Amount.from(325),
+      });
 
       await mockRepo.addHistoryEntry({
         type: 'mint',
         mintUrl: operation.mintUrl,
         quoteId: operation.quoteId,
-        amount: 500,
+        amount: Amount.from(500),
         state: 'PAID',
         unit: 'sat',
         paymentRequest: 'lnbc500...',

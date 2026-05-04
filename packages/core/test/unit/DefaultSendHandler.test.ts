@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { type Proof, type Wallet, type OutputConfig } from '@cashu/cashu-ts';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -38,7 +39,7 @@ describe('DefaultSendHandler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -47,7 +48,7 @@ describe('DefaultSendHandler', () => {
 
   const makeCoreProof = (secret: string, amount = 10, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -73,7 +74,7 @@ describe('DefaultSendHandler', () => {
     id,
     state: 'init',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     method: 'default',
     methodData: {},
     createdAt: Date.now() - 10000,
@@ -88,14 +89,14 @@ describe('DefaultSendHandler', () => {
     id,
     state: 'prepared',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     method: 'default',
     methodData: {},
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     needsSwap: true,
-    fee: 1,
-    inputAmount: 101,
+    fee: Amount.from(1),
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['input-1', 'input-2'],
     outputData: createMockOutputData(['keep-1'], ['send-1']),
     ...overrides,
@@ -124,20 +125,20 @@ describe('DefaultSendHandler', () => {
     eventBus = new EventBus<CoreEvents>();
 
     mockWallet = {
-      selectProofsToSend: mock((proofs: Proof[], amount: number, includeFees: boolean) => {
+      selectProofsToSend: mock((proofs: Proof[], amount: Amount, includeFees: boolean) => {
         if (!includeFees) {
-          const exact = proofs.find((proof) => proof.amount === amount);
+          const exact = proofs.find((proof) => proof.amount.equals(amount));
           if (exact) {
             return { send: [exact], keep: proofs.filter((proof) => proof.secret !== exact.secret) };
           }
         }
 
         const send: Proof[] = [];
-        let total = 0;
+        let total = Amount.zero();
         for (const proof of proofs) {
-          if (total >= amount) break;
+          if (total.greaterThanOrEqual(amount)) break;
           send.push(proof);
-          total += proof.amount;
+          total = total.add(proof.amount);
         }
 
         return {
@@ -147,7 +148,7 @@ describe('DefaultSendHandler', () => {
           ),
         };
       }),
-      getFeesForProofs: mock(() => 1),
+      getFeesForProofs: mock(() => Amount.from(1)),
       send: mock(() =>
         Promise.resolve({
           keep: [makeProof('keep-1', 9)],
@@ -168,19 +169,19 @@ describe('DefaultSendHandler', () => {
 
     proofService = {
       selectProofsToSend: mock(
-        async (selectedMintUrl: string, amount: number, includeFees = true) => {
+        async (selectedMintUrl: string, amount: Amount, includeFees = true) => {
           const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
           return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
         },
       ),
-      reserveProofs: mock(() => Promise.resolve({ amount: 100 })),
+      reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(100) })),
       releaseProofs: mock(() => Promise.resolve()),
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
           keep: createMockOutputData(['keep-1'], []).keep,
           send: createMockOutputData([], ['send-1']).send,
-          sendAmount: 100,
-          keepAmount: 9,
+          sendAmount: Amount.from(100),
+          keepAmount: Amount.from(9),
         }),
       ),
       setProofState: mock(() => Promise.resolve()),
@@ -280,7 +281,7 @@ describe('DefaultSendHandler', () => {
 
       expect(result.state).toBe('prepared');
       expect(result.needsSwap).toBe(false);
-      expect(result.fee).toBe(0);
+      expect(result.fee).toEqual(Amount.zero());
       expect(result.outputData).toBe(undefined);
       expect(result.inputProofSecrets).toEqual(['proof-100']);
       expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
@@ -295,11 +296,11 @@ describe('DefaultSendHandler', () => {
       const result = await handler.prepare(buildPrepareContext(makeInitOp('op-swap')));
 
       expect(result.needsSwap).toBe(true);
-      expect(result.fee).toBe(1);
+      expect(result.fee).toEqual(Amount.from(1));
       expect(result.outputData).toBeDefined();
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: 9,
-        send: 100,
+        keep: Amount.from(9),
+        send: Amount.from(100),
       });
     });
   });
@@ -308,8 +309,8 @@ describe('DefaultSendHandler', () => {
     it('marks exact-match proofs inflight without saving replacement proofs', async () => {
       const operation = makeExecutingOp('op-exact', {
         needsSwap: false,
-        fee: 0,
-        inputAmount: 100,
+        fee: Amount.from(0),
+        inputAmount: Amount.from(100),
         inputProofSecrets: ['proof-100'],
         outputData: undefined,
       });
@@ -407,7 +408,7 @@ describe('DefaultSendHandler', () => {
       const receiveArgs = (mockWallet.receive as Mock<any>).mock.calls[0];
 
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: 99,
+        keep: Amount.from(99),
         send: 0,
       });
       expect(receiveArgs).toBeDefined();
@@ -434,8 +435,8 @@ describe('DefaultSendHandler', () => {
     it('rolls back an exact-match executing operation without mint recovery', async () => {
       const operation = makeExecutingOp('op-recover-exact', {
         needsSwap: false,
-        fee: 0,
-        inputAmount: 100,
+        fee: Amount.from(0),
+        inputAmount: Amount.from(100),
         inputProofSecrets: ['proof-100'],
         outputData: undefined,
       });

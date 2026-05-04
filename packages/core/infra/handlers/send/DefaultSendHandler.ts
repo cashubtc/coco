@@ -1,4 +1,4 @@
-import type { Token, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { Amount, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -19,6 +19,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  sumAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -36,11 +37,11 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Try exact match first (no swap needed)
     const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
-    const exactAmount = exactProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-    const needsSwap = exactAmount !== amount || exactProofs.length === 0;
+    const exactAmount = sumAmounts(exactProofs.map((p) => p.amount));
+    const needsSwap = !exactAmount.equals(amount) || exactProofs.length === 0;
 
     let selectedProofs: Proof[];
-    let fee = 0;
+    let fee = Amount.zero();
     let serializedOutputData: PreparedSendOperation['outputData'];
 
     if (!needsSwap && exactProofs.length > 0) {
@@ -56,9 +57,9 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
       const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
       selectedProofs = selected;
-      const selectedAmount = selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+      const selectedAmount = sumAmounts(selectedProofs.map((p) => p.amount));
       fee = wallet.getFeesForProofs(selectedProofs);
-      const keepAmount = selectedAmount - amount - fee;
+      const keepAmount = selectedAmount.subtract(amount).subtract(fee);
 
       // Use ProofService to create outputs and increment counters
       const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
@@ -99,7 +100,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       error: operation.error,
       needsSwap,
       fee,
-      inputAmount: selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0),
+      inputAmount: sumAmounts(selectedProofs.map((p) => p.amount)),
       inputProofSecrets: inputSecrets,
       outputData: serializedOutputData,
       method: operation.method,
@@ -247,11 +248,11 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         );
 
         if (sendProofs.length > 0) {
-          const totalAmount = sendProofs.reduce((acc: number, p: CoreProof) => acc + p.amount, 0);
+          const totalAmount = sumAmounts(sendProofs.map((p) => p.amount));
           const fee = wallet.getFeesForProofs(sendProofs);
-          const reclaimAmount = totalAmount - fee;
+          const reclaimAmount = totalAmount.subtract(fee);
 
-          if (reclaimAmount > 0) {
+          if (!reclaimAmount.isZero()) {
             // Use ProofService to create outputs for reclaim
             const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
               keep: reclaimAmount,

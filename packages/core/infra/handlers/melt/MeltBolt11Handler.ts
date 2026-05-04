@@ -1,4 +1,10 @@
-import type { OutputConfig, Proof, SerializedBlindedSignature } from '@cashu/cashu-ts';
+import {
+  Amount,
+  OutputData,
+  type OutputConfig,
+  type Proof,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import { MintOperationError } from '@core/models';
 import type {
   BasePrepareContext,
@@ -44,12 +50,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    * effectiveFee: Actual fee paid = meltInputAmount - amount - changeAmount
    */
   private calculateSettlementAmounts(
-    meltInputAmount: number,
-    meltAmount: number,
+    meltInputAmount: Amount,
+    meltAmount: Amount,
     changeProofs?: SerializedBlindedSignature[],
-  ): { changeAmount: number; effectiveFee: number } {
-    const changeAmount = changeProofs?.reduce((sum, p) => sum + p.amount, 0) ?? 0;
-    const effectiveFee = meltInputAmount - meltAmount - changeAmount;
+  ): { changeAmount: Amount; effectiveFee: Amount } {
+    const changeAmount = Amount.sum(changeProofs?.map((p) => p.amount) ?? []);
+    const effectiveFee = meltInputAmount.subtract(meltAmount).subtract(changeAmount);
     return { changeAmount, effectiveFee };
   }
 
@@ -59,9 +65,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    */
   private getMeltInputAmount(operation: {
     needsSwap: boolean;
-    inputAmount: number;
+    inputAmount: Amount;
     swapOutputData?: SerializedOutputData;
-  }): number {
+  }): Amount {
     if (!operation.needsSwap) {
       return operation.inputAmount;
     }
@@ -70,10 +76,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       throw new Error('Swap was required but swapOutputData is missing');
     }
 
-    return deserializeOutputData(operation.swapOutputData).send.reduce(
-      (sum, output) => sum + output.blindedMessage.amount,
-      0,
-    );
+    return OutputData.sumOutputAmounts(deserializeOutputData(operation.swapOutputData).send);
   }
 
   private buildFinalizedData(
@@ -104,9 +107,12 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl, id: operationId } = ctx.operation;
     ctx.logger?.debug('Preparing bolt11 melt operation', { operationId, mintUrl });
 
-    const quote = await ctx.wallet.createMeltQuote(ctx.operation.methodData.invoice);
+    const quote = await ctx.wallet.createMeltQuoteBolt11(
+      ctx.operation.methodData.invoice,
+      ctx.operation.methodData.amountSats,
+    );
     const { amount, fee_reserve } = quote;
-    const totalAmount = amount + fee_reserve;
+    const totalAmount = amount.add(fee_reserve);
 
     ctx.logger?.debug('Melt quote created', {
       operationId,
@@ -118,7 +124,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = sumProofs(selectedProofs);
-    const needsSwap = selectedAmount >= Math.floor(totalAmount * SWAP_THRESHOLD_RATIO);
+    const needsSwap = selectedAmount.greaterThanOrEqual(totalAmount.scaledBy(11, 10));
 
     ctx.logger?.debug('Proofs selected for melt', {
       operationId,
@@ -172,7 +178,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       fee_reserve,
       inputAmount: selectedAmount,
       inputProofSecrets: inputSecrets,
-      swap_fee: 0,
+      swap_fee: Amount.zero(),
       state: 'prepared',
     };
   }
@@ -184,7 +190,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   private async prepareSwapThenMelt(
     ctx: BasePrepareContext<'bolt11'>,
     quote: MeltQuoteData,
-    totalAmount: number,
+    totalAmount: Amount,
   ): Promise<PreparedMeltOperation & MeltMethodMeta<'bolt11'>> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
@@ -198,7 +204,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
     const sendAmount = totalAmount;
-    const keepAmount = selectedAmount - sendAmount - swapFee;
+    const keepAmount = selectedAmount.subtract(sendAmount).subtract(swapFee);
 
     ctx.logger?.debug('Swap amounts calculated', {
       operationId,
@@ -253,11 +259,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    * The change is the difference between what we send and the quote amount.
    */
   private async createChangeOutputs(
-    quoteAmount: number,
-    sendAmount: number,
+    quoteAmount: Amount,
+    sendAmount: Amount,
     ctx: BasePrepareContext<'bolt11'>,
   ) {
-    const changeDelta = sendAmount - quoteAmount;
+    const changeDelta = sendAmount.subtract(quoteAmount);
     return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl);
   }
 
@@ -393,7 +399,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     }
 
     const swapData = deserializeOutputData(swapOutputData);
-    const sendAmount = swapData.send.reduce((a, c) => a + c.blindedMessage.amount, 0);
+    const sendAmount = OutputData.sumOutputAmounts(swapData.send);
     const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
 
     ctx.logger?.debug('Executing pre-melt swap', {

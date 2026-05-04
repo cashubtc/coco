@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -19,7 +20,7 @@ describe('ProofStateWatcherService', () => {
   const makeProof = (overrides: Partial<CoreProof>): CoreProof =>
     ({
       id: 'keyset-1',
-      amount: 1,
+      amount: Amount.from(1),
       secret: 'secret',
       C: 'C' as unknown as CoreProof['C'],
       mintUrl: mintUrlA,
@@ -130,12 +131,12 @@ describe('ProofStateWatcherService', () => {
       id: 'send-op-1',
       state: 'pending',
       mintUrl: mintUrlA,
-      amount: 2,
+      amount: Amount.from(2),
       method: 'default',
       methodData: {},
       needsSwap: false,
-      fee: 0,
-      inputAmount: 2,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(2),
       inputProofSecrets: ['spent-1', 'spent-2'],
       createdAt: 0,
       updatedAt: 0,
@@ -182,12 +183,12 @@ describe('ProofStateWatcherService', () => {
       id: 'send-op-1',
       state: 'pending',
       mintUrl: mintUrlA,
-      amount: 2,
+      amount: Amount.from(2),
       method: 'default',
       methodData: {},
       needsSwap: false,
-      fee: 0,
-      inputAmount: 2,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(2),
       inputProofSecrets: ['spent-1', 'spent-2'],
       createdAt: 0,
       updatedAt: 0,

@@ -14,9 +14,22 @@ export type {
   BalancesBreakdownByMint,
 } from './types.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
-export { getEncodedToken, getDecodedToken } from '@cashu/cashu-ts';
+export {
+  Amount,
+  getEncodedToken,
+  getDecodedToken,
+  getTokenMetadata,
+  type AmountLike,
+} from '@cashu/cashu-ts';
 export { SubscriptionManager } from './infra/SubscriptionManager.ts';
 export { WsConnectionManager } from './infra/WsConnectionManager.ts';
 export type { WebSocketLike, WebSocketFactory } from './infra/WsConnectionManager.ts';
 export * from './plugins/index.ts';
-export { normalizeMintUrl } from './utils.ts';
+export {
+  normalizeMintUrl,
+  toAmount,
+  sumAmounts,
+  serializeAmount,
+  deserializeAmount,
+  deserializeToken,
+} from './utils.ts';

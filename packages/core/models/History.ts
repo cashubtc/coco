@@ -1,4 +1,4 @@
-import type { MeltQuoteState, Token } from '@cashu/cashu-ts';
+import type { Amount, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type { MintQuoteState } from './MintQuoteState';
 
 type BaseHistoryEntry = {
@@ -15,14 +15,14 @@ export type MintHistoryEntry = BaseHistoryEntry & {
   paymentRequest: string;
   quoteId: string;
   state: MintQuoteState;
-  amount: number;
+  amount: Amount;
 };
 
 export type MeltHistoryEntry = BaseHistoryEntry & {
   type: 'melt';
   quoteId: string;
   state: MeltQuoteState;
-  amount: number;
+  amount: Amount;
 };
 
 /**
@@ -33,7 +33,7 @@ export type SendHistoryState = 'prepared' | 'pending' | 'finalized' | 'rolledBac
 
 export type SendHistoryEntry = BaseHistoryEntry & {
   type: 'send';
-  amount: number;
+  amount: Amount;
   operationId: string;
   state: SendHistoryState;
   /** Token is only available after execute (state >= pending) */
@@ -44,7 +44,7 @@ export type ReceiveHistoryState = 'prepared' | 'finalized' | 'rolledBack';
 
 export type ReceiveHistoryEntry = BaseHistoryEntry & {
   type: 'receive';
-  amount: number;
+  amount: Amount;
   state: ReceiveHistoryState;
   token?: Token;
 };

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
 import { EventBus } from '../../events/EventBus';
@@ -27,7 +28,7 @@ import type { Wallet, Proof, OutputConfig } from '@cashu/cashu-ts';
 describe('P2pkSendHandler', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
-  const testPubkey = '02abc123def456...'; // Example P2PK pubkey
+  const testPubkey = '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9';
 
   let handler: P2pkSendHandler;
   let proofRepository: ProofRepository;
@@ -44,7 +45,7 @@ describe('P2pkSendHandler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -53,7 +54,7 @@ describe('P2pkSendHandler', () => {
 
   const makeCoreProof = (secret: string, amount = 10, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -82,7 +83,7 @@ describe('P2pkSendHandler', () => {
     id,
     state: 'init',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     method: 'p2pk',
     methodData: { pubkey: testPubkey },
     createdAt: Date.now() - 10000,
@@ -97,14 +98,14 @@ describe('P2pkSendHandler', () => {
     id,
     state: 'prepared',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     method: 'p2pk',
     methodData: { pubkey: testPubkey },
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     needsSwap: true, // P2PK always needs swap
-    fee: 1,
-    inputAmount: 101,
+    fee: Amount.from(1),
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['input-1', 'input-2'],
     outputData: createMockOutputData(['keep-1'], ['send-1']),
     ...overrides,
@@ -142,7 +143,7 @@ describe('P2pkSendHandler', () => {
         send: [makeProof('input-1', 60), makeProof('input-2', 50)],
         keep: [],
       })),
-      getFeesForProofs: mock(() => 1),
+      getFeesForProofs: mock(() => Amount.from(1)),
       getKeyset: mock(() => ({ id: keysetId, keys: { 1: 'pubkey' } })),
       send: mock(() =>
         Promise.resolve({
@@ -164,23 +165,23 @@ describe('P2pkSendHandler', () => {
 
     // Mock ProofService
     proofService = {
-      selectProofsToSend: mock(async (_mintUrl: string, amount: number, includeFees = true) => {
+      selectProofsToSend: mock(async (_mintUrl: string, amount: Amount, includeFees = true) => {
         const proofs = await proofRepository.getAvailableProofs(mintUrl);
-        const totalAvailable = proofs.reduce((acc, proof) => acc + proof.amount, 0);
-        if (totalAvailable < amount) {
+        const totalAvailable = Amount.sum(proofs.map((proof) => proof.amount));
+        if (totalAvailable.lessThan(amount)) {
           throw new ProofValidationError(
             `Insufficient balance: need ${amount}, have ${totalAvailable}`,
           );
         }
         return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
       }),
-      reserveProofs: mock(() => Promise.resolve({ amount: 110 })),
+      reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(110) })),
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
           keep: createMockOutputData(['keep-1'], []).keep,
           send: createMockOutputData([], ['send-1']).send,
-          sendAmount: 100,
-          keepAmount: 9,
+          sendAmount: Amount.from(100),
+          keepAmount: Amount.from(9),
         }),
       ),
       setProofState: mock(() => Promise.resolve()),
@@ -297,7 +298,7 @@ describe('P2pkSendHandler', () => {
     });
 
     it('should throw if balance is insufficient', async () => {
-      const operation = makeInitOp('op-1', { amount: 1000 }); // More than available
+      const operation = makeInitOp('op-1', { amount: Amount.from(1000) }); // More than available
       (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(
         () => Promise.resolve([makeCoreProof('input-1', 50)]), // Only 50 available
       );
@@ -345,14 +346,14 @@ describe('P2pkSendHandler', () => {
     });
 
     it('should create outputs for keep and send amounts', async () => {
-      const operation = makeInitOp('op-1', { amount: 100 });
+      const operation = makeInitOp('op-1', { amount: Amount.from(100) });
       const ctx = buildPrepareContext(operation);
 
       await handler.prepare(ctx);
 
       // Selected amount (110) - amount (100) - fee (1) = 9 keep
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: 9,
+        keep: Amount.from(9),
         send: 0,
       });
     });
@@ -411,7 +412,7 @@ describe('P2pkSendHandler', () => {
       });
 
       it('should pass the correct pubkey from methodData', async () => {
-        const customPubkey = '03custom_pubkey_hex...';
+        const customPubkey = '03e5e8d9b1e9e1e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0';
         const operation = makeExecutingOp('op-1', {
           methodData: { pubkey: customPubkey },
           inputProofSecrets: ['input-1', 'input-2'],

@@ -20,6 +20,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  sumAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -45,9 +46,9 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
     const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
-    const selectedAmount = selected.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+    const selectedAmount = sumAmounts(selected.map((p) => p.amount));
     const fee = wallet.getFeesForProofs(selected);
-    const keepAmount = selectedAmount - amount - fee;
+    const keepAmount = selectedAmount.subtract(amount).subtract(fee);
 
     // Use ProofService to create outputs and increment counters
     const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {

@@ -1,4 +1,11 @@
-import { hashToCurve, OutputData, type Proof, type Token } from '@cashu/cashu-ts';
+import {
+  Amount,
+  hashToCurve,
+  OutputData,
+  type AmountLike,
+  type Proof,
+  type Token,
+} from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from './types';
 import type { Logger } from './logging/Logger.ts';
 import { TokenValidationError } from './models/Error.ts';
@@ -11,7 +18,7 @@ import { TokenValidationError } from './models/Error.ts';
  * Serialized form of a BlindedMessage (JSON-safe)
  */
 export interface SerializedBlindedMessage {
-  amount: number;
+  amount: string | number;
   id: string;
   B_: string;
 }
@@ -63,7 +70,7 @@ function hexToUint8Array(hex: string): Uint8Array {
 export function serializeOutput(output: OutputData): SerializedOutput {
   return {
     blindedMessage: {
-      amount: output.blindedMessage.amount,
+      amount: serializeAmount(output.blindedMessage.amount),
       id: output.blindedMessage.id,
       B_: output.blindedMessage.B_,
     },
@@ -78,7 +85,7 @@ export function serializeOutput(output: OutputData): SerializedOutput {
 export function deserializeOutput(serialized: SerializedOutput): OutputData {
   return new OutputData(
     {
-      amount: serialized.blindedMessage.amount,
+      amount: deserializeAmount(serialized.blindedMessage.amount),
       id: serialized.blindedMessage.id,
       B_: serialized.blindedMessage.B_,
     },
@@ -149,10 +156,59 @@ export function mapProofToCoreProof(
   }));
 }
 
+export function toAmount(value: AmountLike): Amount {
+  return Amount.from(value);
+}
+
+export function sumAmounts(values: Iterable<AmountLike>): Amount {
+  return Amount.sum(values);
+}
+
+export function serializeAmount(value: AmountLike): string {
+  return Amount.from(value).toString();
+}
+
+export function deserializeAmount(value: string | number | bigint | Amount): Amount {
+  if (typeof value === 'string') {
+    const legacyIntegerDecimal = value.match(/^([0-9]+)\.0+$/);
+    if (legacyIntegerDecimal?.[1]) {
+      return Amount.from(legacyIntegerDecimal[1]);
+    }
+  }
+  return Amount.from(value);
+}
+
+export function deserializeToken(value: unknown): Token | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const token = value as Token;
+  return {
+    ...token,
+    proofs: Array.isArray(token.proofs)
+      ? token.proofs.map((proof) => ({
+          ...proof,
+          amount: deserializeAmount(proof.amount),
+        }))
+      : [],
+  };
+}
+
 export function assertNonNegativeInteger(paramName: string, value: number, logger?: Logger): void {
   if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
     logger?.warn('Invalid numeric value', { [paramName]: value });
     throw new Error(`${paramName} must be a non-negative integer`);
+  }
+}
+
+export function assertNonNegativeAmountLike(
+  paramName: string,
+  value: AmountLike,
+  logger?: Logger,
+): Amount {
+  try {
+    return Amount.from(value);
+  } catch (error) {
+    logger?.warn('Invalid amount value', { [paramName]: value, error });
+    throw new Error(`${paramName} must be a non-negative integer amount`, { cause: error });
   }
 }
 
@@ -264,7 +320,7 @@ export function isValidToken(token: Token): void {
   if (token.proofs.length === 0) {
     throw new TokenValidationError('Token proofs are required');
   }
-  if (token.proofs.some((p) => !p.amount || p.amount <= 0)) {
+  if (token.proofs.some((p) => !p.amount || Amount.from(p.amount).isZero())) {
     throw new TokenValidationError('Token proofs must have a positive amount');
   }
 }

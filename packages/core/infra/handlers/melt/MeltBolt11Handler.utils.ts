@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import type { Amount, Proof } from '@cashu/cashu-ts';
 import type {
   ExecutingMeltOperation,
   FinalizeResult,
@@ -6,7 +6,7 @@ import type {
   MeltMethod,
   ExecutionResult,
 } from '@core/operations/melt';
-import { deserializeOutputData, type SerializedOutputData } from '@core/utils';
+import { deserializeOutputData, sumAmounts, type SerializedOutputData } from '@core/utils';
 
 // ============================================================================
 // Types
@@ -20,9 +20,9 @@ export interface MeltQuoteData {
   /** The quote ID from the mint */
   quote: string;
   /** The amount to melt (in sats) */
-  amount: number;
+  amount: Amount;
   /** The fee reserve required by the mint */
-  fee_reserve: number;
+  fee_reserve: Amount;
   /** The unit the quote was denominated in */
   unit: string;
 }
@@ -49,8 +49,8 @@ export const SWAP_THRESHOLD_RATIO = 1.1;
 /**
  * Calculate the total amount of a proof set.
  */
-export function sumProofs(proofs: Proof[]): number {
-  return proofs.reduce((sum, p) => sum + p.amount, 0);
+export function sumProofs(proofs: Proof[]): Amount {
+  return sumAmounts(proofs.map((p) => p.amount));
 }
 
 /**

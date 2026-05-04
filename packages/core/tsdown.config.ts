@@ -5,6 +5,6 @@ export default defineConfig([
     entry: ['./index.ts'],
     platform: 'neutral',
     target: 'esnext',
-    format: ['esm', 'cjs'],
+    format: ['esm'],
   },
 ]);

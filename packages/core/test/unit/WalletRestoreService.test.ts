@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import type { ProofService } from '../../services/ProofService';
@@ -21,7 +22,7 @@ describe('WalletRestoreService', () => {
 
   const makeProof = (amount: number, secret: string): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -34,7 +35,7 @@ describe('WalletRestoreService', () => {
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
           keep: [],
-          send: [{ amount: 100, counter: 1, id: keysetId }],
+          send: [{ amount: Amount.from(100), counter: 1, id: keysetId }],
         }),
       ),
       saveProofs: mock(() => Promise.resolve()),
@@ -96,7 +97,7 @@ describe('WalletRestoreService', () => {
       const mockCheckProofsStates = mock(() =>
         Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -108,7 +109,7 @@ describe('WalletRestoreService', () => {
       expect(mockCheckProofsStates).toHaveBeenCalledTimes(1);
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
         keep: 0,
-        send: 99, // 50 + 50 - 1 fee
+        send: Amount.from(99), // 50 + 50 - 1 fee
       });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
@@ -116,8 +117,8 @@ describe('WalletRestoreService', () => {
         keysetId,
         readyProofs: 2,
         spentProofs: 0,
-        sweptAmount: 100,
-        fee: 1,
+        sweptAmount: Amount.from(100),
+        fee: Amount.from(1),
       });
     });
 
@@ -164,7 +165,7 @@ describe('WalletRestoreService', () => {
           { state: 'UNSPENT' } as ProofState,
         ]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -180,7 +181,7 @@ describe('WalletRestoreService', () => {
       });
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
         keep: 0,
-        send: 74, // 50 + 25 - 1 fee
+        send: Amount.from(74), // 50 + 25 - 1 fee
       });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
@@ -188,8 +189,8 @@ describe('WalletRestoreService', () => {
         keysetId,
         readyProofs: 2,
         spentProofs: 1,
-        sweptAmount: 75,
-        fee: 1,
+        sweptAmount: Amount.from(75),
+        fee: Amount.from(1),
       });
     });
 
@@ -237,7 +238,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
       );
       // Mock a negative fee to create a negative total (edge case scenario)
-      const mockGetFeesForProofs = mock(() => 10);
+      const mockGetFeesForProofs = mock(() => Amount.from(10));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -248,9 +249,8 @@ describe('WalletRestoreService', () => {
       expect(logger.warn).toHaveBeenCalledWith('Sweep amount is less than fee', {
         mintUrl,
         keysetId,
-        amount: 5,
-        fee: 10,
-        total: -5,
+        amount: Amount.from(5),
+        fee: Amount.from(10),
       });
       expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
@@ -262,7 +262,7 @@ describe('WalletRestoreService', () => {
       const mockCheckProofsStates = mock(() =>
         Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -279,9 +279,9 @@ describe('WalletRestoreService', () => {
       expect(logger.debug).toHaveBeenCalledWith('Sweep calculation', {
         mintUrl,
         keysetId,
-        amount: 50,
-        fee: 1,
-        total: 49,
+        amount: Amount.from(50),
+        fee: Amount.from(1),
+        total: Amount.from(49),
       });
     });
   });
@@ -329,9 +329,9 @@ describe('WalletRestoreService', () => {
 
     it('should throw when restored proofs are fewer than existing proofs', async () => {
       const existingProofs = [
-        { id: keysetId, amount: 50 },
-        { id: keysetId, amount: 25 },
-        { id: keysetId, amount: 10 },
+        { id: keysetId, amount: Amount.from(50) },
+        { id: keysetId, amount: Amount.from(25) },
+        { id: keysetId, amount: Amount.from(10) },
       ];
       proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
 
@@ -479,7 +479,7 @@ describe('WalletRestoreService', () => {
     });
 
     it('should log all key stages during restore', async () => {
-      const existingProofs = [{ id: keysetId, amount: 25 }];
+      const existingProofs = [{ id: keysetId, amount: Amount.from(25) }];
       proofService.getProofsByKeysetId = mock(() => Promise.resolve(existingProofs as any));
 
       await service.restoreKeyset(mintUrl, mockWallet, keysetId);

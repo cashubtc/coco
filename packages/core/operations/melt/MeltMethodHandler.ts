@@ -1,4 +1,4 @@
-import type { Wallet, Proof } from '@cashu/cashu-ts';
+import type { Amount, AmountLike, Wallet, Proof } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -23,9 +23,9 @@ import type { MintAdapter } from '@core/infra';
  * Extend via declaration merging if you need to add methods externally.
  */
 export interface MeltMethodDefinitions {
-  bolt11: { invoice: string; amountSats?: number };
-  bolt12: { offer: string; amountSats?: number };
-  onchain: { address: string; amountSats: number };
+  bolt11: { invoice: string; amountSats?: AmountLike };
+  bolt12: { offer: string; amountSats?: AmountLike };
+  onchain: { address: string; amountSats: AmountLike };
 }
 
 export type MeltMethod = keyof MeltMethodDefinitions;
@@ -78,9 +78,9 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
 
 export type FinalizeResult<M extends MeltMethod = MeltMethod> = {
   /** Total amount returned as change by the mint */
-  changeAmount?: number;
+  changeAmount?: Amount;
   /** Actual fee impact after settlement */
-  effectiveFee?: number;
+  effectiveFee?: Amount;
   /** Method-specific data that may be available once settlement completes */
   finalizedData?: MeltMethodFinalizedData<M>;
 };

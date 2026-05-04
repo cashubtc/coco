@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -35,7 +36,7 @@ describe('SendOperationService', () => {
 
   const makeProof = (secret: string, amount: number): CoreProof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -54,20 +55,20 @@ describe('SendOperationService', () => {
 
     const wallet = {
       unit: 'sat',
-      selectProofsToSend(proofs: any[], amount: number, includeFees: boolean) {
+      selectProofsToSend(proofs: any[], amount: Amount, includeFees: boolean) {
         if (!includeFees) {
-          const exact = proofs.find((p) => p.amount === amount);
+          const exact = proofs.find((p) => p.amount.equals(amount));
           if (exact) {
             return { send: [exact], keep: proofs.filter((p) => p.secret !== exact.secret) };
           }
         }
 
         const send: any[] = [];
-        let total = 0;
+        let total = Amount.zero();
         for (const proof of proofs) {
-          if (total >= amount) break;
+          if (total.greaterThanOrEqual(amount)) break;
           send.push(proof);
-          total += proof.amount;
+          total = total.add(proof.amount);
         }
 
         return {
@@ -76,7 +77,7 @@ describe('SendOperationService', () => {
         };
       },
       getFeesForProofs() {
-        return 0;
+        return Amount.zero();
       },
     };
 
@@ -92,13 +93,15 @@ describe('SendOperationService', () => {
 
     proofService = {
       selectProofsToSend: mock(
-        async (selectedMintUrl: string, amount: number, includeFees: boolean = true) => {
+        async (selectedMintUrl: string, amount: Amount, includeFees: boolean = true) => {
           const proofs = await proofRepo.getAvailableProofs(selectedMintUrl);
           return wallet.selectProofsToSend(proofs, amount, includeFees).send;
         },
       ),
       reserveProofs: mock((selectedMintUrl: string, secrets: string[], operationId: string) =>
-        proofRepo.reserveProofs(selectedMintUrl, secrets, operationId).then(() => ({ amount: 0 })),
+        proofRepo
+          .reserveProofs(selectedMintUrl, secrets, operationId)
+          .then(() => ({ amount: Amount.from(0) })),
       ),
       releaseProofs: mock((selectedMintUrl: string, secrets: string[]) =>
         proofRepo.releaseProofs(selectedMintUrl, secrets),
@@ -106,8 +109,8 @@ describe('SendOperationService', () => {
       createOutputsAndIncrementCounters: mock(async () => ({
         keep: [],
         send: [],
-        sendAmount: 0,
-        keepAmount: 0,
+        sendAmount: Amount.zero(),
+        keepAmount: Amount.zero(),
       })),
       setProofState: mock(async () => {}),
       saveProofs: mock(async () => {}),
@@ -153,7 +156,7 @@ describe('SendOperationService', () => {
           await firstReservationBlocked;
         }
         await proofRepo.reserveProofs(selectedMintUrl, secrets, operationId);
-        return { amount: 0 };
+        return { amount: Amount.from(0) };
       },
     );
 
@@ -222,12 +225,12 @@ describe('SendOperationService', () => {
       id: 'send-op-failed',
       state: 'prepared',
       mintUrl,
-      amount: 100,
+      amount: Amount.from(100),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,
-      fee: 0,
-      inputAmount: 100,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],
       method: 'default',
       methodData: {},
@@ -247,7 +250,7 @@ describe('SendOperationService', () => {
         state: 'prepared',
         updatedAt: Date.now(),
         needsSwap: false,
-        fee: 0,
+        fee: Amount.from(0),
         inputAmount: ctx.operation.amount,
         inputProofSecrets: [],
       })),
@@ -297,12 +300,12 @@ describe('SendOperationService', () => {
       id: 'send-op-pending',
       state: 'pending',
       mintUrl,
-      amount: 100,
+      amount: Amount.from(100),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: true,
-      fee: 0,
-      inputAmount: 100,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],
       outputData: {
         keep: [],
@@ -354,12 +357,12 @@ describe('SendOperationService', () => {
       id: 'send-op-custom-finalize',
       state: 'pending',
       mintUrl,
-      amount: 100,
+      amount: Amount.from(100),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,
-      fee: 0,
-      inputAmount: 100,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
       inputProofSecrets: ['proof-1'],
       method: 'default',
       methodData: {},
@@ -373,7 +376,7 @@ describe('SendOperationService', () => {
         state: 'prepared',
         updatedAt: Date.now(),
         needsSwap: false,
-        fee: 0,
+        fee: Amount.from(0),
         inputAmount: ctx.operation.amount,
         inputProofSecrets: [],
       })),

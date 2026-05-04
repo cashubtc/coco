@@ -1,13 +1,13 @@
-import type { Mint, Proof } from '@cashu/cashu-ts';
+import type { Amount, Mint, Proof } from '@cashu/cashu-ts';
 
 export type MintInfo = Awaited<ReturnType<Mint['getInfo']>>;
 
 export type ProofState = 'inflight' | 'ready' | 'spent';
 
 export interface BalanceSnapshot {
-  spendable: number;
-  reserved: number;
-  total: number;
+  spendable: Amount;
+  reserved: Amount;
+  total: Amount;
 }
 
 export type BalancesByMint = { [mintUrl: string]: BalanceSnapshot };
@@ -21,9 +21,9 @@ export interface BalanceQuery {
  * @deprecated Use BalanceSnapshot instead.
  */
 export interface BalanceBreakdown {
-  ready: number;
-  reserved: number;
-  total: number;
+  ready: Amount;
+  reserved: Amount;
+  total: Amount;
 }
 
 /**

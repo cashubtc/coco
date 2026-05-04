@@ -1,4 +1,4 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
+import type { Amount, MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
 import type { MeltOperation } from '@core/operations/melt';
 import type { Counter } from '../models/Counter';
 import type { HistoryEntry } from '../models/History';
@@ -24,7 +24,7 @@ export interface CoreEvents {
   };
   'proofs:deleted': { mintUrl: string; secrets: string[] };
   'proofs:wiped': { mintUrl: string; keysetId: string };
-  'proofs:reserved': { mintUrl: string; operationId: string; secrets: string[]; amount: number };
+  'proofs:reserved': { mintUrl: string; operationId: string; secrets: string[]; amount: Amount };
   'proofs:released': { mintUrl: string; secrets: string[] };
   'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteBolt11Response };
   'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };

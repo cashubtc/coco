@@ -1,4 +1,4 @@
-import type { Token } from '@cashu/cashu-ts';
+import type { AmountLike, Token } from '@cashu/cashu-ts';
 import type {
   CreateSendOperationOptions,
   PendingSendOperation,
@@ -17,8 +17,8 @@ export type SendTarget = {
 export interface PrepareSendInput {
   /** Mint to send from. */
   mintUrl: string;
-  /** Amount to send in sats. */
-  amount: number;
+  /** Amount to send. */
+  amount: AmountLike;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
 }

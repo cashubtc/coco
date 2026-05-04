@@ -13,6 +13,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   computeYHexForSecrets,
+  sumAmounts,
 } from '../../utils';
 import {
   UnknownMintError,
@@ -145,8 +146,8 @@ export class ReceiveOperationService {
       throw new ProofValidationError('Token contains no proofs');
     }
 
-    const amount = preparedProofs.reduce((acc, proof) => acc + proof.amount, 0);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amount = sumAmounts(preparedProofs.map((proof) => proof.amount));
+    if (amount.isZero()) {
       this.logger?.warn('Token has invalid or non-positive amount', { mintUrl, amount });
       throw new ProofValidationError('Token amount must be a positive integer');
     }
@@ -210,9 +211,9 @@ export class ReceiveOperationService {
     const { mintUrl } = operation;
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const fee = wallet.getFeesForProofs(operation.inputProofs);
-    const keepAmount = operation.amount - fee;
+    const keepAmount = operation.amount.subtract(fee);
 
-    if (!Number.isFinite(keepAmount) || keepAmount <= 0) {
+    if (keepAmount.isZero()) {
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
 
