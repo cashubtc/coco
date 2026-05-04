@@ -35,6 +35,14 @@ import {
 } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
+function countBlankOutputsForAmount(amount: Amount): number {
+  const value = amount.toBigInt();
+  if (value === 0n) {
+    return 0;
+  }
+  return Math.max((value - 1n).toString(2).length, 1);
+}
+
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
@@ -741,7 +749,7 @@ export class ProofService {
     if (requestedAmount.isZero()) {
       return [];
     }
-    const outputNumber = Math.max(Math.ceil(Math.log2(requestedAmount.toNumber())), 1);
+    const outputNumber = countBlankOutputsForAmount(requestedAmount);
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const seed = await this.seedService.getSeed();
     const outputData = Array(outputNumber)

@@ -53,6 +53,7 @@ describe('ProofService', () => {
   const makeSeed = () => new Uint8Array(64).fill(7);
 
   let originalCreateDeterministicData: typeof OutputData.createDeterministicData;
+  let originalCreateSingleDeterministicData: typeof OutputData.createSingleDeterministicData;
 
   beforeEach(() => {
     proofRepo = new MemoryProofRepository();
@@ -89,11 +90,13 @@ describe('ProofService', () => {
     };
 
     originalCreateDeterministicData = OutputData.createDeterministicData;
+    originalCreateSingleDeterministicData = OutputData.createSingleDeterministicData;
   });
 
   afterEach(() => {
     // Restore OutputData static
     OutputData.createDeterministicData = originalCreateDeterministicData;
+    OutputData.createSingleDeterministicData = originalCreateSingleDeterministicData;
   });
 
   describe('createOutputsAndIncrementCounters', () => {
@@ -180,6 +183,44 @@ describe('ProofService', () => {
 
       const finalCounter = await counterRepo.getCounter(mintUrl, keysetId);
       expect(finalCounter?.counter).toBe(6);
+    });
+  });
+
+  describe('createBlankOutputs', () => {
+    it('creates blank outputs for bigint-backed amounts above MAX_SAFE_INTEGER', async () => {
+      const counters: number[] = [];
+      OutputData.createSingleDeterministicData = ((
+        amount: Parameters<typeof OutputData.createSingleDeterministicData>[0],
+        _seed: Uint8Array,
+        counter: number,
+      ) => {
+        expect(Amount.from(amount)).toEqual(Amount.zero());
+        counters.push(counter);
+        return {} as OutputData;
+      }) as typeof OutputData.createSingleDeterministicData;
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      const amount = Amount.from(1n << 60n);
+
+      const result = await service.createBlankOutputs(amount, mintUrl);
+
+      expect(result.length).toBe(60);
+      expect(counters).toEqual(Array.from({ length: 60 }, (_, index) => index));
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 60,
+      });
     });
   });
 
