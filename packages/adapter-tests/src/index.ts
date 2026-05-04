@@ -255,6 +255,30 @@ export async function runReceiveOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('creates prepared operations with serialized fees', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          id: 'receive-op-prepared',
+          state: 'prepared',
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation;
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.state).toBe('prepared');
+        if (stored!.state === 'prepared') {
+          expect(stored!.fee.equals(Amount.from(1))).toBe(true);
+        }
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
@@ -361,6 +385,8 @@ export async function runAuthSessionRepositoryContract(
         expect(result!.scope).toBe('read write');
         expect(result!.batPool).toBeDefined();
         expect(result!.batPool!).toHaveLength(2);
+        expect(result!.batPool![0]!.amount.equals(Amount.from(1))).toBe(true);
+        expect(result!.batPool![1]!.amount.equals(Amount.from(2))).toBe(true);
       } finally {
         await dispose();
       }

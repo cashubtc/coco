@@ -1,5 +1,26 @@
 import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
+import { deserializeAmount } from '@cashu/coco-core';
 import type { IdbDb, AuthSessionRow } from '../lib/db.ts';
+
+function parseBatPool(batPoolJson: string | null): AuthSession['batPool'] {
+  if (!batPoolJson) return undefined;
+  const proofs = JSON.parse(batPoolJson) as AuthSession['batPool'];
+  return proofs?.map((proof) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
+}
+
+function rowToSession(row: AuthSessionRow): AuthSession {
+  return {
+    mintUrl: row.mintUrl,
+    accessToken: row.accessToken,
+    refreshToken: row.refreshToken ?? undefined,
+    expiresAt: row.expiresAt,
+    scope: row.scope ?? undefined,
+    batPool: parseBatPool(row.batPoolJson),
+  };
+}
 
 export class IdbAuthSessionRepository implements AuthSessionRepository {
   private readonly db: IdbDb;
@@ -13,14 +34,7 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
       | AuthSessionRow
       | undefined;
     if (!row) return null;
-    return {
-      mintUrl: row.mintUrl,
-      accessToken: row.accessToken,
-      refreshToken: row.refreshToken ?? undefined,
-      expiresAt: row.expiresAt,
-      scope: row.scope ?? undefined,
-      batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
-    };
+    return rowToSession(row);
   }
 
   async saveSession(session: AuthSession): Promise<void> {
@@ -43,13 +57,6 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
     const rows = (await (this.db as any)
       .table('coco_cashu_auth_sessions')
       .toArray()) as AuthSessionRow[];
-    return rows.map((row) => ({
-      mintUrl: row.mintUrl,
-      accessToken: row.accessToken,
-      refreshToken: row.refreshToken ?? undefined,
-      expiresAt: row.expiresAt,
-      scope: row.scope ?? undefined,
-      batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
-    }));
+    return rows.map(rowToSession);
   }
 }

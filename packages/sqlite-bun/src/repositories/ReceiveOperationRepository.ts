@@ -98,7 +98,7 @@ function operationToParams(op: ReceiveOperation): unknown[] {
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
-    op.fee,
+    serializeAmount(op.fee),
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
   ];

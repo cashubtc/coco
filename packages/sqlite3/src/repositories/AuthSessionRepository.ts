@@ -1,4 +1,5 @@
 import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
+import { deserializeAmount } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 interface AuthSessionRow {
@@ -10,6 +11,15 @@ interface AuthSessionRow {
   batPoolJson: string | null;
 }
 
+function parseBatPool(batPoolJson: string | null): AuthSession['batPool'] {
+  if (!batPoolJson) return undefined;
+  const proofs = JSON.parse(batPoolJson) as AuthSession['batPool'];
+  return proofs?.map((proof) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
+}
+
 function rowToSession(row: AuthSessionRow): AuthSession {
   return {
     mintUrl: row.mintUrl,
@@ -17,7 +27,7 @@ function rowToSession(row: AuthSessionRow): AuthSession {
     refreshToken: row.refreshToken ?? undefined,
     expiresAt: row.expiresAt,
     scope: row.scope ?? undefined,
-    batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
+    batPool: parseBatPool(row.batPoolJson),
   };
 }
 
