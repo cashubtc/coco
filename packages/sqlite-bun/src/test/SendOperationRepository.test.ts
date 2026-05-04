@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
+import { Amount } from '@cashu/cashu-ts';
 import type { PendingSendOperation, RollingBackSendOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
@@ -44,7 +45,7 @@ function makePendingP2pkOperation(): PendingSendOperation {
     },
     token: {
       mint: 'https://mint.test',
-      proofs: [{ id: 'keyset-1', amount: 100, secret: 'send-secret', C: 'C_send' }],
+      proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
       unit: 'sat',
     },
   } as PendingSendOperation;

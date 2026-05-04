@@ -6,7 +6,7 @@ import type { MeltQuoteRepository } from '../../repositories';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import { OutputData, type Proof } from '@cashu/cashu-ts';
+import { Amount, OutputData, type Proof } from '@cashu/cashu-ts';
 import type { MeltQuote } from '../../models/MeltQuote';
 
 describe('MeltQuoteService.payMeltQuote', () => {
@@ -23,7 +23,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
   const makeProof = (amount: number, secret: string): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       secret,
       C: 'C_' as any,
       id: 'keyset-1',
@@ -138,7 +138,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-1'], 'spent');
 
     // Verify meltProofsBolt11 was called with selected proofs (not swapped proofs)
-    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(
+      { ...quote, amount: Amount.from(quote.amount), fee_reserve: Amount.from(quote.fee_reserve) },
+      selectedProofs,
+    );
 
     // Verify createOutputsAndIncrementCounters was NOT called (no swap needed)
     expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
@@ -257,7 +260,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     // Verify meltProofsBolt11 was called with swapped proofs (not original selected proofs)
     expect(meltProofsBolt11Spy).toHaveBeenCalledWith(
-      quote,
+      { ...quote, amount: Amount.from(quote.amount), fee_reserve: Amount.from(quote.fee_reserve) },
       swappedProofs,
       undefined,
       expectedBlankOutputType,
@@ -356,7 +359,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     );
 
     // Verify meltProofsBolt11 was called with all selected proofs
-    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(quote, selectedProofs);
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(
+      { ...quote, amount: Amount.from(quote.amount), fee_reserve: Amount.from(quote.fee_reserve) },
+      selectedProofs,
+    );
 
     // Verify no swap was performed
     expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
-import type { Wallet, Proof } from '@cashu/cashu-ts';
+import type { Proof, Wallet } from '@cashu/cashu-ts';
+import type { CoreProof } from '../../types';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -64,7 +65,7 @@ export interface PreparedContext<M extends MeltMethod = MeltMethod> extends Base
 export interface ExecuteContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: ExecutingMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
-  reservedProofs: Proof[];
+  reservedProofs: CoreProof[];
 }
 
 export interface PendingContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {

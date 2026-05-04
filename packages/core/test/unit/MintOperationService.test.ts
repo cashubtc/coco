@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { OutputData, type MintQuoteBolt11Response, type Proof } from '@cashu/cashu-ts';
+import { Amount, OutputData, type MintQuoteBolt11Response, type Proof } from '@cashu/cashu-ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
@@ -43,7 +43,7 @@ describe('MintOperationService', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -53,7 +53,7 @@ describe('MintOperationService', () => {
       keep: [
         new OutputData(
           {
-            amount: 10,
+            amount: Amount.from(10),
             id: keysetId,
             B_: `B_${secret}`,
           },
@@ -211,7 +211,7 @@ describe('MintOperationService', () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-imported',
       request: 'lnbc1imported',
-      amount: 12,
+      amount: Amount.from(12),
       unit: 'sat',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
@@ -221,7 +221,7 @@ describe('MintOperationService', () => {
       async ({ operation }: { operation: InitMintOperation }) => ({
         ...makePendingOp(operation.id),
         quoteId: importedQuote.quote,
-        amount: importedQuote.amount,
+        amount: importedQuote.amount.toNumber(),
         request: importedQuote.request,
         expiry: importedQuote.expiry,
         lastObservedRemoteState: importedQuote.state,
@@ -244,7 +244,7 @@ describe('MintOperationService', () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
-      amount: 12,
+      amount: Amount.from(12),
       unit: 'usd',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',

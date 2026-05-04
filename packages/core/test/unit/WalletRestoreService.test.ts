@@ -5,7 +5,7 @@ import type { CounterService } from '../../services/CounterService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
-import { Wallet, type Proof, type ProofState } from '@cashu/cashu-ts';
+import { Amount, Wallet, type Proof, type ProofState } from '@cashu/cashu-ts';
 
 describe('WalletRestoreService', () => {
   const mintUrl = 'https://mint.test';
@@ -21,7 +21,7 @@ describe('WalletRestoreService', () => {
 
   const makeProof = (amount: number, secret: string): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -96,7 +96,7 @@ describe('WalletRestoreService', () => {
       const mockCheckProofsStates = mock(() =>
         Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -164,7 +164,7 @@ describe('WalletRestoreService', () => {
           { state: 'UNSPENT' } as ProofState,
         ]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -237,7 +237,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
       );
       // Mock a negative fee to create a negative total (edge case scenario)
-      const mockGetFeesForProofs = mock(() => 10);
+      const mockGetFeesForProofs = mock(() => Amount.from(10));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
@@ -262,7 +262,7 @@ describe('WalletRestoreService', () => {
       const mockCheckProofsStates = mock(() =>
         Promise.resolve([{ state: 'UNSPENT' } as ProofState]),
       );
-      const mockGetFeesForProofs = mock(() => 1);
+      const mockGetFeesForProofs = mock(() => Amount.from(1));
 
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;

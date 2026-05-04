@@ -1,5 +1,6 @@
 import type { Logger } from '@core/logging';
-import { PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
+import { JSONInt, PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
+import { amountToNumber } from '@core/utils';
 import { PaymentRequestError } from '../models/Error';
 import type { ProofService } from '../services';
 import type {
@@ -86,7 +87,10 @@ export class PaymentRequestService {
       paymentRequest: decodedPaymentRequest,
       payableMints,
       allowedMints,
-      amount: decodedPaymentRequest.amount,
+      amount:
+        decodedPaymentRequest.amount === undefined
+          ? undefined
+          : amountToNumber(decodedPaymentRequest.amount),
       transport,
     };
   }
@@ -141,7 +145,7 @@ export class PaymentRequestService {
         const response = await fetch(transaction.request.transport.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(token),
+          body: JSONInt.stringify(token),
         });
         this.logger?.debug('HTTP payment request completed', {
           mintUrl: transaction.sendOperation.mintUrl,
@@ -195,7 +199,7 @@ export class PaymentRequestService {
 
   private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
     const balances = await this.proofService.getBalancesByMint({ trustedOnly: true });
-    const amount = paymentRequest.amount ?? 0;
+    const amount = paymentRequest.amount === undefined ? 0 : amountToNumber(paymentRequest.amount);
     const mintRequirement = paymentRequest.mints;
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {

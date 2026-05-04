@@ -1,4 +1,5 @@
 import type { Proof } from '@cashu/cashu-ts';
+import { sumProofAmounts } from '@core/utils';
 import type {
   ExecutingMeltOperation,
   FinalizeResult,
@@ -50,7 +51,7 @@ export const SWAP_THRESHOLD_RATIO = 1.1;
  * Calculate the total amount of a proof set.
  */
 export function sumProofs(proofs: Proof[]): number {
-  return proofs.reduce((sum, p) => sum + p.amount, 0);
+  return sumProofAmounts(proofs);
 }
 
 /**

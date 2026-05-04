@@ -5,6 +5,7 @@ import { MemoryRepositories } from '../../repositories/memory/index.ts';
 import type { ReceiveOperationRepository } from '../../repositories/index.ts';
 import type { FinalizedReceiveOperation } from '@core/operations/receive/ReceiveOperation.ts';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService.ts';
+import { sumProofAmounts } from '../../utils.ts';
 
 describe('ReceiveOperationService integration', () => {
   let sender: Manager;
@@ -69,6 +70,7 @@ describe('ReceiveOperationService integration', () => {
       method: 'bolt11',
       methodData: {},
     });
+    await sender.subscription.awaitMintQuotePaid(mintUrl, pendingMint.quoteId);
     await sender.ops.mint.execute(pendingMint.id);
 
     const preparedSend = await sender.ops.send.prepare({ mintUrl, amount: 30 });
@@ -89,7 +91,7 @@ describe('ReceiveOperationService integration', () => {
     expect(finalized.length).toBe(1);
     const op = finalized[0] as FinalizedReceiveOperation;
 
-    const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+    const tokenAmount = sumProofAmounts(token.proofs);
     expect(op?.amount).toBe(tokenAmount);
     expect(op?.outputData).toBeDefined();
   }, 30000);

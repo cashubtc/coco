@@ -1,6 +1,7 @@
 import {
   AuthManager,
   Mint,
+  normalizeProofAmounts,
   type AuthProvider,
   type OIDCAuth,
   type TokenResponse,
@@ -148,7 +149,7 @@ export class AuthService {
     auth.setCAT(session.accessToken);
 
     if (session.batPool?.length) {
-      auth.importPool(session.batPool, 'replace');
+      auth.importPool(normalizeProofAmounts(session.batPool), 'replace');
     }
 
     if (session.refreshToken) {

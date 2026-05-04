@@ -1,4 +1,9 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, OutputConfig } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type MeltQuoteBolt11Response,
+  type MeltQuoteState,
+  type OutputConfig,
+} from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
@@ -6,7 +11,7 @@ import type { WalletService } from './WalletService';
 import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
-import { mapProofToCoreProof } from '@core/utils';
+import { amountToNumber, mapProofToCoreProof, sumProofAmounts } from '@core/utils';
 import { UnknownMintError } from '../models/Error';
 
 export class MeltQuoteService {
@@ -54,7 +59,12 @@ export class MeltQuoteService {
     try {
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
       const quote = await wallet.createMeltQuoteBolt11(invoice);
-      await this.meltQuoteRepo.addMeltQuote({ ...quote, mintUrl });
+      await this.meltQuoteRepo.addMeltQuote({
+        ...quote,
+        amount: amountToNumber(quote.amount),
+        fee_reserve: amountToNumber(quote.fee_reserve),
+        mintUrl,
+      });
       await this.eventBus.emit('melt-quote:created', { mintUrl, quoteId: quote.quote, quote });
       return quote;
     } catch (err) {
@@ -85,13 +95,18 @@ export class MeltQuoteService {
         this.logger?.warn('Melt quote not found', { mintUrl, quoteId });
         throw new Error('Quote not found');
       }
+      const cashuQuote = {
+        ...quote,
+        amount: Amount.from(quote.amount),
+        fee_reserve: Amount.from(quote.fee_reserve),
+      };
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
-      let targetAmount = quote.amount + quote.fee_reserve;
+      let targetAmount = amountToNumber(quote.amount) + amountToNumber(quote.fee_reserve);
       const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount);
-      const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
+      const selectedInputFee = amountToNumber(wallet.getFeesForProofs(selectedProofs));
       targetAmount = targetAmount + selectedInputFee;
-      const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
+      const selectedAmount = sumProofAmounts(selectedProofs);
       if (selectedAmount < targetAmount) {
         this.logger?.warn('Insufficient proofs to cover melt amount with fee', {
           mintUrl,
@@ -114,7 +129,7 @@ export class MeltQuoteService {
           selectedProofs.map((proof) => proof.secret),
           'inflight',
         );
-        const { change } = await wallet.meltProofsBolt11(quote, selectedProofs);
+        const { change } = await wallet.meltProofsBolt11(cashuQuote, selectedProofs);
         await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
         await this.proofService.setProofState(
           mintUrl,
@@ -129,8 +144,9 @@ export class MeltQuoteService {
           targetAmount,
           selectedProofs,
         });
-        const swapFees = wallet.getFeesForProofs(selectedProofs);
-        const totalSendAmount = quote.amount + quote.fee_reserve + swapFees;
+        const swapFees = amountToNumber(wallet.getFeesForProofs(selectedProofs));
+        const totalSendAmount =
+          amountToNumber(quote.amount) + amountToNumber(quote.fee_reserve) + swapFees;
         if (selectedAmount < totalSendAmount) {
           this.logger?.warn('Insufficient proofs after fee calculation', {
             mintUrl,
@@ -141,11 +157,11 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
-        const sendAmount = quote.amount + quote.fee_reserve;
+        const sendAmount = amountToNumber(quote.amount) + amountToNumber(quote.fee_reserve);
         const keepAmount = selectedAmount - sendAmount - swapFees;
 
         // Create deterministic blank outputs for receiving change and reserve counters
-        const changeDelta = sendAmount - quote.amount;
+        const changeDelta = sendAmount - amountToNumber(quote.amount);
         const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl);
 
         const outputData = await this.proofService.createOutputsAndIncrementCounters(
@@ -189,7 +205,7 @@ export class MeltQuoteService {
           'inflight',
         );
 
-        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, {
+        const { change } = await wallet.meltProofsBolt11(cashuQuote, send, undefined, {
           type: 'custom',
           data: blankOutputs,
         });
@@ -201,7 +217,7 @@ export class MeltQuoteService {
         );
       }
       await this.setMeltQuoteState(mintUrl, quoteId, 'PAID');
-      await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote });
+      await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote: cashuQuote });
     } catch (err) {
       this.logger?.error('Failed to pay melt quote', { mintUrl, quoteId, err });
       throw err;

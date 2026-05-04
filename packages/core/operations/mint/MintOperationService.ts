@@ -30,7 +30,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import { amountToNumber, generateSubId, mapProofToCoreProof } from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
@@ -193,7 +193,8 @@ export class MintOperationService {
     methodData: MintMethodData = {},
     options?: { skipMintLock?: boolean },
   ): Promise<PendingMintOperation> {
-    if (!quote.amount || quote.amount <= 0) {
+    const quoteAmount = amountToNumber(quote.amount);
+    if (quoteAmount <= 0) {
       throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
     }
 
@@ -215,7 +216,7 @@ export class MintOperationService {
 
     const initOperation = await this.init(
       mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      { amount: quoteAmount, unit: quote.unit },
       method,
       methodData,
       { quoteId: quote.quote },

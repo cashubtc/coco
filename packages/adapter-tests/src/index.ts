@@ -6,6 +6,7 @@ import type {
   MeltOperation,
   AuthSession,
 } from '@cashu/coco-core';
+import { Amount } from '@cashu/cashu-ts';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;
@@ -305,8 +306,8 @@ export async function runAuthSessionRepositoryContract(
           refreshToken: 'refresh-xyz',
           scope: 'read write',
           batPool: [
-            { id: 'proof-1', amount: 1, secret: 's1', C: 'C1' },
-            { id: 'proof-2', amount: 2, secret: 's2', C: 'C2' },
+            { id: 'proof-1', amount: Amount.from(1), secret: 's1', C: 'C1' },
+            { id: 'proof-2', amount: Amount.from(2), secret: 's2', C: 'C2' },
           ] as AuthSession['batPool'],
         });
         await repo.saveSession(session);
@@ -317,6 +318,8 @@ export async function runAuthSessionRepositoryContract(
         expect(result!.scope).toBe('read write');
         expect(result!.batPool).toBeDefined();
         expect(result!.batPool!).toHaveLength(2);
+        expect(result!.batPool![0]!.amount.equals(1)).toBe(true);
+        expect(result!.batPool![1]!.amount.equals(2)).toBe(true);
       } finally {
         await dispose();
       }

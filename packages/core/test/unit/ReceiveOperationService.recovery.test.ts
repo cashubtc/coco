@@ -11,7 +11,8 @@ import type { MintService } from '../../services/MintService';
 import { TokenService } from '../../services/TokenService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
+import { Amount, type ProofState as CashuProofState, type Proof } from '@cashu/cashu-ts';
+import { sumProofAmounts } from '../../utils';
 import type { CoreProof } from '../../types';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
@@ -40,7 +41,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -63,7 +64,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     state: 'init',
     mintUrl,
     unit: 'sat',
-    amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
+    amount: sumProofAmounts(proofs),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
@@ -78,7 +79,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     state: 'prepared',
     mintUrl,
     unit: 'sat',
-    amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
+    amount: sumProofAmounts(proofs),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,

@@ -8,7 +8,7 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '../../operations/mint/MintOperation.ts';
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -60,7 +60,7 @@ describe('MintOpsApi', () => {
     quote = {
       quote: quoteId,
       request: 'lnbc1test',
-      amount: 10,
+      amount: Amount.from(10),
       unit: 'sat',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',

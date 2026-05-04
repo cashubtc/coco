@@ -1,4 +1,12 @@
-import { hashToCurve, OutputData, type Proof, type Token } from '@cashu/cashu-ts';
+import {
+  Amount,
+  hashToCurve,
+  OutputData,
+  sumProofs,
+  type AmountLike,
+  type Proof,
+  type Token,
+} from '@cashu/cashu-ts';
 import type { CoreProof, ProofState } from './types';
 import type { Logger } from './logging/Logger.ts';
 import { TokenValidationError } from './models/Error.ts';
@@ -37,6 +45,14 @@ export interface SerializedOutputData {
 // OutputData Serialization Functions
 // ============================================================================
 
+export function amountToNumber(amount: AmountLike): number {
+  return Amount.from(amount).toNumber();
+}
+
+export function sumProofAmounts(proofs: Array<{ amount: AmountLike }>): number {
+  return amountToNumber(sumProofs(proofs));
+}
+
 /**
  * Convert a Uint8Array to hex string
  */
@@ -63,7 +79,7 @@ function hexToUint8Array(hex: string): Uint8Array {
 export function serializeOutput(output: OutputData): SerializedOutput {
   return {
     blindedMessage: {
-      amount: output.blindedMessage.amount,
+      amount: amountToNumber(output.blindedMessage.amount),
       id: output.blindedMessage.id,
       B_: output.blindedMessage.B_,
     },
@@ -78,7 +94,7 @@ export function serializeOutput(output: OutputData): SerializedOutput {
 export function deserializeOutput(serialized: SerializedOutput): OutputData {
   return new OutputData(
     {
-      amount: serialized.blindedMessage.amount,
+      amount: Amount.from(serialized.blindedMessage.amount),
       id: serialized.blindedMessage.id,
       B_: serialized.blindedMessage.B_,
     },
@@ -143,6 +159,7 @@ export function mapProofToCoreProof(
 ): CoreProof[] {
   return proofs.map((p) => ({
     ...p,
+    amount: amountToNumber(p.amount),
     mintUrl,
     state,
     createdByOperationId: options?.createdByOperationId,
@@ -264,7 +281,7 @@ export function isValidToken(token: Token): void {
   if (token.proofs.length === 0) {
     throw new TokenValidationError('Token proofs are required');
   }
-  if (token.proofs.some((p) => !p.amount || p.amount <= 0)) {
+  if (token.proofs.some((p) => amountToNumber(p.amount) <= 0)) {
     throw new TokenValidationError('Token proofs must have a positive amount');
   }
 }

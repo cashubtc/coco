@@ -17,6 +17,7 @@ import type { MintQuoteState } from '@core/models/MintQuoteState';
 import type { Logger } from '@core/logging';
 import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
+import { amountToNumber } from '@core/utils';
 
 export class HistoryService {
   private readonly historyRepository: HistoryRepository;
@@ -277,7 +278,7 @@ export class HistoryService {
       type: 'melt',
       createdAt: Date.now(),
       unit: quote.unit,
-      amount: quote.amount,
+      amount: amountToNumber(quote.amount),
       mintUrl,
       quoteId,
       state: quote.state,

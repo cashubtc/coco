@@ -152,7 +152,7 @@ export interface MintQuoteRow {
   request: string;
   amount: number;
   unit: string;
-  expiry: number;
+  expiry: number | null;
   pubkey?: string | null;
 }
 

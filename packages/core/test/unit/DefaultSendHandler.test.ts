@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { type Proof, type Wallet, type OutputConfig } from '@cashu/cashu-ts';
+import { Amount, type Proof, type Wallet, type OutputConfig } from '@cashu/cashu-ts';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
+import { amountToNumber } from '../../utils';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -38,7 +39,7 @@ describe('DefaultSendHandler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -126,7 +127,7 @@ describe('DefaultSendHandler', () => {
     mockWallet = {
       selectProofsToSend: mock((proofs: Proof[], amount: number, includeFees: boolean) => {
         if (!includeFees) {
-          const exact = proofs.find((proof) => proof.amount === amount);
+          const exact = proofs.find((proof) => amountToNumber(proof.amount) === amount);
           if (exact) {
             return { send: [exact], keep: proofs.filter((proof) => proof.secret !== exact.secret) };
           }
@@ -137,7 +138,7 @@ describe('DefaultSendHandler', () => {
         for (const proof of proofs) {
           if (total >= amount) break;
           send.push(proof);
-          total += proof.amount;
+          total += amountToNumber(proof.amount);
         }
 
         return {
@@ -225,11 +226,11 @@ describe('DefaultSendHandler', () => {
 
   const buildExecuteContext = (
     operation: ExecutingSendOperation,
-    reservedProofs: Proof[] = [],
+    reservedProofs: Array<CoreProof | Proof> = [],
   ): ExecuteContext => ({
     operation,
     wallet: mockWallet,
-    reservedProofs,
+    reservedProofs: reservedProofs as CoreProof[],
     proofRepository,
     proofService,
     walletService,

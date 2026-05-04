@@ -1,3 +1,4 @@
+import { deserializeProofs, serializeProofs } from '@cashu/cashu-ts';
 import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
@@ -17,7 +18,7 @@ function rowToSession(row: AuthSessionRow): AuthSession {
     refreshToken: row.refreshToken ?? undefined,
     expiresAt: row.expiresAt,
     scope: row.scope ?? undefined,
-    batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
+    batPool: row.batPoolJson ? deserializeProofs(row.batPoolJson) : undefined,
   };
 }
 
@@ -53,7 +54,7 @@ export class SqliteAuthSessionRepository implements AuthSessionRepository {
         session.refreshToken ?? null,
         session.expiresAt,
         session.scope ?? null,
-        session.batPool ? JSON.stringify(session.batPool) : null,
+        session.batPool ? JSON.stringify(serializeProofs(session.batPool)) : null,
       ],
     );
   }

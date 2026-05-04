@@ -22,12 +22,12 @@ import type {
   RollbackContext,
   RecoverExecutingContext,
 } from '../../operations/send/SendMethodHandler';
-import type { Wallet, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { Amount, type Wallet, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 
 describe('P2pkSendHandler', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
-  const testPubkey = '02abc123def456...'; // Example P2PK pubkey
+  const testPubkey = '02' + '11'.repeat(32);
 
   let handler: P2pkSendHandler;
   let proofRepository: ProofRepository;
@@ -44,7 +44,7 @@ describe('P2pkSendHandler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -233,11 +233,11 @@ describe('P2pkSendHandler', () => {
 
   const buildExecuteContext = (
     operation: ExecutingSendOperation,
-    reservedProofs: Proof[] = [],
+    reservedProofs: Array<CoreProof | Proof> = [],
   ): ExecuteContext => ({
     operation,
     wallet: mockWallet,
-    reservedProofs,
+    reservedProofs: reservedProofs as CoreProof[],
     proofRepository,
     proofService,
     walletService,
@@ -411,7 +411,7 @@ describe('P2pkSendHandler', () => {
       });
 
       it('should pass the correct pubkey from methodData', async () => {
-        const customPubkey = '03custom_pubkey_hex...';
+        const customPubkey = '03' + '22'.repeat(32);
         const operation = makeExecutingOp('op-1', {
           methodData: { pubkey: customPubkey },
           inputProofSecrets: ['input-1', 'input-2'],

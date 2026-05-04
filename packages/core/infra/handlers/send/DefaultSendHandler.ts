@@ -1,4 +1,4 @@
-import type { Token, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { normalizeProofAmounts, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -15,10 +15,12 @@ import type {
 } from '../../../operations/send/SendOperation';
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
 import {
+  amountToNumber,
   mapProofToCoreProof,
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  sumProofAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -36,7 +38,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Try exact match first (no swap needed)
     const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
-    const exactAmount = exactProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+    const exactAmount = sumProofAmounts(exactProofs);
     const needsSwap = exactAmount !== amount || exactProofs.length === 0;
 
     let selectedProofs: Proof[];
@@ -56,8 +58,8 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
       const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
       selectedProofs = selected;
-      const selectedAmount = selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-      fee = wallet.getFeesForProofs(selectedProofs);
+      const selectedAmount = sumProofAmounts(selectedProofs);
+      fee = amountToNumber(wallet.getFeesForProofs(selectedProofs));
       const keepAmount = selectedAmount - amount - fee;
 
       // Use ProofService to create outputs and increment counters
@@ -99,7 +101,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       error: operation.error,
       needsSwap,
       fee,
-      inputAmount: selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0),
+      inputAmount: sumProofAmounts(selectedProofs),
       inputProofSecrets: inputSecrets,
       outputData: serializedOutputData,
       method: operation.method,
@@ -123,7 +125,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const { operation, wallet, reservedProofs, proofService, logger } = ctx;
     const { mintUrl, amount, needsSwap, inputProofSecrets } = operation;
 
-    const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
+    const inputProofs = reservedProofs.filter((p) => inputProofSecrets.includes(p.secret));
 
     if (inputProofs.length !== inputProofSecrets.length) {
       throw new Error('Could not find all reserved proofs');
@@ -134,7 +136,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     if (!needsSwap) {
       // Exact match - just use the proofs directly
-      sendProofs = inputProofs;
+      sendProofs = normalizeProofAmounts(inputProofs);
       logger?.debug('Executing exact match send', {
         operationId: operation.id,
         proofCount: sendProofs.length,
@@ -247,8 +249,8 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         );
 
         if (sendProofs.length > 0) {
-          const totalAmount = sendProofs.reduce((acc: number, p: CoreProof) => acc + p.amount, 0);
-          const fee = wallet.getFeesForProofs(sendProofs);
+          const totalAmount = sumProofAmounts(sendProofs);
+          const fee = amountToNumber(wallet.getFeesForProofs(sendProofs));
           const reclaimAmount = totalAmount - fee;
 
           if (reclaimAmount > 0) {
@@ -260,7 +262,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
             // Swap to reclaim
             const keep = await wallet.receive(
-              { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
+              { mint: mintUrl, proofs: normalizeProofAmounts(sendProofs), unit: wallet.unit },
               undefined,
               { type: 'custom', data: outputResult.keep },
             );

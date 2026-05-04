@@ -1,3 +1,4 @@
+import { JSONInt, normalizeProofAmounts, type Token } from '@cashu/cashu-ts';
 import type {
   SendOperationRepository,
   SendOperation,
@@ -25,12 +26,14 @@ interface SendOperationRow {
 }
 
 function parseToken(tokenJson: string | null): unknown {
-  return tokenJson ? JSON.parse(tokenJson) : undefined;
+  if (!tokenJson) return undefined;
+  const token = JSONInt.parse(tokenJson) as Token;
+  return { ...token, proofs: normalizeProofAmounts(token.proofs) };
 }
 
 function serializeToken(operation: SendOperation): string | null {
   const maybeTokenOperation = operation as SendOperation & { token?: unknown };
-  return maybeTokenOperation.token ? JSON.stringify(maybeTokenOperation.token) : null;
+  return maybeTokenOperation.token ? (JSONInt.stringify(maybeTokenOperation.token) ?? null) : null;
 }
 
 function rowToOperation(row: SendOperationRow): SendOperation {

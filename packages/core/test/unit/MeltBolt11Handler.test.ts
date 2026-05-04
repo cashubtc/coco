@@ -1,4 +1,4 @@
-import type { Proof, SerializedBlindedSignature, Wallet } from '@cashu/cashu-ts';
+import { Amount, type Proof, type SerializedBlindedSignature, type Wallet } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -49,7 +49,7 @@ describe('MeltBolt11Handler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -165,11 +165,11 @@ describe('MeltBolt11Handler', () => {
 
     // Mock wallet
     mockWallet = {
-      createMeltQuote: mock(() =>
+      createMeltQuoteBolt11: mock(() =>
         Promise.resolve({
           quote: 'quote-123',
-          amount: 100,
-          fee_reserve: 10,
+          amount: Amount.from(100),
+          fee_reserve: Amount.from(10),
           unit: 'sat',
         }),
       ),
@@ -272,11 +272,11 @@ describe('MeltBolt11Handler', () => {
 
   const buildExecuteContext = (
     operation: ExecutingMeltOperation & MeltMethodMeta<'bolt11'>,
-    reservedProofs: Proof[] = [],
+    reservedProofs: Array<CoreProof | Proof> = [],
   ): ExecuteContext<'bolt11'> => ({
     operation,
     wallet: mockWallet,
-    reservedProofs,
+    reservedProofs: reservedProofs as CoreProof[],
     proofRepository,
     proofService,
     walletService,
@@ -661,7 +661,7 @@ describe('MeltBolt11Handler', () => {
         );
 
         const changeSignatures: SerializedBlindedSignature[] = [
-          { id: keysetId, amount: 10, C_: 'C_change' },
+          { id: keysetId, amount: Amount.from(10), C_: 'C_change' },
         ];
         (mintAdapter.customMeltBolt11 as Mock<any>).mockImplementation(() =>
           Promise.resolve({ state: 'PAID', change: changeSignatures }),
@@ -692,7 +692,7 @@ describe('MeltBolt11Handler', () => {
       });
 
       const changeSignatures: SerializedBlindedSignature[] = [
-        { id: keysetId, amount: 5, C_: 'C_change' },
+        { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
       ];
       (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
         Promise.resolve({
@@ -906,7 +906,7 @@ describe('MeltBolt11Handler', () => {
         });
 
         const changeSignatures: SerializedBlindedSignature[] = [
-          { id: keysetId, amount: 5, C_: 'C_change' },
+          { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
         ];
         (mintAdapter.checkMeltQuoteState as Mock<any>).mockImplementation(() =>
           Promise.resolve('PAID'),

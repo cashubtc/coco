@@ -7,7 +7,7 @@ import { WalletRestoreService } from '../../services/WalletRestoreService';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { UnknownMintError } from '../../models/Error';
-import { getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
+import { Amount, getEncodedToken, OutputData, PaymentRequest } from '@cashu/cashu-ts';
 import type { Proof } from '@cashu/cashu-ts';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository, MemoryReceiveOperationRepository } from '@core/repositories';
@@ -28,13 +28,13 @@ describe('WalletApi - Trust Enforcement', () => {
   let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
-  const keysetId = 'keyset-1';
+  const keysetId = '009a1f293253e41e';
   const testProofs: Proof[] = [
     {
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret: 'secret-1',
-      C: 'C-1',
+      C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
     } as Proof,
   ];
 
@@ -42,7 +42,7 @@ describe('WalletApi - Trust Enforcement', () => {
     secrets.map(
       (secret) =>
         new OutputData(
-          { amount: 10, id: keysetId, B_: `B_${secret}` },
+          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
           BigInt(1),
           new TextEncoder().encode(secret),
         ),
@@ -58,7 +58,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
     mockMintService = {
       isTrustedMint: mock(async (mintUrl: string) => false),
-      addMintByUrl: mock(async () => ({ mint: {}, keysets: [{ id: 'keyset-1' }] })),
+      addMintByUrl: mock(async () => ({ mint: {}, keysets: [{ id: keysetId }] })),
       ensureUpdatedMint: mock(async () => ({
         mint: { url: testMintUrl },
         keysets: [
@@ -315,42 +315,42 @@ describe('WalletApi - Trust Enforcement', () => {
       expect(encodedToken).toBe(getEncodedToken(token));
     });
 
-    it('should encode tokens with V3 when version 3 is specified', () => {
+    it('should encode tokens as cashuB', () => {
       const token = {
         mint: testMintUrl,
         proofs: [
           {
             id: '009a1f293253e41e',
-            amount: 2,
+            amount: Amount.from(2),
             secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
             C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
           } as Proof,
         ],
       };
 
-      const encodedToken = walletApi.encodeToken(token, { version: 3 });
+      const encodedToken = walletApi.encodeToken(token);
 
-      expect(encodedToken).toStartWith('cashuA');
-      expect(encodedToken).toBe(getEncodedToken(token, { version: 3 }));
+      expect(encodedToken).toStartWith('cashuB');
+      expect(encodedToken).toBe(getEncodedToken(token));
     });
 
-    it('should encode tokens with V4 when version 4 is specified', () => {
+    it('should pass token encoding options through', () => {
       const v4Token = {
         mint: testMintUrl,
         proofs: [
           {
             id: '009a1f293253e41e',
-            amount: 2,
+            amount: Amount.from(2),
             secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
             C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
           } as Proof,
         ],
       };
 
-      const encodedToken = walletApi.encodeToken(v4Token, { version: 4 });
+      const encodedToken = walletApi.encodeToken(v4Token, { removeDleq: true });
 
       expect(encodedToken).toStartWith('cashuB');
-      expect(encodedToken).toBe(getEncodedToken(v4Token, { version: 4 }));
+      expect(encodedToken).toBe(getEncodedToken(v4Token, { removeDleq: true }));
     });
   });
 

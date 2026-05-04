@@ -41,7 +41,7 @@ interface MintIntentData {
 interface MintQuoteSnapshot {
   quoteId: string;
   request: string;
-  expiry: number;
+  expiry: number | null;
   pubkey?: string;
 }
 

@@ -1,3 +1,4 @@
+import { JSONInt } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
 
@@ -88,14 +89,14 @@ export class RequestRateLimiter {
     let body: unknown | undefined = undefined;
     if (requestBody !== undefined) {
       finalHeaders.set('Content-Type', 'application/json');
-      body = JSON.stringify(requestBody);
+      body = JSONInt.stringify(requestBody);
     }
 
     // Log request payload
     this.logger?.debug('Mint request', {
       method: init.method || 'GET',
       endpoint,
-      requestBody: requestBody ? JSON.stringify(requestBody, null, 2) : undefined,
+      requestBody: requestBody ? JSONInt.stringify(requestBody, undefined, 2) : undefined,
     });
 
     let response: Response;

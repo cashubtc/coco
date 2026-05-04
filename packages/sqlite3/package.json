@@ -27,6 +27,7 @@
     }
   },
   "dependencies": {
+    "@cashu/cashu-ts": "4.1.0",
     "better-sqlite3": "^12.6.2"
   },
   "scripts": {

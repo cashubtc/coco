@@ -3,12 +3,13 @@ import {
   type CheckStatePayload,
   type Keys,
   OutputData,
-  type Proof,
+  type ProofLike,
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
   type GetKeysetsResponse,
   type AuthProvider,
   type MintQuoteBolt11Response,
+  normalizeProofAmounts,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
@@ -105,23 +106,31 @@ export class MintAdapter {
 
   async customMeltBolt11(
     mintUrl: string,
-    proofsToSend: Proof[],
+    proofsToSend: ProofLike[],
     changeOutputs: OutputData[],
     quoteId: string,
   ): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
-    return cashuMint.meltBolt11({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+    return cashuMint.meltBolt11({
+      quote: quoteId,
+      inputs: normalizeProofAmounts(proofsToSend),
+      outputs: blindedMessages,
+    });
   }
 
   async customMeltBolt12(
     mintUrl: string,
-    proofsToSend: Proof[],
+    proofsToSend: ProofLike[],
     changeOutputs: OutputData[],
     quoteId: string,
   ): Promise<MeltQuoteBolt12Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
-    return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+    return cashuMint.meltBolt12({
+      quote: quoteId,
+      inputs: normalizeProofAmounts(proofsToSend),
+      outputs: blindedMessages,
+    });
   }
 }

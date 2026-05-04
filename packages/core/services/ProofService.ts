@@ -23,7 +23,13 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import {
+  amountToNumber,
+  deserializeOutputData,
+  mapProofToCoreProof,
+  sumProofAmounts,
+  type SerializedOutputData,
+} from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 export class ProofService {
@@ -66,12 +72,14 @@ export class ProofService {
     let denominations = splitAmount(sendAmount, keys.keys);
 
     // Calculate receiver fees (sender pays fees)
-    let receiveFee = wallet.getFeesForKeyset(denominations.length, keysetId);
+    let receiveFee = amountToNumber(wallet.getFeesForKeyset(denominations.length, keysetId));
     let receiveFeeAmounts = splitAmount(receiveFee, keys.keys);
 
     // Iterate until fee calculation stabilizes
     while (
-      wallet.getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId) >
+      amountToNumber(
+        wallet.getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId),
+      ) >
       receiveFee
     ) {
       receiveFee++;
@@ -597,7 +605,7 @@ export class ProofService {
     includeFees: boolean = true,
   ): Promise<Proof[]> {
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
-    const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
+    const totalAmount = sumProofAmounts(proofs);
     if (totalAmount < amount) {
       throw new ProofValidationError('Not enough proofs to send');
     }

@@ -11,7 +11,12 @@ import type {
   PendingMintCheckResult,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import {
+  amountToNumber,
+  deserializeOutputData,
+  mapProofToCoreProof,
+  serializeOutputData,
+} from '@core/utils';
 import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
@@ -20,14 +25,15 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
     const quote =
       ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
+    const quoteAmount = amountToNumber(quote.amount);
 
-    if (!quote.amount || quote.amount <= 0) {
+    if (quoteAmount <= 0) {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    if (quote.amount !== ctx.operation.amount) {
+    if (quoteAmount !== ctx.operation.amount) {
       throw new Error(
-        `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${ctx.operation.amount}`,
+        `Mint quote ${quote.quote} amount ${quoteAmount} does not match requested amount ${ctx.operation.amount}`,
       );
     }
 
@@ -40,7 +46,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
       ctx.operation.mintUrl,
       {
-        keep: quote.amount,
+        keep: quoteAmount,
         send: 0,
       },
     );
@@ -52,7 +58,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     return {
       ...ctx.operation,
       quoteId: quote.quote,
-      amount: quote.amount,
+      amount: quoteAmount,
       unit: quote.unit,
       request: quote.request,
       expiry: quote.expiry,

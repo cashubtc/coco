@@ -19,7 +19,12 @@ import type {
   PendingSendOperation,
 } from '../../operations/send/SendOperation';
 import { serializeOutputData } from '../../utils';
-import { OutputData, type Proof, type ProofState as CashuProofState } from '@cashu/cashu-ts';
+import {
+  Amount,
+  OutputData,
+  type Proof,
+  type ProofState as CashuProofState,
+} from '@cashu/cashu-ts';
 
 describe('SendOperationService - recoverPendingOperations', () => {
   const mintUrl = 'https://mint.test';
@@ -624,7 +629,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       expect(token?.proofs).toEqual([
         expect.objectContaining({
           id: keysetId,
-          amount: 20,
+          amount: Amount.from(20),
           secret: 'send-secret',
           C: 'C_send',
         }),

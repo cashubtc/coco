@@ -1,4 +1,10 @@
-import { type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
+import {
+  normalizeProofAmounts,
+  type Token,
+  type Proof,
+  type OutputConfig,
+  OutputData,
+} from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -16,10 +22,12 @@ import type {
 import { getSendProofSecrets, getKeepProofSecrets } from '../../../operations/send/SendOperation';
 import { ProofValidationError } from '../../../models/Error';
 import {
+  amountToNumber,
   mapProofToCoreProof,
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  sumProofAmounts,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -45,8 +53,8 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
     const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
-    const selectedAmount = selected.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-    const fee = wallet.getFeesForProofs(selected);
+    const selectedAmount = sumProofAmounts(selected);
+    const fee = amountToNumber(wallet.getFeesForProofs(selected));
     const keepAmount = selectedAmount - amount - fee;
 
     // Use ProofService to create outputs and increment counters
@@ -122,7 +130,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       throw new Error('P2PK send requires a pubkey in methodData');
     }
 
-    const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
+    const inputProofs = reservedProofs.filter((p) => inputProofSecrets.includes(p.secret));
 
     if (inputProofs.length !== inputProofSecrets.length) {
       throw new Error('Could not find all reserved proofs');
@@ -286,7 +294,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       });
     }
 
-    let sendProofs: Proof[] = existingProofs.filter((p: CoreProof) =>
+    let sendProofs: Array<CoreProof | Proof> = existingProofs.filter((p: CoreProof) =>
       outputSecrets.sendSecrets.includes(p.secret),
     );
     if (sendProofs.length === 0 && operation.outputData.send.length > 0) {
@@ -319,7 +327,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     if (sendProofs.length > 0) {
       token = {
         mint: operation.mintUrl,
-        proofs: sendProofs,
+        proofs: normalizeProofAmounts(sendProofs),
         unit: wallet.unit,
       };
     } else if (outputSecrets.sendSecrets.length > 0) {

@@ -1,3 +1,4 @@
+import { deserializeProofs, serializeProofs } from '@cashu/cashu-ts';
 import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
 import type { IdbDb, AuthSessionRow } from '../lib/db.ts';
 
@@ -19,7 +20,7 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
       refreshToken: row.refreshToken ?? undefined,
       expiresAt: row.expiresAt,
       scope: row.scope ?? undefined,
-      batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
+      batPool: row.batPoolJson ? deserializeProofs(row.batPoolJson) : undefined,
     };
   }
 
@@ -30,7 +31,7 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
       refreshToken: session.refreshToken ?? null,
       expiresAt: session.expiresAt,
       scope: session.scope ?? null,
-      batPoolJson: session.batPool ? JSON.stringify(session.batPool) : null,
+      batPoolJson: session.batPool ? JSON.stringify(serializeProofs(session.batPool)) : null,
     };
     await (this.db as any).table('coco_cashu_auth_sessions').put(row);
   }
@@ -49,7 +50,7 @@ export class IdbAuthSessionRepository implements AuthSessionRepository {
       refreshToken: row.refreshToken ?? undefined,
       expiresAt: row.expiresAt,
       scope: row.scope ?? undefined,
-      batPool: row.batPoolJson ? JSON.parse(row.batPoolJson) : undefined,
+      batPool: row.batPoolJson ? deserializeProofs(row.batPoolJson) : undefined,
     }));
   }
 }

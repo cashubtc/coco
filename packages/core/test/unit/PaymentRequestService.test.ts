@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
+import { Amount, PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
 import {
   PaymentRequestService,
   type PreparedPaymentRequest,
@@ -40,7 +40,7 @@ describe('PaymentRequestService', () => {
 
   const mockToken: Token = {
     mint: testMintUrl,
-    proofs: [{ id: 'keyset-1', amount: 100, secret: 'secret-1', C: 'C-1' }],
+    proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'secret-1', C: 'C-1' }],
   };
 
   const createMockPreparedSendOperation = (
@@ -234,7 +234,7 @@ describe('PaymentRequestService', () => {
       expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 750);
       expect(transaction.request).not.toBe(request);
       expect(transaction.request.amount).toBe(750);
-      expect(transaction.request.paymentRequest.amount).toBe(750);
+      expect(transaction.request.paymentRequest.amount?.toNumber()).toBe(750);
       expect(transaction.request.payableMints).toEqual([testMintUrl]);
     });
 

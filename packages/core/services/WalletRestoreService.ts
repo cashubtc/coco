@@ -1,5 +1,5 @@
 import { type Proof, Mint, Wallet, type OutputConfig } from '@cashu/cashu-ts';
-import { mapProofToCoreProof } from '@core/utils';
+import { amountToNumber, mapProofToCoreProof, sumProofAmounts } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
 import type { Logger } from '../logging/Logger.ts';
@@ -98,8 +98,8 @@ export class WalletRestoreService {
       return;
     }
 
-    const sweepFee = sweepWallet.getFeesForProofs(checkedProofs.ready);
-    const sweepAmount = checkedProofs.ready.reduce((acc, proof) => acc + proof.amount, 0);
+    const sweepFee = amountToNumber(sweepWallet.getFeesForProofs(checkedProofs.ready));
+    const sweepAmount = sumProofAmounts(checkedProofs.ready);
     const sweepTotalAmount = sweepAmount - sweepFee;
 
     if (sweepTotalAmount < 0) {

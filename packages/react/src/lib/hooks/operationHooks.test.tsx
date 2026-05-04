@@ -1,4 +1,5 @@
 import type { Manager } from '@cashu/coco-core';
+import { Amount } from '@cashu/cashu-ts';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { useLayoutEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -73,7 +74,7 @@ const MINT_IMPORT_QUOTE_INPUT: MintOperationImportQuoteInput = {
     request: 'lnbc1importquote',
     expiry: 1_700_000_100_000,
     state: 'UNPAID',
-    amount: 100,
+    amount: Amount.from(100),
     unit: 'sat',
   },
 };

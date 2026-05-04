@@ -28,6 +28,7 @@
     }
   },
   "dependencies": {
+    "@cashu/cashu-ts": "4.1.0",
     "dexie": "^4.0.8"
   },
   "scripts": {

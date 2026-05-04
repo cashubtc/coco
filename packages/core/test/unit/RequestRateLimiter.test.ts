@@ -55,6 +55,25 @@ describe('RequestRateLimiter', () => {
     expect(hdrs.get('Content-Type')).toBe('application/json');
   });
 
+  it('serializes bigint values in cashu-ts request payloads', async () => {
+    const calls: Array<{ input: any; init?: any }> = [];
+    // @ts-ignore
+    globalThis.fetch = async (input: any, init?: RequestInit) => {
+      calls.push({ input, init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    const limiter = new RequestRateLimiter();
+
+    await limiter.request({
+      endpoint: 'https://mint.test/v1/swap',
+      method: 'POST',
+      requestBody: { amount: 1n },
+    });
+
+    expect(calls[0]?.init?.body).toBe('{"amount":1}');
+  });
+
   it('throws HttpResponseError with status and message on non-OK responses', async () => {
     // @ts-ignore
     globalThis.fetch = async () => {

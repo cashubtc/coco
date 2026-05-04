@@ -1,4 +1,5 @@
-import type { Wallet, Proof, Token } from '@cashu/cashu-ts';
+import type { Wallet, Token } from '@cashu/cashu-ts';
+import type { CoreProof } from '../../types';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -57,7 +58,7 @@ export interface PreparedContext extends BaseHandlerDeps {
 export interface ExecuteContext extends BaseHandlerDeps {
   operation: ExecutingSendOperation;
   wallet: Wallet;
-  reservedProofs: Proof[];
+  reservedProofs: CoreProof[];
 }
 
 export interface PendingContext extends BaseHandlerDeps {

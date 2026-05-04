@@ -4,6 +4,8 @@ import {
   Mint,
   Wallet,
   OutputData,
+  sumProofs,
+  type AmountLike,
   type OutputConfig,
   PaymentRequest,
   PaymentRequestTransportType,
@@ -15,7 +17,7 @@ import {
 } from '@cashu/cashu-ts';
 import { createFakeInvoice } from 'fake-bolt11';
 
-export type OutputDataFactory = (amount: number, keys: MintKeys | HasKeysetKeys) => OutputData;
+export type OutputDataFactory = (amount: AmountLike, keys: MintKeys | HasKeysetKeys) => OutputData;
 
 export type IntegrationTestRunner = {
   describe(name: string, fn: () => void): void;
@@ -495,7 +497,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           mgr!.once('send:pending', (payload) => {
             expect(payload.mintUrl).toBe(mintUrl);
             expect(payload.token.proofs.length).toBeGreaterThan(0);
-            const tokenAmount = payload.token.proofs.reduce((sum, p) => sum + p.amount, 0);
+            const tokenAmount = sumProofs(payload.token.proofs).toNumber();
             expect(tokenAmount).toBeGreaterThanOrEqual(sendAmount);
             resolve(payload);
           });
@@ -586,9 +588,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const op = await mgr!.ops.receive.execute(prepOp.id);
 
-        const tokenAmount = token.proofs.reduce((sum: number, proof: { amount: number }) => {
-          return sum + proof.amount;
-        }, 0);
+        const tokenAmount = sumProofs(token.proofs).toNumber();
         expect(op.state).toBe('finalized');
 
         expect(await getMintSpendableBalance(mgr!, mintUrl)).toBeGreaterThan(preBalance);
@@ -626,8 +626,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(decodedToken.mint).toBe(token.mint);
         expect(decodedToken.proofs).toHaveLength(token.proofs.length);
 
-        const decodedAmount = decodedToken.proofs.reduce((sum, proof) => sum + proof.amount, 0);
-        const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+        const decodedAmount = sumProofs(decodedToken.proofs).toNumber();
+        const tokenAmount = sumProofs(token.proofs).toNumber();
         expect(decodedAmount).toBe(tokenAmount);
       });
 
@@ -2642,7 +2642,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(receivedToken!.mint).toBe(mintUrl);
         expect(receivedToken!.proofs.length).toBeGreaterThan(0);
 
-        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        const tokenAmount = sumProofs(receivedToken!.proofs).toNumber();
         expect(tokenAmount).toBeGreaterThanOrEqual(30);
 
         // Balance should have decreased
@@ -2679,7 +2679,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(receivedToken).toBeDefined();
         expect(receivedToken!.mint).toBe(mintUrl);
 
-        const tokenAmount = receivedToken!.proofs.reduce((sum, p) => sum + p.amount, 0);
+        const tokenAmount = sumProofs(receivedToken!.proofs).toNumber();
         expect(tokenAmount).toBeGreaterThanOrEqual(25);
       });
 

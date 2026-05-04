@@ -61,6 +61,7 @@ import {
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
+import { Amount } from '@cashu/cashu-ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -492,7 +493,7 @@ export class Manager {
       try {
         const operation = await this.mintOperationService.importQuote(
           quote.mintUrl,
-          quote,
+          { ...quote, amount: Amount.from(quote.amount) },
           'bolt11',
           {},
         );

@@ -13,7 +13,7 @@ import { HistoryService } from '../../services/HistoryService';
 import type { ProofService } from '../../services/ProofService';
 import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
-import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
+import { Amount, OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import {
   MintOperationError,
   NetworkError,
@@ -50,7 +50,7 @@ describe('ReceiveOperationService', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -59,7 +59,7 @@ describe('ReceiveOperationService', () => {
     secrets.map(
       (secret) =>
         new OutputData(
-          { amount: 10, id: keysetId, B_: `B_${secret}` },
+          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
           BigInt(1),
           new TextEncoder().encode(secret),
         ),
@@ -291,7 +291,7 @@ describe('ReceiveOperationService', () => {
   });
 
   it('init rejects tokens with non-positive amount', async () => {
-    const zeroProof = { ...makeProof('p1'), amount: 0 } as Proof;
+    const zeroProof = { ...makeProof('p1'), amount: Amount.zero() } as Proof;
     const token: Token = { mint: mintUrl, proofs: [zeroProof] } as Token;
 
     expect(service.init(token)).rejects.toThrow(ProofValidationError);

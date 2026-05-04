@@ -31,7 +31,8 @@ export interface BalanceBreakdown {
  */
 export type BalancesBreakdownByMint = { [mintUrl: string]: BalanceBreakdown };
 
-export interface CoreProof extends Proof {
+export interface CoreProof extends Omit<Proof, 'amount'> {
+  amount: number;
   mintUrl: string;
   state: ProofState;
 
