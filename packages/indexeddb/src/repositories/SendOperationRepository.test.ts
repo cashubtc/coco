@@ -2,6 +2,7 @@
 
 // @ts-ignore bun:test types are provided by the test runner in this workspace.
 import { describe, expect, it } from 'bun:test';
+import { Amount } from '@cashu/cashu-ts';
 import { IdbSendOperationRepository } from './SendOperationRepository.ts';
 import type { SendOperationRow } from '../lib/db.ts';
 
@@ -94,7 +95,7 @@ describe('IdbSendOperationRepository', () => {
       outputData: { keep: [], send: [] },
       token: {
         mint: 'https://mint.test',
-        proofs: [{ id: 'keyset-1', amount: 100, secret: 'send-secret', C: 'C_send' }],
+        proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
         unit: 'sat',
       },
     });

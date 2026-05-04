@@ -79,8 +79,7 @@ export class ProofService {
     while (
       amountToNumber(
         wallet.getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId),
-      ) >
-      receiveFee
+      ) > receiveFee
     ) {
       receiveFee++;
       receiveFeeAmounts = splitAmount(receiveFee, keys.keys);

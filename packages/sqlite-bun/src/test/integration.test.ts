@@ -1,4 +1,11 @@
-import { describe, it, beforeEach, afterEach, expect as bunExpect } from 'bun:test';
+import {
+  describe,
+  it,
+  beforeEach,
+  afterEach,
+  expect as bunExpect,
+  setDefaultTimeout,
+} from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { runIntegrationTests, type IntegrationTestRunner } from '@cashu/coco-adapter-tests';
 import { SqliteRepositories } from '../index.ts';
@@ -8,6 +15,8 @@ import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 const expect = bunExpect as unknown as IntegrationTestRunner['expect'];
 
 const mintUrl = process.env.MINT_URL;
+
+setDefaultTimeout(30_000);
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');

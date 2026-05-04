@@ -62,9 +62,14 @@ is_browser_test_package() {
 ensure_playwright_browsers() {
     log_info "Ensuring Playwright browsers are installed..."
     cd "$PROJECT_ROOT"
-    npx playwright install --with-deps chromium firefox webkit 2>/dev/null || {
+    local playwright_bin="$PROJECT_ROOT/packages/indexeddb/node_modules/.bin/playwright"
+    if [ ! -x "$playwright_bin" ]; then
+        playwright_bin="npx playwright"
+    fi
+
+    $playwright_bin install --with-deps chromium firefox webkit 2>/dev/null || {
         log_warn "Failed to install all browsers, trying without deps..."
-        npx playwright install chromium firefox webkit || {
+        $playwright_bin install chromium firefox webkit || {
             log_error "Failed to install Playwright browsers"
             return 1
         }
@@ -95,7 +100,7 @@ start_mint_container() {
     local package_name=$1
     local port=$2
     local container_name="cdk-mint-${package_name}"
-    local mint_url="http://localhost:${port}"
+    local mint_url="http://127.0.0.1:${port}"
 
     log_info "Starting mint container for $package_name on port $port..."
 
@@ -157,7 +162,7 @@ run_test() {
     local test_pattern="${3:-}"
     local log_level="${4:-}"
     local test_file
-    local mint_url="http://localhost:${port}"
+    local mint_url="http://127.0.0.1:${port}"
 
     # Find the test file for this package
     test_file=$(discover_integration_tests | grep "^${package_name}|" | cut -d'|' -f2)

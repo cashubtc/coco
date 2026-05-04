@@ -1,9 +1,4 @@
-import type {
-  OutputConfig,
-  Proof,
-  ProofLike,
-  SerializedBlindedSignature,
-} from '@cashu/cashu-ts';
+import type { OutputConfig, Proof, ProofLike, SerializedBlindedSignature } from '@cashu/cashu-ts';
 import { MintOperationError } from '@core/models';
 import type {
   BasePrepareContext,
@@ -55,8 +50,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     meltAmount: number,
     changeProofs?: SerializedBlindedSignature[],
   ): { changeAmount: number; effectiveFee: number } {
-    const changeAmount =
-      changeProofs?.reduce((sum, p) => sum + amountToNumber(p.amount), 0) ?? 0;
+    const changeAmount = changeProofs?.reduce((sum, p) => sum + amountToNumber(p.amount), 0) ?? 0;
     const effectiveFee = meltInputAmount - meltAmount - changeAmount;
     return { changeAmount, effectiveFee };
   }

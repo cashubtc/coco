@@ -262,16 +262,20 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       return async () => seed;
     };
 
-    beforeEach(async () => {
-      seedGetter = await createSeedGetter();
-    });
-
-    afterEach(async () => {
+    const disposeManager = async () => {
       if (mgr) {
         await mgr.pauseSubscriptions();
         await mgr.dispose();
         mgr = undefined;
       }
+    };
+
+    beforeEach(async () => {
+      seedGetter = await createSeedGetter();
+    });
+
+    afterEach(async () => {
+      await disposeManager();
     });
 
     describe('Mint Management', () => {
@@ -482,6 +486,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -688,6 +693,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -742,6 +748,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -945,6 +952,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -1107,6 +1115,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -1309,6 +1318,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -1713,7 +1723,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           }
           await dispose();
         }
-      }, 20000);
+      }, 30000);
     });
 
     describe('Full Workflow Integration', () => {
@@ -2114,6 +2124,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
@@ -2558,6 +2569,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       afterEach(async () => {
+        await disposeManager();
         if (repositoriesDispose) {
           await repositoriesDispose();
           repositoriesDispose = undefined;
