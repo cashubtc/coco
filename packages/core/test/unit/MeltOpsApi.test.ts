@@ -148,9 +148,7 @@ describe('MeltOpsApi', () => {
 
     const result = await api.refresh(executingOperation.id);
 
-    expect(meltOperationService.recoverExecutingOperation).toHaveBeenCalledWith(
-      executingOperation,
-    );
+    expect(meltOperationService.recoverExecutingOperation).toHaveBeenCalledWith(executingOperation);
     expect(result).toBe(finalizedOperation);
   });
 
