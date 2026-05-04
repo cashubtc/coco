@@ -224,7 +224,20 @@ run_test() {
             unset VITE_TEST_LOG_LEVEL
         fi
 
-        if [ -n "$test_pattern" ]; then
+        if [ "$CI" = "true" ]; then
+            for browser in chromium firefox webkit; do
+                log_test "Running browser instance: $browser"
+                export VITEST_BROWSER="$browser"
+                if [ -n "$test_pattern" ]; then
+                    bun run test:browser -- --testNamePattern="$test_pattern" || test_result=$?
+                else
+                    bun run test:browser || test_result=$?
+                fi
+                if [ $test_result -ne 0 ]; then
+                    break
+                fi
+            done
+        elif [ -n "$test_pattern" ]; then
             bun run test:browser -- --testNamePattern="$test_pattern" || test_result=$?
         else
             bun run test:browser || test_result=$?
@@ -232,6 +245,7 @@ run_test() {
 
         unset VITE_MINT_URL
         unset VITE_TEST_LOG_LEVEL
+        unset VITEST_BROWSER
     else
         # Standard test command for non-browser packages (uses vitest or bun:test)
         export MINT_URL="$mint_url"
