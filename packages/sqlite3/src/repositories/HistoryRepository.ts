@@ -8,7 +8,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -30,6 +30,10 @@ type Row = {
   metadata: string | null;
   operationId: string | null;
 };
+
+function parseToken<TToken>(tokenJson: string | null): TToken | undefined {
+  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+}
 
 export class SqliteHistoryRepository implements HistoryRepository {
   private readonly db: SqliteDb;
@@ -367,10 +371,10 @@ export class SqliteHistoryRepository implements HistoryRepository {
         amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
+        token: parseToken<SendToken>(row.tokenJson),
       };
     }
-    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
+    const token = parseToken<ReceiveToken>(row.tokenJson);
     return {
       ...base,
       type: 'receive',

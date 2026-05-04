@@ -6,7 +6,7 @@ import type {
   ReceiveHistoryState,
   SendHistoryEntry,
 } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -41,6 +41,10 @@ type UpdatableHistoryEntry =
   | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
   | Omit<SendHistoryEntry, 'id' | 'createdAt'>
   | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
+
+function parseToken<TToken>(tokenJson: string | null): TToken | undefined {
+  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+}
 
 export class ExpoHistoryRepository {
   private readonly db: ExpoSqliteDb;
@@ -408,10 +412,10 @@ export class ExpoHistoryRepository {
         amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
+        token: parseToken<SendToken>(row.tokenJson),
       };
     }
-    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
+    const token = parseToken<ReceiveToken>(row.tokenJson);
     return {
       ...base,
       type: 'receive',

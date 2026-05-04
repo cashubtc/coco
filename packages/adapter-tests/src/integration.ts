@@ -985,6 +985,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(sendEntry.amount).toBe(sendAmount);
           expect(sendEntry.token).toBeDefined();
           expect(sendEntry.token!.proofs.length).toBeGreaterThan(0);
+          expect(typeof sendEntry.token!.proofs[0]!.amount.toNumber).toBe('function');
         }
       });
 
@@ -1050,6 +1051,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             finalizedReceive.id,
           );
           expect(receiveEntry.amount).toBe(finalizedReceive.amount);
+          expect(receiveEntry.token).toBeDefined();
+          expect(receiveEntry.token!.proofs.length).toBeGreaterThan(0);
+          expect(typeof receiveEntry.token!.proofs[0]!.amount.toNumber).toBe('function');
         }
       });
 

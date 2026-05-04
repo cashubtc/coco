@@ -8,7 +8,7 @@ import type {
   SendHistoryEntry,
   SendHistoryState,
 } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb } from '../lib/db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -27,6 +27,10 @@ type UpdatableHistoryEntry =
   | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
   | Omit<SendHistoryEntry, 'id' | 'createdAt'>
   | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
+
+function parseToken<TToken>(tokenJson: string | null | undefined): TToken | undefined {
+  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+}
 
 export class IdbHistoryRepository {
   private readonly db: IdbDb;
@@ -285,10 +289,10 @@ export class IdbHistoryRepository {
         amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
+        token: parseToken<SendToken>(row.tokenJson),
       };
     }
-    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
+    const token = parseToken<ReceiveToken>(row.tokenJson);
     return {
       ...base,
       type: 'receive',
