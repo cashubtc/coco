@@ -219,7 +219,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `restore(mintUrl: string): Promise<void>`
 - `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
-- `encodeToken(token: Token, opts?: { version?: 3 | 4 }): string`
+- `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`
 
 ### AuthApi
@@ -236,7 +236,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### PaymentRequestsApi
 
 - `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
-- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: number }): Promise<PreparedPaymentRequest>`
+- `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: AmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 
 ### SubscriptionApi
