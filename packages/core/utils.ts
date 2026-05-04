@@ -314,7 +314,7 @@ export function isValidToken(token: Token): void {
   if (token.proofs.length === 0) {
     throw new TokenValidationError('Token proofs are required');
   }
-  if (token.proofs.some((p) => !p.amount || Amount.from(p.amount).isZero())) {
+  if (token.proofs.some((p) => p.amount == null || Amount.from(p.amount).isZero())) {
     throw new TokenValidationError('Token proofs must have a positive amount');
   }
 }
