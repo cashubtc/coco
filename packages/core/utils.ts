@@ -169,12 +169,6 @@ export function serializeAmount(value: AmountLike): string {
 }
 
 export function deserializeAmount(value: string | number | bigint | Amount): Amount {
-  if (typeof value === 'string') {
-    const legacyIntegerDecimal = value.match(/^([0-9]+)\.0+$/);
-    if (legacyIntegerDecimal?.[1]) {
-      return Amount.from(legacyIntegerDecimal[1]);
-    }
-  }
   return Amount.from(value);
 }
 
