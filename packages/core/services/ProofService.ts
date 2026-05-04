@@ -5,7 +5,6 @@ import {
   sumProofs,
   type AmountLike,
   type Keys,
-  type MintKeys,
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';

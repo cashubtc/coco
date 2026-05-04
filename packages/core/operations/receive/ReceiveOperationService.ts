@@ -1,5 +1,4 @@
 import {
-  getDecodedToken,
   getTokenMetadata,
   sumProofs,
   type Proof,
