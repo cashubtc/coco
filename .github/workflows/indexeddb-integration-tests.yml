@@ -31,4 +31,3 @@ jobs:
         run: ./scripts/test-integration.sh indexeddb
         env:
           CI: true
-          INDEXEDDB_TEST_BROWSERS: firefox

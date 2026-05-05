@@ -1,12 +1,18 @@
 import type { Repositories, Manager, Logger } from '@cashu/coco-core';
 import { initializeCoco, getEncodedToken, ConsoleLogger } from '@cashu/coco-core';
 import {
+  HttpResponseError,
+  JSONInt,
   Mint,
+  MintOperationError,
+  NetworkError,
   Wallet,
   OutputData,
   Amount,
   type AmountLike,
   type OutputConfig,
+  type RequestFn,
+  type RequestOptions,
   PaymentRequest,
   PaymentRequestTransportType,
   type MintKeys,
@@ -74,6 +80,22 @@ type FinalizedReceiveEventPayload = {
   operation: Awaited<ReturnType<Manager['ops']['receive']['execute']>>;
 };
 
+type FetchResponse = {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+};
+
+declare function fetch(
+  endpoint: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: unknown;
+  },
+): Promise<FetchResponse>;
+
 function expectAmountEquals(
   expect: Expectation,
   actual: Amount | null | undefined,
@@ -81,6 +103,89 @@ function expectAmountEquals(
 ): void {
   expect(actual).toBeDefined();
   expect(actual!.equals(Amount.from(expected))).toBe(true);
+}
+
+// TODO: Revisit this shim once cashu-ts default browser requests are stable in Firefox/WebKit.
+const testMintRequest: RequestFn = async <T>(options: RequestOptions): Promise<T> => {
+  const {
+    endpoint,
+    requestBody,
+    headers,
+    onResponseMeta,
+    requestTimeout,
+    cached_endpoints,
+    ttl,
+    logger,
+    ...init
+  } = options;
+  void onResponseMeta;
+  void requestTimeout;
+  void cached_endpoints;
+  void ttl;
+  void logger;
+
+  const body = requestBody === undefined ? undefined : JSONInt.stringify(requestBody);
+  if (requestBody !== undefined && body === undefined) {
+    throw new TypeError('Failed to serialize JSON body');
+  }
+
+  let response: FetchResponse;
+  try {
+    response = await fetch(endpoint, {
+      method: init.method,
+      signal: init.signal,
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...headers,
+      },
+      body,
+    });
+  } catch (error) {
+    throw new NetworkError(error instanceof Error ? error.message : 'Network request failed');
+  }
+
+  const text = await response.text();
+  const parseErrorData = (): Record<string, unknown> => {
+    if (!text) return {};
+    const parsed = JSONInt.parse(text);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  };
+
+  if (!response.ok) {
+    let errorData: Record<string, unknown>;
+    try {
+      errorData = parseErrorData();
+    } catch {
+      errorData = { detail: text };
+    }
+
+    if (
+      response.status === 400 &&
+      typeof errorData.code === 'number' &&
+      typeof errorData.detail === 'string'
+    ) {
+      throw new MintOperationError(errorData.code, errorData.detail);
+    }
+
+    const message =
+      typeof errorData.error === 'string'
+        ? errorData.error
+        : typeof errorData.detail === 'string'
+          ? errorData.detail
+          : 'HTTP request failed';
+    throw new HttpResponseError(message, response.status);
+  }
+
+  try {
+    return (text ? JSONInt.parse(text) : {}) as T;
+  } catch {
+    throw new HttpResponseError('bad response', response.status);
+  }
+};
+
+function createTestMint(mintUrl: string): Mint {
+  return new Mint(mintUrl, { customRequest: testMintRequest });
 }
 
 const watcherTestSubscriptions = {
@@ -891,7 +996,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             effectiveFee?: Amount;
             finalizedData?: { preimage?: string };
           };
-          const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
+          const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
           const expectedPreimage = meltQuote.payment_preimage ?? undefined;
           expect(settlement.changeAmount).toBeDefined();
           expect(settlement.effectiveFee).toBeDefined();
@@ -931,7 +1036,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
               effectiveFee?: Amount;
               finalizedData?: { preimage?: string };
             };
-            const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
+            const meltQuote = await createTestMint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
             const expectedPreimage = meltQuote.payment_preimage ?? undefined;
             expect(operationAfterRetry!.state).toBe('finalized');
             expect(settlement.changeAmount).toBeDefined();
@@ -2158,7 +2263,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(keypair.publicKeyHex).toBeDefined();
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = new Wallet(createTestMint(mintUrl));
         await senderWallet.loadMint();
 
         // Fund the sender wallet
@@ -2219,7 +2324,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect('secretKey' in keypair).toBe(false);
 
         // Create a sender wallet with cashu-ts
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = new Wallet(createTestMint(mintUrl));
         await senderWallet.loadMint();
 
         // Fund the sender wallet
@@ -2276,7 +2381,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should fail to receive P2PK token without the private key', async () => {
         // Create a sender wallet with cashu-ts
         const senderSeed = crypto.getRandomValues(new Uint8Array(64));
-        const senderWallet = new Wallet(new Mint(mintUrl), {
+        const senderWallet = new Wallet(createTestMint(mintUrl), {
           bip39seed: senderSeed,
         });
         await senderWallet.loadMint();
@@ -2432,7 +2537,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const keypair2 = await mgr!.keyring.generateKeyPair();
 
         // Create sender wallet
-        const senderWallet = new Wallet(new Mint(mintUrl));
+        const senderWallet = new Wallet(createTestMint(mintUrl));
         await senderWallet.loadMint();
         const keyset = senderWallet.keyChain.getCheapestKeyset();
 
@@ -2501,7 +2606,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           // Create a separate wallet with a different seed that has funds
           const toBeSweptSeed = crypto.getRandomValues(new Uint8Array(64));
-          const baseWallet = new Wallet(new Mint(mintUrl), {
+          const baseWallet = new Wallet(createTestMint(mintUrl), {
             bip39seed: toBeSweptSeed,
           });
           await baseWallet.loadMint();
