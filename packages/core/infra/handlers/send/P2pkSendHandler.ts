@@ -47,7 +47,11 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
     const selectedAmount = sumProofs(selected);
     const fee = wallet.getFeesForProofs(selected);
-    const keepAmount = selectedAmount.subtract(amount).subtract(fee);
+    const requiredAmount = amount.add(fee);
+    if (selectedAmount.lessThan(requiredAmount)) {
+      throw new ProofValidationError('Send amount is not sufficient after fees');
+    }
+    const keepAmount = selectedAmount.subtract(requiredAmount);
 
     // Use ProofService to create outputs and increment counters
     const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {

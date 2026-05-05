@@ -21,6 +21,7 @@ import {
   getSecretsFromSerializedOutputData,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
+import { ProofValidationError } from '../../../models/Error';
 
 /**
  * Default send handler for standard (unlocked) token sends.
@@ -58,7 +59,11 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       selectedProofs = selected;
       const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);
-      const keepAmount = selectedAmount.subtract(amount).subtract(fee);
+      const requiredAmount = amount.add(fee);
+      if (selectedAmount.lessThan(requiredAmount)) {
+        throw new ProofValidationError('Send amount is not sufficient after fees');
+      }
+      const keepAmount = selectedAmount.subtract(requiredAmount);
 
       // Use ProofService to create outputs and increment counters
       const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
@@ -249,37 +254,45 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         if (sendProofs.length > 0) {
           const totalAmount = sumProofs(sendProofs);
           const fee = wallet.getFeesForProofs(sendProofs);
-          const reclaimAmount = totalAmount.subtract(fee);
-
-          if (!reclaimAmount.isZero()) {
-            // Use ProofService to create outputs for reclaim
-            const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
-              keep: reclaimAmount,
-              send: 0,
-            });
-
-            // Swap to reclaim
-            const keep = await wallet.receive(
-              { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
-              undefined,
-              { type: 'custom', data: outputResult.keep },
-            );
-
-            // Save reclaimed proofs
-            await proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', keep));
-
-            // Mark send proofs as spent
-            await proofService.setProofState(
-              mintUrl,
-              sendProofs.map((p: CoreProof) => p.secret),
-              'spent',
-            );
-
-            logger?.info('Reclaimed proofs from pending operation', {
+          if (totalAmount.lessThanOrEqual(fee)) {
+            logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
               operationId: operation.id,
-              reclaimedAmount: reclaimAmount,
-              proofCount: keep.length,
+              amount: totalAmount,
+              fee,
             });
+          } else {
+            const reclaimAmount = totalAmount.subtract(fee);
+
+            if (!reclaimAmount.isZero()) {
+              // Use ProofService to create outputs for reclaim
+              const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
+                keep: reclaimAmount,
+                send: 0,
+              });
+
+              // Swap to reclaim
+              const keep = await wallet.receive(
+                { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
+                undefined,
+                { type: 'custom', data: outputResult.keep },
+              );
+
+              // Save reclaimed proofs
+              await proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', keep));
+
+              // Mark send proofs as spent
+              await proofService.setProofState(
+                mintUrl,
+                sendProofs.map((p: CoreProof) => p.secret),
+                'spent',
+              );
+
+              logger?.info('Reclaimed proofs from pending operation', {
+                operationId: operation.id,
+                reclaimedAmount: reclaimAmount,
+                proofCount: keep.length,
+              });
+            }
           }
         }
       }

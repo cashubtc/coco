@@ -23,6 +23,7 @@ import type {
   RollbackContext,
   RecoverExecutingContext,
 } from '../../operations/send/SendMethodHandler';
+import { ProofValidationError } from '../../models/Error';
 
 describe('DefaultSendHandler', () => {
   const mintUrl = 'https://mint.test';
@@ -302,6 +303,21 @@ describe('DefaultSendHandler', () => {
         keep: Amount.from(9),
         send: Amount.from(100),
       });
+    });
+
+    it('throws ProofValidationError when selected proofs do not cover fees', async () => {
+      (proofService.selectProofsToSend as Mock<any>).mockImplementation(
+        (_mintUrl: string, _amount: Amount, includeFees = true) =>
+          Promise.resolve(includeFees ? [makeProof('input-1', 60), makeProof('input-2', 40)] : []),
+      );
+
+      await expect(
+        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
+      ).rejects.toThrow(ProofValidationError);
+      await expect(
+        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
+      ).rejects.toThrow('Send amount is not sufficient after fees');
+      expect(proofService.reserveProofs).not.toHaveBeenCalled();
     });
   });
 

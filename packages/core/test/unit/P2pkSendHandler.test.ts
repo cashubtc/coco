@@ -358,6 +358,24 @@ describe('P2pkSendHandler', () => {
       });
     });
 
+    it('should throw ProofValidationError when selected proofs do not cover fees', async () => {
+      (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(() =>
+        Promise.resolve([makeCoreProof('input-1', 60), makeCoreProof('input-2', 40)]),
+      );
+      (mockWallet.selectProofsToSend as Mock<any>).mockImplementation(() => ({
+        send: [makeProof('input-1', 60), makeProof('input-2', 40)],
+        keep: [],
+      }));
+
+      await expect(
+        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
+      ).rejects.toThrow(ProofValidationError);
+      await expect(
+        handler.prepare(buildPrepareContext(makeInitOp('op-underfunded'))),
+      ).rejects.toThrow('Send amount is not sufficient after fees');
+      expect(proofService.reserveProofs).not.toHaveBeenCalled();
+    });
+
     it('should log preparation with pubkey', async () => {
       const operation = makeInitOp('op-1');
       const ctx = buildPrepareContext(operation);

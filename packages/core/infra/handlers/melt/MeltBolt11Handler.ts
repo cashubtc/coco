@@ -6,7 +6,7 @@ import {
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
-import { MintOperationError } from '@core/models';
+import { MintOperationError, ProofValidationError } from '@core/models';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -130,6 +130,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
     const selectedAmount = sumProofs(selectedProofs);
+    if (selectedAmount.lessThan(totalAmount)) {
+      throw new ProofValidationError('Melt amount is not sufficient after fees');
+    }
     const swapThreshold = totalAmount.scaledBy(
       SWAP_THRESHOLD_NUMERATOR,
       SWAP_THRESHOLD_DENOMINATOR,
@@ -215,7 +218,11 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const swapFee = ctx.wallet.getFeesForProofs(selectedProofs);
     const sendAmount = totalAmount;
-    const keepAmount = selectedAmount.subtract(sendAmount).subtract(swapFee);
+    const requiredAmount = sendAmount.add(swapFee);
+    if (selectedAmount.lessThan(requiredAmount)) {
+      throw new ProofValidationError('Melt amount is not sufficient after fees');
+    }
+    const keepAmount = selectedAmount.subtract(requiredAmount);
 
     ctx.logger?.debug('Swap amounts calculated', {
       operationId,

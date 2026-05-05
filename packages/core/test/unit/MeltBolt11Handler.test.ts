@@ -10,7 +10,7 @@ import {
   SWAP_THRESHOLD_NUMERATOR,
 } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
 import type { Logger } from '../../logging/Logger';
-import { MintOperationError } from '../../models/Error';
+import { MintOperationError, ProofValidationError } from '../../models/Error';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -411,6 +411,21 @@ describe('MeltBolt11Handler', () => {
         );
       });
 
+      it('should throw ProofValidationError when selected proofs do not cover fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 60), makeProof('input-2', 49)]),
+        );
+
+        await expect(handler.prepare(ctx)).rejects.toThrow(ProofValidationError);
+        await expect(handler.prepare(ctx)).rejects.toThrow(
+          'Melt amount is not sufficient after fees',
+        );
+        expect(proofService.reserveProofs).not.toHaveBeenCalled();
+      });
+
       it('should create blank outputs for change', async () => {
         const operation = makeInitOp('op-1');
         const ctx = buildPrepareContext(operation);
@@ -489,6 +504,22 @@ describe('MeltBolt11Handler', () => {
           ['input-1', 'input-2'],
           'op-1',
         );
+      });
+
+      it('should throw ProofValidationError when swap proofs do not cover input fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (mockWallet.getFeesForProofs as Mock<any>).mockImplementation(() => Amount.from(25));
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 80), makeProof('input-2', 50)]),
+        );
+
+        await expect(handler.prepare(ctx)).rejects.toThrow(ProofValidationError);
+        await expect(handler.prepare(ctx)).rejects.toThrow(
+          'Melt amount is not sufficient after fees',
+        );
+        expect(proofService.reserveProofs).not.toHaveBeenCalled();
       });
     });
   });
