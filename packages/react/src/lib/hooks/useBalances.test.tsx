@@ -1,4 +1,4 @@
-import type { Manager } from '@cashu/coco-core';
+import { Amount, type Manager } from '@cashu/coco-core';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHookWrapper } from '../../test/testUtils';
@@ -59,9 +59,9 @@ describe('useBalances', () => {
       expect(result.current.balances).toEqual({
         byMint: {},
         total: {
-          spendable: 0,
-          reserved: 0,
-          total: 0,
+          spendable: Amount.zero(),
+          reserved: Amount.zero(),
+          total: Amount.zero(),
         },
       });
     });

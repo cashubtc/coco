@@ -438,7 +438,7 @@ describe('ReceiveOperationService', () => {
 
     const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
     expect(historyEntry?.state).toBe('rolledBack');
-    expect(historyEntry?.amount).toBe(prepared.amount);
+    expect(historyEntry?.amount).toEqual(prepared.amount);
   });
 
   it('keeps executing when receive fails with recovery-sensitive outputs already signed', async () => {

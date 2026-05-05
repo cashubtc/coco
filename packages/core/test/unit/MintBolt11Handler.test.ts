@@ -165,7 +165,7 @@ describe('MintBolt11Handler', () => {
 
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(1);
       expect(result.quoteId).toBe(quoteId);
-      expect(result.amount).toBe(quote.amount);
+      expect(result.amount).toEqual(quote.amount);
       expect(result.request).toBe(quote.request);
       expect(result.outputData.keep).toHaveLength(1);
       expect(result.outputData.send).toEqual([]);

@@ -74,6 +74,15 @@ type FinalizedReceiveEventPayload = {
   operation: Awaited<ReturnType<Manager['ops']['receive']['execute']>>;
 };
 
+function expectAmountEquals(
+  expect: Expectation,
+  actual: Amount | null | undefined,
+  expected: AmountLike,
+): void {
+  expect(actual).toBeDefined();
+  expect(actual!.equals(Amount.from(expected))).toBe(true);
+}
+
 const watcherTestSubscriptions = {
   slowPollingIntervalMs: 50,
   fastPollingIntervalMs: 50,
@@ -403,7 +412,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 100);
           expect(pendingMint.quoteId).toBeDefined();
           expect(pendingMint.request).toBeDefined();
-          expect(pendingMint.amount).toBe(100);
+          expectAmountEquals(expect, pendingMint.amount, 100);
 
           const pendingEvent = await pendingEventPromise;
           expect(pendingEvent.mintUrl).toBe(mintUrl);
@@ -594,12 +603,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const op = await mgr!.ops.receive.execute(prepOp.id);
 
-        const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount)).toNumber();
+        const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount));
         expect(op.state).toBe('finalized');
 
         expect(await getMintSpendableBalance(mgr!, mintUrl)).toBeGreaterThan(preBalance);
 
-        expect(op.amount.toNumber()).toBe(tokenAmount);
+        expectAmountEquals(expect, op.amount, tokenAmount);
         expect(op.outputData).toBeDefined();
       });
 
@@ -634,7 +643,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const decodedAmount = Amount.sum(decodedToken.proofs.map((proof) => proof.amount));
         const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount));
-        expect(decodedAmount.toNumber()).toBe(tokenAmount.toNumber());
+        expect(decodedAmount.equals(tokenAmount)).toBe(true);
       });
 
       it('should handle multiple send/receive operations', async () => {
@@ -811,7 +820,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         });
 
         expect(prepared.quoteId).toBeDefined();
-        expect(prepared.amount).toBeGreaterThan(0);
+        expect(prepared.amount.toNumber()).toBeGreaterThan(0);
 
         const balanceAfterPrepare = await getMintBalance();
         expect(balanceAfterPrepare.reserved.toNumber()).toBeGreaterThan(0);
@@ -873,8 +882,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         if (executed?.state === 'finalized') {
           const settlement = executed as {
-            changeAmount?: number;
-            effectiveFee?: number;
+            changeAmount?: Amount;
+            effectiveFee?: Amount;
+            finalizedData?: { preimage?: string };
+          };
+          const storedSettlement = operationAfterExecute as {
+            changeAmount?: Amount;
+            effectiveFee?: Amount;
             finalizedData?: { preimage?: string };
           };
           const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(prepared.quoteId);
@@ -883,9 +897,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(settlement.effectiveFee).toBeDefined();
           expect(settlement.finalizedData?.preimage).toBe(expectedPreimage);
           expect(operationAfterExecute?.state).toBe('finalized');
-          expect((operationAfterExecute as any).changeAmount).toBe(settlement.changeAmount);
-          expect((operationAfterExecute as any).effectiveFee).toBe(settlement.effectiveFee);
-          expect((operationAfterExecute as any).finalizedData?.preimage).toBe(expectedPreimage);
+          expectAmountEquals(expect, storedSettlement.changeAmount, settlement.changeAmount!);
+          expectAmountEquals(expect, storedSettlement.effectiveFee, settlement.effectiveFee!);
+          expect(storedSettlement.finalizedData?.preimage).toBe(expectedPreimage);
         }
 
         if (executed?.state === 'pending') {
@@ -908,8 +922,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           if (refreshed.state === 'finalized') {
             const settlement = refreshed as {
-              changeAmount?: number;
-              effectiveFee?: number;
+              changeAmount?: Amount;
+              effectiveFee?: Amount;
+              finalizedData?: { preimage?: string };
+            };
+            const storedSettlement = operationAfterRetry as {
+              changeAmount?: Amount;
+              effectiveFee?: Amount;
               finalizedData?: { preimage?: string };
             };
             const meltQuote = await new Mint(mintUrl).checkMeltQuoteBolt11(refreshed.quoteId);
@@ -918,9 +937,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             expect(settlement.changeAmount).toBeDefined();
             expect(settlement.effectiveFee).toBeDefined();
             expect(settlement.finalizedData?.preimage).toBe(expectedPreimage);
-            expect((operationAfterRetry as any).changeAmount).toBe(settlement.changeAmount);
-            expect((operationAfterRetry as any).effectiveFee).toBe(settlement.effectiveFee);
-            expect((operationAfterRetry as any).finalizedData?.preimage).toBe(expectedPreimage);
+            expectAmountEquals(expect, storedSettlement.changeAmount, settlement.changeAmount!);
+            expectAmountEquals(expect, storedSettlement.effectiveFee, settlement.effectiveFee!);
+            expect(storedSettlement.finalizedData?.preimage).toBe(expectedPreimage);
           } else if (refreshed.state === 'rolled_back') {
             expect(operationAfterRetry!.state).toBe('rolled_back');
           } else {
@@ -982,7 +1001,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await mgr!.history.getOperationIdForHistoryEntry(sendEntry.id)).toBe(operation.id);
           expect(sendEntry.operationId).toBeDefined();
           expect(sendEntry.state).toBe('pending');
-          expect(sendEntry.amount).toBe(sendAmount);
+          expectAmountEquals(expect, sendEntry.amount, sendAmount);
           expect(sendEntry.token).toBeDefined();
           expect(sendEntry.token!.proofs.length).toBeGreaterThan(0);
           expect(typeof sendEntry.token!.proofs[0]!.amount.toNumber).toBe('function');
@@ -1017,7 +1036,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const historyEvent = await historyPromise;
         expect(historyEvent.entry.quoteId).toBe(prepared.quoteId);
-        expect(historyEvent.entry.amount).toBe(prepared.amount);
+        expectAmountEquals(expect, historyEvent.entry.amount, prepared.amount);
 
         const history = await mgr!.history.getPaginatedHistory(0, 10);
         const meltEntry = history.find(
@@ -1029,7 +1048,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(meltEntry.operationId).toBe(prepared.id);
           expect(await mgr!.history.getOperationIdForHistoryEntry(meltEntry.id)).toBe(prepared.id);
           expect(meltEntry.state).toBe('UNPAID');
-          expect(meltEntry.amount).toBe(prepared.amount);
+          expectAmountEquals(expect, meltEntry.amount, prepared.amount);
         }
       });
 
@@ -1050,7 +1069,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(await mgr!.history.getOperationIdForHistoryEntry(receiveEntry.id)).toBe(
             finalizedReceive.id,
           );
-          expect(receiveEntry.amount).toBe(finalizedReceive.amount);
+          expectAmountEquals(expect, receiveEntry.amount, finalizedReceive.amount);
           expect(receiveEntry.token).toBeDefined();
           expect(receiveEntry.token!.proofs.length).toBeGreaterThan(0);
           expect(typeof receiveEntry.token!.proofs[0]!.amount.toNumber).toBe('function');
@@ -1612,13 +1631,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           const finalizedPromise = waitForEvent<{
             mintUrl: string;
             operationId: string;
-            operation: { amount: number };
+            operation: { amount: Amount };
           }>(mgr!, 'mint-op:finalized');
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 150);
           const finalized = await finalizedPromise;
           expect(finalized.mintUrl).toBe(mintUrl);
           expect(finalized.operationId).toBe(pendingMint.id);
-          expect(finalized.operation.amount).toBe(150);
+          expectAmountEquals(expect, finalized.operation.amount, 150);
 
           expect(await getMintTotalBalance(mgr, mintUrl)).toBeGreaterThanOrEqual(150);
         } finally {
@@ -1743,7 +1762,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await mgr.mint.addMint(mintUrl, { trusted: true });
 
           const pendingMint = await mintAmount(mgr!, mintUrl, 500);
-          expect(pendingMint.amount).toBe(500);
+          expectAmountEquals(expect, pendingMint.amount, 500);
 
           const balanceAfterMint = await getMintTotalBalance(mgr, mintUrl);
           expect(balanceAfterMint).toBeGreaterThanOrEqual(500);
@@ -2590,7 +2609,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const parsed = await mgr!.paymentRequests.parse(encoded);
 
         expect(parsed.transport.type).toBe('inband');
-        expect(parsed.amount).toBe(50);
+        expectAmountEquals(expect, parsed.amount, 50);
         expect(parsed.allowedMints).toContain(mintUrl);
         expect(parsed.payableMints).toContain(mintUrl);
       });
@@ -2613,7 +2632,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         if (parsed.transport.type === 'http') {
           expect(parsed.transport.url).toBe(targetUrl);
         }
-        expect(parsed.amount).toBe(75);
+        expectAmountEquals(expect, parsed.amount, 75);
       });
 
       it('should process a payment request without amount', async () => {

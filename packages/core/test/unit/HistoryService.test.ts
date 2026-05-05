@@ -265,7 +265,7 @@ describe('HistoryService', () => {
       expect(entry.type).toBe('mint');
       expect(entry.mintUrl).toBe(operation.mintUrl);
       expect(entry.quoteId).toBe(operation.quoteId);
-      expect(entry.amount).toBe(operation.amount);
+      expect(entry.amount).toEqual(operation.amount);
       expect(entry.state).toBe('UNPAID');
       expect(entry.unit).toBe(operation.unit);
       expect(entry.paymentRequest).toBe(operation.request);
@@ -332,7 +332,7 @@ describe('HistoryService', () => {
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MintHistoryEntry;
-      expect(entry.amount).toBe(operation.amount);
+      expect(entry.amount).toEqual(operation.amount);
       expect(entry.operationId).toBe(operation.id);
       expect(entry.paymentRequest).toBe(operation.request);
       expect(entry.state).toBe('PAID');
@@ -355,7 +355,7 @@ describe('HistoryService', () => {
       expect(entry.type).toBe('melt');
       expect(entry.mintUrl).toBe(operation.mintUrl);
       expect(entry.quoteId).toBe(operation.quoteId);
-      expect(entry.amount).toBe(operation.amount);
+      expect(entry.amount).toEqual(operation.amount);
       expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('UNPAID');
       expect(entry.unit).toBe('sat');
@@ -399,7 +399,7 @@ describe('HistoryService', () => {
 
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
-      expect(entry.amount).toBe(operation.amount);
+      expect(entry.amount).toEqual(operation.amount);
       expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PENDING');
       expect(historyUpdateEvents.length).toBe(1);
@@ -444,7 +444,7 @@ describe('HistoryService', () => {
       expect(historyEntries.size).toBe(1);
       const entry = Array.from(historyEntries.values())[0] as MeltHistoryEntry;
       expect(entry.quoteId).toBe(operation.quoteId);
-      expect(entry.amount).toBe(operation.amount);
+      expect(entry.amount).toEqual(operation.amount);
       expect(entry.operationId).toBe(operation.id);
       expect(entry.state).toBe('PAID');
       expect(historyUpdateEvents.length).toBe(1);

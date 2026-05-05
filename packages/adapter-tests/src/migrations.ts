@@ -27,6 +27,12 @@ type MigrationExpectApi = {
   toContain(value: unknown): void;
 };
 
+type RawAmount = string | number;
+
+function rawAmountToNumber(amount: RawAmount): number {
+  return Amount.from(amount).toNumber();
+}
+
 /**
  * Options for running migration tests.
  * Each adapter provides its specific implementations.
@@ -298,7 +304,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           await runRemainingMigrations();
 
           // Verify send_operations state transformed
-          const ops = await rawQuery<{ id: string; state: string; amount: number }>(
+          const ops = await rawQuery<{ id: string; state: string; amount: string }>(
             'coco_cashu_send_operations',
           );
 
@@ -307,7 +313,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           const completedOp = ops.find((o) => o.id === 'op-completed-1');
           expect(completedOp).toBeDefined();
           expect(completedOp!.state).toBe('finalized');
-          expect(completedOp!.amount).toBe(100);
+          expect(completedOp!.amount).toBe('100');
 
           const pendingOp = ops.find((o) => o.id === 'op-pending-1');
           expect(pendingOp).toBeDefined();
@@ -353,14 +359,14 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
           const ops = await rawQuery<{
             id: string;
             mintUrl: string;
-            amount: number;
+            amount: string;
             state: string;
             createdAt: number;
             updatedAt: number;
             error: string | null;
             needsSwap: number | null;
-            fee: number | null;
-            inputAmount: number | null;
+            fee: string | null;
+            inputAmount: string | null;
             inputProofSecretsJson: string | null;
             outputDataJson: string | null;
           }>('coco_cashu_send_operations', { id: 'op-full-data' });
@@ -370,13 +376,13 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
 
           expect(op.id).toBe('op-full-data');
           expect(op.mintUrl).toBe('https://mint.test');
-          expect(op.amount).toBe(100);
+          expect(op.amount).toBe('100');
           expect(op.state).toBe('finalized');
           expect(op.createdAt).toBe(1000);
           expect(op.updatedAt).toBe(2000);
           expect(op.error).toBe('some error');
-          expect(op.fee).toBe(5);
-          expect(op.inputAmount).toBe(105);
+          expect(op.fee).toBe('5');
+          expect(op.inputAmount).toBe('105');
 
           logger?.info('Data preservation test passed');
         } finally {
@@ -410,20 +416,20 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
             createdAt: 1001,
           });
 
-          const proofsBefore = await rawQuery<{ secret: string; amount: number; state: string }>(
+          const proofsBefore = await rawQuery<{ secret: string; amount: RawAmount; state: string }>(
             'coco_cashu_proofs',
           );
 
           await runRemainingMigrations();
 
-          const proofsAfter = await rawQuery<{ secret: string; amount: number; state: string }>(
+          const proofsAfter = await rawQuery<{ secret: string; amount: string; state: string }>(
             'coco_cashu_proofs',
           );
 
           expect(proofsAfter).toHaveLength(proofsBefore.length);
 
-          const totalBefore = proofsBefore.reduce((sum, p) => sum + p.amount, 0);
-          const totalAfter = proofsAfter.reduce((sum, p) => sum + p.amount, 0);
+          const totalBefore = proofsBefore.reduce((sum, p) => sum + rawAmountToNumber(p.amount), 0);
+          const totalAfter = proofsAfter.reduce((sum, p) => sum + rawAmountToNumber(p.amount), 0);
           expect(totalAfter).toBe(totalBefore);
           expect(totalAfter).toBe(150);
 

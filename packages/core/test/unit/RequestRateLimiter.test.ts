@@ -55,6 +55,40 @@ describe('RequestRateLimiter', () => {
     expect(hdrs.get('Content-Type')).toBe('application/json');
   });
 
+  it('serializes bigint request bodies as JSON numbers', async () => {
+    let capturedBody: unknown;
+    // @ts-ignore
+    globalThis.fetch = async (_input: any, init?: RequestInit) => {
+      capturedBody = init?.body;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    const limiter = new RequestRateLimiter();
+
+    await limiter.request({
+      endpoint: 'https://mint.test/v1/mint/quote/bolt11',
+      method: 'POST',
+      requestBody: { amount: 50n, unit: 'sat' },
+    });
+
+    expect(capturedBody).toBe('{"amount":50,"unit":"sat"}');
+  });
+
+  it('parses bigint JSON numbers in responses', async () => {
+    // @ts-ignore
+    globalThis.fetch = async () => {
+      return new Response('{"amount":9007199254740993}', { status: 200 });
+    };
+
+    const limiter = new RequestRateLimiter();
+    const result = await limiter.request<{ amount: bigint }>({
+      endpoint: 'https://mint.test/v1/large-amount',
+      method: 'GET',
+    });
+
+    expect(result.amount).toBe(9007199254740993n);
+  });
+
   it('throws HttpResponseError with status and message on non-OK responses', async () => {
     // @ts-ignore
     globalThis.fetch = async () => {
