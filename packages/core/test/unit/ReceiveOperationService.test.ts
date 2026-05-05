@@ -339,6 +339,28 @@ describe('ReceiveOperationService', () => {
     expect(service.prepare(initOp)).rejects.toThrow(ProofValidationError);
   });
 
+  it('prepare throws ProofValidationError when fees exceed the amount', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
+      wallet: {
+        unit: 'sat',
+        getFeesForProofs: mock(() => initOp.amount.add(Amount.from(1))),
+        receive: mockWalletReceive,
+      },
+    }));
+
+    try {
+      await service.prepare(initOp);
+      throw new Error('Expected prepare to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProofValidationError);
+      expect((error as Error).message).toBe('Receive amount is not sufficient after fees');
+    }
+  });
+
   it('prepare throws when deterministic outputs are empty', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
