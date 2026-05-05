@@ -1,6 +1,7 @@
 import type { Logger } from '@core/logging';
 import {
   Amount,
+  JSONInt,
   PaymentRequest,
   PaymentRequestTransportType,
   type AmountLike,
@@ -147,7 +148,7 @@ export class PaymentRequestService {
         const response = await fetch(transaction.request.transport.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(token),
+          body: JSONInt.stringify(token),
         });
         this.logger?.debug('HTTP payment request completed', {
           mintUrl: transaction.sendOperation.mintUrl,

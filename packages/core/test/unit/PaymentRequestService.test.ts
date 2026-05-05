@@ -336,6 +336,8 @@ describe('PaymentRequestService', () => {
       expect(fetchCalls[0]?.input).toBe(testHttpTarget);
       expect(fetchCalls[0]?.init?.method).toBe('POST');
       expect(fetchCalls[0]?.init?.headers).toEqual({ 'Content-Type': 'application/json' });
+      expect(fetchCalls[0]?.init?.body).toContain('"amount":100');
+      expect(fetchCalls[0]?.init?.body).not.toContain('"amount":"100"');
       if (result.type === 'http') {
         expect(result.response.status).toBe(200);
         expect(result.operation).toBe(mockPendingOperation);
