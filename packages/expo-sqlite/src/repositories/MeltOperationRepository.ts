@@ -1,5 +1,10 @@
-import type { MeltOperationRepository } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  normalizeMeltMethodData,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import { ExpoSqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
@@ -47,12 +52,15 @@ const preparedStates: MeltOperationState[] = [
 
 const isPreparedState = (state: MeltOperationState) => preparedStates.includes(state);
 
+const parseMethodData = (row: MeltOperationRow): MeltMethodData =>
+  normalizeMeltMethodData(JSON.parse(row.methodDataJson) as MeltMethodInputData);
+
 const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
     method: row.method,
-    methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
+    methodData: parseMethodData(row),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -98,7 +106,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 const operationToParams = (operation: MeltOperation): unknown[] => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return [
@@ -219,7 +227,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
           updatedAtSeconds,
           operation.error ?? null,
           operation.method,
-          JSON.stringify(operation.methodData),
+          stringifyJson(operation.methodData),
           operation.id,
         ],
       );
@@ -237,7 +245,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
         updatedAtSeconds,
         operation.error ?? null,
         operation.method,
-        JSON.stringify(operation.methodData),
+        stringifyJson(operation.methodData),
         operation.quoteId,
         operation.unit,
         serializeAmount(operation.amount),

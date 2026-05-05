@@ -43,6 +43,7 @@ export async function runRepositoryTransactionContract(
         expect(stored.length).toBeGreaterThan(0);
         const operation = await repositories.meltOperationRepository.getById('melt-op');
         expect(operation).toBeDefined();
+        expect(operation?.methodData.amountSats?.toString()).toBe('1');
       } finally {
         await dispose();
       }
@@ -201,7 +202,7 @@ export function createDummyMeltOperation(): MeltOperation {
     state: 'init',
     mintUrl: 'https://mint.test',
     method: 'bolt11',
-    methodData: { invoice: 'lnbc1test' },
+    methodData: { invoice: 'lnbc1test', amountSats: Amount.from(1) },
     createdAt: 0,
     updatedAt: 0,
   } satisfies MeltOperation;

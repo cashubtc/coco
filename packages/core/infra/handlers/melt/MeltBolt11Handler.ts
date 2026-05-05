@@ -111,7 +111,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const amountMsat =
       ctx.operation.methodData.amountSats === undefined
         ? undefined
-        : Amount.from(ctx.operation.methodData.amountSats).multiplyBy(1000);
+        : ctx.operation.methodData.amountSats.multiplyBy(1000);
 
     const quote = await ctx.wallet.createMeltQuoteBolt11(
       ctx.operation.methodData.invoice,

@@ -1,5 +1,5 @@
+import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core';
 import type { IdbDb } from './db.ts';
-import { normalizeMintUrl } from '@cashu/coco-core';
 
 function normalizeStoredAmount(value: unknown): string | null | undefined {
   if (value === null || value === undefined) return value;
@@ -279,7 +279,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
             op.method = 'default';
           }
           if (!op.methodDataJson) {
-            op.methodDataJson = JSON.stringify(op.methodData ?? {});
+            op.methodDataJson = stringifyJson(op.methodData ?? {});
           }
           if ('methodData' in op) {
             delete op.methodData;
@@ -330,7 +330,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
             op.method = 'default';
           }
           if (!op.methodDataJson) {
-            op.methodDataJson = JSON.stringify(op.methodData ?? {});
+            op.methodDataJson = stringifyJson(op.methodData ?? {});
           }
           if ('methodData' in op) {
             delete op.methodData;

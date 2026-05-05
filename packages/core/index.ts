@@ -30,6 +30,7 @@ export {
   toAmount,
   sumAmounts,
   serializeAmount,
+  stringifyJson,
   deserializeAmount,
   deserializeToken,
 } from './utils.ts';

@@ -1,5 +1,5 @@
 import type { MintOperationRepository } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;
@@ -86,7 +86,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
 const operationToParams = (operation: MintOperation): unknown[] => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return [
@@ -180,7 +180,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           updatedAtSeconds,
           operation.error ?? null,
           operation.method,
-          JSON.stringify(operation.methodData),
+          stringifyJson(operation.methodData),
           serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
@@ -200,7 +200,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         updatedAtSeconds,
         operation.error ?? null,
         operation.method,
-        JSON.stringify(operation.methodData),
+        stringifyJson(operation.methodData),
         serializeAmount(operation.amount),
         operation.unit,
         operation.request,

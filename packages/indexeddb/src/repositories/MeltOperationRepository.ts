@@ -1,5 +1,10 @@
-import type { MeltOperationRepository } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  normalizeMeltMethodData,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import type { IdbDb, MeltOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -23,12 +28,15 @@ const preparedStates: MeltOperationState[] = [
 
 const isPreparedState = (state: MeltOperationState) => preparedStates.includes(state);
 
+const parseMethodData = (row: MeltOperationRow): MeltMethodData =>
+  normalizeMeltMethodData(JSON.parse(row.methodDataJson) as MeltMethodInputData);
+
 const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
     method: row.method as MeltOperation['method'],
-    methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
+    methodData: parseMethodData(row),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -84,7 +92,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
 
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return {

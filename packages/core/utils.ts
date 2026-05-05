@@ -168,6 +168,16 @@ export function serializeAmount(value: AmountLike): string {
   return Amount.from(value).toString();
 }
 
+export function stringifyJson(value: unknown): string {
+  const json = JSON.stringify(value, (_key, value) =>
+    typeof value === 'bigint' ? value.toString() : value,
+  );
+  if (json === undefined) {
+    throw new TypeError('Value cannot be serialized to JSON');
+  }
+  return json;
+}
+
 export function deserializeAmount(value: string | number | bigint | Amount): Amount {
   return Amount.from(value);
 }

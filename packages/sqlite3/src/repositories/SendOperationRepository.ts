@@ -4,7 +4,12 @@ import type {
   SendOperationState,
   SendMethod,
 } from '@cashu/coco-core';
-import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  deserializeToken,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface SendOperationRow {
@@ -111,7 +116,7 @@ function operationToParams(op: SendOperation): unknown[] {
       updatedAtSeconds,
       op.error ?? null,
       op.method,
-      JSON.stringify(op.methodData),
+      stringifyJson(op.methodData),
       null, // needsSwap
       null, // fee
       null, // inputAmount
@@ -131,7 +136,7 @@ function operationToParams(op: SendOperation): unknown[] {
     updatedAtSeconds,
     op.error ?? null,
     op.method,
-    JSON.stringify(op.methodData),
+    stringifyJson(op.methodData),
     op.needsSwap ? 1 : 0,
     serializeAmount(op.fee),
     serializeAmount(op.inputAmount),

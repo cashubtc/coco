@@ -220,6 +220,14 @@ describe('MeltOperationService', () => {
       expect(stored?.mintUrl).toBe(mintUrl);
     });
 
+    it('normalizes AmountLike amountSats before storing the operation', async () => {
+      const operation = await service.init(mintUrl, 'bolt11', { invoice, amountSats: 1n });
+
+      expect(operation.methodData.amountSats?.toString()).toBe('1');
+      const stored = await meltOperationRepository.getById(operation.id);
+      expect(stored?.methodData.amountSats?.toString()).toBe('1');
+    });
+
     it('throws when mint is untrusted', async () => {
       (mintService.isTrustedMint as Mock<any>).mockResolvedValue(false);
 

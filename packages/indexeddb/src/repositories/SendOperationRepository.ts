@@ -4,7 +4,12 @@ import type {
   SendOperationState,
   SendMethod,
 } from '@cashu/coco-core';
-import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  deserializeToken,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -109,7 +114,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
       updatedAt: updatedAtSeconds,
       error: op.error ?? null,
       method: op.method,
-      methodDataJson: JSON.stringify(op.methodData),
+      methodDataJson: stringifyJson(op.methodData),
       needsSwap: null,
       fee: null,
       inputAmount: null,
@@ -129,7 +134,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
     updatedAt: updatedAtSeconds,
     error: op.error ?? null,
     method: op.method,
-    methodDataJson: JSON.stringify(op.methodData),
+    methodDataJson: stringifyJson(op.methodData),
     needsSwap: op.needsSwap ? 1 : 0,
     fee: serializeAmount(op.fee),
     inputAmount: serializeAmount(op.inputAmount),
