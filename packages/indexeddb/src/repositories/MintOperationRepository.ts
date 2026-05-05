@@ -54,7 +54,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     state: normalizeState(row.state),
     quoteId: row.quoteId ?? '',
     request: row.request ?? '',
-    expiry: row.expiry ?? 0,
+    expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,

@@ -5,6 +5,7 @@ import {
   type CoreProof,
   type Repositories,
   type MeltOperation,
+  type MintOperation,
   type ReceiveOperation,
   type AuthSession,
 } from '@cashu/coco-core';
@@ -208,6 +209,29 @@ export function createDummyMeltOperation(): MeltOperation {
   } satisfies MeltOperation;
 }
 
+type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
+
+export function createDummyMintOperation(
+  overrides?: Partial<PendingMintOperation>,
+): PendingMintOperation {
+  return {
+    id: 'mint-op',
+    state: 'pending',
+    mintUrl: 'https://mint.test',
+    quoteId: 'quote-id',
+    method: 'bolt11',
+    methodData: {},
+    createdAt: 0,
+    updatedAt: 0,
+    amount: Amount.from(3),
+    unit: 'sat',
+    request: 'lnbc1test',
+    expiry: 1_730_000_000,
+    outputData: { keep: [], send: [] },
+    ...overrides,
+  } satisfies PendingMintOperation;
+}
+
 export function createDummyReceiveOperation(): ReceiveOperation {
   return {
     id: 'receive-op',
@@ -231,6 +255,36 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
   };
+}
+
+export async function runMintOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintOperationRepository contract', () => {
+    it('preserves null quote expiries for pending operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ expiry: null });
+        await repositories.mintOperationRepository.create(operation);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        const pending = await repositories.mintOperationRepository.getPending();
+
+        expect(stored).toBeDefined();
+        expect(pending).toHaveLength(1);
+        if (!stored || stored.state !== 'pending' || pending[0]?.state !== 'pending') {
+          throw new Error('Expected pending mint operations');
+        }
+        expect(stored.expiry).toBe(null);
+        expect(pending[0].expiry).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }
 
 export async function runReceiveOperationRepositoryContract(
