@@ -38,7 +38,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     // Try exact match first (no swap needed)
     const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
     const exactAmount = sumProofs(exactProofs);
-    const needsSwap = !exactAmount.equals(amount) || exactProofs.length === 0;
+    const needsSwap = !exactAmount.equals(amount);
 
     let selectedProofs: Proof[];
     let fee = Amount.zero();
