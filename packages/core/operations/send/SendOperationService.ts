@@ -1,4 +1,4 @@
-import type { AmountLike, Token, Proof, ProofState as CashuProofState } from '@cashu/cashu-ts';
+import type { AmountLike, Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -737,7 +737,7 @@ export class SendOperationService {
   ): Promise<CashuProofState[]> {
     const wallet = await this.walletService.getWallet(mintUrl);
     const proofInputs = secrets.map((secret) => ({ secret }));
-    return wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    return wallet.checkProofsStates(proofInputs);
   }
 
   /**

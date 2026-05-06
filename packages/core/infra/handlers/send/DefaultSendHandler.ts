@@ -328,7 +328,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
     let inputStates;
     try {
-      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+      inputStates = await wallet.checkProofsStates(proofInputs);
     } catch (error) {
       logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: operation.id,

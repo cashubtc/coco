@@ -245,7 +245,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
     let inputStates;
     try {
-      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+      inputStates = await wallet.checkProofsStates(proofInputs);
     } catch (error) {
       logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: operation.id,
@@ -328,7 +328,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       };
     } else if (outputSecrets.sendSecrets.length > 0) {
       const sendStates = await wallet.checkProofsStates(
-        outputSecrets.sendSecrets.map((secret) => ({ secret })) as unknown as Proof[],
+        outputSecrets.sendSecrets.map((secret) => ({ secret })),
       );
       const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
       if (!allSendProofsSpent) {
