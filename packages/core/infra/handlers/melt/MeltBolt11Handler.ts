@@ -236,7 +236,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const blankOutputs = await this.createChangeOutputs(amount, sendAmount, ctx);
 
-    // Add additional fee calculation to the resulting outputs to cover the melts input fee
+    // FIXME: This relies on the 10% swap threshold buffer to cover the future melt input fee.
+    // Pathological fee/output combinations can still make the fee-inflated send side exceed
+    // the amount validated above.
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
