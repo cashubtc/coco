@@ -1,7 +1,7 @@
 {
   "name": "@cashu/coco-core",
   "version": "1.0.0",
-  "main": "dist/index.cjs",
+  "main": "dist/index.js",
   "module": "dist/index.js",
   "repository": {
     "type": "git",
@@ -18,8 +18,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     }
   },
   "files": [
@@ -38,7 +37,7 @@
   "type": "module",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@cashu/cashu-ts": "^3.5.0",
+    "@cashu/cashu-ts": "^4.1.0",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "@scure/bip32": "^2.0.1"

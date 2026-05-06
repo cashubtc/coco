@@ -139,10 +139,9 @@ export class WalletApi {
    * Encode a token to a string.
    * @param token - The token to encode
    * @param opts - Optional encoding options
-   * @param opts.version - Token version (3 for cashuA, 4 for cashuB). Defaults to 4 if keyset allows it.
    * @returns Encoded token string
    */
-  encodeToken(token: Token, opts?: { version?: 3 | 4 }): string {
+  encodeToken(token: Token, opts?: { removeDleq?: boolean }): string {
     return getEncodedToken(token, opts);
   }
 

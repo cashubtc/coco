@@ -4,22 +4,22 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import type { PendingSendOperation, RollingBackSendOperation } from '@cashu/coco-core';
+import { Amount, type PendingSendOperation, type RollingBackSendOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 function makeRollingBackOperation(): RollingBackSendOperation {
   return {
     id: 'send-op-1',
     mintUrl: 'https://mint.test',
-    amount: 100,
+    amount: Amount.from(100),
     state: 'rolling_back',
     method: 'default',
     methodData: {},
     createdAt: 1_000,
     updatedAt: 2_000,
     needsSwap: true,
-    fee: 1,
-    inputAmount: 101,
+    fee: Amount.from(1),
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['secret-1'],
   };
 }
@@ -28,15 +28,15 @@ function makePendingP2pkOperation(): PendingSendOperation {
   return {
     id: 'send-op-p2pk',
     mintUrl: 'https://mint.test',
-    amount: 100,
+    amount: Amount.from(100),
     state: 'pending',
     method: 'p2pk',
     methodData: { pubkey: '02' + '11'.repeat(32) },
     createdAt: 1_000,
     updatedAt: 2_000,
     needsSwap: true,
-    fee: 1,
-    inputAmount: 101,
+    fee: Amount.from(1),
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['secret-1'],
     outputData: {
       keep: [],
@@ -44,7 +44,7 @@ function makePendingP2pkOperation(): PendingSendOperation {
     },
     token: {
       mint: 'https://mint.test',
-      proofs: [{ id: 'keyset-1', amount: 100, secret: 'send-secret', C: 'C_send' }],
+      proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
       unit: 'sat',
     },
   } as PendingSendOperation;

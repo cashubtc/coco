@@ -1,5 +1,10 @@
+import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core';
 import type { IdbDb } from './db.ts';
-import { normalizeMintUrl } from '@cashu/coco-core';
+
+function normalizeStoredAmount(value: unknown): string | null | undefined {
+  if (value === null || value === undefined) return value;
+  return String(value);
+}
 
 export async function ensureSchema(db: IdbDb): Promise<void> {
   // Dexie schema with final versioned stores (flattened for first release)
@@ -274,7 +279,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
             op.method = 'default';
           }
           if (!op.methodDataJson) {
-            op.methodDataJson = JSON.stringify(op.methodData ?? {});
+            op.methodDataJson = stringifyJson(op.methodData ?? {});
           }
           if ('methodData' in op) {
             delete op.methodData;
@@ -325,7 +330,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
             op.method = 'default';
           }
           if (!op.methodDataJson) {
-            op.methodDataJson = JSON.stringify(op.methodData ?? {});
+            op.methodDataJson = stringifyJson(op.methodData ?? {});
           }
           if ('methodData' in op) {
             delete op.methodData;
@@ -451,6 +456,101 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
           if (!op.unit) {
             op.unit = 'sat';
           }
+        });
+    });
+
+  // Version 18: Store amount-bearing fields as canonical decimal text.
+  db.version(18)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+id+state], state, mintUrl, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_proofs')
+        .toCollection()
+        .modify((row: { amount: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+        });
+
+      await tx
+        .table('coco_cashu_mint_quotes')
+        .toCollection()
+        .modify((row: { amount: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+        });
+
+      await tx
+        .table('coco_cashu_melt_quotes')
+        .toCollection()
+        .modify((row: { amount: unknown; fee_reserve: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+          row.fee_reserve = normalizeStoredAmount(row.fee_reserve);
+        });
+
+      await tx
+        .table('coco_cashu_history')
+        .toCollection()
+        .modify((row: { amount: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+        });
+
+      await tx
+        .table('coco_cashu_send_operations')
+        .toCollection()
+        .modify((row: { amount: unknown; fee?: unknown; inputAmount?: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+          row.fee = normalizeStoredAmount(row.fee);
+          row.inputAmount = normalizeStoredAmount(row.inputAmount);
+        });
+
+      await tx
+        .table('coco_cashu_melt_operations')
+        .toCollection()
+        .modify(
+          (row: {
+            amount?: unknown;
+            fee_reserve?: unknown;
+            swap_fee?: unknown;
+            inputAmount?: unknown;
+            changeAmount?: unknown;
+            effectiveFee?: unknown;
+          }) => {
+            row.amount = normalizeStoredAmount(row.amount);
+            row.fee_reserve = normalizeStoredAmount(row.fee_reserve);
+            row.swap_fee = normalizeStoredAmount(row.swap_fee);
+            row.inputAmount = normalizeStoredAmount(row.inputAmount);
+            row.changeAmount = normalizeStoredAmount(row.changeAmount);
+            row.effectiveFee = normalizeStoredAmount(row.effectiveFee);
+          },
+        );
+
+      await tx
+        .table('coco_cashu_receive_operations')
+        .toCollection()
+        .modify((row: { amount: unknown; fee?: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
+          row.fee = normalizeStoredAmount(row.fee);
+        });
+
+      await tx
+        .table('coco_cashu_mint_operations')
+        .toCollection()
+        .modify((row: { amount?: unknown }) => {
+          row.amount = normalizeStoredAmount(row.amount);
         });
     });
 }

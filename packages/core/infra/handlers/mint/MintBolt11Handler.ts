@@ -21,11 +21,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const quote =
       ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
 
-    if (!quote.amount || quote.amount <= 0) {
+    if (!quote.amount || quote.amount.isZero()) {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    if (quote.amount !== ctx.operation.amount) {
+    if (!quote.amount.equals(ctx.operation.amount)) {
       throw new Error(
         `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${ctx.operation.amount}`,
       );

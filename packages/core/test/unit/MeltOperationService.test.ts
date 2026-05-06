@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
@@ -49,7 +50,7 @@ describe('MeltOperationService', () => {
 
   const makeProof = (secret: string, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount: 10,
+      amount: Amount.from(10),
       C: `C_${secret}` as unknown as any,
       id: keysetId,
       secret,
@@ -77,11 +78,11 @@ describe('MeltOperationService', () => {
     state: 'prepared',
     quoteId: 'quote-1',
     unit: 'sat',
-    amount: 100,
-    fee_reserve: 1,
-    swap_fee: 0,
+    amount: Amount.from(100),
+    fee_reserve: Amount.from(1),
+    swap_fee: Amount.from(0),
     needsSwap: false,
-    inputAmount: 101,
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['proof-1'],
     changeOutputData: { keep: [], send: [] },
     ...overrides,
@@ -111,8 +112,8 @@ describe('MeltOperationService', () => {
   ): FinalizedMeltOperation => ({
     ...makePreparedOp(id),
     state: 'finalized',
-    changeAmount: 0,
-    effectiveFee: 1,
+    changeAmount: Amount.from(0),
+    effectiveFee: Amount.from(1),
     finalizedData: { preimage: 'preimage-123' },
     ...overrides,
   });
@@ -156,8 +157,8 @@ describe('MeltOperationService', () => {
       finalize: mock(
         async () =>
           ({
-            changeAmount: 0,
-            effectiveFee: 1,
+            changeAmount: Amount.from(0),
+            effectiveFee: Amount.from(1),
             finalizedData: { preimage: 'preimage-123' },
           }) as FinalizeResult,
       ),
@@ -217,6 +218,14 @@ describe('MeltOperationService', () => {
       expect(operation.state).toBe('init');
       const stored = await meltOperationRepository.getById(operation.id);
       expect(stored?.mintUrl).toBe(mintUrl);
+    });
+
+    it('normalizes AmountLike amountSats before storing the operation', async () => {
+      const operation = await service.init(mintUrl, 'bolt11', { invoice, amountSats: 1n });
+
+      expect(operation.methodData.amountSats?.toString()).toBe('1');
+      const stored = await meltOperationRepository.getById(operation.id);
+      expect(stored?.methodData.amountSats?.toString()).toBe('1');
     });
 
     it('throws when mint is untrusted', async () => {
@@ -340,16 +349,16 @@ describe('MeltOperationService', () => {
 
       expect(result.state).toBe('finalized');
       if (result.state === 'finalized') {
-        expect(result.changeAmount).toBe(0);
-        expect(result.effectiveFee).toBe(1);
+        expect(result.changeAmount).toEqual(Amount.from(0));
+        expect(result.effectiveFee).toEqual(Amount.from(1));
         expect(result.finalizedData?.preimage).toBe('preimage-123');
       }
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-4');
       expect(stored?.state).toBe('finalized');
       const finalizedOp = stored as FinalizedMeltOperation;
-      expect(finalizedOp.changeAmount).toBe(0);
-      expect(finalizedOp.effectiveFee).toBe(1);
+      expect(finalizedOp.changeAmount).toEqual(Amount.from(0));
+      expect(finalizedOp.effectiveFee).toEqual(Amount.from(1));
       expect(finalizedOp.finalizedData?.preimage).toBe('preimage-123');
     });
 
@@ -399,8 +408,8 @@ describe('MeltOperationService', () => {
 
       expect(handler.finalize).toHaveBeenCalled();
       expect(result).toEqual({
-        changeAmount: 0,
-        effectiveFee: 1,
+        changeAmount: Amount.from(0),
+        effectiveFee: Amount.from(1),
         finalizedData: { preimage: 'preimage-123' },
       });
       expect(events.length).toBe(1);
@@ -408,8 +417,8 @@ describe('MeltOperationService', () => {
       expect(stored?.state).toBe('finalized');
       // Verify the finalized operation has the settlement amounts
       const finalizedOp = stored as FinalizedMeltOperation;
-      expect(finalizedOp.changeAmount).toBe(0);
-      expect(finalizedOp.effectiveFee).toBe(1);
+      expect(finalizedOp.changeAmount).toEqual(Amount.from(0));
+      expect(finalizedOp.effectiveFee).toEqual(Amount.from(1));
       expect(finalizedOp.finalizedData?.preimage).toBe('preimage-123');
     });
 
@@ -421,8 +430,8 @@ describe('MeltOperationService', () => {
 
       expect(handler.finalize).not.toHaveBeenCalled();
       expect(result).toEqual({
-        changeAmount: 0,
-        effectiveFee: 1,
+        changeAmount: Amount.from(0),
+        effectiveFee: Amount.from(1),
         finalizedData: { preimage: 'preimage-123' },
       });
     });

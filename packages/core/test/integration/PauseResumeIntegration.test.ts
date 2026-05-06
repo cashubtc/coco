@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { initializeCoco, type Manager } from '../../Manager';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -7,7 +8,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function getMintTotalBalance(manager: Manager, mintUrl: string): Promise<number> {
   const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
-  return balances[mintUrl]?.total ?? 0;
+  return balances[mintUrl]?.total.toNumber() ?? 0;
 }
 
 describe('Pause/Resume Integration Test', () => {
@@ -57,7 +58,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create a mint quote
     const pendingMint1 = await manager.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });
@@ -79,7 +80,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create another quote while paused (this should still work - just creating locally)
     const pendingMint2 = await manager.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });
@@ -116,7 +117,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create a quote after multiple cycles
     const pendingMint = await manager.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });
@@ -136,7 +137,7 @@ describe('Pause/Resume Integration Test', () => {
     // Create a quote with subscriptions active
     const pendingMint = await manager.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });

@@ -1,4 +1,4 @@
-import type { Token, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { Amount, sumProofs, type Token, type Proof, type OutputConfig } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -21,6 +21,7 @@ import {
   getSecretsFromSerializedOutputData,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
+import { ProofValidationError } from '../../../models/Error';
 
 /**
  * Default send handler for standard (unlocked) token sends.
@@ -36,11 +37,11 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Try exact match first (no swap needed)
     const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
-    const exactAmount = exactProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
-    const needsSwap = exactAmount !== amount || exactProofs.length === 0;
+    const exactAmount = sumProofs(exactProofs);
+    const needsSwap = !exactAmount.equals(amount);
 
     let selectedProofs: Proof[];
-    let fee = 0;
+    let fee = Amount.zero();
     let serializedOutputData: PreparedSendOperation['outputData'];
 
     if (!needsSwap && exactProofs.length > 0) {
@@ -56,9 +57,13 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
       const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
       selectedProofs = selected;
-      const selectedAmount = selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+      const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);
-      const keepAmount = selectedAmount - amount - fee;
+      const requiredAmount = amount.add(fee);
+      if (selectedAmount.lessThan(requiredAmount)) {
+        throw new ProofValidationError('Send amount is not sufficient after fees');
+      }
+      const keepAmount = selectedAmount.subtract(requiredAmount);
 
       // Use ProofService to create outputs and increment counters
       const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
@@ -99,7 +104,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       error: operation.error,
       needsSwap,
       fee,
-      inputAmount: selectedProofs.reduce((acc: number, p: Proof) => acc + p.amount, 0),
+      inputAmount: sumProofs(selectedProofs),
       inputProofSecrets: inputSecrets,
       outputData: serializedOutputData,
       method: operation.method,
@@ -247,39 +252,47 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         );
 
         if (sendProofs.length > 0) {
-          const totalAmount = sendProofs.reduce((acc: number, p: CoreProof) => acc + p.amount, 0);
+          const totalAmount = sumProofs(sendProofs);
           const fee = wallet.getFeesForProofs(sendProofs);
-          const reclaimAmount = totalAmount - fee;
-
-          if (reclaimAmount > 0) {
-            // Use ProofService to create outputs for reclaim
-            const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
-              keep: reclaimAmount,
-              send: 0,
-            });
-
-            // Swap to reclaim
-            const keep = await wallet.receive(
-              { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
-              undefined,
-              { type: 'custom', data: outputResult.keep },
-            );
-
-            // Save reclaimed proofs
-            await proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', keep));
-
-            // Mark send proofs as spent
-            await proofService.setProofState(
-              mintUrl,
-              sendProofs.map((p: CoreProof) => p.secret),
-              'spent',
-            );
-
-            logger?.info('Reclaimed proofs from pending operation', {
+          if (totalAmount.lessThanOrEqual(fee)) {
+            logger?.warn('Cannot reclaim send proofs because fees consume the amount', {
               operationId: operation.id,
-              reclaimedAmount: reclaimAmount,
-              proofCount: keep.length,
+              amount: totalAmount,
+              fee,
             });
+          } else {
+            const reclaimAmount = totalAmount.subtract(fee);
+
+            if (!reclaimAmount.isZero()) {
+              // Use ProofService to create outputs for reclaim
+              const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
+                keep: reclaimAmount,
+                send: 0,
+              });
+
+              // Swap to reclaim
+              const keep = await wallet.receive(
+                { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
+                undefined,
+                { type: 'custom', data: outputResult.keep },
+              );
+
+              // Save reclaimed proofs
+              await proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', keep));
+
+              // Mark send proofs as spent
+              await proofService.setProofState(
+                mintUrl,
+                sendProofs.map((p: CoreProof) => p.secret),
+                'spent',
+              );
+
+              logger?.info('Reclaimed proofs from pending operation', {
+                operationId: operation.id,
+                reclaimedAmount: reclaimAmount,
+                proofCount: keep.length,
+              });
+            }
           }
         }
       }
@@ -315,7 +328,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
     let inputStates;
     try {
-      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+      inputStates = await wallet.checkProofsStates(proofInputs);
     } catch (error) {
       logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: operation.id,

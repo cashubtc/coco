@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -44,7 +45,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
   const makeProof = (secret: string, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount: 10,
+      amount: Amount.from(10),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -57,7 +58,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     id,
     state: 'init',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     method: 'default',
@@ -71,12 +72,12 @@ describe('SendOperationService - recoverPendingOperations', () => {
     id,
     state: 'prepared',
     mintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     needsSwap: true,
-    fee: 1,
-    inputAmount: 101,
+    fee: Amount.from(1),
+    inputAmount: Amount.from(101),
     inputProofSecrets: ['input-secret-1', 'input-secret-2'],
     outputData: serializeOutputData({ keep: [], send: [] }),
     method: 'default',
@@ -158,13 +159,20 @@ describe('SendOperationService - recoverPendingOperations', () => {
       saveProofs: mock(() => Promise.resolve()),
       setProofState: mock(() => Promise.resolve()),
       reserveProofs: mock((mintUrl: string, secrets: string[], operationId: string) =>
-        proofRepo.reserveProofs(mintUrl, secrets, operationId).then(() => ({ amount: 0 })),
+        proofRepo
+          .reserveProofs(mintUrl, secrets, operationId)
+          .then(() => ({ amount: Amount.from(0) })),
       ),
       releaseProofs: mock((mintUrl: string, secrets: string[]) =>
         proofRepo.releaseProofs(mintUrl, secrets),
       ),
       createOutputsAndIncrementCounters: mock(() =>
-        Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
+        Promise.resolve({
+          keep: [],
+          send: [],
+          sendAmount: Amount.zero(),
+          keepAmount: Amount.zero(),
+        }),
       ),
       recoverProofsFromOutputData: mock(
         async (
@@ -464,12 +472,12 @@ describe('SendOperationService - recoverPendingOperations', () => {
       mockMintRestore.mockImplementation(() =>
         Promise.resolve({
           outputs: [
-            { B_: `B_keep_keep-secret`, amount: 10 },
-            { B_: `B_send_send-secret`, amount: 10 },
+            { B_: `B_keep_keep-secret`, amount: Amount.from(10) },
+            { B_: `B_send_send-secret`, amount: Amount.from(10) },
           ],
           signatures: [
-            { C_: 'C_keep', amount: 10, id: keysetId },
-            { C_: 'C_send', amount: 10, id: keysetId },
+            { C_: 'C_keep', amount: Amount.from(10), id: keysetId },
+            { C_: 'C_send', amount: Amount.from(10), id: keysetId },
           ],
         }),
       );
@@ -523,12 +531,12 @@ describe('SendOperationService - recoverPendingOperations', () => {
 
         return Promise.resolve({
           outputs: [
-            { B_: `B_keep_${keepSecret}`, amount: 10 },
-            { B_: `B_send_${sendSecret}`, amount: 20 },
+            { B_: `B_keep_${keepSecret}`, amount: Amount.from(10) },
+            { B_: `B_send_${sendSecret}`, amount: Amount.from(20) },
           ],
           signatures: [
-            { C_: 'C_signature_keep', amount: 10, id: keysetId },
-            { C_: 'C_signature_send', amount: 20, id: keysetId },
+            { C_: 'C_signature_keep', amount: Amount.from(10), id: keysetId },
+            { C_: 'C_signature_send', amount: Amount.from(20), id: keysetId },
           ],
         });
       });
@@ -552,7 +560,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       const keepProof = savedProofs.find((p) => p.secret === keepSecret);
       expect(keepProof).toBeDefined();
       expect(keepProof.C).toBe('C_signature_keep');
-      expect(keepProof.amount).toBe(10);
+      expect(keepProof.amount).toEqual(Amount.from(10));
       expect(keepProof.id).toBe(keysetId);
       expect(keepProof.mintUrl).toBe(mintUrl);
       expect(keepProof.state).toBe('ready');
@@ -561,7 +569,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       const sendProof = savedProofs.find((p) => p.secret === sendSecret);
       expect(sendProof).toBeDefined();
       expect(sendProof.C).toBe('C_signature_send');
-      expect(sendProof.amount).toBe(20);
+      expect(sendProof.amount).toEqual(Amount.from(20));
       expect(sendProof.id).toBe(keysetId);
       expect(sendProof.mintUrl).toBe(mintUrl);
       expect(sendProof.state).toBe('ready');
@@ -594,14 +602,14 @@ describe('SendOperationService - recoverPendingOperations', () => {
       mockMintRestore.mockImplementation((req: { outputs: any[] }) => {
         if (req.outputs[0]?.B_ === 'B_keep_keep-secret') {
           return Promise.resolve({
-            outputs: [{ B_: 'B_keep_keep-secret', amount: 10 }],
-            signatures: [{ C_: 'C_keep', amount: 10, id: keysetId }],
+            outputs: [{ B_: 'B_keep_keep-secret', amount: Amount.from(10) }],
+            signatures: [{ C_: 'C_keep', amount: Amount.from(10), id: keysetId }],
           });
         }
 
         return Promise.resolve({
-          outputs: [{ B_: 'B_send_send-secret', amount: 20 }],
-          signatures: [{ C_: 'C_send', amount: 20, id: keysetId }],
+          outputs: [{ B_: 'B_send_send-secret', amount: Amount.from(20) }],
+          signatures: [{ C_: 'C_send', amount: Amount.from(20), id: keysetId }],
         });
       });
 
@@ -624,7 +632,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       expect(token?.proofs).toEqual([
         expect.objectContaining({
           id: keysetId,
-          amount: 20,
+          amount: Amount.from(20),
           secret: 'send-secret',
           C: 'C_send',
         }),

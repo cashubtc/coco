@@ -138,7 +138,6 @@ export class WalletService {
 
     const cache: KeyChainCache = {
       mintUrl: mint.mintUrl,
-      unit: DEFAULT_UNIT,
       keysets: keysetCache,
     };
 

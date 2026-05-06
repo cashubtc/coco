@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { HistoryApi } from '../../api/HistoryApi';
 import type { HistoryEntry } from '../../models/History';
@@ -25,7 +26,7 @@ describe('HistoryApi', () => {
       mintUrl: 'https://mint.test',
       quoteId: 'quote-1',
       operationId: 'operation-1',
-      amount: 10,
+      amount: Amount.from(10),
       state: 'UNPAID',
       unit: 'sat',
       createdAt: Date.now(),
@@ -48,7 +49,7 @@ describe('HistoryApi', () => {
       type: 'send',
       mintUrl: 'https://mint.test',
       operationId: '   ',
-      amount: 10,
+      amount: Amount.from(10),
       state: 'pending',
       unit: 'sat',
       createdAt: Date.now(),

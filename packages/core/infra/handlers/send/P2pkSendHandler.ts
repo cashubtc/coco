@@ -1,4 +1,4 @@
-import { type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
+import { sumProofs, type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -45,9 +45,13 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
     const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
-    const selectedAmount = selected.reduce((acc: number, p: Proof) => acc + p.amount, 0);
+    const selectedAmount = sumProofs(selected);
     const fee = wallet.getFeesForProofs(selected);
-    const keepAmount = selectedAmount - amount - fee;
+    const requiredAmount = amount.add(fee);
+    if (selectedAmount.lessThan(requiredAmount)) {
+      throw new ProofValidationError('Send amount is not sufficient after fees');
+    }
+    const keepAmount = selectedAmount.subtract(requiredAmount);
 
     // Use ProofService to create outputs and increment counters
     const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
@@ -241,7 +245,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
     let inputStates;
     try {
-      inputStates = await wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+      inputStates = await wallet.checkProofsStates(proofInputs);
     } catch (error) {
       logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: operation.id,
@@ -324,7 +328,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       };
     } else if (outputSecrets.sendSecrets.length > 0) {
       const sendStates = await wallet.checkProofsStates(
-        outputSecrets.sendSecrets.map((secret) => ({ secret })) as unknown as Proof[],
+        outputSecrets.sendSecrets.map((secret) => ({ secret })),
       );
       const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
       if (!allSendProofsSpent) {

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import type { CoreEvents } from '@core/events';
 import { EventBus } from '@core/events';
 import { MemoryAuthSessionRepository } from '@core/repositories';
@@ -97,8 +98,8 @@ describe('AuthSessionService', () => {
 
   it('saves and retrieves session with batPool', async () => {
     const batPool = [
-      { id: 'key1', amount: 1, secret: 's1', C: 'c1' },
-      { id: 'key1', amount: 2, secret: 's2', C: 'c2' },
+      { id: 'key1', amount: Amount.from(1), secret: 's1', C: 'c1' },
+      { id: 'key1', amount: Amount.from(2), secret: 's2', C: 'c2' },
     ] as any;
 
     await service.saveSession(

@@ -1,5 +1,12 @@
 import type { Logger } from '@core/logging';
-import { PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
+import {
+  Amount,
+  JSONInt,
+  PaymentRequest,
+  PaymentRequestTransportType,
+  type AmountLike,
+  type Token,
+} from '@cashu/cashu-ts';
 import { PaymentRequestError } from '../models/Error';
 import type { ProofService } from '../services';
 import type {
@@ -16,7 +23,7 @@ type ResolvedPaymentRequest = {
   paymentRequest: PaymentRequest;
   payableMints: string[];
   allowedMints: string[];
-  amount?: number;
+  amount?: Amount;
   transport: PaymentRequestTransport;
 };
 
@@ -96,7 +103,7 @@ export class PaymentRequestService {
    */
   async prepare(
     request: ResolvedPaymentRequest,
-    options: { mintUrl: string; amount?: number },
+    options: { mintUrl: string; amount?: AmountLike },
   ): Promise<PreparedPaymentRequest> {
     const { mintUrl, amount } = options;
     this.validateMint(mintUrl, request.allowedMints);
@@ -141,7 +148,7 @@ export class PaymentRequestService {
         const response = await fetch(transaction.request.transport.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(token),
+          body: JSONInt.stringify(token),
         });
         this.logger?.debug('HTTP payment request completed', {
           mintUrl: transaction.sendOperation.mintUrl,
@@ -195,24 +202,28 @@ export class PaymentRequestService {
 
   private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
     const balances = await this.proofService.getBalancesByMint({ trustedOnly: true });
-    const amount = paymentRequest.amount ?? 0;
+    const amount = paymentRequest.amount ?? Amount.zero();
     const mintRequirement = paymentRequest.mints;
     const matchingMints: string[] = [];
     for (const [mintUrl, balance] of Object.entries(balances)) {
-      if (balance.spendable >= amount && (!mintRequirement || mintRequirement.includes(mintUrl))) {
+      if (
+        balance.spendable.greaterThanOrEqual(amount) &&
+        (!mintRequirement || mintRequirement.includes(mintUrl))
+      ) {
         matchingMints.push(mintUrl);
       }
     }
     return matchingMints;
   }
 
-  private validateAmount(request: ResolvedPaymentRequest, amount?: number): number {
-    if (request.amount && amount && request.amount !== amount) {
+  private validateAmount(request: ResolvedPaymentRequest, amount?: AmountLike): Amount {
+    const providedAmount = amount === undefined ? undefined : Amount.from(amount);
+    if (request.amount && providedAmount && !request.amount.equals(providedAmount)) {
       throw new PaymentRequestError(
-        `Amount mismatch: request specifies ${request.amount} but ${amount} was provided`,
+        `Amount mismatch: request specifies ${request.amount} but ${providedAmount} was provided`,
       );
     }
-    const finalAmount = request.amount ?? amount;
+    const finalAmount = request.amount ?? providedAmount;
     if (!finalAmount) {
       throw new PaymentRequestError('Amount is required but was not provided');
     }
@@ -221,9 +232,9 @@ export class PaymentRequestService {
 
   private async resolvePreparedRequest(
     request: ResolvedPaymentRequest,
-    amount: number,
+    amount: Amount,
   ): Promise<ResolvedPaymentRequest> {
-    if (request.amount === amount) {
+    if (request.amount?.equals(amount)) {
       return request;
     }
 

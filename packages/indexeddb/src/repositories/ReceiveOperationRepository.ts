@@ -3,6 +3,7 @@ import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -10,13 +11,25 @@ function getOperationUnit(op: ReceiveOperation): string {
   return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
 }
 
+function parseInputProofs(
+  inputProofsJson: string | null | undefined,
+): ReceiveOperation['inputProofs'] {
+  const proofs = inputProofsJson
+    ? (JSON.parse(inputProofsJson) as ReceiveOperation['inputProofs'])
+    : [];
+  return proofs.map((proof) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
+}
+
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
-    amount: row.amount,
-    inputProofs: row.inputProofsJson ? JSON.parse(row.inputProofsJson) : [],
+    amount: deserializeAmount(row.amount),
+    inputProofs: parseInputProofs(row.inputProofsJson),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -27,7 +40,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 
   const preparedData = {
-    fee: row.fee ?? 0,
+    fee: deserializeAmount(row.fee ?? 0),
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
 
@@ -54,7 +67,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
       id: op.id,
       mintUrl: op.mintUrl,
       unit: getOperationUnit(op),
-      amount: op.amount,
+      amount: serializeAmount(op.amount),
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
@@ -69,12 +82,12 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     id: op.id,
     mintUrl: op.mintUrl,
     unit: getOperationUnit(op),
-    amount: op.amount,
+    amount: serializeAmount(op.amount),
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
     error: op.error ?? null,
-    fee: op.fee,
+    fee: serializeAmount(op.fee),
     inputProofsJson: JSON.stringify(op.inputProofs),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
   };

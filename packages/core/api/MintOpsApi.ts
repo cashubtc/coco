@@ -1,3 +1,4 @@
+import type { AmountLike } from '@cashu/cashu-ts';
 import type {
   MintMethod,
   MintMethodData,
@@ -16,7 +17,7 @@ type PrepareMintInputCommon = {
   /** Mint that will execute the quote-backed mint operation. */
   mintUrl: string;
   /** Amount to request from the mint. */
-  amount: number;
+  amount: AmountLike;
   /** Unit to request from the mint. Only `sat` is currently supported. */
   unit?: 'sat';
 };

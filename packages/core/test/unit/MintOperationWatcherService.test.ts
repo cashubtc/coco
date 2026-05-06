@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -7,7 +8,7 @@ import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
-import type { MintQuoteResponse } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 describe('MintOperationWatcherService', () => {
   const mintUrl = 'https://mint.test';
@@ -16,7 +17,7 @@ describe('MintOperationWatcherService', () => {
   let bus: EventBus<CoreEvents>;
   let subscribe: Mock<any>;
   let unsubscribe: Mock<any>;
-  let callback: ((payload: MintQuoteResponse) => Promise<void>) | undefined;
+  let callback: ((payload: MintQuoteBolt11Response) => Promise<void>) | undefined;
 
   const makePendingOperation = (): PendingMintOperation => ({
     id: 'mint-op-1',
@@ -24,7 +25,7 @@ describe('MintOperationWatcherService', () => {
     mintUrl,
     method: 'bolt11',
     methodData: {},
-    amount: 10,
+    amount: Amount.from(10),
     unit: 'sat',
     quoteId,
     request: 'lnbc1test',
@@ -45,7 +46,7 @@ describe('MintOperationWatcherService', () => {
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (payload: MintQuoteResponse) => Promise<void>,
+        next: (payload: MintQuoteBolt11Response) => Promise<void>,
       ) => {
         callback = next;
         return { subId: 'sub-1', unsubscribe };

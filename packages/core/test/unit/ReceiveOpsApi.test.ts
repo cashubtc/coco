@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { Token } from '@cashu/cashu-ts';
 import type {
@@ -17,11 +18,11 @@ const makePreparedOperation = (): PreparedReceiveOperation => ({
   state: 'prepared',
   mintUrl,
   unit: 'sat',
-  amount: 20,
+  amount: Amount.from(20),
   inputProofs: [],
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  fee: 0,
+  fee: Amount.from(0),
   outputData: { keep: [], send: [] } as SerializedOutputData,
 });
 
@@ -39,7 +40,7 @@ describe('ReceiveOpsApi', () => {
       state: 'init',
       mintUrl,
       unit: 'sat',
-      amount: 20,
+      amount: Amount.from(20),
       inputProofs: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),

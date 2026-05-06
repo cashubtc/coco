@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletApi } from '../../api/WalletApi';
 import { MintService } from '../../services/MintService';
@@ -28,13 +29,13 @@ describe('WalletApi - Trust Enforcement', () => {
   let mintAdapter: MintAdapter;
 
   const testMintUrl = 'https://mint.test';
-  const keysetId = 'keyset-1';
+  const keysetId = '009a1f293253e41e';
   const testProofs: Proof[] = [
     {
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret: 'secret-1',
-      C: 'C-1',
+      C: '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
     } as Proof,
   ];
 
@@ -42,7 +43,7 @@ describe('WalletApi - Trust Enforcement', () => {
     secrets.map(
       (secret) =>
         new OutputData(
-          { amount: 10, id: keysetId, B_: `B_${secret}` },
+          { amount: Amount.from(10), id: keysetId, B_: `B_${secret}` },
           BigInt(1),
           new TextEncoder().encode(secret),
         ),
@@ -63,7 +64,7 @@ describe('WalletApi - Trust Enforcement', () => {
         mint: { url: testMintUrl },
         keysets: [
           {
-            id: 'keyset-1',
+            id: keysetId,
             unit: 'sat',
             active: true,
             keys: {
@@ -82,7 +83,7 @@ describe('WalletApi - Trust Enforcement', () => {
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
           receive: mock(async () => []),
-          getFeesForProofs: mock(() => 0),
+          getFeesForProofs: mock(() => Amount.zero()),
         },
       })),
     };
@@ -93,12 +94,16 @@ describe('WalletApi - Trust Enforcement', () => {
         send: [],
       })),
       getBalancesByMint: mock(async () => ({
-        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
+        [testMintUrl]: {
+          spendable: Amount.from(10),
+          reserved: Amount.from(5),
+          total: Amount.from(15),
+        },
       })),
       getBalanceTotal: mock(async () => ({
-        spendable: 10,
-        reserved: 5,
-        total: 15,
+        spendable: Amount.from(10),
+        reserved: Amount.from(5),
+        total: Amount.from(15),
       })),
       saveProofs: mock(async () => {}),
       prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
@@ -135,12 +140,16 @@ describe('WalletApi - Trust Enforcement', () => {
   describe('receive - trust enforcement', () => {
     it('exposes the structured balances api', async () => {
       await expect(walletApi.balances.byMint()).resolves.toEqual({
-        [testMintUrl]: { spendable: 10, reserved: 5, total: 15 },
+        [testMintUrl]: {
+          spendable: Amount.from(10),
+          reserved: Amount.from(5),
+          total: Amount.from(15),
+        },
       });
       await expect(walletApi.balances.total()).resolves.toEqual({
-        spendable: 10,
-        reserved: 5,
-        total: 15,
+        spendable: Amount.from(10),
+        reserved: Amount.from(5),
+        total: Amount.from(15),
       });
     });
 
@@ -313,44 +322,6 @@ describe('WalletApi - Trust Enforcement', () => {
       const encodedToken = walletApi.encodeToken(token);
 
       expect(encodedToken).toBe(getEncodedToken(token));
-    });
-
-    it('should encode tokens with V3 when version 3 is specified', () => {
-      const token = {
-        mint: testMintUrl,
-        proofs: [
-          {
-            id: '009a1f293253e41e',
-            amount: 2,
-            secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
-            C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
-          } as Proof,
-        ],
-      };
-
-      const encodedToken = walletApi.encodeToken(token, { version: 3 });
-
-      expect(encodedToken).toStartWith('cashuA');
-      expect(encodedToken).toBe(getEncodedToken(token, { version: 3 }));
-    });
-
-    it('should encode tokens with V4 when version 4 is specified', () => {
-      const v4Token = {
-        mint: testMintUrl,
-        proofs: [
-          {
-            id: '009a1f293253e41e',
-            amount: 2,
-            secret: '407915bc212be61a77e3e6d2aeb4c727980bda51cd06a6afc29e2861768a7837',
-            C: '02bc9097997d81afb2cc7346b5e4345a9346bd2a506eb7958598a72f0cf85163ea',
-          } as Proof,
-        ],
-      };
-
-      const encodedToken = walletApi.encodeToken(v4Token, { version: 4 });
-
-      expect(encodedToken).toStartWith('cashuB');
-      expect(encodedToken).toBe(getEncodedToken(v4Token, { version: 4 }));
     });
   });
 

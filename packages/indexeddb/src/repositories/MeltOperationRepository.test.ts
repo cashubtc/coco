@@ -2,7 +2,7 @@
 
 // @ts-ignore bun:test types are provided by the test runner in this workspace.
 import { describe, expect, it } from 'bun:test';
-import type { MeltOperation } from '@cashu/coco-core';
+import { Amount, type MeltOperation } from '@cashu/coco-core';
 import { IdbMeltOperationRepository } from './MeltOperationRepository.ts';
 import type { MeltOperationRow } from '../lib/db.ts';
 
@@ -19,15 +19,15 @@ function makeFinalizedOperation(): FinalizedMeltOperation {
     updatedAt: 2_000,
     quoteId: 'quote-1',
     unit: 'sat',
-    amount: 100,
-    fee_reserve: 5,
-    swap_fee: 0,
+    amount: Amount.from(100),
+    fee_reserve: Amount.from(5),
+    swap_fee: Amount.zero(),
     needsSwap: false,
-    inputAmount: 105,
+    inputAmount: Amount.from(105),
     inputProofSecrets: ['secret-1'],
     changeOutputData: { keep: [], send: [] },
-    changeAmount: 2,
-    effectiveFee: 3,
+    changeAmount: Amount.from(2),
+    effectiveFee: Amount.from(3),
     finalizedData: { preimage: '' },
   };
 }
@@ -129,8 +129,8 @@ describe('IdbMeltOperationRepository', () => {
 
     await repository.create(operation);
 
-    expect(persistedRow?.changeAmount).toBe(2);
-    expect(persistedRow?.effectiveFee).toBe(3);
+    expect(persistedRow?.changeAmount).toBe('2');
+    expect(persistedRow?.effectiveFee).toBe('3');
     expect(persistedRow?.finalizedDataJson).toBe(JSON.stringify({ preimage: '' }));
   });
 });

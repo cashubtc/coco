@@ -3,6 +3,7 @@ import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 function getOperationUnit(op: ReceiveOperation): string {
@@ -13,14 +14,24 @@ interface ReceiveOperationRow {
   id: string;
   mintUrl: string;
   unit: string | null;
-  amount: number;
+  amount: string | number;
   state: ReceiveOperationState;
   createdAt: number;
   updatedAt: number;
   error: string | null;
-  fee: number | null;
+  fee: string | number | null;
   inputProofsJson: string | null;
   outputDataJson: string | null;
+}
+
+function parseInputProofs(inputProofsJson: string | null): ReceiveOperation['inputProofs'] {
+  const proofs = inputProofsJson
+    ? (JSON.parse(inputProofsJson) as ReceiveOperation['inputProofs'])
+    : [];
+  return proofs.map((proof) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
 }
 
 function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
@@ -28,8 +39,8 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     id: row.id,
     mintUrl: row.mintUrl,
     unit: row.unit ?? 'sat',
-    amount: row.amount,
-    inputProofs: row.inputProofsJson ? JSON.parse(row.inputProofsJson) : [],
+    amount: deserializeAmount(row.amount),
+    inputProofs: parseInputProofs(row.inputProofsJson),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -40,7 +51,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 
   const preparedData = {
-    fee: row.fee ?? 0,
+    fee: deserializeAmount(row.fee ?? 0),
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
 
@@ -67,7 +78,7 @@ function operationToParams(op: ReceiveOperation): unknown[] {
       op.id,
       op.mintUrl,
       getOperationUnit(op),
-      op.amount,
+      serializeAmount(op.amount),
       op.state,
       createdAtSeconds,
       updatedAtSeconds,
@@ -82,12 +93,12 @@ function operationToParams(op: ReceiveOperation): unknown[] {
     op.id,
     op.mintUrl,
     getOperationUnit(op),
-    op.amount,
+    serializeAmount(op.amount),
     op.state,
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
-    op.fee,
+    serializeAmount(op.fee),
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
   ];
@@ -153,7 +164,7 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
           updatedAtSeconds,
           operation.error ?? null,
           getOperationUnit(operation),
-          operation.fee,
+          serializeAmount(operation.fee),
           JSON.stringify(operation.inputProofs),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           operation.id,

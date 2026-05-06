@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { OutputData, type MintQuoteBolt11Response, type Wallet } from '@cashu/cashu-ts';
 import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
@@ -36,7 +37,7 @@ describe('MintBolt11Handler', () => {
     keep: [
       new OutputData(
         {
-          amount: 10,
+          amount: Amount.from(10),
           id: keysetId,
           B_: 'B_out_1',
         },
@@ -51,7 +52,7 @@ describe('MintBolt11Handler', () => {
     id: 'op-1',
     state: 'init' as const,
     mintUrl,
-    amount: 10,
+    amount: Amount.from(10),
     unit: 'sat',
     method: 'bolt11' as const,
     methodData: {},
@@ -62,7 +63,7 @@ describe('MintBolt11Handler', () => {
   const quote: MintQuoteBolt11Response = {
     quote: quoteId,
     request: 'lnbc1test',
-    amount: 10,
+    amount: Amount.from(10),
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     state: 'PAID',
@@ -164,7 +165,7 @@ describe('MintBolt11Handler', () => {
 
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(1);
       expect(result.quoteId).toBe(quoteId);
-      expect(result.amount).toBe(quote.amount);
+      expect(result.amount).toEqual(quote.amount);
       expect(result.request).toBe(quote.request);
       expect(result.outputData.keep).toHaveLength(1);
       expect(result.outputData.send).toEqual([]);

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { AuthService } from '../../services/AuthService.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
@@ -144,7 +145,7 @@ describe('AuthService', () => {
     });
 
     it('imports batPool into AuthManager when session has batPool', async () => {
-      const fakeBatPool = [{ id: 'key1', amount: 1, secret: 's1', C: 'c1' }] as any;
+      const fakeBatPool = [{ id: 'key1', amount: Amount.from(1), secret: 's1', C: 'c1' }] as any;
       const sessionWithPool: AuthSession = {
         ...fakeSession,
         batPool: fakeBatPool,

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { NullLogger } from '../../logging/index.ts';
 import { initializeCoco, type Manager } from '../../Manager.ts';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
@@ -65,13 +66,13 @@ describe('ReceiveOperationService integration', () => {
 
     const pendingMint = await sender.ops.mint.prepare({
       mintUrl,
-      amount: 50,
+      amount: Amount.from(50),
       method: 'bolt11',
       methodData: {},
     });
     await sender.ops.mint.execute(pendingMint.id);
 
-    const preparedSend = await sender.ops.send.prepare({ mintUrl, amount: 30 });
+    const preparedSend = await sender.ops.send.prepare({ mintUrl, amount: Amount.from(30) });
     const { token } = await sender.ops.send.execute(preparedSend.id);
 
     const receiveService = (receiver as any).receiveOperationService as ReceiveOperationService;
@@ -89,8 +90,8 @@ describe('ReceiveOperationService integration', () => {
     expect(finalized.length).toBe(1);
     const op = finalized[0] as FinalizedReceiveOperation;
 
-    const tokenAmount = token.proofs.reduce((sum, proof) => sum + proof.amount, 0);
-    expect(op?.amount).toBe(tokenAmount);
+    const tokenAmount = Amount.sum(token.proofs.map((proof) => proof.amount));
+    expect(op?.amount).toEqual(tokenAmount);
     expect(op?.outputData).toBeDefined();
   }, 30000);
 });

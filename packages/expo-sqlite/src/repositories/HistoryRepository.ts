@@ -6,6 +6,7 @@ import type {
   ReceiveHistoryState,
   SendHistoryEntry,
 } from '@cashu/coco-core';
+import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
 type MintQuoteState = MintHistoryEntry['state'];
@@ -19,7 +20,7 @@ type Row = {
   mintUrl: string;
   type: 'mint' | 'melt' | 'send' | 'receive';
   unit: string;
-  amount: number;
+  amount: string | number;
   createdAt: number;
   quoteId: string | null;
   state: string | null;
@@ -40,6 +41,10 @@ type UpdatableHistoryEntry =
   | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
   | Omit<SendHistoryEntry, 'id' | 'createdAt'>
   | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
+
+function parseToken<TToken>(tokenJson: string | null): TToken | undefined {
+  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+}
 
 export class ExpoHistoryRepository {
   private readonly db: ExpoSqliteDb;
@@ -128,7 +133,7 @@ export class ExpoHistoryRepository {
       history.mintUrl,
       history.type,
       history.unit,
-      history.amount,
+      serializeAmount(history.amount),
       history.createdAt,
     ];
 
@@ -226,7 +231,7 @@ export class ExpoHistoryRepository {
          WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           paymentRequest,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -253,7 +258,7 @@ export class ExpoHistoryRepository {
          WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           history.metadata ? JSON.stringify(history.metadata) : null,
           history.operationId ?? null,
@@ -280,7 +285,7 @@ export class ExpoHistoryRepository {
          WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           tokenJson,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -307,7 +312,7 @@ export class ExpoHistoryRepository {
          WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
         [
           history.unit,
-          history.amount,
+          serializeAmount(history.amount),
           state,
           tokenJson,
           history.metadata ? JSON.stringify(history.metadata) : null,
@@ -387,7 +392,7 @@ export class ExpoHistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MintQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'melt') {
@@ -397,24 +402,24 @@ export class ExpoHistoryRepository {
         quoteId: row.quoteId ?? '',
         operationId: row.operationId ?? undefined,
         state: (row.state ?? 'UNPAID') as MeltQuoteState,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
       };
     }
     if (row.type === 'send') {
       return {
         ...base,
         type: 'send',
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
         operationId: row.operationId ?? '',
         state: (row.state ?? 'pending') as SendHistoryState,
-        token: row.tokenJson ? (JSON.parse(row.tokenJson) as SendToken) : undefined,
+        token: parseToken<SendToken>(row.tokenJson),
       };
     }
-    const token = row.tokenJson ? (JSON.parse(row.tokenJson) as ReceiveToken) : undefined;
+    const token = parseToken<ReceiveToken>(row.tokenJson);
     return {
       ...base,
       type: 'receive',
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       operationId: row.operationId ?? undefined,
       state: (row.state ?? 'finalized') as ReceiveHistoryState,
       token,

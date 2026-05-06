@@ -1,4 +1,5 @@
 import type { MeltQuoteRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { MeltQuote } from '@cashu/coco-core';
 import type { IdbDb, MeltQuoteRow } from '../lib/db.ts';
 
@@ -19,10 +20,10 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
       quote: row.quote,
       state: row.state,
       request: row.request,
-      amount: row.amount,
+      amount: deserializeAmount(row.amount),
       unit: row.unit,
       expiry: row.expiry,
-      fee_reserve: row.fee_reserve,
+      fee_reserve: deserializeAmount(row.fee_reserve),
       payment_preimage: row.payment_preimage,
     };
     return quote;
@@ -34,10 +35,10 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
       quote: quote.quote,
       state: quote.state,
       request: quote.request,
-      amount: quote.amount,
+      amount: serializeAmount(quote.amount),
       unit: quote.unit,
       expiry: quote.expiry,
-      fee_reserve: quote.fee_reserve,
+      fee_reserve: serializeAmount(quote.fee_reserve),
       payment_preimage: quote.payment_preimage ?? null,
     };
     await (this.db as any).table('coco_cashu_melt_quotes').put(row);
@@ -68,10 +69,10 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
         quote: row.quote,
         state: row.state,
         request: row.request,
-        amount: row.amount,
+        amount: deserializeAmount(row.amount),
         unit: row.unit,
         expiry: row.expiry,
-        fee_reserve: row.fee_reserve,
+        fee_reserve: deserializeAmount(row.fee_reserve),
         payment_preimage: row.payment_preimage,
       }));
   }

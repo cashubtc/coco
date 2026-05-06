@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import type {
   InitReceiveOperation,
   PreparedReceiveOperation,
@@ -40,7 +41,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -63,7 +64,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     state: 'init',
     mintUrl,
     unit: 'sat',
-    amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
+    amount: Amount.sum(proofs.map((proof) => proof.amount)),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
@@ -78,11 +79,11 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     state: 'prepared',
     mintUrl,
     unit: 'sat',
-    amount: proofs.reduce((acc, proof) => acc + proof.amount, 0),
+    amount: Amount.sum(proofs.map((proof) => proof.amount)),
     inputProofs: proofs,
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
-    fee: 1,
+    fee: Amount.from(1),
     outputData: makeOutputData([outputSecret]),
   });
 
@@ -185,7 +186,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       const outputSecrets = getOutputProofSecrets(op);
       const recovered: CoreProof[] = outputSecrets.map((secret) => ({
         id: keysetId,
-        amount: 10,
+        amount: Amount.from(10),
         secret,
         C: `C_${secret}`,
         mintUrl,

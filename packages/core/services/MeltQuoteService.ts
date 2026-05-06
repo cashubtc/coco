@@ -1,4 +1,9 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, OutputConfig } from '@cashu/cashu-ts';
+import {
+  sumProofs,
+  type MeltQuoteBolt11Response,
+  type MeltQuoteState,
+  type OutputConfig,
+} from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
 import type { ProofService } from './ProofService';
@@ -87,12 +92,12 @@ export class MeltQuoteService {
       }
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
 
-      let targetAmount = quote.amount + quote.fee_reserve;
+      let targetAmount = quote.amount.add(quote.fee_reserve);
       const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount);
       const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
-      targetAmount = targetAmount + selectedInputFee;
-      const selectedAmount = selectedProofs.reduce((acc, proof) => acc + proof.amount, 0);
-      if (selectedAmount < targetAmount) {
+      targetAmount = targetAmount.add(selectedInputFee);
+      const selectedAmount = sumProofs(selectedProofs);
+      if (selectedAmount.lessThan(targetAmount)) {
         this.logger?.warn('Insufficient proofs to cover melt amount with fee', {
           mintUrl,
           quoteId,
@@ -103,7 +108,7 @@ export class MeltQuoteService {
       }
 
       // If we have the exact amount, skip the send/swap operation
-      if (selectedAmount === targetAmount) {
+      if (selectedAmount.equals(targetAmount)) {
         this.logger?.debug('Exact amount match, skipping send/swap', {
           mintUrl,
           quoteId,
@@ -130,8 +135,8 @@ export class MeltQuoteService {
           selectedProofs,
         });
         const swapFees = wallet.getFeesForProofs(selectedProofs);
-        const totalSendAmount = quote.amount + quote.fee_reserve + swapFees;
-        if (selectedAmount < totalSendAmount) {
+        const totalSendAmount = quote.amount.add(quote.fee_reserve).add(swapFees);
+        if (selectedAmount.lessThan(totalSendAmount)) {
           this.logger?.warn('Insufficient proofs after fee calculation', {
             mintUrl,
             quoteId,
@@ -141,11 +146,11 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
-        const sendAmount = quote.amount + quote.fee_reserve;
-        const keepAmount = selectedAmount - sendAmount - swapFees;
+        const sendAmount = quote.amount.add(quote.fee_reserve);
+        const keepAmount = selectedAmount.subtract(sendAmount).subtract(swapFees);
 
         // Create deterministic blank outputs for receiving change and reserve counters
-        const changeDelta = sendAmount - quote.amount;
+        const changeDelta = sendAmount.subtract(quote.amount);
         const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl);
 
         const outputData = await this.proofService.createOutputsAndIncrementCounters(

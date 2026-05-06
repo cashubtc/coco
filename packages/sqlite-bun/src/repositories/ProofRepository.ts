@@ -1,10 +1,16 @@
-import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  serializeAmount,
+  type ProofRepository,
+  type CoreProof,
+  type ProofState,
+} from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface ProofRow {
   mintUrl: string;
   id: string;
-  amount: number;
+  amount: string | number;
   secret: string;
   C: string;
   dleqJson: string | null;
@@ -19,7 +25,7 @@ const MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE = 900;
 function rowToProof(r: ProofRow): CoreProof {
   const base = {
     id: r.id,
-    amount: r.amount,
+    amount: deserializeAmount(r.amount),
     secret: r.secret,
     C: r.C,
     ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
@@ -61,7 +67,7 @@ export class SqliteProofRepository implements ProofRepository {
         await tx.run(insertSql, [
           mintUrl,
           p.id,
-          p.amount,
+          serializeAmount(p.amount),
           p.secret,
           p.C,
           dleqJson,

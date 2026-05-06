@@ -4,12 +4,18 @@ import type {
   SendOperationState,
   SendMethod,
 } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  deserializeToken,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 interface SendOperationRow {
   id: string;
   mintUrl: string;
-  amount: number;
+  amount: string | number;
   state: SendOperationState;
   createdAt: number;
   updatedAt: number;
@@ -17,15 +23,15 @@ interface SendOperationRow {
   method: string;
   methodDataJson: string;
   needsSwap: number | null;
-  fee: number | null;
-  inputAmount: number | null;
+  fee: string | number | null;
+  inputAmount: string | number | null;
   inputProofSecretsJson: string | null;
   outputDataJson: string | null;
   tokenJson: string | null;
 }
 
 function parseToken(tokenJson: string | null): unknown {
-  return tokenJson ? JSON.parse(tokenJson) : undefined;
+  return tokenJson ? deserializeToken(JSON.parse(tokenJson)) : undefined;
 }
 
 function serializeToken(operation: SendOperation): string | null {
@@ -37,7 +43,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
-    amount: row.amount,
+    amount: deserializeAmount(row.amount),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -52,8 +58,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   // All other states have PreparedData
   const preparedData = {
     needsSwap: row.needsSwap === 1,
-    fee: row.fee ?? 0,
-    inputAmount: row.inputAmount ?? 0,
+    fee: deserializeAmount(row.fee ?? 0),
+    inputAmount: deserializeAmount(row.inputAmount ?? 0),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
@@ -104,13 +110,13 @@ function operationToParams(op: SendOperation): unknown[] {
     return [
       op.id,
       op.mintUrl,
-      op.amount,
+      serializeAmount(op.amount),
       op.state,
       createdAtSeconds,
       updatedAtSeconds,
       op.error ?? null,
       op.method,
-      JSON.stringify(op.methodData),
+      stringifyJson(op.methodData),
       null, // needsSwap
       null, // fee
       null, // inputAmount
@@ -124,16 +130,16 @@ function operationToParams(op: SendOperation): unknown[] {
   return [
     op.id,
     op.mintUrl,
-    op.amount,
+    serializeAmount(op.amount),
     op.state,
     createdAtSeconds,
     updatedAtSeconds,
     op.error ?? null,
     op.method,
-    JSON.stringify(op.methodData),
+    stringifyJson(op.methodData),
     op.needsSwap ? 1 : 0,
-    op.fee,
-    op.inputAmount,
+    serializeAmount(op.fee),
+    serializeAmount(op.inputAmount),
     JSON.stringify(op.inputProofSecrets),
     op.outputData ? JSON.stringify(op.outputData) : null,
     serializeToken(op),
@@ -193,8 +199,8 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
           updatedAtSeconds,
           operation.error ?? null,
           operation.needsSwap ? 1 : 0,
-          operation.fee,
-          operation.inputAmount,
+          serializeAmount(operation.fee),
+          serializeAmount(operation.inputAmount),
           JSON.stringify(operation.inputProofSecrets),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           serializeToken(operation),

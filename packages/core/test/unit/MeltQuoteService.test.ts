@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MeltQuoteService } from '../../services/MeltQuoteService';
 import { EventBus } from '../../events/EventBus';
@@ -23,7 +24,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
   const makeProof = (amount: number, secret: string): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       secret,
       C: 'C_' as any,
       id: 'keyset-1',
@@ -60,7 +61,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
       },
       async setProofState() {},
       createOutputsAndIncrementCounters: mock(() =>
-        Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
+        Promise.resolve({
+          keep: [],
+          send: [],
+          sendAmount: Amount.zero(),
+          keepAmount: Amount.zero(),
+        }),
       ),
       saveProofs: mock(() => Promise.resolve()),
     } as any;
@@ -71,7 +77,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
           wallet: {
             meltProofsBolt11: mock(() => Promise.resolve({ change: [], quote: {} as any })),
             send: mock(() => Promise.resolve({ send: [], keep: [] })),
-            getFeesForProofs: mock(() => 0), // Default mock for getFeesForProofs
+            getFeesForProofs: mock(() => Amount.zero()), // Default mock for getFeesForProofs
           },
         };
       },
@@ -90,8 +96,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
   it('should skip send/swap when selected proofs sum to exact amount', async () => {
     const quote: MeltQuote = {
       quote: quoteId,
-      amount: 100,
-      fee_reserve: 10,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
       request: 'lnbc110...',
       unit: 'sat',
       mintUrl,
@@ -100,7 +106,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       payment_preimage: 'payment_preimage',
     };
 
-    const exactAmount = quote.amount + quote.fee_reserve; // 110
+    const exactAmount = quote.amount.add(quote.fee_reserve); // 110
     const selectedProofs = [makeProof(110, 'secret-1')];
 
     mockMeltQuoteRepo.getMeltQuote = mock(() => Promise.resolve(quote));
@@ -108,7 +114,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     const setProofStateSpy = mock(() => Promise.resolve());
     mockProofService.setProofState = setProofStateSpy;
     const meltProofsBolt11Spy = mock(() => Promise.resolve({ change: [], quote: quote }));
-    const getFeesForProofsSpy = mock(() => 0);
+    const getFeesForProofsSpy = mock(() => Amount.zero());
 
     // Create a wallet object that will be returned consistently
     const wallet = {
@@ -157,8 +163,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
   it('should perform send/swap when selected proofs sum to more than required amount', async () => {
     const quote: MeltQuote = {
       quote: quoteId,
-      amount: 100,
-      fee_reserve: 10,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
       request: 'lnbc110...',
       unit: 'sat',
       mintUrl,
@@ -167,7 +173,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       payment_preimage: 'payment_preimage',
     };
 
-    const amountWithFee = quote.amount + quote.fee_reserve; // 110
+    const amountWithFee = quote.amount.add(quote.fee_reserve); // 110
     const selectedProofs = [makeProof(150, 'secret-1')]; // More than needed
     const swappedProofs = [makeProof(110, 'secret-2')];
     const keepProofs = [makeProof(40, 'secret-3')];
@@ -180,8 +186,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       Promise.resolve({
         keep: [],
         send: [],
-        sendAmount: 112, // This includes receiver fees (110 + 2)
-        keepAmount: 38, // This is after fee adjustment (40 - 2)
+        sendAmount: Amount.from(112), // This includes receiver fees (110 + 2)
+        keepAmount: Amount.from(38), // This is after fee adjustment (40 - 2)
       }),
     );
     mockProofService.createOutputsAndIncrementCounters = createOutputsSpy;
@@ -199,7 +205,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     const wallet = {
       meltProofsBolt11: meltProofsBolt11Spy,
       send: sendSpy,
-      getFeesForProofs: mock(() => 0), // Mock swap fees as 0
+      getFeesForProofs: mock(() => Amount.zero()), // Mock swap fees as 0
     };
     mockWalletService.getWalletWithActiveKeysetId = mock(() =>
       Promise.resolve({
@@ -218,7 +224,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     // Verify createBlankOutputs was called with the correct amount
     // sendAmount ( quote.amount = 100 + quote.fee_reserve = 10) - quote.amount = 100
     expect(createBlanksSpy).toHaveBeenCalledWith(
-      10, // 100 + 10 - 100
+      Amount.from(10), // 100 + 10 - 100
       mintUrl,
     );
     // Verify createOutputsAndIncrementCounters was called with includeFees option
@@ -228,8 +234,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(createOutputsSpy).toHaveBeenCalledWith(
       mintUrl,
       {
-        keep: 40, // selectedAmount - quote.amount - quote.fee_reserve - swapFees
-        send: 110, // quote.amount + quote.fee_reserve
+        keep: Amount.from(40), // selectedAmount - quote.amount - quote.fee_reserve - swapFees
+        send: Amount.from(110), // quote.amount + quote.fee_reserve
       },
       { includeFees: true },
     );
@@ -239,7 +245,12 @@ describe('MeltQuoteService.payMeltQuote', () => {
       send: { type: 'custom', data: [] },
       keep: { type: 'custom', data: [] },
     };
-    expect(sendSpy).toHaveBeenCalledWith(112, selectedProofs, undefined, expectedOutputConfig);
+    expect(sendSpy).toHaveBeenCalledWith(
+      Amount.from(112),
+      selectedProofs,
+      undefined,
+      expectedOutputConfig,
+    );
 
     // Verify saveProofs was called with swapped proofs
     expect(saveProofsSpy).toHaveBeenCalled();
@@ -278,8 +289,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
   it('should throw error when insufficient proofs', async () => {
     const quote: MeltQuote = {
       quote: quoteId,
-      amount: 100,
-      fee_reserve: 10,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
       request: 'lnbc110...',
       unit: 'sat',
       mintUrl,
@@ -288,7 +299,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       payment_preimage: 'payment_preimage',
     };
 
-    const amountWithFee = quote.amount + quote.fee_reserve; // 110
+    const amountWithFee = quote.amount.add(quote.fee_reserve); // 110
     const selectedProofs = [makeProof(50, 'secret-1')]; // Less than needed
 
     mockMeltQuoteRepo.getMeltQuote = mock(() => Promise.resolve(quote));
@@ -302,8 +313,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
   it('should handle multiple proofs summing to exact amount', async () => {
     const quote: MeltQuote = {
       quote: quoteId,
-      amount: 100,
-      fee_reserve: 10,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
       request: 'lnbc110...',
       unit: 'sat',
       mintUrl,
@@ -312,7 +323,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
       payment_preimage: 'payment_preimage',
     };
 
-    const exactAmount = quote.amount + quote.fee_reserve; // 110
+    const exactAmount = quote.amount.add(quote.fee_reserve); // 110
     const selectedProofs = [
       makeProof(50, 'secret-1'),
       makeProof(30, 'secret-2'),
@@ -328,7 +339,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
     // Create a wallet object that will be returned consistently
     const wallet = {
       meltProofsBolt11: meltProofsBolt11Spy,
-      getFeesForProofs: mock(() => 0),
+      getFeesForProofs: mock(() => Amount.zero()),
     };
     mockWalletService.getWalletWithActiveKeysetId = mock(() =>
       Promise.resolve({

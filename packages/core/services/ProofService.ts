@@ -1,7 +1,10 @@
 import {
+  Amount,
   OutputData,
+  splitAmount,
+  sumProofs,
+  type AmountLike,
   type Keys,
-  type MintKeys,
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
@@ -23,8 +26,21 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import {
+  deserializeOutputData,
+  mapProofToCoreProof,
+  toAmount,
+  type SerializedOutputData,
+} from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
+
+function countBlankOutputsForAmount(amount: Amount): number {
+  const value = amount.toBigInt();
+  if (value === 0n) {
+    return 0;
+  }
+  return Math.max((value - 1n).toString(2).length, 1);
+}
 
 export class ProofService {
   private readonly counterService: CounterService;
@@ -59,11 +75,12 @@ export class ProofService {
    * Calculates the send amount including receiver fees.
    * This is used when the sender pays fees for the receiver.
    */
-  async calculateSendAmountWithFees(mintUrl: string, sendAmount: number): Promise<number> {
+  async calculateSendAmountWithFees(mintUrl: string, sendAmount: AmountLike): Promise<Amount> {
     const { wallet, keys, keysetId } =
       await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const requestedSendAmount = toAmount(sendAmount);
     // Split the send amount to determine number of outputs
-    let denominations = splitAmount(sendAmount, keys.keys);
+    let denominations = splitAmount(requestedSendAmount, keys.keys);
 
     // Calculate receiver fees (sender pays fees)
     let receiveFee = wallet.getFeesForKeyset(denominations.length, keysetId);
@@ -71,14 +88,15 @@ export class ProofService {
 
     // Iterate until fee calculation stabilizes
     while (
-      wallet.getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId) >
-      receiveFee
+      wallet
+        .getFeesForKeyset(denominations.length + receiveFeeAmounts.length, keysetId)
+        .greaterThan(receiveFee)
     ) {
-      receiveFee++;
+      receiveFee = receiveFee.add(1);
       receiveFeeAmounts = splitAmount(receiveFee, keys.keys);
     }
 
-    return sendAmount + receiveFee;
+    return requestedSendAmount.add(receiveFee);
   }
 
   async checkInflightProofs() {
@@ -139,19 +157,19 @@ export class ProofService {
 
   async createOutputsAndIncrementCounters(
     mintUrl: string,
-    amount: { keep: number; send: number },
+    amount: { keep: AmountLike; send: AmountLike },
     options?: { includeFees?: boolean },
-  ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: number; keepAmount: number }> {
+  ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: Amount; keepAmount: Amount }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    if (
-      !Number.isFinite(amount.keep) ||
-      !Number.isFinite(amount.send) ||
-      amount.keep < 0 ||
-      amount.send < 0
-    ) {
-      return { keep: [], send: [], sendAmount: 0, keepAmount: 0 };
+    let requestedKeep: Amount;
+    let requestedSend: Amount;
+    try {
+      requestedKeep = toAmount(amount.keep);
+      requestedSend = toAmount(amount.send);
+    } catch {
+      return { keep: [], send: [], sendAmount: Amount.zero(), keepAmount: Amount.zero() };
     }
     const { wallet, keys, keysetId } =
       await this.walletService.getWalletWithActiveKeysetId(mintUrl);
@@ -160,24 +178,26 @@ export class ProofService {
     const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
 
     // Calculate send amount with fees if needed
-    let sendAmount = amount.send;
-    let keepAmount = amount.keep;
-    if (options?.includeFees && amount.send > 0) {
-      sendAmount = await this.calculateSendAmountWithFees(mintUrl, amount.send);
-      const feeAmount = sendAmount - amount.send;
+    let sendAmount = requestedSend;
+    let keepAmount = requestedKeep;
+    if (options?.includeFees && !requestedSend.isZero()) {
+      sendAmount = await this.calculateSendAmountWithFees(mintUrl, requestedSend);
+      const feeAmount = sendAmount.subtract(requestedSend);
       // Adjust keep amount: if send increases due to fees, keep decreases
-      keepAmount = Math.max(0, amount.keep - feeAmount);
+      keepAmount = requestedKeep.greaterThanOrEqual(feeAmount)
+        ? requestedKeep.subtract(feeAmount)
+        : Amount.zero();
       this.logger?.debug('Fee calculation for send amount', {
         mintUrl,
-        originalSendAmount: amount.send,
-        originalKeepAmount: amount.keep,
-        feeAmount,
-        finalSendAmount: sendAmount,
-        adjustedKeepAmount: keepAmount,
+        originalSendAmount: requestedSend.toString(),
+        originalKeepAmount: requestedKeep.toString(),
+        feeAmount: feeAmount.toString(),
+        finalSendAmount: sendAmount.toString(),
+        adjustedKeepAmount: keepAmount.toString(),
       });
     }
 
-    if (keepAmount > 0) {
+    if (!keepAmount.isZero()) {
       data.keep = OutputData.createDeterministicData(
         keepAmount,
         seed,
@@ -188,7 +208,7 @@ export class ProofService {
         await this.counterService.incrementCounter(mintUrl, keys.id, data.keep.length);
       }
     }
-    if (sendAmount > 0) {
+    if (!sendAmount.isZero()) {
       data.send = OutputData.createDeterministicData(
         sendAmount,
         seed,
@@ -271,12 +291,12 @@ export class ProofService {
    * @param mintUrl - The URL of the mint
    * @returns The total balance for the mint
    */
-  async getBalance(mintUrl: string): Promise<number> {
+  async getBalance(mintUrl: string): Promise<Amount> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
     const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
-    return balance[mintUrl]?.total ?? 0;
+    return balance[mintUrl]?.total ?? Amount.zero();
   }
 
   /**
@@ -284,12 +304,12 @@ export class ProofService {
    * @param mintUrl - The URL of the mint
    * @returns The spendable balance for the mint
    */
-  async getSpendableBalance(mintUrl: string): Promise<number> {
+  async getSpendableBalance(mintUrl: string): Promise<Amount> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
     const balance = await this.getBalancesByMint({ mintUrls: [mintUrl] });
-    return balance[mintUrl]?.spendable ?? 0;
+    return balance[mintUrl]?.spendable ?? Amount.zero();
   }
 
   /**
@@ -309,7 +329,7 @@ export class ProofService {
    * Gets balances for all mints.
    * @returns An object mapping mint URLs to their total balances
    */
-  async getBalances(): Promise<{ [mintUrl: string]: number }> {
+  async getBalances(): Promise<{ [mintUrl: string]: Amount }> {
     const balances = await this.getBalancesByMint();
     return Object.fromEntries(
       Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.total]),
@@ -320,7 +340,7 @@ export class ProofService {
    * Gets spendable balances for all mints.
    * @returns An object mapping mint URLs to their spendable balances
    */
-  async getSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+  async getSpendableBalances(): Promise<{ [mintUrl: string]: Amount }> {
     const balances = await this.getBalancesByMint();
     return Object.fromEntries(
       Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.spendable]),
@@ -364,11 +384,11 @@ export class ProofService {
 
       const balance = balances[mintUrl] || this.emptyBalanceSnapshot();
       if (proof.usedByOperationId) {
-        balance.reserved += proof.amount;
+        balance.reserved = balance.reserved.add(proof.amount);
       } else {
-        balance.spendable += proof.amount;
+        balance.spendable = balance.spendable.add(proof.amount);
       }
-      balance.total = balance.spendable + balance.reserved;
+      balance.total = balance.spendable.add(balance.reserved);
       balances[mintUrl] = balance;
     }
 
@@ -389,9 +409,9 @@ export class ProofService {
     const balances = await this.getBalancesByMint(scope);
     return Object.values(balances).reduce<BalanceSnapshot>(
       (total, balance) => ({
-        spendable: total.spendable + balance.spendable,
-        reserved: total.reserved + balance.reserved,
-        total: total.total + balance.total,
+        spendable: total.spendable.add(balance.spendable),
+        reserved: total.reserved.add(balance.reserved),
+        total: total.total.add(balance.total),
       }),
       this.emptyBalanceSnapshot(),
     );
@@ -415,7 +435,7 @@ export class ProofService {
    * Gets balances for trusted mints only.
    * @returns An object mapping trusted mint URLs to their total balances
    */
-  async getTrustedBalances(): Promise<{ [mintUrl: string]: number }> {
+  async getTrustedBalances(): Promise<{ [mintUrl: string]: Amount }> {
     const balances = await this.getBalancesByMint({ trustedOnly: true });
     return Object.fromEntries(
       Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.total]),
@@ -426,7 +446,7 @@ export class ProofService {
    * Gets spendable balances for trusted mints only.
    * @returns An object mapping trusted mint URLs to their spendable balances
    */
-  async getTrustedSpendableBalances(): Promise<{ [mintUrl: string]: number }> {
+  async getTrustedSpendableBalances(): Promise<{ [mintUrl: string]: Amount }> {
     const balances = await this.getBalancesByMint({ trustedOnly: true });
     return Object.fromEntries(
       Object.entries(balances).map(([mintUrl, balance]) => [mintUrl, balance.spendable]),
@@ -448,7 +468,7 @@ export class ProofService {
   }
 
   private emptyBalanceSnapshot(): BalanceSnapshot {
-    return { spendable: 0, reserved: 0, total: 0 };
+    return { spendable: Amount.zero(), reserved: Amount.zero(), total: Amount.zero() };
   }
 
   private snapshotToBreakdown(balance: BalanceSnapshot): BalanceBreakdown {
@@ -488,7 +508,7 @@ export class ProofService {
     mintUrl: string,
     secrets: string[],
     operationId: string,
-  ): Promise<{ amount: number }> {
+  ): Promise<{ amount: Amount }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -496,7 +516,7 @@ export class ProofService {
       throw new ProofValidationError('operationId is required');
     }
     if (!secrets || secrets.length === 0) {
-      return { amount: 0 };
+      return { amount: Amount.zero() };
     }
 
     // Repository will validate proofs are ready and not already reserved
@@ -504,7 +524,7 @@ export class ProofService {
 
     // Calculate the reserved amount for the event
     const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
-    const amount = reservedProofs.reduce((acc, p) => acc + p.amount, 0);
+    const amount = sumProofs(reservedProofs);
 
     await this.eventBus?.emit('proofs:reserved', {
       mintUrl,
@@ -593,19 +613,20 @@ export class ProofService {
    */
   async selectProofsToSend(
     mintUrl: string,
-    amount: number,
+    amount: AmountLike,
     includeFees: boolean = true,
   ): Promise<Proof[]> {
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
-    const totalAmount = proofs.reduce((acc, proof) => acc + proof.amount, 0);
-    if (totalAmount < amount) {
+    const requestedAmount = toAmount(amount);
+    const totalAmount = sumProofs(proofs);
+    if (totalAmount.lessThan(requestedAmount)) {
       throw new ProofValidationError('Not enough proofs to send');
     }
     const wallet = await this.walletService.getWallet(mintUrl);
-    const selectedProofs = wallet.selectProofsToSend(proofs, amount, includeFees);
+    const selectedProofs = wallet.selectProofsToSend(proofs, requestedAmount, includeFees);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
-      amount,
+      amount: requestedAmount.toString(),
       selectedProofs,
       count: selectedProofs.send.length,
     });
@@ -721,15 +742,13 @@ export class ProofService {
     return preparedProofs;
   }
 
-  async createBlankOutputs(amount: number, mintUrl: string): Promise<OutputData[]> {
-    if (!Number.isFinite(amount) || amount < 0) {
-      throw new ProofValidationError('amount must be a non-negative number');
-    }
+  async createBlankOutputs(amount: AmountLike, mintUrl: string): Promise<OutputData[]> {
+    const requestedAmount = toAmount(amount);
     const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
-    if (amount === 0) {
+    if (requestedAmount.isZero()) {
       return [];
     }
-    const outputNumber = Math.max(Math.ceil(Math.log2(amount)), 1);
+    const outputNumber = countBlankOutputsForAmount(requestedAmount);
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const seed = await this.seedService.getSeed();
     const outputData = Array(outputNumber)
@@ -913,43 +932,4 @@ export class ProofService {
 
     return unspentProofs;
   }
-}
-
-/**
- * Splits the amount into denominations of the provided keyset.
- *
- * @remarks
- * Partial splits will be filled up to value using minimum splits required. Sorting is only applied
- * if a fill was made - exact custom splits are always returned in the same order.
- * @param value Amount to split.
- * @param keyset Keys to look up split amounts.
- * @param split? Optional custom split amounts.
- * @param order? Optional order for split amounts (if fill was required)
- * @returns Array of split amounts.
- * @throws Error if split sum is greater than value or mint does not have keys for requested split.
- */
-function splitAmount(value: number, keys: Keys): number[] {
-  const split: number[] = [];
-  // Denomination fill for the remaining value
-  const sortedKeyAmounts = Object.keys(keys)
-    .map((key) => Number(key))
-    .filter((amount) => Number.isSafeInteger(amount) && amount > 0)
-    .sort((a, b) => b - a);
-  if (!sortedKeyAmounts || sortedKeyAmounts.length === 0) {
-    throw new Error('Cannot split amount, keyset is inactive or contains no keys');
-  }
-  for (const amt of sortedKeyAmounts) {
-    // Calculate how many of amt fit into remaining value
-    const requireCount = Math.floor(value / amt);
-    // Add them to the split and reduce the target value by added amounts
-    split.push(...Array<number>(requireCount).fill(amt));
-    value -= amt * requireCount;
-    // Break early once target is satisfied
-    if (value === 0) break;
-  }
-  if (value !== 0) {
-    throw new Error(`Unable to split remaining amount: ${value}`);
-  }
-
-  return split;
 }

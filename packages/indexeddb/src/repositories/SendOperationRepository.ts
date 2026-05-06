@@ -4,6 +4,12 @@ import type {
   SendOperationState,
   SendMethod,
 } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  deserializeToken,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -13,7 +19,7 @@ type LegacySendOperationRow = SendOperationRow & {
 };
 
 function parseToken(row: SendOperationRow): unknown {
-  return row.tokenJson ? JSON.parse(row.tokenJson) : undefined;
+  return row.tokenJson ? deserializeToken(JSON.parse(row.tokenJson)) : undefined;
 }
 
 function serializeToken(operation: SendOperation): string | null {
@@ -35,7 +41,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
-    amount: row.amount,
+    amount: deserializeAmount(row.amount),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -50,8 +56,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   // All other states have PreparedData
   const preparedData = {
     needsSwap: row.needsSwap === 1,
-    fee: row.fee ?? 0,
-    inputAmount: row.inputAmount ?? 0,
+    fee: deserializeAmount(row.fee ?? 0),
+    inputAmount: deserializeAmount(row.inputAmount ?? 0),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
@@ -102,13 +108,13 @@ function operationToRow(op: SendOperation): SendOperationRow {
     return {
       id: op.id,
       mintUrl: op.mintUrl,
-      amount: op.amount,
+      amount: serializeAmount(op.amount),
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
       error: op.error ?? null,
       method: op.method,
-      methodDataJson: JSON.stringify(op.methodData),
+      methodDataJson: stringifyJson(op.methodData),
       needsSwap: null,
       fee: null,
       inputAmount: null,
@@ -122,16 +128,16 @@ function operationToRow(op: SendOperation): SendOperationRow {
   return {
     id: op.id,
     mintUrl: op.mintUrl,
-    amount: op.amount,
+    amount: serializeAmount(op.amount),
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,
     error: op.error ?? null,
     method: op.method,
-    methodDataJson: JSON.stringify(op.methodData),
+    methodDataJson: stringifyJson(op.methodData),
     needsSwap: op.needsSwap ? 1 : 0,
-    fee: op.fee,
-    inputAmount: op.inputAmount,
+    fee: serializeAmount(op.fee),
+    inputAmount: serializeAmount(op.inputAmount),
     inputProofSecretsJson: JSON.stringify(op.inputProofSecrets),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
     tokenJson: serializeToken(op),

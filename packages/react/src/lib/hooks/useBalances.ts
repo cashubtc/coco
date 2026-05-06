@@ -1,12 +1,17 @@
-import type { BalanceQuery, BalanceSnapshot, BalancesByMint } from '@cashu/coco-core';
+import {
+  Amount,
+  type BalanceQuery,
+  type BalanceSnapshot,
+  type BalancesByMint,
+} from '@cashu/coco-core';
 import { useCallback, useEffect, useState } from 'react';
 import type { WalletBalancesValue } from '../contexts/BalanceContext';
 import { useManager } from '../contexts/ManagerContext';
 
 const EMPTY_BALANCE_SNAPSHOT: BalanceSnapshot = {
-  spendable: 0,
-  reserved: 0,
-  total: 0,
+  spendable: Amount.zero(),
+  reserved: Amount.zero(),
+  total: Amount.zero(),
 };
 
 const EMPTY_BALANCES: WalletBalancesValue = {
@@ -17,9 +22,9 @@ const EMPTY_BALANCES: WalletBalancesValue = {
 const getBalanceTotal = (byMint: BalancesByMint): BalanceSnapshot => {
   return Object.values(byMint).reduce<BalanceSnapshot>(
     (total, balance) => ({
-      spendable: total.spendable + balance.spendable,
-      reserved: total.reserved + balance.reserved,
-      total: total.total + balance.total,
+      spendable: total.spendable.add(balance.spendable),
+      reserved: total.reserved.add(balance.reserved),
+      total: total.total.add(balance.total),
     }),
     EMPTY_BALANCE_SNAPSHOT,
   );

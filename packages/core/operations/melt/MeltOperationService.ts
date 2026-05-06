@@ -11,7 +11,8 @@ import type {
   PreparedOrLaterOperation,
 } from './MeltOperation';
 import { createMeltOperation, hasPreparedData } from './MeltOperation';
-import type { MeltMethod, MeltMethodData, PendingCheckResult } from './MeltMethodHandler';
+import type { MeltMethod, MeltMethodInputData, PendingCheckResult } from './MeltMethodHandler';
+import { normalizeMeltMethodData } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -96,24 +97,34 @@ export class MeltOperationService {
   async init(
     mintUrl: string,
     method: MeltMethod,
-    methodData: MeltMethodData,
+    methodData: MeltMethodInputData,
   ): Promise<InitMeltOperation> {
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (
-      methodData.amountSats &&
-      (!Number.isFinite(methodData.amountSats) || methodData.amountSats <= 0)
-    ) {
+    let normalizedMethodData;
+    try {
+      normalizedMethodData = normalizeMeltMethodData(methodData);
+      if (
+        'amountSats' in normalizedMethodData &&
+        normalizedMethodData.amountSats !== undefined &&
+        normalizedMethodData.amountSats.isZero()
+      ) {
+        throw new ProofValidationError('Amount must be a positive number');
+      }
+    } catch (error) {
+      if (error instanceof ProofValidationError) {
+        throw error;
+      }
       throw new ProofValidationError('Amount must be a positive number');
     }
 
     const id = generateSubId();
     const operation = createMeltOperation(id, mintUrl, {
       method,
-      methodData,
+      methodData: normalizedMethodData,
     });
 
     await this.meltOperationRepository.create(operation);

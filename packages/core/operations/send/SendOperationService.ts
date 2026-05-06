@@ -1,4 +1,4 @@
-import type { Token, Proof, ProofState as CashuProofState } from '@cashu/cashu-ts';
+import type { AmountLike, Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -26,7 +26,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId } from '../../utils';
+import { generateSubId, toAmount } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -120,7 +120,7 @@ export class SendOperationService {
    */
   async init<M extends SendMethod = 'default'>(
     mintUrl: string,
-    amount: number,
+    amount: AmountLike,
     options: CreateSendOperationOptions<M> = {
       method: 'default' as M,
       methodData: {} as SendMethodData<M>,
@@ -131,7 +131,7 @@ export class SendOperationService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (toAmount(amount).isZero()) {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
@@ -314,7 +314,7 @@ export class SendOperationService {
    * High-level send method that orchestrates init → prepare → execute.
    * This is the main entry point for consumers.
    */
-  async send(mintUrl: string, amount: number): Promise<Token> {
+  async send(mintUrl: string, amount: AmountLike): Promise<Token> {
     const initOp = await this.init(mintUrl, amount);
     const preparedOp = await this.prepare(initOp);
     const { token } = await this.execute(preparedOp);
@@ -737,7 +737,7 @@ export class SendOperationService {
   ): Promise<CashuProofState[]> {
     const wallet = await this.walletService.getWallet(mintUrl);
     const proofInputs = secrets.map((secret) => ({ secret }));
-    return wallet.checkProofsStates(proofInputs as unknown as Proof[]);
+    return wallet.checkProofsStates(proofInputs);
   }
 
   /**

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -25,7 +26,7 @@ describe('ProofService', () => {
     getWalletWithActiveKeysetId: (mintUrl: string) => Promise<any>;
     getWallet: (
       mintUrl: string,
-    ) => Promise<{ selectProofsToSend: (proofs: any[], amount: number) => { send: any[] } }>;
+    ) => Promise<{ selectProofsToSend: (proofs: any[], amount: Amount) => { send: any[] } }>;
   };
 
   // Minimal mint service stub
@@ -40,7 +41,7 @@ describe('ProofService', () => {
 
   const makeProof = (overrides: Partial<CoreProof>): CoreProof =>
     ({
-      amount: 1,
+      amount: Amount.from(1),
       C: 'C_' as unknown as any,
       id: keysetId,
       secret: Math.random().toString(36).slice(2),
@@ -52,6 +53,7 @@ describe('ProofService', () => {
   const makeSeed = () => new Uint8Array(64).fill(7);
 
   let originalCreateDeterministicData: typeof OutputData.createDeterministicData;
+  let originalCreateSingleDeterministicData: typeof OutputData.createSingleDeterministicData;
 
   beforeEach(() => {
     proofRepo = new MemoryProofRepository();
@@ -66,7 +68,7 @@ describe('ProofService', () => {
       },
       async getWallet() {
         return {
-          selectProofsToSend(proofs: any[], _amount: number) {
+          selectProofsToSend(proofs: any[], _amount: Amount) {
             // Default naive selector used by tests; specific tests can override walletService
             return { send: proofs.slice(0, 1) };
           },
@@ -88,11 +90,13 @@ describe('ProofService', () => {
     };
 
     originalCreateDeterministicData = OutputData.createDeterministicData;
+    originalCreateSingleDeterministicData = OutputData.createSingleDeterministicData;
   });
 
   afterEach(() => {
     // Restore OutputData static
     OutputData.createDeterministicData = originalCreateDeterministicData;
+    OutputData.createSingleDeterministicData = originalCreateSingleDeterministicData;
   });
 
   describe('createOutputsAndIncrementCounters', () => {
@@ -140,15 +144,15 @@ describe('ProofService', () => {
     });
 
     it('creates deterministic outputs and increments counters accordingly', async () => {
-      const calls: Array<{ amount: number; counter: number }> = [];
+      const calls: Array<{ amount: Amount; counter: number }> = [];
       OutputData.createDeterministicData = ((
-        amount: number,
+        amount: Amount,
         _seed: Uint8Array,
         counter: number,
       ) => {
         calls.push({ amount, counter });
         // Return arrays with predictable sizes not necessarily equal to amount
-        const size = amount === 3 ? 2 : amount === 7 ? 4 : 0;
+        const size = amount.equals(3) ? 2 : amount.equals(7) ? 4 : 0;
         return new Array(size).fill({}) as any;
       }) as any;
 
@@ -170,9 +174,9 @@ describe('ProofService', () => {
 
       expect(calls.length).toBe(2);
       // First call uses current counter (0)
-      expect(calls[0]).toEqual({ amount: 3, counter: 0 });
+      expect(calls[0]).toEqual({ amount: Amount.from(3), counter: 0 });
       // Second call uses offset by keep outputs length (2)
-      expect(calls[1]).toEqual({ amount: 7, counter: 2 });
+      expect(calls[1]).toEqual({ amount: Amount.from(7), counter: 2 });
 
       expect(result.keep.length).toBe(2);
       expect(result.send.length).toBe(4);
@@ -182,13 +186,51 @@ describe('ProofService', () => {
     });
   });
 
+  describe('createBlankOutputs', () => {
+    it('creates blank outputs for bigint-backed amounts above MAX_SAFE_INTEGER', async () => {
+      const counters: number[] = [];
+      OutputData.createSingleDeterministicData = ((
+        amount: Parameters<typeof OutputData.createSingleDeterministicData>[0],
+        _seed: Uint8Array,
+        counter: number,
+      ) => {
+        expect(Amount.from(amount)).toEqual(Amount.zero());
+        counters.push(counter);
+        return {} as OutputData;
+      }) as typeof OutputData.createSingleDeterministicData;
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      const amount = Amount.from(1n << 60n);
+
+      const result = await service.createBlankOutputs(amount, mintUrl);
+
+      expect(result.length).toBe(60);
+      expect(counters).toEqual(Array.from({ length: 60 }, (_, index) => index));
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 60,
+      });
+    });
+  });
+
   describe('calculateSendAmountWithFees', () => {
     it('ignores denominations above MAX_SAFE_INTEGER when splitting', async () => {
       walletService = {
         async getWalletWithActiveKeysetId() {
           return {
             wallet: {
-              getFeesForKeyset: () => 0,
+              getFeesForKeyset: () => Amount.zero(),
             },
             keysetId,
             keys: {
@@ -221,7 +263,9 @@ describe('ProofService', () => {
         bus,
       );
 
-      await expect(service.calculateSendAmountWithFees(mintUrl, 3)).resolves.toBe(3);
+      await expect(service.calculateSendAmountWithFees(mintUrl, 3)).resolves.toEqual(
+        Amount.from(3),
+      );
     });
 
     it('throws when all available denominations exceed MAX_SAFE_INTEGER', async () => {
@@ -229,7 +273,7 @@ describe('ProofService', () => {
         async getWalletWithActiveKeysetId() {
           return {
             wallet: {
-              getFeesForKeyset: () => 0,
+              getFeesForKeyset: () => Amount.zero(),
             },
             keysetId,
             keys: {
@@ -262,7 +306,7 @@ describe('ProofService', () => {
       );
 
       await expect(service.calculateSendAmountWithFees(mintUrl, 1)).rejects.toThrow(
-        'Cannot split amount, keyset is inactive or contains no keys',
+        'Unable to split remaining amount: 1',
       );
     });
   });
@@ -286,9 +330,9 @@ describe('ProofService', () => {
       });
 
       const proofs: CoreProof[] = [
-        makeProof({ secret: 's1', id: 'k1', amount: 5 }),
-        makeProof({ secret: 's2', id: 'k1', amount: 10 }),
-        makeProof({ secret: 's3', id: 'k2', amount: 15 }),
+        makeProof({ secret: 's1', id: 'k1', amount: Amount.from(5) }),
+        makeProof({ secret: 's2', id: 'k1', amount: Amount.from(10) }),
+        makeProof({ secret: 's3', id: 'k2', amount: Amount.from(15) }),
       ];
 
       await service.saveProofs(mintUrl, proofs);
@@ -315,13 +359,15 @@ describe('ProofService', () => {
       );
 
       // Pre-seed repository with a proof to force a collision for keyset kBad
-      await proofRepo.saveProofs(mintUrl, [makeProof({ secret: 'dup', id: 'kBad', amount: 1 })]);
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(1) }),
+      ]);
 
       const proofs: CoreProof[] = [
         // This one will collide (same secret under same mint)
-        makeProof({ secret: 'dup', id: 'kBad', amount: 2 }),
+        makeProof({ secret: 'dup', id: 'kBad', amount: Amount.from(2) }),
         // Another independent group should succeed
-        makeProof({ secret: 'ok1', id: 'kOk', amount: 3 }),
+        makeProof({ secret: 'ok1', id: 'kOk', amount: Amount.from(3) }),
       ];
 
       await expect(service.saveProofs(mintUrl, proofs)).rejects.toThrow(ProofOperationError);
@@ -589,8 +635,8 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'a1', id: 'k1', amount: 5 }),
-        makeProof({ secret: 'a2', id: 'k1', amount: 10 }),
+        makeProof({ secret: 'a1', id: 'k1', amount: Amount.from(5) }),
+        makeProof({ secret: 'a2', id: 'k1', amount: Amount.from(10) }),
       ]);
 
       await expect(service.selectProofsToSend(mintUrl, 100)).rejects.toThrow(ProofValidationError);
@@ -609,8 +655,13 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'available-1', id: 'k1', amount: 50 }),
-        makeProof({ secret: 'reserved-1', id: 'k1', amount: 100, usedByOperationId: 'op-1' }),
+        makeProof({ secret: 'available-1', id: 'k1', amount: Amount.from(50) }),
+        makeProof({
+          secret: 'reserved-1',
+          id: 'k1',
+          amount: Amount.from(100),
+          usedByOperationId: 'op-1',
+        }),
       ]);
 
       const selected = await service.selectProofsToSend(mintUrl, 40);
@@ -625,14 +676,14 @@ describe('ProofService', () => {
         },
         async getWallet() {
           return {
-            selectProofsToSend(proofs: any[], amount: number) {
+            selectProofsToSend(proofs: any[], amount: Amount) {
               // pick smallest number of proofs that reach amount
               const selected: any[] = [];
-              let acc = 0;
+              let acc = Amount.zero();
               for (const p of proofs) {
-                if (acc >= amount) break;
+                if (acc.greaterThanOrEqual(amount)) break;
                 selected.push(p);
-                acc += (p as any).amount ?? 0;
+                acc = acc.add((p as any).amount ?? 0);
               }
               return { send: selected };
             },
@@ -651,9 +702,9 @@ describe('ProofService', () => {
         bus,
       );
 
-      const p1 = makeProof({ secret: 'b1', id: 'k1', amount: 30 });
-      const p2 = makeProof({ secret: 'b2', id: 'k1', amount: 50 });
-      const p3 = makeProof({ secret: 'b3', id: 'k1', amount: 80 });
+      const p1 = makeProof({ secret: 'b1', id: 'k1', amount: Amount.from(30) });
+      const p2 = makeProof({ secret: 'b2', id: 'k1', amount: Amount.from(50) });
+      const p3 = makeProof({ secret: 'b3', id: 'k1', amount: Amount.from(80) });
       await proofRepo.saveProofs(mintUrl, [p1, p2, p3]);
 
       const selected = await service.selectProofsToSend(mintUrl, 60);
@@ -679,25 +730,29 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'a1', amount: 100 }),
-        makeProof({ secret: 'a2', amount: 50 }),
+        makeProof({ secret: 'a1', amount: Amount.from(100) }),
+        makeProof({ secret: 'a2', amount: Amount.from(50) }),
       ]);
       await proofRepo.reserveProofs(mintUrl, ['a1'], operationId);
 
       await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
-        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+        },
       });
       await expect(service.getBalanceTotal({ mintUrls: [mintUrl] })).resolves.toEqual({
-        spendable: 50,
-        reserved: 100,
-        total: 150,
+        spendable: Amount.from(50),
+        reserved: Amount.from(100),
+        total: Amount.from(150),
       });
-      await expect(service.getBalance(mintUrl)).resolves.toBe(150);
-      await expect(service.getSpendableBalance(mintUrl)).resolves.toBe(50);
+      await expect(service.getBalance(mintUrl)).resolves.toEqual(Amount.from(150));
+      await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(Amount.from(50));
       await expect(service.getBalanceBreakdown(mintUrl)).resolves.toEqual({
-        ready: 50,
-        reserved: 100,
-        total: 150,
+        ready: Amount.from(50),
+        reserved: Amount.from(100),
+        total: Amount.from(150),
       });
     });
 
@@ -720,16 +775,20 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'scope-a1', amount: 100 }),
-        makeProof({ secret: 'scope-a2', amount: 50 }),
+        makeProof({ secret: 'scope-a1', amount: Amount.from(100) }),
+        makeProof({ secret: 'scope-a2', amount: Amount.from(50) }),
       ]);
       await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'scope-b1', amount: 200, mintUrl: otherMintUrl }),
+        makeProof({ secret: 'scope-b1', amount: Amount.from(200), mintUrl: otherMintUrl }),
       ]);
       await proofRepo.reserveProofs(mintUrl, ['scope-a1'], operationId);
 
       await expect(service.getBalancesByMint({ mintUrls: [mintUrl] })).resolves.toEqual({
-        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+        },
       });
 
       expect(proofRepo.getReadyProofs).toHaveBeenCalledTimes(1);
@@ -755,16 +814,18 @@ describe('ProofService', () => {
         bus,
       );
 
-      await proofRepo.saveProofs(mintUrl, [makeProof({ secret: 'empty-a1', amount: 100 })]);
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'empty-a1', amount: Amount.from(100) }),
+      ]);
       await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'empty-b1', amount: 200, mintUrl: otherMintUrl }),
+        makeProof({ secret: 'empty-b1', amount: Amount.from(200), mintUrl: otherMintUrl }),
       ]);
 
       await expect(service.getBalancesByMint({ mintUrls: [] })).resolves.toEqual({});
       await expect(service.getBalanceTotal({ mintUrls: [] })).resolves.toEqual({
-        spendable: 0,
-        reserved: 0,
-        total: 0,
+        spendable: Amount.from(0),
+        reserved: Amount.from(0),
+        total: Amount.from(0),
       });
 
       expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
@@ -784,34 +845,46 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'b1', amount: 100 }),
-        makeProof({ secret: 'b2', amount: 50 }),
+        makeProof({ secret: 'b1', amount: Amount.from(100) }),
+        makeProof({ secret: 'b2', amount: Amount.from(50) }),
       ]);
       await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'c1', amount: 200, mintUrl: otherMintUrl }),
+        makeProof({ secret: 'c1', amount: Amount.from(200), mintUrl: otherMintUrl }),
       ]);
       await proofRepo.reserveProofs(mintUrl, ['b1'], operationId);
 
       await expect(service.getBalancesByMint()).resolves.toEqual({
-        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
-        [otherMintUrl]: { spendable: 200, reserved: 0, total: 200 },
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+        },
+        [otherMintUrl]: {
+          spendable: Amount.from(200),
+          reserved: Amount.from(0),
+          total: Amount.from(200),
+        },
       });
       await expect(service.getBalanceTotal()).resolves.toEqual({
-        spendable: 250,
-        reserved: 100,
-        total: 350,
+        spendable: Amount.from(250),
+        reserved: Amount.from(100),
+        total: Amount.from(350),
       });
       await expect(service.getBalances()).resolves.toEqual({
-        [mintUrl]: 150,
-        [otherMintUrl]: 200,
+        [mintUrl]: Amount.from(150),
+        [otherMintUrl]: Amount.from(200),
       });
       await expect(service.getSpendableBalances()).resolves.toEqual({
-        [mintUrl]: 50,
-        [otherMintUrl]: 200,
+        [mintUrl]: Amount.from(50),
+        [otherMintUrl]: Amount.from(200),
       });
       await expect(service.getBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: 50, reserved: 100, total: 150 },
-        [otherMintUrl]: { ready: 200, reserved: 0, total: 200 },
+        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
+        [otherMintUrl]: {
+          ready: Amount.from(200),
+          reserved: Amount.zero(),
+          total: Amount.from(200),
+        },
       });
     });
 
@@ -828,30 +901,34 @@ describe('ProofService', () => {
       );
 
       await proofRepo.saveProofs(mintUrl, [
-        makeProof({ secret: 'd1', amount: 100 }),
-        makeProof({ secret: 'd2', amount: 50 }),
+        makeProof({ secret: 'd1', amount: Amount.from(100) }),
+        makeProof({ secret: 'd2', amount: Amount.from(50) }),
       ]);
       await proofRepo.saveProofs(otherMintUrl, [
-        makeProof({ secret: 'e1', amount: 500, mintUrl: otherMintUrl }),
+        makeProof({ secret: 'e1', amount: Amount.from(500), mintUrl: otherMintUrl }),
       ]);
       await proofRepo.reserveProofs(mintUrl, ['d1'], operationId);
 
       await expect(service.getBalancesByMint({ trustedOnly: true })).resolves.toEqual({
-        [mintUrl]: { spendable: 50, reserved: 100, total: 150 },
+        [mintUrl]: {
+          spendable: Amount.from(50),
+          reserved: Amount.from(100),
+          total: Amount.from(150),
+        },
       });
       await expect(service.getBalanceTotal({ trustedOnly: true })).resolves.toEqual({
-        spendable: 50,
-        reserved: 100,
-        total: 150,
+        spendable: Amount.from(50),
+        reserved: Amount.from(100),
+        total: Amount.from(150),
       });
       await expect(service.getTrustedBalances()).resolves.toEqual({
-        [mintUrl]: 150,
+        [mintUrl]: Amount.from(150),
       });
       await expect(service.getTrustedSpendableBalances()).resolves.toEqual({
-        [mintUrl]: 50,
+        [mintUrl]: Amount.from(50),
       });
       await expect(service.getTrustedBalancesBreakdown()).resolves.toEqual({
-        [mintUrl]: { ready: 50, reserved: 100, total: 150 },
+        [mintUrl]: { ready: Amount.from(50), reserved: Amount.from(100), total: Amount.from(150) },
       });
     });
   });

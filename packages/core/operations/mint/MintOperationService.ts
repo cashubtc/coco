@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import type { AmountLike, Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -30,7 +30,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import { generateSubId, mapProofToCoreProof, toAmount } from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
@@ -130,7 +130,7 @@ export class MintOperationService {
 
   async init(
     mintUrl: string,
-    intent: { amount: number; unit: string },
+    intent: { amount: AmountLike; unit: string },
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
     options?: { quoteId?: string },
@@ -140,7 +140,7 @@ export class MintOperationService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (!Number.isFinite(intent.amount) || intent.amount <= 0) {
+    if (toAmount(intent.amount).isZero()) {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
@@ -177,7 +177,7 @@ export class MintOperationService {
 
   async prepareNewQuote(
     mintUrl: string,
-    amount: number,
+    amount: AmountLike,
     unit = 'sat',
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
@@ -193,7 +193,7 @@ export class MintOperationService {
     methodData: MintMethodData = {},
     options?: { skipMintLock?: boolean },
   ): Promise<PendingMintOperation> {
-    if (!quote.amount || quote.amount <= 0) {
+    if (!quote.amount || quote.amount.isZero()) {
       throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
     }
 

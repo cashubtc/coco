@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 /**
  * Auth BAT integration test — automated via Keycloak password grant.
  *
@@ -101,7 +102,7 @@ describe('Auth BAT (automated — password grant)', () => {
 
     const pendingMint = await mgr.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });
@@ -141,7 +142,7 @@ describe('Auth BAT (automated — password grant)', () => {
 
     const pendingMint = await mgr2.ops.mint.prepare({
       mintUrl,
-      amount: 1,
+      amount: Amount.from(1),
       method: 'bolt11',
       methodData: {},
     });

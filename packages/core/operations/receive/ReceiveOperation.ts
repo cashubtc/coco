@@ -13,8 +13,12 @@
  */
 export type ReceiveOperationState = 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
 
-import type { Proof } from '@cashu/cashu-ts';
-import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import type { Amount, AmountLike, Proof } from '@cashu/cashu-ts';
+import {
+  getSecretsFromSerializedOutputData,
+  toAmount,
+  type SerializedOutputData,
+} from '../../utils';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -34,7 +38,7 @@ interface ReceiveOperationBase {
   unit: string;
 
   /** The amount received (sum of input proofs) */
-  amount: number;
+  amount: Amount;
 
   /** Proofs contained in the received token (prepared for receiving) */
   inputProofs: Proof[];
@@ -54,7 +58,7 @@ interface ReceiveOperationBase {
  */
 interface PreparedData {
   /** Fees charged for the receive operation */
-  fee: number;
+  fee: Amount;
 
   /** Serialized OutputData for deterministic receive outputs */
   outputData: SerializedOutputData;
@@ -182,7 +186,7 @@ export function getOutputProofSecrets(op: PreparedOrLaterOperation): string[] {
 export function createReceiveOperation(
   id: string,
   mintUrl: string,
-  amount: number,
+  amount: AmountLike,
   inputProofs: Proof[],
   unit: string,
 ): InitReceiveOperation {
@@ -192,7 +196,7 @@ export function createReceiveOperation(
     state: 'init',
     mintUrl,
     unit,
-    amount,
+    amount: toAmount(amount),
     inputProofs,
     createdAt: now,
     updatedAt: now,

@@ -1,4 +1,4 @@
-import type { Wallet, Proof } from '@cashu/cashu-ts';
+import { Amount, type AmountLike, type Wallet, type Proof } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -19,22 +19,53 @@ import type {
 import type { MintAdapter } from '@core/infra';
 
 /**
- * Registry of supported melt methods and their payload shapes.
+ * Registry of supported melt methods and their public input payload shapes.
  * Extend via declaration merging if you need to add methods externally.
  */
+export interface MeltMethodInputDefinitions {
+  bolt11: { invoice: string; amountSats?: AmountLike };
+  bolt12: { offer: string; amountSats?: AmountLike };
+  onchain: { address: string; amountSats: AmountLike };
+}
+
+/**
+ * Registry of supported melt methods and their normalized operation payload shapes.
+ * Amount values are normalized at the operation boundary.
+ */
 export interface MeltMethodDefinitions {
-  bolt11: { invoice: string; amountSats?: number };
-  bolt12: { offer: string; amountSats?: number };
-  onchain: { address: string; amountSats: number };
+  bolt11: { invoice: string; amountSats?: Amount };
+  bolt12: { offer: string; amountSats?: Amount };
+  onchain: { address: string; amountSats: Amount };
 }
 
 export type MeltMethod = keyof MeltMethodDefinitions;
 
 export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefinitions[M];
 
+export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =
+  M extends keyof MeltMethodInputDefinitions ? MeltMethodInputDefinitions[M] : never;
+
 export interface MeltMethodMeta<M extends MeltMethod = MeltMethod> {
   method: M;
   methodData: MeltMethodData<M>;
+}
+
+export function normalizeMeltMethodData<M extends MeltMethod>(
+  methodData: MeltMethodInputData<M> | MeltMethodData<M>,
+): MeltMethodData<M> {
+  if (
+    typeof methodData !== 'object' ||
+    methodData === null ||
+    !('amountSats' in methodData) ||
+    methodData.amountSats === undefined
+  ) {
+    return methodData as MeltMethodData<M>;
+  }
+
+  return {
+    ...methodData,
+    amountSats: Amount.from(methodData.amountSats as AmountLike),
+  } as MeltMethodData<M>;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,9 +109,9 @@ export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends Base
 
 export type FinalizeResult<M extends MeltMethod = MeltMethod> = {
   /** Total amount returned as change by the mint */
-  changeAmount?: number;
+  changeAmount?: Amount;
   /** Actual fee impact after settlement */
-  effectiveFee?: number;
+  effectiveFee?: Amount;
   /** Method-specific data that may be available once settlement completes */
   finalizedData?: MeltMethodFinalizedData<M>;
 };

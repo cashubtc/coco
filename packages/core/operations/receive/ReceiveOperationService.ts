@@ -1,6 +1,6 @@
 import {
-  getDecodedToken,
   getTokenMetadata,
+  sumProofs,
   type Proof,
   type ProofState as CashuProofState,
   type Token,
@@ -145,8 +145,8 @@ export class ReceiveOperationService {
       throw new ProofValidationError('Token contains no proofs');
     }
 
-    const amount = preparedProofs.reduce((acc, proof) => acc + proof.amount, 0);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amount = sumProofs(preparedProofs);
+    if (amount.isZero()) {
       this.logger?.warn('Token has invalid or non-positive amount', { mintUrl, amount });
       throw new ProofValidationError('Token amount must be a positive integer');
     }
@@ -210,11 +210,12 @@ export class ReceiveOperationService {
     const { mintUrl } = operation;
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
     const fee = wallet.getFeesForProofs(operation.inputProofs);
-    const keepAmount = operation.amount - fee;
 
-    if (!Number.isFinite(keepAmount) || keepAmount <= 0) {
+    if (operation.amount.lessThanOrEqual(fee)) {
       throw new ProofValidationError('Receive amount is not sufficient after fees');
     }
+
+    const keepAmount = operation.amount.subtract(fee);
 
     const outputResult = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
       keep: keepAmount,

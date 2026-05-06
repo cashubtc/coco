@@ -35,9 +35,10 @@ export class ProofValidationError extends Error {
   }
 }
 export class TokenValidationError extends Error {
-  constructor(message: string) {
+  constructor(message: string, cause?: unknown) {
     super(message);
     this.name = 'TokenValidationError';
+    (this as unknown as { cause?: unknown }).cause = cause;
   }
 }
 

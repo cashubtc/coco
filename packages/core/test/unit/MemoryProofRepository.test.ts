@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
 import type { CoreProof } from '../../types.ts';
@@ -10,7 +11,7 @@ describe('MemoryProofRepository', () => {
 
   const makeProof = (secret: string, selectedMintUrl = mintUrl): CoreProof => ({
     id: 'keyset-1',
-    amount: 1,
+    amount: Amount.from(1),
     secret,
     C: `C_${secret}`,
     mintUrl: selectedMintUrl,

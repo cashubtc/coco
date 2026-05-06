@@ -1,4 +1,5 @@
 import type { MintOperationRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -34,7 +35,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
   };
 
   const intent = {
-    amount: row.amount ?? 0,
+    amount: deserializeAmount(row.amount ?? 0),
     unit: row.unit ?? '',
   };
 
@@ -53,7 +54,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     state: normalizeState(row.state),
     quoteId: row.quoteId ?? '',
     request: row.request ?? '',
-    expiry: row.expiry ?? 0,
+    expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
@@ -64,7 +65,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
 const operationToRow = (operation: MintOperation): MintOperationRow => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return {
@@ -77,7 +78,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       error: operation.error ?? null,
       method: operation.method,
       methodDataJson,
-      amount: operation.amount,
+      amount: serializeAmount(operation.amount),
       unit: operation.unit,
       terminalFailureJson: operation.terminalFailure
         ? JSON.stringify(operation.terminalFailure)
@@ -96,7 +97,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     error: operation.error ?? null,
     method: operation.method,
     methodDataJson,
-    amount: operation.amount,
+    amount: serializeAmount(operation.amount),
     unit: operation.unit,
     request: operation.request,
     expiry: operation.expiry,

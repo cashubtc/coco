@@ -1,3 +1,4 @@
+import { JSONInt } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
 
@@ -14,6 +15,18 @@ interface RateLimiterOptions {
   refillPerMinute?: number;
   bypassPathPrefixes?: string[];
   logger?: Logger;
+}
+
+function stringifyJson(value: unknown, space?: number): string {
+  const body = JSONInt.stringify(value, undefined, space);
+  if (body === undefined) {
+    throw new TypeError('Failed to serialize JSON body');
+  }
+  return body;
+}
+
+async function parseJsonResponse<T>(response: { text(): Promise<string> }): Promise<T> {
+  return JSONInt.parse(await response.text()) as T;
 }
 
 /**
@@ -88,14 +101,14 @@ export class RequestRateLimiter {
     let body: unknown | undefined = undefined;
     if (requestBody !== undefined) {
       finalHeaders.set('Content-Type', 'application/json');
-      body = JSON.stringify(requestBody);
+      body = stringifyJson(requestBody);
     }
 
     // Log request payload
     this.logger?.debug('Mint request', {
       method: init.method || 'GET',
       endpoint,
-      requestBody: requestBody ? JSON.stringify(requestBody, null, 2) : undefined,
+      requestBody: requestBody ? stringifyJson(requestBody, 2) : undefined,
     });
 
     let response: Response;
@@ -119,7 +132,7 @@ export class RequestRateLimiter {
         | Record<string, unknown>;
       let errorData: ErrorShape = { error: 'bad response' };
       try {
-        errorData = (await response.clone().json()) as ErrorShape;
+        errorData = await parseJsonResponse<ErrorShape>(response.clone());
       } catch {
         // leave default errorData
       }
@@ -128,7 +141,7 @@ export class RequestRateLimiter {
       this.logger?.debug('Mint response error', {
         endpoint,
         status: response.status,
-        errorData: JSON.stringify(errorData, null, 2),
+        errorData: stringifyJson(errorData, 2),
       });
 
       const hasProtocolError =
@@ -150,12 +163,12 @@ export class RequestRateLimiter {
     }
 
     try {
-      const responseData = (await response.json()) as T;
+      const responseData = await parseJsonResponse<T>(response);
       // Log successful response
       this.logger?.debug('Mint response success', {
         endpoint,
         status: response.status,
-        responseData: JSON.stringify(responseData, null, 2),
+        responseData: stringifyJson(responseData, 2),
       });
       return responseData;
     } catch (err) {

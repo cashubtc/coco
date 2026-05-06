@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { PaymentRequest, PaymentRequestTransportType, type Token } from '@cashu/cashu-ts';
 import {
@@ -27,12 +28,12 @@ describe('PaymentRequestService', () => {
     id: 'test-op-id',
     state: 'pending',
     mintUrl: testMintUrl,
-    amount: 100,
+    amount: Amount.from(100),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     needsSwap: false,
-    fee: 0,
-    inputAmount: 100,
+    fee: Amount.from(0),
+    inputAmount: Amount.from(100),
     inputProofSecrets: ['secret-1'],
     method: 'default',
     methodData: {},
@@ -40,12 +41,12 @@ describe('PaymentRequestService', () => {
 
   const mockToken: Token = {
     mint: testMintUrl,
-    proofs: [{ id: 'keyset-1', amount: 100, secret: 'secret-1', C: 'C-1' }],
+    proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'secret-1', C: 'C-1' }],
   };
 
   const createMockPreparedSendOperation = (
     mintUrl: string,
-    amount: number,
+    amount: Amount,
   ): PreparedSendOperation => ({
     id: 'test-op-id',
     state: 'prepared',
@@ -54,7 +55,7 @@ describe('PaymentRequestService', () => {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     needsSwap: false,
-    fee: 0,
+    fee: Amount.from(0),
     inputAmount: amount,
     inputProofSecrets: ['secret-1'],
     method: 'default',
@@ -63,7 +64,7 @@ describe('PaymentRequestService', () => {
 
   const createResolvedRequest = (
     options: {
-      amount?: number;
+      amount?: Amount;
       allowedMints?: string[];
       transport?: ResolvedPaymentRequest['transport'];
     } = {},
@@ -94,13 +95,13 @@ describe('PaymentRequestService', () => {
     request: ResolvedPaymentRequest,
     mintUrl = testMintUrl,
   ): PreparedPaymentRequest => ({
-    sendOperation: createMockPreparedSendOperation(mintUrl, request.amount ?? 100),
+    sendOperation: createMockPreparedSendOperation(mintUrl, request.amount ?? Amount.from(100)),
     request,
   });
 
   beforeEach(() => {
     mockSendOperationService = {
-      init: mock(async (mintUrl: string, amount: number) => ({
+      init: mock(async (mintUrl: string, amount: Amount) => ({
         id: 'test-op-id',
         state: 'init',
         mintUrl,
@@ -108,7 +109,7 @@ describe('PaymentRequestService', () => {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })),
-      prepare: mock(async (initOp: { mintUrl: string; amount: number }) =>
+      prepare: mock(async (initOp: { mintUrl: string; amount: Amount }) =>
         createMockPreparedSendOperation(initOp.mintUrl, initOp.amount),
       ),
       execute: mock(async () => ({
@@ -119,8 +120,16 @@ describe('PaymentRequestService', () => {
 
     mockProofService = {
       getBalancesByMint: mock(async () => ({
-        [testMintUrl]: { spendable: 1000, reserved: 0, total: 1000 },
-        [testMintUrl2]: { spendable: 500, reserved: 0, total: 500 },
+        [testMintUrl]: {
+          spendable: Amount.from(1000),
+          reserved: Amount.zero(),
+          total: Amount.from(1000),
+        },
+        [testMintUrl2]: {
+          spendable: Amount.from(500),
+          reserved: Amount.zero(),
+          total: Amount.from(500),
+        },
       })),
     } as unknown as ProofService;
 
@@ -143,7 +152,7 @@ describe('PaymentRequestService', () => {
       const result = await service.parse(encoded);
 
       expect(result.transport.type).toBe('inband');
-      expect(result.amount).toBe(100);
+      expect(result.amount).toEqual(Amount.from(100));
       expect(result.allowedMints).toEqual([testMintUrl]);
       expect(result.payableMints).toContain(testMintUrl);
     });
@@ -165,7 +174,7 @@ describe('PaymentRequestService', () => {
       if (result.transport.type === 'http') {
         expect(result.transport.url).toBe(testHttpTarget);
       }
-      expect(result.amount).toBe(200);
+      expect(result.amount).toEqual(Amount.from(200));
       expect(result.allowedMints).toEqual([testMintUrl, testMintUrl2]);
     });
 
@@ -195,7 +204,11 @@ describe('PaymentRequestService', () => {
     it('should return an empty payable mint list if no matching mints are found', async () => {
       (mockProofService.getBalancesByMint as unknown as ReturnType<typeof mock>).mockImplementation(
         async () => ({
-          [testMintUrl]: { spendable: 50, reserved: 0, total: 50 },
+          [testMintUrl]: {
+            spendable: Amount.from(50),
+            reserved: Amount.zero(),
+            total: Amount.from(50),
+          },
         }),
       );
 
@@ -206,20 +219,20 @@ describe('PaymentRequestService', () => {
 
       expect(result.payableMints).toEqual([]);
       expect(result.allowedMints).toEqual([testMintUrl]);
-      expect(result.amount).toBe(100);
+      expect(result.amount).toEqual(Amount.from(100));
     });
   });
 
   describe('prepare', () => {
     it('should prepare a transaction for a valid request', async () => {
-      const request = createResolvedRequest({ amount: 100 });
+      const request = createResolvedRequest({ amount: Amount.from(100) });
 
       const transaction = await service.prepare(request, { mintUrl: testMintUrl });
 
       expect(transaction.sendOperation).toBeDefined();
       expect(transaction.sendOperation.mintUrl).toBe(testMintUrl);
       expect(transaction.request).toBe(request);
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 100);
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(100));
       expect(mockSendOperationService.prepare).toHaveBeenCalled();
     });
 
@@ -229,17 +242,23 @@ describe('PaymentRequestService', () => {
         allowedMints: [testMintUrl, testMintUrl2],
       });
 
-      const transaction = await service.prepare(request, { mintUrl: testMintUrl, amount: 750 });
+      const transaction = await service.prepare(request, {
+        mintUrl: testMintUrl,
+        amount: Amount.from(750),
+      });
 
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 750);
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(750));
       expect(transaction.request).not.toBe(request);
-      expect(transaction.request.amount).toBe(750);
-      expect(transaction.request.paymentRequest.amount).toBe(750);
+      expect(transaction.request.amount).toEqual(Amount.from(750));
+      expect(transaction.request.paymentRequest.amount).toEqual(Amount.from(750));
       expect(transaction.request.payableMints).toEqual([testMintUrl]);
     });
 
     it('should throw if mint is not in allowed list', async () => {
-      const request = createResolvedRequest({ amount: 100, allowedMints: [testMintUrl2] });
+      const request = createResolvedRequest({
+        amount: Amount.from(100),
+        allowedMints: [testMintUrl2],
+      });
 
       await expect(service.prepare(request, { mintUrl: testMintUrl })).rejects.toThrow(
         PaymentRequestError,
@@ -250,11 +269,11 @@ describe('PaymentRequestService', () => {
     });
 
     it('should allow any mint if allowedMints is empty', async () => {
-      const request = createResolvedRequest({ amount: 100, allowedMints: [] });
+      const request = createResolvedRequest({ amount: Amount.from(100), allowedMints: [] });
 
       await service.prepare(request, { mintUrl: testMintUrl });
 
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, 100);
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(100));
     });
 
     it('should throw if no amount is provided anywhere', async () => {
@@ -269,20 +288,20 @@ describe('PaymentRequestService', () => {
     });
 
     it('should throw if amounts do not match', async () => {
-      const request = createResolvedRequest({ amount: 100 });
+      const request = createResolvedRequest({ amount: Amount.from(100) });
 
-      await expect(service.prepare(request, { mintUrl: testMintUrl, amount: 200 })).rejects.toThrow(
-        PaymentRequestError,
-      );
-      await expect(service.prepare(request, { mintUrl: testMintUrl, amount: 200 })).rejects.toThrow(
-        'Amount mismatch',
-      );
+      await expect(
+        service.prepare(request, { mintUrl: testMintUrl, amount: Amount.from(200) }),
+      ).rejects.toThrow(PaymentRequestError);
+      await expect(
+        service.prepare(request, { mintUrl: testMintUrl, amount: Amount.from(200) }),
+      ).rejects.toThrow('Amount mismatch');
     });
   });
 
   describe('execute', () => {
     it('should execute an inband payment request and return the token', async () => {
-      const prepared = createPreparedRequest(createResolvedRequest({ amount: 100 }));
+      const prepared = createPreparedRequest(createResolvedRequest({ amount: Amount.from(100) }));
 
       const result = await service.execute(prepared);
 
@@ -304,7 +323,7 @@ describe('PaymentRequestService', () => {
 
       const prepared = createPreparedRequest(
         createResolvedRequest({
-          amount: 100,
+          amount: Amount.from(100),
           transport: { type: 'http', url: testHttpTarget },
         }),
       );
@@ -317,6 +336,8 @@ describe('PaymentRequestService', () => {
       expect(fetchCalls[0]?.input).toBe(testHttpTarget);
       expect(fetchCalls[0]?.init?.method).toBe('POST');
       expect(fetchCalls[0]?.init?.headers).toEqual({ 'Content-Type': 'application/json' });
+      expect(fetchCalls[0]?.init?.body).toContain('"amount":100');
+      expect(fetchCalls[0]?.init?.body).not.toContain('"amount":"100"');
       if (result.type === 'http') {
         expect(result.response.status).toBe(200);
         expect(result.operation).toBe(mockPendingOperation);
@@ -330,7 +351,7 @@ describe('PaymentRequestService', () => {
 
       const prepared = createPreparedRequest(
         createResolvedRequest({
-          amount: 100,
+          amount: Amount.from(100),
           transport: { type: 'http', url: testHttpTarget },
         }),
       );

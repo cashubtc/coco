@@ -1,10 +1,13 @@
-import type {
-  Mint,
-  Keyset,
-  CoreProof,
-  Repositories,
-  MeltOperation,
-  AuthSession,
+import {
+  Amount,
+  type Mint,
+  type Keyset,
+  type CoreProof,
+  type Repositories,
+  type MeltOperation,
+  type MintOperation,
+  type ReceiveOperation,
+  type AuthSession,
 } from '@cashu/coco-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -41,6 +44,7 @@ export async function runRepositoryTransactionContract(
         expect(stored.length).toBeGreaterThan(0);
         const operation = await repositories.meltOperationRepository.getById('melt-op');
         expect(operation).toBeDefined();
+        expect(operation?.methodData.amountSats?.toString()).toBe('1');
       } finally {
         await dispose();
       }
@@ -184,7 +188,7 @@ export function createDummyKeyset(): Keyset {
 export function createDummyProof(overrides?: Partial<CoreProof>): CoreProof {
   return {
     id: 'proof-id',
-    amount: 1,
+    amount: Amount.from(1),
     secret: 'secret',
     C: 'C',
     mintUrl: 'https://mint.test',
@@ -199,10 +203,49 @@ export function createDummyMeltOperation(): MeltOperation {
     state: 'init',
     mintUrl: 'https://mint.test',
     method: 'bolt11',
-    methodData: { invoice: 'lnbc1test' },
+    methodData: { invoice: 'lnbc1test', amountSats: Amount.from(1) },
     createdAt: 0,
     updatedAt: 0,
   } satisfies MeltOperation;
+}
+
+type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
+
+export function createDummyMintOperation(
+  overrides?: Partial<PendingMintOperation>,
+): PendingMintOperation {
+  return {
+    id: 'mint-op',
+    state: 'pending',
+    mintUrl: 'https://mint.test',
+    quoteId: 'quote-id',
+    method: 'bolt11',
+    methodData: {},
+    createdAt: 0,
+    updatedAt: 0,
+    amount: Amount.from(3),
+    unit: 'sat',
+    request: 'lnbc1test',
+    expiry: 1_730_000_000,
+    outputData: { keep: [], send: [] },
+    ...overrides,
+  } satisfies PendingMintOperation;
+}
+
+export function createDummyReceiveOperation(): ReceiveOperation {
+  return {
+    id: 'receive-op',
+    state: 'init',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    amount: Amount.from(3),
+    inputProofs: [
+      { id: 'keyset-id', amount: Amount.from(1), secret: 'receive-secret-1', C: 'C1' },
+      { id: 'keyset-id', amount: Amount.from(2), secret: 'receive-secret-2', C: 'C2' },
+    ],
+    createdAt: 0,
+    updatedAt: 0,
+  } satisfies ReceiveOperation;
 }
 
 export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSession {
@@ -212,6 +255,86 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
   };
+}
+
+export async function runMintOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintOperationRepository contract', () => {
+    it('preserves null quote expiries for pending operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ expiry: null });
+        await repositories.mintOperationRepository.create(operation);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        const pending = await repositories.mintOperationRepository.getPending();
+
+        expect(stored).toBeDefined();
+        expect(pending).toHaveLength(1);
+        if (!stored || stored.state !== 'pending' || pending[0]?.state !== 'pending') {
+          throw new Error('Expected pending mint operations');
+        }
+        expect(stored.expiry).toBe(null);
+        expect(pending[0].expiry).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runReceiveOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('ReceiveOperationRepository contract', () => {
+    it('rehydrates persisted input proof amounts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.inputProofs).toHaveLength(2);
+        expect(stored!.inputProofs[0]!.amount.equals(Amount.from(1))).toBe(true);
+        expect(stored!.inputProofs[1]!.amount.equals(Amount.from(2))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('creates prepared operations with serialized fees', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          id: 'receive-op-prepared',
+          state: 'prepared',
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation;
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.state).toBe('prepared');
+        if (stored!.state === 'prepared') {
+          expect(stored!.fee.equals(Amount.from(1))).toBe(true);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }
 
 export async function runAuthSessionRepositoryContract(
@@ -305,8 +428,8 @@ export async function runAuthSessionRepositoryContract(
           refreshToken: 'refresh-xyz',
           scope: 'read write',
           batPool: [
-            { id: 'proof-1', amount: 1, secret: 's1', C: 'C1' },
-            { id: 'proof-2', amount: 2, secret: 's2', C: 'C2' },
+            { id: 'proof-1', amount: Amount.from(1), secret: 's1', C: 'C1' },
+            { id: 'proof-2', amount: Amount.from(2), secret: 's2', C: 'C2' },
           ] as AuthSession['batPool'],
         });
         await repo.saveSession(session);
@@ -317,6 +440,8 @@ export async function runAuthSessionRepositoryContract(
         expect(result!.scope).toBe('read write');
         expect(result!.batPool).toBeDefined();
         expect(result!.batPool!).toHaveLength(2);
+        expect(result!.batPool![0]!.amount.equals(Amount.from(1))).toBe(true);
+        expect(result!.batPool![1]!.amount.equals(Amount.from(2))).toBe(true);
       } finally {
         await dispose();
       }

@@ -28,6 +28,7 @@ export type MeltOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
+import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 
@@ -66,19 +67,19 @@ interface PreparedData {
   needsSwap: boolean;
 
   /** The amount requested to melt (before fees) */
-  amount: number;
+  amount: Amount;
 
   /** Calculated fee for the swap (0 if exact match) */
-  fee_reserve: number;
+  fee_reserve: Amount;
 
   /** The ID of the quote used for the melt operation */
   quoteId: string;
 
   /** The fee for the swap (0 if exact match) */
-  swap_fee: number;
+  swap_fee: Amount;
 
   /** Total amount of input proofs selected */
-  inputAmount: number;
+  inputAmount: Amount;
 
   /** Secrets of proofs reserved as input for this operation */
   inputProofSecrets: string[];
@@ -153,7 +154,7 @@ interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
    * May be 0 if no change was returned.
    * May be undefined for legacy operations finalized before settlement tracking was added.
    */
-  changeAmount?: number;
+  changeAmount?: Amount;
 
   /**
    * Actual fee impact after settlement.
@@ -162,7 +163,7 @@ interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
    * This represents the actual cost paid for the melt, which may differ from fee_reserve.
    * May be undefined for legacy operations finalized before settlement tracking was added.
    */
-  effectiveFee?: number;
+  effectiveFee?: Amount;
 }
 
 export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> = FinalizedMeltOperationBase &

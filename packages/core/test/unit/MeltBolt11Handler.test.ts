@@ -1,12 +1,16 @@
+import { Amount } from '@cashu/cashu-ts';
 import type { Proof, SerializedBlindedSignature, Wallet } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
-import { SWAP_THRESHOLD_RATIO } from '../../infra/handlers/melt/MeltBolt11Handler.utils';
+import {
+  SWAP_THRESHOLD_DENOMINATOR,
+  SWAP_THRESHOLD_NUMERATOR,
+} from '../../infra/handlers/melt/MeltBolt11Handler.utils';
 import type { Logger } from '../../logging/Logger';
-import { MintOperationError } from '../../models/Error';
+import { MintOperationError, ProofValidationError } from '../../models/Error';
 import type {
   BasePrepareContext,
   ExecuteContext,
@@ -49,7 +53,7 @@ describe('MeltBolt11Handler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -58,7 +62,7 @@ describe('MeltBolt11Handler', () => {
 
   const makeCoreProof = (secret: string, amount = 10, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -127,11 +131,11 @@ describe('MeltBolt11Handler', () => {
     updatedAt: Date.now() - 10000,
     quoteId: 'quote-123',
     unit: 'sat',
-    amount: 100,
-    fee_reserve: 10,
-    swap_fee: 0,
+    amount: Amount.from(100),
+    fee_reserve: Amount.from(10),
+    swap_fee: Amount.from(0),
     needsSwap: false,
-    inputAmount: 110,
+    inputAmount: Amount.from(110),
     inputProofSecrets: ['input-1', 'input-2'],
     changeOutputData: createMockOutputData(['change-1'], []),
     ...overrides,
@@ -165,15 +169,15 @@ describe('MeltBolt11Handler', () => {
 
     // Mock wallet
     mockWallet = {
-      createMeltQuote: mock(() =>
+      createMeltQuoteBolt11: mock(() =>
         Promise.resolve({
           quote: 'quote-123',
-          amount: 100,
-          fee_reserve: 10,
+          amount: Amount.from(100),
+          fee_reserve: Amount.from(10),
           unit: 'sat',
         }),
       ),
-      getFeesForProofs: mock(() => 1),
+      getFeesForProofs: mock(() => Amount.from(1)),
       send: mock(() =>
         Promise.resolve({
           keep: [makeProof('keep-1', 50)],
@@ -192,10 +196,15 @@ describe('MeltBolt11Handler', () => {
       selectProofsToSend: mock(() =>
         Promise.resolve([makeProof('input-1', 60), makeProof('input-2', 50)]),
       ),
-      reserveProofs: mock(() => Promise.resolve({ amount: 110 })),
+      reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(110) })),
       createBlankOutputs: mock(() => Promise.resolve([])),
       createOutputsAndIncrementCounters: mock(() =>
-        Promise.resolve({ keep: [], send: [], sendAmount: 0, keepAmount: 0 }),
+        Promise.resolve({
+          keep: [],
+          send: [],
+          sendAmount: Amount.zero(),
+          keepAmount: Amount.zero(),
+        }),
       ),
       setProofState: mock(() => Promise.resolve()),
       saveProofs: mock(() => Promise.resolve()),
@@ -361,16 +370,20 @@ describe('MeltBolt11Handler', () => {
         expect(result.state).toBe('prepared');
         expect(result.needsSwap).toBe(false);
         expect(result.quoteId).toBe('quote-123');
-        expect(result.amount).toBe(100);
-        expect(result.fee_reserve).toBe(10);
-        expect(result.swap_fee).toBe(0);
+        expect(result.amount).toEqual(Amount.from(100));
+        expect(result.fee_reserve).toEqual(Amount.from(10));
+        expect(result.swap_fee).toEqual(Amount.from(0));
         expect(result.inputProofSecrets).toEqual(['input-1', 'input-2']);
         expect(proofService.reserveProofs).toHaveBeenCalledWith(
           mintUrl,
           ['input-1', 'input-2'],
           'op-1',
         );
-        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+          mintUrl,
+          Amount.from(110),
+          true,
+        );
       });
 
       it('should select enough proofs to cover melt input fees', async () => {
@@ -389,9 +402,28 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.prepare(ctx);
 
         expect(result.needsSwap).toBe(false);
-        expect(result.inputAmount).toBe(111);
+        expect(result.inputAmount).toEqual(Amount.from(111));
         expect(result.inputProofSecrets).toEqual(['input-1', 'input-2', 'input-3']);
-        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, 110, true);
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+          mintUrl,
+          Amount.from(110),
+          true,
+        );
+      });
+
+      it('should throw ProofValidationError when selected proofs do not cover fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 60), makeProof('input-2', 49)]),
+        );
+
+        await expect(handler.prepare(ctx)).rejects.toThrow(ProofValidationError);
+        await expect(handler.prepare(ctx)).rejects.toThrow(
+          'Melt amount is not sufficient after fees',
+        );
+        expect(proofService.reserveProofs).not.toHaveBeenCalled();
       });
 
       it('should create blank outputs for change', async () => {
@@ -406,7 +438,25 @@ describe('MeltBolt11Handler', () => {
         await handler.prepare(ctx);
 
         // Change = 120 - 100 = 20
-        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(20, mintUrl);
+        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(Amount.from(20), mintUrl);
+      });
+
+      it('should pass amountless invoice amount to cashu-ts in millisatoshis', async () => {
+        const operation = makeInitOp('op-1', {
+          methodData: { invoice, amountSats: Amount.from(1000) },
+        });
+        const ctx = buildPrepareContext(operation);
+
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 55), makeProof('input-2', 55)]),
+        );
+
+        await handler.prepare(ctx);
+
+        expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(
+          invoice,
+          Amount.from(1_000_000),
+        );
       });
     });
 
@@ -424,17 +474,17 @@ describe('MeltBolt11Handler', () => {
         const result = await handler.prepare(ctx);
 
         expect(result.needsSwap).toBe(true);
-        expect(result.swap_fee).toBe(1); // From mocked getFeesForProofs
+        expect(result.swap_fee).toEqual(Amount.from(1)); // From mocked getFeesForProofs
         expect(result.swapOutputData).toBeDefined();
         expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalled();
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[0]).toEqual([
           mintUrl,
-          110,
+          Amount.from(110),
           true,
         ]);
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[1]).toEqual([
           mintUrl,
-          110,
+          Amount.from(110),
           true,
         ]);
       });
@@ -454,6 +504,22 @@ describe('MeltBolt11Handler', () => {
           ['input-1', 'input-2'],
           'op-1',
         );
+      });
+
+      it('should throw ProofValidationError when swap proofs do not cover input fees', async () => {
+        const operation = makeInitOp('op-1');
+        const ctx = buildPrepareContext(operation);
+
+        (mockWallet.getFeesForProofs as Mock<any>).mockImplementation(() => Amount.from(25));
+        (proofService.selectProofsToSend as Mock<any>).mockImplementation(() =>
+          Promise.resolve([makeProof('input-1', 80), makeProof('input-2', 50)]),
+        );
+
+        await expect(handler.prepare(ctx)).rejects.toThrow(ProofValidationError);
+        await expect(handler.prepare(ctx)).rejects.toThrow(
+          'Melt amount is not sufficient after fees',
+        );
+        expect(proofService.reserveProofs).not.toHaveBeenCalled();
       });
     });
   });
@@ -480,8 +546,8 @@ describe('MeltBolt11Handler', () => {
 
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(0);
-          expect(result.finalized.effectiveFee).toBe(10);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(0));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(10));
           expect(result.finalized.finalizedData?.preimage).toBe('preimage-123');
         }
         expect(proofService.setProofState).toHaveBeenCalledWith(
@@ -542,7 +608,7 @@ describe('MeltBolt11Handler', () => {
 
     describe('swap-then-melt execution', () => {
       it('should execute swap before melt', async () => {
-        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+        const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
           inputProofSecrets: ['input-1'],
@@ -571,7 +637,7 @@ describe('MeltBolt11Handler', () => {
       });
 
       it('should use swap send proofs for melt', async () => {
-        const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+        const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
           inputProofSecrets: ['input-1'],
@@ -604,8 +670,8 @@ describe('MeltBolt11Handler', () => {
         const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
-          amount: 55,
-          inputAmount: 200,
+          amount: Amount.from(55),
+          inputAmount: Amount.from(200),
           inputProofSecrets: ['input-1'],
           swapOutputData,
         });
@@ -623,8 +689,8 @@ describe('MeltBolt11Handler', () => {
 
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(0);
-          expect(result.finalized.effectiveFee).toBe(5);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(0));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(5));
         }
       });
 
@@ -661,7 +727,7 @@ describe('MeltBolt11Handler', () => {
         );
 
         const changeSignatures: SerializedBlindedSignature[] = [
-          { id: keysetId, amount: 10, C_: 'C_change' },
+          { id: keysetId, amount: Amount.from(10), C_: 'C_change' },
         ];
         (mintAdapter.customMeltBolt11 as Mock<any>).mockImplementation(() =>
           Promise.resolve({ state: 'PAID', change: changeSignatures }),
@@ -673,8 +739,8 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(10);
-          expect(result.finalized.effectiveFee).toBe(0);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(10));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(0));
         }
       });
     });
@@ -692,7 +758,7 @@ describe('MeltBolt11Handler', () => {
       });
 
       const changeSignatures: SerializedBlindedSignature[] = [
-        { id: keysetId, amount: 5, C_: 'C_change' },
+        { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
       ];
       (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
         Promise.resolve({
@@ -709,8 +775,8 @@ describe('MeltBolt11Handler', () => {
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
       expect(result).toEqual({
-        changeAmount: 5,
-        effectiveFee: 5,
+        changeAmount: Amount.from(5),
+        effectiveFee: Amount.from(5),
         finalizedData: { preimage: 'preimage-123' },
       });
     });
@@ -729,7 +795,7 @@ describe('MeltBolt11Handler', () => {
     });
 
     it('should mark swap send proofs as spent for swap-then-melt', async () => {
-      const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
+      const swapOutputData = createSwapOutputDataWithAmounts(90, 110);
       const operation = makePendingOp('op-1', {
         needsSwap: true,
         inputProofSecrets: ['input-1'],
@@ -751,8 +817,8 @@ describe('MeltBolt11Handler', () => {
       const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
       const operation = makePendingOp('op-1', {
         needsSwap: true,
-        amount: 55,
-        inputAmount: 200,
+        amount: Amount.from(55),
+        inputAmount: Amount.from(200),
         inputProofSecrets: ['input-1'],
         swapOutputData,
       });
@@ -765,8 +831,8 @@ describe('MeltBolt11Handler', () => {
       const result = await handler.finalize(ctx);
 
       expect(result).toEqual({
-        changeAmount: 0,
-        effectiveFee: 5,
+        changeAmount: Amount.from(0),
+        effectiveFee: Amount.from(5),
         finalizedData: undefined,
       });
     });
@@ -892,8 +958,8 @@ describe('MeltBolt11Handler', () => {
 
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(0);
-          expect(result.finalized.effectiveFee).toBe(10);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(0));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(10));
           expect(result.finalized.finalizedData?.preimage).toBe('preimage-123');
         }
         expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
@@ -906,7 +972,7 @@ describe('MeltBolt11Handler', () => {
         });
 
         const changeSignatures: SerializedBlindedSignature[] = [
-          { id: keysetId, amount: 5, C_: 'C_change' },
+          { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
         ];
         (mintAdapter.checkMeltQuoteState as Mock<any>).mockImplementation(() =>
           Promise.resolve('PAID'),
@@ -921,8 +987,8 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(5);
-          expect(result.finalized.effectiveFee).toBe(5);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(5));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(5));
         }
       });
 
@@ -930,8 +996,8 @@ describe('MeltBolt11Handler', () => {
         const swapOutputData = createSwapOutputDataWithAmounts(140, 60);
         const operation = makeExecutingOp('op-1', {
           needsSwap: true,
-          amount: 55,
-          inputAmount: 200,
+          amount: Amount.from(55),
+          inputAmount: Amount.from(200),
           inputProofSecrets: ['input-1'],
           swapOutputData,
         });
@@ -948,8 +1014,8 @@ describe('MeltBolt11Handler', () => {
 
         expect(result.status).toBe('PAID');
         if (result.status === 'PAID') {
-          expect(result.finalized.changeAmount).toBe(0);
-          expect(result.finalized.effectiveFee).toBe(5);
+          expect(result.finalized.changeAmount).toEqual(Amount.from(0));
+          expect(result.finalized.effectiveFee).toEqual(Amount.from(5));
         }
       });
     });
@@ -1225,8 +1291,9 @@ describe('MeltBolt11Handler', () => {
   // ============================================================================
 
   describe('constants', () => {
-    it('should use correct SWAP_THRESHOLD_RATIO', () => {
-      expect(SWAP_THRESHOLD_RATIO).toBe(1.1);
+    it('should use a 10% integer swap threshold', () => {
+      expect(SWAP_THRESHOLD_NUMERATOR).toBe(11);
+      expect(SWAP_THRESHOLD_DENOMINATOR).toBe(10);
     });
   });
 });

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { OutputData, type MintQuoteBolt11Response, type Proof } from '@cashu/cashu-ts';
 import { EventBus } from '../../events/EventBus';
@@ -43,7 +44,7 @@ describe('MintOperationService', () => {
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
-      amount: 10,
+      amount: Amount.from(10),
       secret,
       C: `C_${secret}`,
     }) as Proof;
@@ -53,7 +54,7 @@ describe('MintOperationService', () => {
       keep: [
         new OutputData(
           {
-            amount: 10,
+            amount: Amount.from(10),
             id: keysetId,
             B_: `B_${secret}`,
           },
@@ -66,7 +67,7 @@ describe('MintOperationService', () => {
 
   const toCoreProof = (secret: string, operationId: string): CoreProof => ({
     id: keysetId,
-    amount: 10,
+    amount: Amount.from(10),
     secret,
     C: `C_${secret}`,
     mintUrl,
@@ -80,7 +81,7 @@ describe('MintOperationService', () => {
     mintUrl,
     method: 'bolt11',
     methodData: {},
-    amount: 10,
+    amount: Amount.from(10),
     unit: 'sat',
     quoteId,
     createdAt: Date.now(),
@@ -91,7 +92,7 @@ describe('MintOperationService', () => {
     ...makeInitOp(id),
     state: 'pending',
     quoteId,
-    amount: 10,
+    amount: Amount.from(10),
     request: 'lnbc1test',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     lastObservedRemoteState: 'PAID',
@@ -211,7 +212,7 @@ describe('MintOperationService', () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-imported',
       request: 'lnbc1imported',
-      amount: 12,
+      amount: Amount.from(12),
       unit: 'sat',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
@@ -244,7 +245,7 @@ describe('MintOperationService', () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
-      amount: 12,
+      amount: Amount.from(12),
       unit: 'usd',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',

@@ -1,4 +1,5 @@
 import type { MintOperationRepository } from '@cashu/coco-core';
+import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['getById']>>>;
@@ -17,7 +18,7 @@ interface MintOperationRow {
   error: string | null;
   method: MintMethod;
   methodDataJson: string;
-  amount: number | null;
+  amount: string | number | null;
   unit: string | null;
   request: string | null;
   expiry: number | null;
@@ -55,7 +56,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
   };
 
   const intent = {
-    amount: row.amount ?? 0,
+    amount: deserializeAmount(row.amount ?? 0),
     unit: row.unit ?? '',
   };
 
@@ -74,7 +75,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     state: normalizeState(row.state),
     quoteId: row.quoteId ?? '',
     request: row.request ?? '',
-    expiry: row.expiry ?? 0,
+    expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
@@ -85,7 +86,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
 const operationToParams = (operation: MintOperation): unknown[] => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return [
@@ -98,7 +99,7 @@ const operationToParams = (operation: MintOperation): unknown[] => {
       operation.error ?? null,
       operation.method,
       methodDataJson,
-      operation.amount,
+      serializeAmount(operation.amount),
       operation.unit,
       null,
       null,
@@ -120,7 +121,7 @@ const operationToParams = (operation: MintOperation): unknown[] => {
     operation.error ?? null,
     operation.method,
     methodDataJson,
-    operation.amount,
+    serializeAmount(operation.amount),
     operation.unit,
     operation.request,
     operation.expiry,
@@ -179,8 +180,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           updatedAtSeconds,
           operation.error ?? null,
           operation.method,
-          JSON.stringify(operation.methodData),
-          operation.amount,
+          stringifyJson(operation.methodData),
+          serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
           operation.id,
@@ -199,8 +200,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         updatedAtSeconds,
         operation.error ?? null,
         operation.method,
-        JSON.stringify(operation.methodData),
-        operation.amount,
+        stringifyJson(operation.methodData),
+        serializeAmount(operation.amount),
         operation.unit,
         operation.request,
         operation.expiry,

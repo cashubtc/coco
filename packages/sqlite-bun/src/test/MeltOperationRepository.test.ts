@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
-import type { MeltOperation } from '@cashu/coco-core';
+import { Amount, type MeltOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
 
 type FinalizedMeltOperation = Extract<MeltOperation, { state: 'finalized' }>;
@@ -20,15 +20,15 @@ function makeFinalizedMeltOperation(): FinalizedMeltOperation {
     updatedAt: 2_000,
     quoteId: 'quote-1',
     unit: 'sat',
-    amount: 100,
-    fee_reserve: 5,
-    swap_fee: 0,
+    amount: Amount.from(100),
+    fee_reserve: Amount.from(5),
+    swap_fee: Amount.zero(),
     needsSwap: false,
-    inputAmount: 105,
+    inputAmount: Amount.from(105),
     inputProofSecrets: ['secret-1'],
     changeOutputData: { keep: [], send: [] },
-    changeAmount: 2,
-    effectiveFee: 3,
+    changeAmount: Amount.from(2),
+    effectiveFee: Amount.from(3),
     finalizedData: { preimage: '' },
   };
 }
@@ -70,16 +70,16 @@ describe('SqliteMeltOperationRepository', () => {
         'bolt11',
         JSON.stringify({ invoice: 'lnbc1test' }),
         'quote-legacy',
-        100,
-        5,
+        '100',
+        '5',
+        '0',
         0,
-        0,
-        105,
+        '105',
         JSON.stringify(['secret-1']),
         JSON.stringify({ keep: [], send: [] }),
         null,
-        2,
-        3,
+        '2',
+        '3',
         JSON.stringify({ preimage: '' }),
       ],
     );

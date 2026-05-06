@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type {
   ExecutingMeltOperation,
@@ -35,11 +36,11 @@ const makePreparedOperation = (): PreparedMeltOperation => ({
   updatedAt: Date.now(),
   quoteId: 'quote-1',
   unit: 'sat',
-  amount: 100,
-  fee_reserve: 0,
-  swap_fee: 0,
+  amount: Amount.from(100),
+  fee_reserve: Amount.from(0),
+  swap_fee: Amount.from(0),
   needsSwap: false,
-  inputAmount: 100,
+  inputAmount: Amount.from(100),
   inputProofSecrets: [],
   changeOutputData: { keep: [], send: [] },
 });

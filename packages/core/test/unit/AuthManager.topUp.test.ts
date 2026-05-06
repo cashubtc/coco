@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { AuthManager, type Proof } from '@cashu/cashu-ts';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -101,7 +102,7 @@ function createMockMint(): MockMint {
 
     return {
       id: keysetId,
-      amount: 1,
+      amount: Amount.from(1),
       C_: C_.toHex(true),
       dleq: {
         e: bytesToHex(eBytes),

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MintOpsApi } from '../../api/MintOpsApi.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
@@ -40,7 +41,7 @@ const makePendingOperation = (): PendingMintOperation => ({
   methodData: {},
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  amount: 10,
+  amount: Amount.from(10),
   unit: 'sat',
   request: 'lnbc1test',
   expiry: Math.floor(Date.now() / 1000) + 3600,
@@ -60,7 +61,7 @@ describe('MintOpsApi', () => {
     quote = {
       quote: quoteId,
       request: 'lnbc1test',
-      amount: 10,
+      amount: Amount.from(10),
       unit: 'sat',
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
@@ -100,14 +101,14 @@ describe('MintOpsApi', () => {
   it('prepare creates a new quote-backed operation and returns a pending mint operation', async () => {
     const result = await api.prepare({
       mintUrl,
-      amount: 10,
+      amount: Amount.from(10),
       method: 'bolt11',
       methodData: {},
     });
 
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
-      10,
+      Amount.from(10),
       'sat',
       'bolt11',
       {},
@@ -118,13 +119,13 @@ describe('MintOpsApi', () => {
   it('prepare defaults empty methodData for bolt11', async () => {
     const result = await api.prepare({
       mintUrl,
-      amount: 10,
+      amount: Amount.from(10),
       method: 'bolt11',
     });
 
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
-      10,
+      Amount.from(10),
       'sat',
       'bolt11',
       {},
@@ -136,7 +137,7 @@ describe('MintOpsApi', () => {
     await expect(
       api.prepare({
         mintUrl,
-        amount: 10,
+        amount: Amount.from(10),
         unit: 'usd' as 'sat',
         method: 'bolt11',
         methodData: {},

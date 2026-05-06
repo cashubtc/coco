@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import type { Amount } from '@cashu/cashu-ts';
 import type {
   ExecutingMeltOperation,
   FinalizeResult,
@@ -20,9 +20,9 @@ export interface MeltQuoteData {
   /** The quote ID from the mint */
   quote: string;
   /** The amount to melt (in sats) */
-  amount: number;
+  amount: Amount;
   /** The fee reserve required by the mint */
-  fee_reserve: number;
+  fee_reserve: Amount;
   /** The unit the quote was denominated in */
   unit: string;
 }
@@ -38,20 +38,10 @@ export interface MeltQuoteData {
  * larger change amounts and potential privacy/fee implications.
  *
  * Example: If we need 100 sats but selected proofs total 115 sats,
- * that's 1.15x (15% over) which exceeds 1.1x, so we swap first.
+ * that's 1.15x (15% over) which exceeds 11/10, so we swap first.
  */
-export const SWAP_THRESHOLD_RATIO = 1.1;
-
-// ============================================================================
-// Proof Helpers
-// ============================================================================
-
-/**
- * Calculate the total amount of a proof set.
- */
-export function sumProofs(proofs: Proof[]): number {
-  return proofs.reduce((sum, p) => sum + p.amount, 0);
-}
+export const SWAP_THRESHOLD_NUMERATOR = 11;
+export const SWAP_THRESHOLD_DENOMINATOR = 10;
 
 /**
  * Extract the send proof secrets from serialized swap output data.

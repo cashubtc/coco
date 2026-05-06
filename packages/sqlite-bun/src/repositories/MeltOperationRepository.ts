@@ -1,4 +1,10 @@
-import type { MeltOperationRepository } from '@cashu/coco-core';
+import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  normalizeMeltMethodData,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core';
 import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
@@ -6,8 +12,8 @@ type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
 type MeltMethod = MeltOperation['method'];
 type MeltMethodData = MeltOperation['methodData'];
 type MeltSettlementData = {
-  changeAmount?: number;
-  effectiveFee?: number;
+  changeAmount?: MeltOperation extends { changeAmount?: infer A } ? A : never;
+  effectiveFee?: MeltOperation extends { effectiveFee?: infer A } ? A : never;
   finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
 };
 
@@ -22,16 +28,16 @@ interface MeltOperationRow {
   methodDataJson: string;
   quoteId: string | null;
   unit: string | null;
-  amount: number | null;
-  fee_reserve: number | null;
-  swap_fee: number | null;
+  amount: string | number | null;
+  fee_reserve: string | number | null;
+  swap_fee: string | number | null;
   needsSwap: number | null;
-  inputAmount: number | null;
+  inputAmount: string | number | null;
   inputProofSecretsJson: string | null;
   changeOutputDataJson: string | null;
   swapOutputDataJson: string | null;
-  changeAmount: number | null;
-  effectiveFee: number | null;
+  changeAmount: string | number | null;
+  effectiveFee: string | number | null;
   finalizedDataJson: string | null;
 }
 
@@ -46,12 +52,15 @@ const preparedStates: MeltOperationState[] = [
 
 const isPreparedState = (state: MeltOperationState) => preparedStates.includes(state);
 
+const parseMethodData = (row: MeltOperationRow): MeltMethodData =>
+  normalizeMeltMethodData(JSON.parse(row.methodDataJson) as MeltMethodInputData);
+
 const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
     method: row.method,
-    methodData: JSON.parse(row.methodDataJson) as MeltMethodData,
+    methodData: parseMethodData(row),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -64,11 +73,11 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   const preparedData = {
     quoteId: row.quoteId ?? '',
     unit: row.unit ?? 'sat',
-    amount: row.amount ?? 0,
-    fee_reserve: row.fee_reserve ?? 0,
-    swap_fee: row.swap_fee ?? 0,
+    amount: deserializeAmount(row.amount ?? 0),
+    fee_reserve: deserializeAmount(row.fee_reserve ?? 0),
+    swap_fee: deserializeAmount(row.swap_fee ?? 0),
     needsSwap: row.needsSwap === 1,
-    inputAmount: row.inputAmount ?? 0,
+    inputAmount: deserializeAmount(row.inputAmount ?? 0),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     changeOutputData: row.changeOutputDataJson
       ? JSON.parse(row.changeOutputDataJson)
@@ -85,8 +94,8 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   if (row.state === 'finalized') {
     return {
       ...operation,
-      changeAmount: row.changeAmount ?? undefined,
-      effectiveFee: row.effectiveFee ?? undefined,
+      changeAmount: row.changeAmount !== null ? deserializeAmount(row.changeAmount) : undefined,
+      effectiveFee: row.effectiveFee !== null ? deserializeAmount(row.effectiveFee) : undefined,
       finalizedData: row.finalizedDataJson ? JSON.parse(row.finalizedDataJson) : undefined,
     } as MeltOperation;
   }
@@ -97,7 +106,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 const operationToParams = (operation: MeltOperation): unknown[] => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
-  const methodDataJson = JSON.stringify(operation.methodData);
+  const methodDataJson = stringifyJson(operation.methodData);
 
   if (operation.state === 'init') {
     return [
@@ -126,8 +135,14 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
   }
 
   const settlement = operation as MeltSettlementData;
-  const changeAmount = operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null;
-  const effectiveFee = operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null;
+  const changeAmount =
+    operation.state === 'finalized' && settlement.changeAmount !== undefined
+      ? serializeAmount(settlement.changeAmount)
+      : null;
+  const effectiveFee =
+    operation.state === 'finalized' && settlement.effectiveFee !== undefined
+      ? serializeAmount(settlement.effectiveFee)
+      : null;
   const finalizedDataJson =
     operation.state === 'finalized' && settlement.finalizedData !== undefined
       ? JSON.stringify(settlement.finalizedData)
@@ -144,11 +159,11 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
     methodDataJson,
     operation.quoteId,
     operation.unit,
-    operation.amount,
-    operation.fee_reserve,
-    operation.swap_fee,
+    serializeAmount(operation.amount),
+    serializeAmount(operation.fee_reserve),
+    serializeAmount(operation.swap_fee),
     operation.needsSwap ? 1 : 0,
-    operation.inputAmount,
+    serializeAmount(operation.inputAmount),
     JSON.stringify(operation.inputProofSecrets),
     JSON.stringify(operation.changeOutputData),
     operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
@@ -212,7 +227,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
           updatedAtSeconds,
           operation.error ?? null,
           operation.method,
-          JSON.stringify(operation.methodData),
+          stringifyJson(operation.methodData),
           operation.id,
         ],
       );
@@ -230,19 +245,23 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
         updatedAtSeconds,
         operation.error ?? null,
         operation.method,
-        JSON.stringify(operation.methodData),
+        stringifyJson(operation.methodData),
         operation.quoteId,
         operation.unit,
-        operation.amount,
-        operation.fee_reserve,
-        operation.swap_fee,
+        serializeAmount(operation.amount),
+        serializeAmount(operation.fee_reserve),
+        serializeAmount(operation.swap_fee),
         operation.needsSwap ? 1 : 0,
-        operation.inputAmount,
+        serializeAmount(operation.inputAmount),
         JSON.stringify(operation.inputProofSecrets),
         JSON.stringify(operation.changeOutputData),
         operation.swapOutputData ? JSON.stringify(operation.swapOutputData) : null,
-        operation.state === 'finalized' ? (settlement.changeAmount ?? null) : null,
-        operation.state === 'finalized' ? (settlement.effectiveFee ?? null) : null,
+        operation.state === 'finalized' && settlement.changeAmount !== undefined
+          ? serializeAmount(settlement.changeAmount)
+          : null,
+        operation.state === 'finalized' && settlement.effectiveFee !== undefined
+          ? serializeAmount(settlement.effectiveFee)
+          : null,
         operation.state === 'finalized' && settlement.finalizedData !== undefined
           ? JSON.stringify(settlement.finalizedData)
           : null,

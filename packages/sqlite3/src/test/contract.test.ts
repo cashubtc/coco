@@ -4,6 +4,8 @@ import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
+  runMintOperationRepositoryContract,
+  runReceiveOperationRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -43,6 +45,10 @@ runRepositoryTransactionContract(
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('sqlite3 adapter transactions', () => {
   it('commits across repositories', async () => {
