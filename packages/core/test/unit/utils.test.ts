@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { Amount, type Token } from '@cashu/cashu-ts';
 
+import { TokenValidationError } from '../../models/Error';
 import { deserializeAmount, isValidToken, serializeAmount } from '../../utils';
 
 describe('amount serialization utilities', () => {
@@ -45,5 +46,14 @@ describe('token validation utilities', () => {
     expect(() => isValidToken(makeToken(Amount.zero()))).toThrow(
       'Token proofs must have a positive amount',
     );
+  });
+
+  it('wraps malformed proof amounts in TokenValidationError', () => {
+    for (const amount of [-1, 'abc', Number.NaN]) {
+      expect(() => isValidToken(makeToken(amount))).toThrow(TokenValidationError);
+      expect(() => isValidToken(makeToken(amount))).toThrow(
+        'Token proofs must have a positive amount',
+      );
+    }
   });
 });

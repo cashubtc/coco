@@ -324,7 +324,20 @@ export function isValidToken(token: Token): void {
   if (token.proofs.length === 0) {
     throw new TokenValidationError('Token proofs are required');
   }
-  if (token.proofs.some((p) => p.amount == null || Amount.from(p.amount).isZero())) {
-    throw new TokenValidationError('Token proofs must have a positive amount');
+  for (const proof of token.proofs) {
+    if (proof.amount == null) {
+      throw new TokenValidationError('Token proofs must have a positive amount');
+    }
+
+    let amount: Amount;
+    try {
+      amount = Amount.from(proof.amount);
+    } catch (error) {
+      throw new TokenValidationError('Token proofs must have a positive amount', error);
+    }
+
+    if (amount.isZero()) {
+      throw new TokenValidationError('Token proofs must have a positive amount');
+    }
   }
 }
