@@ -53,7 +53,7 @@ describe('MeltBolt11Handler', () => {
 
   const makeProof = (secret: string, amount = 10, overrides?: Partial<Proof>): Proof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
@@ -62,7 +62,7 @@ describe('MeltBolt11Handler', () => {
 
   const makeCoreProof = (secret: string, amount = 10, overrides?: Partial<CoreProof>): CoreProof =>
     ({
-      amount,
+      amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
