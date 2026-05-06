@@ -13,7 +13,7 @@ services:
 
   mint:
     container_name: coco-auth-mint
-    image: cashubtc/mintd:0.15.2-test-static-4
+    image: cashubtc/mintd:v0.16.0
     command: >
       sh -c "
         echo 'Waiting for Keycloak...' &&

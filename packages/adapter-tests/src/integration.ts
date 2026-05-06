@@ -211,6 +211,10 @@ function waitForEvent<TPayload = unknown>(
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function waitForSendHistoryState(
   manager: Manager,
   state: string,
@@ -366,6 +370,20 @@ async function awaitMintQuotePaidWithSubscription(
 
   await paidNotificationPromise;
   return (await getLatestPendingMintOperation(manager, pendingMint.id)) ?? pendingMint;
+}
+
+async function waitForPaidMintOperationSnapshot(
+  manager: Manager,
+  operationId: string,
+): Promise<PreparedMintOperation> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const operation = await getLatestPendingMintOperation(manager, operationId);
+    if (operation?.lastObservedRemoteState === 'PAID') {
+      return operation;
+    }
+    await sleep(25);
+  }
+  throw new Error(`Mint operation ${operationId} did not persist a PAID quote snapshot`);
 }
 
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
@@ -553,6 +571,81 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(finalizedEvent.operation.quoteId).toBe(pendingMint.quoteId);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(100);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should batch redeem paid mint quotes with consolidated output denominations', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          const pendingMints = await Promise.all([
+            prepareMintOperation(mgr, mintUrl, 23, testUnit),
+            prepareMintOperation(mgr, mintUrl, 23, testUnit),
+            prepareMintOperation(mgr, mintUrl, 23, testUnit),
+          ]);
+          const paidMints = await Promise.all(
+            pendingMints.map(async (pendingMint) => {
+              await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
+              return waitForPaidMintOperationSnapshot(mgr!, pendingMint.id);
+            }),
+          );
+
+          const operationIds = paidMints.map((operation) => {
+            expect(operation).toBeDefined();
+            expect(operation?.outputData).toBe(undefined);
+            return operation!.id;
+          });
+
+          const mintOperationService = (
+            mgr as unknown as {
+              mintOperationService: {
+                finalizeBatch(operationIds: string[]): Promise<Array<{ state: string }>>;
+              };
+            }
+          ).mintOperationService;
+          const finalized = await mintOperationService.finalizeBatch(operationIds);
+          expect(finalized).toHaveLength(3);
+          for (const operation of finalized) {
+            expect(operation.state).toBe('finalized');
+          }
+
+          const attempts = await Promise.all(
+            operationIds.map((operationId) =>
+              repositories.mintBatchAttemptRepository.getByOperationId(operationId),
+            ),
+          );
+          const [attempt] = attempts;
+          expect(attempt).toBeDefined();
+          expect(attempt?.state).toBe('finalized');
+          for (const currentAttempt of attempts) {
+            expect(currentAttempt?.id).toBe(attempt?.id);
+          }
+
+          const readyProofs = await repositories.proofRepository.getReadyProofs(mintUrl, {
+            unit: testUnit,
+          });
+          const batchProofs = readyProofs.filter((proof) => proof.createdByBatchId === attempt?.id);
+          expect(batchProofs).toHaveLength(3);
+          expect(batchProofs.reduce((sum, proof) => sum + proof.amount.toNumber(), 0)).toBe(69);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();

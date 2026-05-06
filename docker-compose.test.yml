@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   testmint:
-    image: cashubtc/mintd:0.15.1
+    image: cashubtc/mintd:v0.16.0
     container_name: cdk-mint
     ports:
       - '3338:3338'
