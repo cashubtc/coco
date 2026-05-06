@@ -12,6 +12,7 @@ import type {
   MintOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  MintBatchAttemptRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
@@ -28,6 +29,7 @@ import { SqliteSendOperationRepository } from './repositories/SendOperationRepos
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { SqliteMintOperationRepository } from './repositories/MintOperationRepository.ts';
+import { SqliteMintBatchAttemptRepository } from './repositories/MintBatchAttemptRepository.ts';
 import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 import {
   SqlitePaymentRequestReceiveAttemptRepository,
@@ -48,6 +50,7 @@ export class SqliteRepositories implements Repositories {
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
+  readonly mintBatchAttemptRepository: MintBatchAttemptRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
@@ -66,6 +69,7 @@ export class SqliteRepositories implements Repositories {
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
     this.authSessionRepository = new SqliteAuthSessionRepository(this.db);
     this.mintOperationRepository = new SqliteMintOperationRepository(this.db);
+    this.mintBatchAttemptRepository = new SqliteMintBatchAttemptRepository(this.db);
     this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
     this.paymentRequestReceiveOperationRepository =
       new SqlitePaymentRequestReceiveOperationRepository(this.db);
@@ -92,6 +96,7 @@ export class SqliteRepositories implements Repositories {
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
         authSessionRepository: new SqliteAuthSessionRepository(txDb),
         mintOperationRepository: new SqliteMintOperationRepository(txDb),
+        mintBatchAttemptRepository: new SqliteMintBatchAttemptRepository(txDb),
         receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
         paymentRequestReceiveOperationRepository:
           new SqlitePaymentRequestReceiveOperationRepository(txDb),
@@ -121,6 +126,7 @@ export {
   SqliteMeltOperationRepository,
   SqliteAuthSessionRepository,
   SqliteMintOperationRepository,
+  SqliteMintBatchAttemptRepository,
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,

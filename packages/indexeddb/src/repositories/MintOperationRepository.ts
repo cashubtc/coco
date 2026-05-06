@@ -58,7 +58,11 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     pubkey: row.pubkey ?? undefined,
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
-    outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : { keep: [], send: [] },
+    ...(row.outputDataJson ? { outputData: JSON.parse(row.outputDataJson) } : {}),
+    ...(row.batchEligible !== null && row.batchEligible !== undefined
+      ? { batchEligible: row.batchEligible === 1 }
+      : {}),
+    ...(row.redeemedByBatchId ? { redeemedByBatchId: row.redeemedByBatchId } : {}),
   } as MintOperation;
 };
 
@@ -84,6 +88,8 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      batchEligible: null,
+      redeemedByBatchId: null,
     };
   }
 
@@ -107,7 +113,9 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     terminalFailureJson: operation.terminalFailure
       ? JSON.stringify(operation.terminalFailure)
       : null,
-    outputDataJson: JSON.stringify(operation.outputData),
+    outputDataJson: operation.outputData ? JSON.stringify(operation.outputData) : null,
+    batchEligible: operation.batchEligible === undefined ? null : operation.batchEligible ? 1 : 0,
+    redeemedByBatchId: operation.redeemedByBatchId ?? null,
   };
 };
 
