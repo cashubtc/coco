@@ -3,6 +3,7 @@ export type { MeltMethod, MeltMethodData, MeltMethodInputData } from './melt/Mel
 export { normalizeMeltMethodData } from './melt/MeltMethodHandler.ts';
 export { MeltOperationService } from './melt/MeltOperationService.ts';
 export type { MintOperation, MintOperationState } from './mint/MintOperation.ts';
+export type { MintBatchAttempt, MintBatchAttemptState } from './mint/MintBatchAttempt.ts';
 export type {
   MintMethod,
   MintMethodData,

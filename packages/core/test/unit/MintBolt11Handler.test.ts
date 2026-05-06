@@ -167,9 +167,7 @@ describe('MintBolt11Handler', () => {
       expect(result.quoteId).toBe(quoteId);
       expect(result.amount).toEqual(quote.amount);
       expect(result.request).toBe(quote.request);
-      expect(result.outputData.keep).toHaveLength(1);
-      expect(result.outputData.send).toEqual([]);
-      expect(result.outputData.keep[0]?.blindedMessage).toEqual(outputData.keep[0]?.blindedMessage);
+      expect(result.outputData).toBeUndefined();
       expect(result.lastObservedRemoteState).toBe('PAID');
     });
 

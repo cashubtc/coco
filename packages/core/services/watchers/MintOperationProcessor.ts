@@ -40,6 +40,7 @@ export class MintOperationProcessor {
 
   private running = false;
   private queue: QueueItem[] = [];
+  private readonly activeItems = new Set<string>();
   private processing = false;
   private processingTimer?: ReturnType<typeof setTimeout>;
   private offStateChanged?: () => void;
@@ -200,11 +201,17 @@ export class MintOperationProcessor {
     }
   }
 
-  // TODO: Improve deduplication by tracking an "active" set keyed by `${mintUrl}::${operationId}`
-  // to prevent re-enqueueing while an item is currently being processed. Today we only
-  // deduplicate within the queue, so an item can be enqueued again if a new event arrives
-  // during in-flight processing.
+  private queueKey(mintUrl: string, operationId: string): string {
+    return `${mintUrl}::${operationId}`;
+  }
+
   private enqueue(mintUrl: string, operationId: string, method: string): void {
+    const key = this.queueKey(mintUrl, operationId);
+    if (this.activeItems.has(key)) {
+      this.logger?.debug('Mint operation already being processed', { mintUrl, operationId });
+      return;
+    }
+
     // Check if already in queue
     const existing = this.queue.find(
       (item) => item.mintUrl === mintUrl && item.operationId === operationId,
@@ -283,12 +290,18 @@ export class MintOperationProcessor {
       return;
     }
     this.processing = true;
+    const activeKeys = [this.queueKey(item.mintUrl, item.operationId)];
+    this.activeItems.add(activeKeys[0]!);
 
     try {
-      await this.processItem(item);
+      const extraActiveKeys = await this.processItem(item);
+      activeKeys.push(...extraActiveKeys);
     } catch (err) {
       this.handleProcessingError(item, err);
     } finally {
+      for (const key of activeKeys) {
+        this.activeItems.delete(key);
+      }
       this.processing = false;
       if (this.running) {
         this.scheduleNextProcess();
@@ -296,7 +309,7 @@ export class MintOperationProcessor {
     }
   }
 
-  private async processItem(item: QueueItem): Promise<void> {
+  private async processItem(item: QueueItem): Promise<string[]> {
     const { mintUrl, operationId, method } = item;
 
     const handler = this.handlers.get(method);
@@ -306,7 +319,7 @@ export class MintOperationProcessor {
         mintUrl,
         operationId,
       });
-      return;
+      return [];
     }
 
     this.logger?.info('Processing mint operation', {
@@ -316,8 +329,83 @@ export class MintOperationProcessor {
       attempt: item.retryCount + 1,
     });
 
+    const operation =
+      typeof (this.mintOperations as any).getOperation === 'function'
+        ? await this.mintOperations.getOperation(operationId)
+        : null;
+    if (
+      operation?.state === 'pending' &&
+      operation.batchEligible &&
+      !operation.outputData &&
+      operation.lastObservedRemoteState === 'PAID'
+    ) {
+      const batchItems = await this.collectBatchItems(item, operation.unit);
+      if (batchItems.length > 1) {
+        const batchIds = batchItems.map((batchItem) => batchItem.operationId);
+        const extraActiveKeys = batchItems
+          .slice(1)
+          .map((batchItem) => this.queueKey(batchItem.mintUrl, batchItem.operationId));
+        for (const key of extraActiveKeys) {
+          this.activeItems.add(key);
+        }
+
+        try {
+          await this.mintOperations.finalizeBatch(batchIds);
+          this.logger?.info('Successfully processed mint batch', {
+            mintUrl,
+            method,
+            count: batchIds.length,
+          });
+          return extraActiveKeys;
+        } catch (error) {
+          this.logger?.warn('Mint batch processing failed, falling back to single operation', {
+            mintUrl,
+            operationId,
+            method,
+            count: batchIds.length,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          for (const key of extraActiveKeys) {
+            this.activeItems.delete(key);
+          }
+          for (const batchItem of batchItems.slice(1)) {
+            this.queue.push(batchItem);
+          }
+        }
+      }
+    }
+
     await handler.process(mintUrl, operationId);
     this.logger?.info('Successfully processed mint operation', { mintUrl, operationId, method });
+    return [];
+  }
+
+  private async collectBatchItems(item: QueueItem, unit: string): Promise<QueueItem[]> {
+    const batchItems = [item];
+    const remaining: QueueItem[] = [];
+
+    for (const candidate of this.queue) {
+      if (candidate.mintUrl !== item.mintUrl || candidate.method !== item.method) {
+        remaining.push(candidate);
+        continue;
+      }
+
+      const operation = await this.mintOperations.getOperation(candidate.operationId);
+      if (
+        operation?.state === 'pending' &&
+        operation.unit === unit &&
+        operation.batchEligible &&
+        !operation.outputData &&
+        operation.lastObservedRemoteState === 'PAID'
+      ) {
+        batchItems.push(candidate);
+      } else {
+        remaining.push(candidate);
+      }
+    }
+
+    this.queue = remaining;
+    return batchItems;
   }
 
   private handleProcessingError(item: QueueItem, err: unknown): void {

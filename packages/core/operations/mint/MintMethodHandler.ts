@@ -1,4 +1,4 @@
-import type { MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
+import type { Amount, MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -12,6 +12,7 @@ import type {
   MintOperationFailure,
   PendingMintOperation,
 } from './MintOperation';
+import type { MintBatchAttempt } from './MintBatchAttempt';
 import type { MintAdapter } from '../../infra/MintAdapter';
 
 /**
@@ -72,6 +73,31 @@ export interface PendingContext<M extends MintMethod = MintMethod> extends BaseH
   wallet: Wallet;
 }
 
+export interface SingleOutputPrepareContext<M extends MintMethod = MintMethod>
+  extends BaseHandlerDeps {
+  operation: PendingMintOperation<M>;
+  wallet: Wallet;
+}
+
+export interface BatchSupportContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+  operation: PendingMintOperation<M>;
+  wallet: Wallet;
+}
+
+export interface BatchPrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+  operations: PendingMintOperation<M>[];
+  totalAmount: Amount;
+  quoteAmounts: Amount[];
+  wallet: Wallet;
+  keysetId: string;
+}
+
+export interface BatchExecuteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+  attempt: MintBatchAttempt<M>;
+  operations: PendingMintOperation<M>[];
+  wallet: Wallet;
+}
+
 export type MintExecutionResult =
   | {
       status: 'ISSUED';
@@ -83,6 +109,25 @@ export type MintExecutionResult =
   | {
       status: 'FAILED';
       error?: string;
+    };
+
+export interface MintBatchSupport {
+  supported: boolean;
+  reason?: string;
+}
+
+export type MintBatchExecutionResult =
+  | {
+      status: 'ISSUED';
+      proofs: Proof[];
+    }
+  | {
+      status: 'ALREADY_ISSUED';
+    }
+  | {
+      status: 'FAILED';
+      error?: string;
+      retryable?: boolean;
     };
 
 export type RecoverExecutingResult =
@@ -101,7 +146,11 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
 
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
+  prepareSingleOutput?(ctx: SingleOutputPrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
+  assessBatchSupport?(ctx: BatchSupportContext<M>): Promise<MintBatchSupport> | MintBatchSupport;
+  prepareBatch?(ctx: BatchPrepareContext<M>): Promise<MintBatchAttempt<M>>;
+  executeBatch?(ctx: BatchExecuteContext<M>): Promise<MintBatchExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
   checkPending(ctx: PendingContext<M>): Promise<PendingMintCheckResult<M>>;
 }

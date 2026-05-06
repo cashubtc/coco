@@ -9,10 +9,20 @@ import type {
   RecoverExecutingContext,
   PendingContext,
   PendingMintCheckResult,
+  SingleOutputPrepareContext,
+  BatchSupportContext,
+  BatchPrepareContext,
+  BatchExecuteContext,
+  MintBatchExecutionResult,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
-import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
+import {
+  deserializeOutputData,
+  generateSubId,
+  mapProofToCoreProof,
+  serializeOutputData,
+} from '@core/utils';
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
@@ -34,19 +44,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: quote.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for mint operation');
-    }
-
     return {
       ...ctx.operation,
       quoteId: quote.quote,
@@ -57,8 +54,33 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       pubkey: quote.pubkey,
       lastObservedRemoteState: quote.state,
       lastObservedRemoteStateAt: Date.now(),
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
+    };
+  }
+
+  async prepareSingleOutput(
+    ctx: SingleOutputPrepareContext<'bolt11'>,
+  ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
+    if (ctx.operation.outputData) {
+      return ctx.operation;
+    }
+
+    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
+      ctx.operation.mintUrl,
+      {
+        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
+        send: { amount: Amount.zero(), unit: ctx.operation.unit },
+      },
+    );
+
+    if (outputData.keep.length === 0) {
+      throw new Error('Failed to create deterministic outputs for mint operation');
+    }
+
+    return {
+      ...ctx.operation,
+      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
+      updatedAt: Date.now(),
     };
   }
 
@@ -76,6 +98,89 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         },
       );
 
+      return { status: 'ISSUED', proofs };
+    } catch (err) {
+      if (err instanceof MintOperationError && err.code === 20002) {
+        return { status: 'ALREADY_ISSUED' };
+      }
+      throw err;
+    }
+  }
+
+  assessBatchSupport(ctx: BatchSupportContext<'bolt11'>): { supported: boolean; reason?: string } {
+    const { operation } = ctx;
+    if (operation.method !== 'bolt11') {
+      return { supported: false, reason: 'unsupported method' };
+    }
+    if (operation.pubkey) {
+      return { supported: false, reason: 'locked quotes are single-only' };
+    }
+    if (!operation.amount || operation.amount.isZero()) {
+      return { supported: false, reason: 'invalid amount' };
+    }
+    if (operation.outputData) {
+      return { supported: false, reason: 'operation already has precomputed output data' };
+    }
+    return { supported: true };
+  }
+
+  async prepareBatch(ctx: BatchPrepareContext<'bolt11'>) {
+    const unit = ctx.operations[0]?.unit ?? 'sat';
+    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
+      ctx.operations[0]?.mintUrl ?? '',
+      {
+        keep: { amount: ctx.totalAmount, unit },
+        send: { amount: Amount.zero(), unit },
+      },
+    );
+
+    if (outputData.keep.length === 0) {
+      throw new Error('Failed to create deterministic outputs for mint batch');
+    }
+
+    const now = Date.now();
+    return {
+      id: generateSubId(),
+      mintUrl: ctx.operations[0]?.mintUrl ?? '',
+      method: 'bolt11' as const,
+      unit,
+      operationIds: ctx.operations.map((operation) => operation.id),
+      quoteIds: ctx.operations.map((operation) => operation.quoteId),
+      quoteAmounts: ctx.quoteAmounts,
+      totalAmount: ctx.totalAmount,
+      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
+      keysetId: ctx.keysetId,
+      state: 'prepared' as const,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  async executeBatch(ctx: BatchExecuteContext<'bolt11'>): Promise<MintBatchExecutionResult> {
+    const outputData = deserializeOutputData(ctx.attempt.outputData);
+    const entries = ctx.operations.map((operation, index) => ({
+      amount: ctx.attempt.quoteAmounts[index],
+      quote: {
+        quote: operation.quoteId,
+        amount: operation.amount,
+        unit: operation.unit,
+        request: operation.request,
+        expiry: operation.expiry,
+        ...(operation.pubkey ? { pubkey: operation.pubkey } : {}),
+      },
+    }));
+
+    try {
+      const preview = await (ctx.wallet as any).prepareBatchMint(
+        'bolt11',
+        entries,
+        { keysetId: ctx.attempt.keysetId },
+        {
+          type: 'custom',
+          data: outputData.keep,
+        },
+      );
+      const proofs = await (ctx.wallet as any).completeBatchMint(preview);
       return { status: 'ISSUED', proofs };
     } catch (err) {
       if (err instanceof MintOperationError && err.code === 20002) {

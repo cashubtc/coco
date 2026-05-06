@@ -5,6 +5,10 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
+  MintBatchAttempt,
+  MintBatchAttemptState,
+} from '@core/operations/mint/MintBatchAttempt';
+import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../operations/receive/ReceiveOperation';
@@ -218,6 +222,16 @@ export interface MintOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface MintBatchAttemptRepository {
+  create(attempt: MintBatchAttempt): Promise<void>;
+  update(attempt: MintBatchAttempt): Promise<void>;
+  getById(id: string): Promise<MintBatchAttempt | null>;
+  getByState(state: MintBatchAttemptState): Promise<MintBatchAttempt[]>;
+  getByOperationId(operationId: string): Promise<MintBatchAttempt | null>;
+  getPending(): Promise<MintBatchAttempt[]>;
+  delete(id: string): Promise<void>;
+}
+
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
   create(operation: ReceiveOperation): Promise<void>;
@@ -284,6 +298,7 @@ interface RepositoriesBase {
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
+  mintBatchAttemptRepository: MintBatchAttemptRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;

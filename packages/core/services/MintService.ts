@@ -17,6 +17,12 @@ import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
+const DEFAULT_BATCH_MINT_CAP = 100;
+
+export interface MintBatchCapability {
+  supported: boolean;
+  maxBatchSize: number;
+}
 
 export interface MethodUnitCapability {
   supported: boolean;
@@ -295,6 +301,27 @@ export class MintService {
         `NUT-${nut} method ${method} unit ${capability.unit} requires amount <= ${capability.maxAmount}`,
       );
     }
+  }
+
+  async getMintBatchCapability(mintUrl: string, method: string): Promise<MintBatchCapability> {
+    const mintInfo = await this.getMintInfo(mintUrl);
+    const nut29 = (mintInfo as any).nuts?.[29] ?? (mintInfo as any).nuts?.['29'];
+    if (!nut29) {
+      return { supported: false, maxBatchSize: 0 };
+    }
+
+    const methods = Array.isArray(nut29.methods) ? nut29.methods : undefined;
+    if (methods && !methods.includes(method)) {
+      return { supported: false, maxBatchSize: 0 };
+    }
+
+    const advertisedMax = Number(nut29.max_batch_size);
+    const maxBatchSize =
+      Number.isFinite(advertisedMax) && advertisedMax > 0
+        ? Math.min(Math.floor(advertisedMax), DEFAULT_BATCH_MINT_CAP)
+        : DEFAULT_BATCH_MINT_CAP;
+
+    return { supported: true, maxBatchSize };
   }
 
   async getAllMints(): Promise<Mint[]> {
