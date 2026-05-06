@@ -189,13 +189,17 @@ Responsibilities:
   `ensureOutputsSaved(operation, proofs)` path, then call `finalizeIssuedOperation(...)` per
   operation.
 - On batch failure, do not mark the whole group as failed. Use a batch-specific recovery path that
-  checks saved outputs and remote issuance per operation, but does not submit new single-quote mint
-  requests from the service catch path. Return per-operation retry guidance to the processor.
-
-The service should not turn a rejected batch into immediate single-operation finalizations. That would
-bypass the processor's scheduling, retry, and backoff behavior. If an operation needs to be retried
-as a single operation, the service returns a downgrade outcome and the processor requeues it for a
-later turn.
+  checks saved outputs and remote issuance per operation before deciding how each operation should
+  continue.
+- For transient or ambiguous failures such as network errors, timeouts, rate limits, or unclear
+  submission status, unresolved operations should return to `pending` with `batchEligible: true`.
+  The normal pending event may re-enqueue paid quotes, so the processor must either use its own
+  active-item dedupe when also handling retryable results, or make retryable result handling
+  acknowledge that the pending event already owns requeueing. Do not let both paths add duplicate
+  queue entries for the same operation.
+- Only operation-local structural failures should downgrade an operation to single-mint execution.
+  Group-shape failures such as mixed output keysets, mint capability absence, or batch-size limits
+  should fall back, split, shrink, or retry without permanently mutating per-operation eligibility.
 
 Suggested result shape:
 
@@ -213,7 +217,9 @@ interface MintBatchFinalizeResult {
 
 Use `downgraded` when an item should leave the batch group and run through the single-operation path.
 Use `retryable` for transient or ambiguous failures such as network errors, timeouts, rate limits, or
-a batch request whose submission status is unclear.
+a batch request whose submission status is unclear. Retryable results keep the operation's current
+`batchEligible` value. Because returning an operation to `pending` emits `mint-op:pending`, retryable
+requeue handling must be deduplicated against that event path.
 
 ### 4. Keep processor batching method agnostic
 
@@ -235,7 +241,14 @@ compatible group":
 - Apply result handling per operation:
   - `finalized` / `failed`: remove from queue
   - `downgraded`: requeue with `batchEligible: false` so it is processed singly on a later turn
-  - `retryable`: apply existing retry/backoff
+  - `retryable`: apply existing retry/backoff with the existing `batchEligible` value, but dedupe
+    against any `mint-op:pending` event emitted while the batch was recovering
+  - group fallback/split: retry a smaller compatible group or requeue without persisting
+    `batchEligible: false` unless the service identified an operation-local structural issue
+
+Before adding result-driven requeueing, fix the current queue dedupe TODO by tracking active
+operation keys as well as queued keys, or route all result requeues through a helper that can collapse
+duplicates created by recovery events.
 
 The processor should not know whether `bolt11`, `bolt12`, or a future method has a native batch
 endpoint. It only groups by method because cross-method batches are not valid.
@@ -297,10 +310,15 @@ const entries = operations.map((operation) => ({
 6. Call:
 
 ```ts
-const preview = await wallet.prepareBatchMint('bolt11', entries, { keysetId }, {
-  type: 'custom',
-  data: allOutputs,
-});
+const preview = await wallet.prepareBatchMint(
+  'bolt11',
+  entries,
+  { keysetId },
+  {
+    type: 'custom',
+    data: allOutputs,
+  },
+);
 const proofs = await wallet.completeBatchMint(preview);
 ```
 
@@ -323,6 +341,7 @@ The batch attempt should fall back or retry without mutating operation eligibili
 - the group exceeds the mint's advertised `nuts[29].max_batch_size`
 - the mint returns a structural batch-size error such as `BATCH_SIZE_EXCEEDED`; retry with a smaller
   group if possible before falling back to single-operation processing
+- the batch request fails due to network, timeout, rate limit, or ambiguous submission status
 
 Bolt11 should not downgrade for transient request failures.
 
@@ -339,18 +358,18 @@ Batch execution should keep the same sequence per operation:
   from its own output data.
 - If proof persistence fails for one operation after the batch succeeded, recovery should use the
   existing `recoverProofsFromOutputData()` path for that operation.
-- If the batch request errors, each executing operation should be recovered individually with a
-  no-new-mint recovery mode:
+- If the batch request errors, each executing operation should be recovered individually:
   - saved outputs already present -> finalize
   - remote quote is `ISSUED` -> recover proofs from persisted output data and finalize if recovered
-  - remote quote is still `PAID`/`UNPAID` -> transition back to `pending` and let the processor or
-    watcher schedule the next attempt
+  - remote quote is still `PAID`/`UNPAID` or the quote check cannot complete because the mint is
+    offline -> transition back to `pending`
+- For non-structural failures, operations that return to `pending` keep `batchEligible: true`. The
+  normal `mint-op:pending` flow may re-enqueue paid quotes, and the processor should form another
+  batch on a later pass after deduping that event path against retryable result handling.
+- For operation-local structural failures, persist `batchEligible: false` and requeue that operation
+  for single minting. Group-shape failures should not poison per-operation eligibility.
 - Retrying after a lost batch response is safe because recovery checks saved outputs and remote
   issuance before another mint attempt.
-
-This means a batch failure can degrade into single-operation retry later, but the service catch path
-must not immediately mint each quote singly. That preserves processor scheduling, backoff, and
-fairness.
 
 ## Refined Flow
 
@@ -369,7 +388,9 @@ fairness.
    `batchEligible: false` and returns `downgraded` results.
 9. The processor requeues downgraded operations as non-batchable so they are picked up singly in a
    later turn.
-10. Transient batch failures remain retryable and use the existing backoff behavior.
+10. Transient batch failures move unresolved operations back to `pending` with `batchEligible: true`;
+    pending-event and retryable-result requeue paths are deduped, then the processor batches them
+    again on a later pass.
 
 ## Resolved Design Choices
 
@@ -379,7 +400,8 @@ fairness.
    incompatibilities: unsupported method, locked quote without stored signing key, mixed unit, or
    invalid persisted output data. Treat missing NUT-29 support, mixed output keyset groups, and
    batch-size incompatibility as scheduling fallbacks. Treat network errors, timeouts, rate limits,
-   and ambiguous submissions as retryable.
+   and ambiguous submissions as retryable; unresolved operations keep `batchEligible: true` and are
+   re-enqueued for a later batch attempt.
 3. **NUT-29 capability source**: add a small helper in `MintService` (or a nearby utility) that parses
    the stored mint info consistently. It should treat omitted `nuts[29].methods` as "all NUT-04
    methods" and expose an effective max batch size from `nuts[29].max_batch_size` or an internal
@@ -394,6 +416,9 @@ fairness.
    after mint operation method data has an explicit private-key path.
 6. **Queue fairness**: process one compatible group per pass. This matches the current timer model and
    avoids long processor monopolization when many quotes become paid at once.
+7. **Retry requeue ownership**: returning an executing operation to `pending` emits `mint-op:pending`.
+   The implementation must dedupe that event against retryable result handling, for example with an
+   active queue key set. Otherwise a batch recovery can enqueue the same operation twice.
 
 ## Implementation Steps
 
@@ -413,10 +438,12 @@ fairness.
    - downgrading stale locally ineligible operations
    - transitioning a group to `executing`
    - finalizing per-operation batch results
-   - recovering a failed batch group without submitting single-quote mint requests
+   - recovering a failed batch group and re-enqueueing unresolved transient failures as
+     batch-eligible
 6. Update `MintOperationProcessor` to queue `batchEligible`, read NUT-29 max batch size from
    `MintService`, select matching batchable items, and requeue downgraded operations as
-   non-batchable.
+   non-batchable. As part of this change, close the existing active-item dedupe gap so requeue events
+   emitted during in-flight processing cannot duplicate retryable result requeues.
 7. Implement `assessBatchSupport`, `canBatch`, and `executeBatch` in `MintBolt11Handler`.
 8. Add focused unit tests:
    - prepare persists `batchEligible: true` for locally eligible bolt11 operations
@@ -434,12 +461,15 @@ fairness.
    - service transitions all candidates to `executing` before batch execution
    - service downgrades stale locally ineligible candidates without executing them singly
    - service saves/finalizes each operation with only its own proofs
-   - batch failure recovers/requeues without marking all operations failed or minting singly
+   - network batch failure recovers/requeues unresolved operations with `batchEligible: true`
+   - processor dedupes retryable result handling against `mint-op:pending` requeue events
+   - a later processor pass forms another batch for still-eligible requeued operations
+   - operation-local structural failures requeue with `batchEligible: false`
    - bolt11 handler uses `prepareBatchMint('bolt11', ...)` with custom output data and the derived
      `keysetId`
    - bolt11 handler splits returned proofs by operation output counts
    - bolt11 skips batching when NUT-29 is not advertised or a quote has `pubkey`
-   - bolt11 falls back for mixed-keyset groups
+   - bolt11 falls back for mixed-keyset groups without persisting operation-local ineligibility
    - batch-size errors split or fall back without failing operations
 9. Run:
    - `bun run --filter='@cashu/coco-core' test -- test/unit/MintQuoteProcessor.test.ts`
