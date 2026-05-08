@@ -317,13 +317,20 @@ export class PollingTransport implements RealTimeTransport {
       if (queue.length === 0 || yToSubs.size === 0) return;
 
       const selected: string[] = [];
-      // Pull up to 100 Ys in round robin
-      while (selected.length < 100 && queue.length > 0) {
+      const selectedSet = new Set<string>();
+      let remaining = queue.length;
+      // Pull up to 100 unique Ys in round robin.
+      while (selected.length < 100 && remaining > 0 && queue.length > 0) {
+        remaining--;
         const y = queue.shift()!;
         const subs = yToSubs.get(y);
-        if (subs && subs.size > 0) {
+        if (subs && subs.size > 0 && !selectedSet.has(y)) {
           selected.push(y);
+          selectedSet.add(y);
           queue.push(y); // rotate for fairness
+        } else if (subs && subs.size > 0) {
+          // Drop duplicate queue entries while keeping the rotated selected entry.
+          continue;
         } else {
           // drop stale y (no subscribers)
           const set = this.proofSetByMint.get(mintUrl);
