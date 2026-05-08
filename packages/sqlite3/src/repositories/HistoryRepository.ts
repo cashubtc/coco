@@ -1,38 +1,222 @@
 import type {
   HistoryEntry,
   HistoryRepository,
-  MintHistoryEntry,
-  MeltHistoryEntry,
-  ReceiveHistoryEntry,
-  ReceiveHistoryState,
-  SendHistoryEntry,
-  SendHistoryState,
+  HistoryType,
+  LegacyHistoryRowInput,
 } from '@cashu/coco-core';
-import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
+import type { Token } from '@cashu/cashu-ts';
+import {
+  deserializeAmount,
+  deserializeToken,
+  operationHistoryId,
+  parseHistoryEntryId,
+  projectLegacyHistoryRow,
+} from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
-type MintQuoteState = MintHistoryEntry['state'];
-type MeltQuoteState = MeltHistoryEntry['state'];
-type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
-type SendToken = NonNullable<SendHistoryEntry['token']>;
-
-type Row = {
-  id: number;
+type HistoryProjectionRow = {
+  source: 'operation' | 'legacy';
+  id: string;
+  legacyHistoryId: string | null;
+  type: HistoryType;
   mintUrl: string;
-  type: 'mint' | 'melt' | 'send' | 'receive';
-  unit: string;
+  unit: string | null;
   amount: string | number;
   createdAt: number;
+  updatedAt: number;
+  state: string;
   quoteId: string | null;
-  state: string | null;
   paymentRequest: string | null;
   tokenJson: string | null;
+  inputProofsJson: string | null;
   metadata: string | null;
   operationId: string | null;
+  remoteState: string | null;
+  error: string | null;
 };
 
-function parseToken<TToken>(tokenJson: string | null): TToken | undefined {
-  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+const projectionSelect = `
+  SELECT *
+  FROM (
+    SELECT
+      'operation' AS source,
+      'send:' || id AS id,
+      NULL AS legacyHistoryId,
+      'send' AS type,
+      mintUrl,
+      'sat' AS unit,
+      amount,
+      createdAt * 1000 AS createdAt,
+      updatedAt * 1000 AS updatedAt,
+      state,
+      NULL AS quoteId,
+      NULL AS paymentRequest,
+      tokenJson,
+      NULL AS inputProofsJson,
+      NULL AS metadata,
+      id AS operationId,
+      NULL AS remoteState,
+      error
+    FROM coco_cashu_send_operations
+    WHERE state != 'init'
+
+    UNION ALL
+
+    SELECT
+      'operation' AS source,
+      'melt:' || id AS id,
+      NULL AS legacyHistoryId,
+      'melt' AS type,
+      mintUrl,
+      COALESCE(unit, 'sat') AS unit,
+      amount,
+      createdAt * 1000 AS createdAt,
+      updatedAt * 1000 AS updatedAt,
+      state,
+      quoteId,
+      NULL AS paymentRequest,
+      NULL AS tokenJson,
+      NULL AS inputProofsJson,
+      NULL AS metadata,
+      id AS operationId,
+      NULL AS remoteState,
+      error
+    FROM coco_cashu_melt_operations
+    WHERE state IN ('prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')
+
+    UNION ALL
+
+    SELECT
+      'operation' AS source,
+      'mint:' || id AS id,
+      NULL AS legacyHistoryId,
+      'mint' AS type,
+      mintUrl,
+      unit,
+      amount,
+      createdAt * 1000 AS createdAt,
+      updatedAt * 1000 AS updatedAt,
+      state,
+      quoteId,
+      request AS paymentRequest,
+      NULL AS tokenJson,
+      NULL AS inputProofsJson,
+      NULL AS metadata,
+      id AS operationId,
+      lastObservedRemoteState AS remoteState,
+      error
+    FROM coco_cashu_mint_operations
+    WHERE state != 'init'
+
+    UNION ALL
+
+    SELECT
+      'operation' AS source,
+      'receive:' || id AS id,
+      NULL AS legacyHistoryId,
+      'receive' AS type,
+      mintUrl,
+      COALESCE(unit, 'sat') AS unit,
+      amount,
+      createdAt * 1000 AS createdAt,
+      updatedAt * 1000 AS updatedAt,
+      state,
+      NULL AS quoteId,
+      NULL AS paymentRequest,
+      NULL AS tokenJson,
+      inputProofsJson,
+      NULL AS metadata,
+      id AS operationId,
+      NULL AS remoteState,
+      error
+    FROM coco_cashu_receive_operations
+    WHERE state IN ('finalized', 'rolled_back')
+
+    UNION ALL
+
+    SELECT
+      'legacy' AS source,
+      'legacy:' || h.id AS id,
+      CAST(h.id AS TEXT) AS legacyHistoryId,
+      h.type,
+      h.mintUrl,
+      h.unit,
+      h.amount,
+      h.createdAt,
+      h.createdAt AS updatedAt,
+      COALESCE(h.state, '') AS state,
+      h.quoteId,
+      h.paymentRequest,
+      h.tokenJson,
+      NULL AS inputProofsJson,
+      h.metadata,
+      h.operationId,
+      NULL AS remoteState,
+      NULL AS error
+    FROM coco_cashu_history h
+    WHERE NOT (
+      h.operationId IS NOT NULL AND EXISTS (
+        SELECT 1 FROM (
+          SELECT 'send' AS type, id AS operationId
+          FROM coco_cashu_send_operations
+          WHERE state != 'init'
+          UNION ALL
+          SELECT 'melt' AS type, id AS operationId
+          FROM coco_cashu_melt_operations
+          WHERE state IN (
+            'prepared',
+            'executing',
+            'pending',
+            'finalized',
+            'rolling_back',
+            'rolled_back'
+          )
+          UNION ALL
+          SELECT 'mint' AS type, id AS operationId
+          FROM coco_cashu_mint_operations
+          WHERE state != 'init'
+          UNION ALL
+          SELECT 'receive' AS type, id AS operationId
+          FROM coco_cashu_receive_operations
+          WHERE state IN ('finalized', 'rolled_back')
+        ) op
+        WHERE op.type = h.type AND op.operationId = h.operationId
+      )
+    )
+    AND NOT (
+      h.operationId IS NULL
+      AND h.type IN ('mint', 'melt')
+      AND h.quoteId IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM (
+          SELECT 'mint' AS type, mintUrl, quoteId
+          FROM coco_cashu_mint_operations
+          WHERE state != 'init'
+          UNION ALL
+          SELECT 'melt' AS type, mintUrl, quoteId
+          FROM coco_cashu_melt_operations
+          WHERE state IN (
+            'prepared',
+            'executing',
+            'pending',
+            'finalized',
+            'rolling_back',
+            'rolled_back'
+          )
+        ) opq
+        WHERE opq.type = h.type AND opq.mintUrl = h.mintUrl AND opq.quoteId = h.quoteId
+      )
+    )
+  )
+`;
+
+function parseToken(tokenJson: string | null): Token | undefined {
+  return tokenJson ? deserializeToken(JSON.parse(tokenJson)) : undefined;
+}
+
+function parseMetadata(metadata: string | null): Record<string, string> | undefined {
+  return metadata ? JSON.parse(metadata) : undefined;
 }
 
 export class SqliteHistoryRepository implements HistoryRepository {
@@ -43,345 +227,128 @@ export class SqliteHistoryRepository implements HistoryRepository {
   }
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
-    const rows = await this.db.all<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history
+    const rows = await this.db.all<HistoryProjectionRow>(
+      `${projectionSelect}
        ORDER BY createdAt DESC, id DESC
        LIMIT ? OFFSET ?`,
       [limit, offset],
     );
-    return rows.map((r) => this.rowToEntry(r));
+
+    return rows.map(rowToEntry);
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE id = ?`,
-      [id],
-    );
-    if (!row) return null;
-    return this.rowToEntry(row);
-  }
+    const parsed = parseHistoryEntryId(id);
+    if (!parsed) return null;
 
-  async addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry> {
-    const baseParams = [
-      history.mintUrl,
-      history.type,
-      history.unit,
-      serializeAmount(history.amount),
-      history.createdAt,
-    ];
-
-    let quoteId: string | null = null;
-    let state: string | null = null;
-    let paymentRequest: string | null = null;
-    let tokenJson: string | null = null;
-    let metadata: string | null = history.metadata ? JSON.stringify(history.metadata) : null;
-    let operationId: string | null = null;
-
-    switch (history.type) {
-      case 'mint': {
-        const h = history as Omit<MintHistoryEntry, 'id'>;
-        quoteId = h.quoteId;
-        state = h.state;
-        paymentRequest = h.paymentRequest;
-        operationId = h.operationId ?? null;
-        break;
-      }
-      case 'melt': {
-        const h = history as Omit<MeltHistoryEntry, 'id'>;
-        quoteId = h.quoteId;
-        state = h.state;
-        operationId = h.operationId ?? null;
-        break;
-      }
-      case 'send': {
-        const h = history as Omit<SendHistoryEntry, 'id'>;
-        tokenJson = h.token ? JSON.stringify(h.token as SendToken) : null;
-        operationId = h.operationId;
-        state = h.state;
-        break;
-      }
-      case 'receive': {
-        const h = history as Omit<ReceiveHistoryEntry, 'id'>;
-        tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
-        operationId = h.operationId ?? null;
-        state = h.state;
-        break;
-      }
+    if (parsed.source === 'legacy') {
+      const row = await this.db.get<HistoryProjectionRow>(
+        `${projectionSelect}
+         WHERE source = 'legacy' AND legacyHistoryId = ?
+         LIMIT 1`,
+        [parsed.legacyHistoryId],
+      );
+      return row ? rowToEntry(row) : null;
     }
 
-    const result = await this.db.run(
-      `INSERT INTO coco_cashu_history (mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [...baseParams, quoteId, state, paymentRequest, tokenJson, metadata, operationId],
+    const row = await this.db.get<HistoryProjectionRow>(
+      `${projectionSelect}
+       WHERE source = 'operation' AND type = ? AND operationId = ?
+       LIMIT 1`,
+      [parsed.type, parsed.operationId],
     );
-    const id = result.lastID;
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE id = ?`,
-      [id],
-    );
-    if (!row) throw new Error('History insert failed to return row');
-    return this.rowToEntry(row);
+    return row ? rowToEntry(row) : null;
+  }
+}
+
+function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
+  if (row.source === 'legacy') {
+    return projectLegacyHistoryRow(rowToLegacyInput(row));
   }
 
-  async getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null> {
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'
-       ORDER BY createdAt DESC, id DESC LIMIT 1`,
-      [mintUrl, quoteId],
-    );
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'mint' ? entry : null;
-  }
+  const base = {
+    id: operationHistoryId(row.type, row.operationId ?? ''),
+    source: 'operation' as const,
+    type: row.type,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
+    operationId: row.operationId ?? '',
+    amount: deserializeAmount(row.amount),
+    state: row.state,
+    ...(row.error ? { error: row.error } : {}),
+  };
 
-  async getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null> {
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'
-       ORDER BY createdAt DESC, id DESC LIMIT 1`,
-      [mintUrl, quoteId],
-    );
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'melt' ? entry : null;
-  }
-
-  async getSendHistoryEntry(
-    mintUrl: string,
-    operationId: string,
-  ): Promise<SendHistoryEntry | null> {
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'send'
-       ORDER BY createdAt DESC, id DESC LIMIT 1`,
-      [mintUrl, operationId],
-    );
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'send' ? entry : null;
-  }
-
-  async getReceiveHistoryEntry(
-    mintUrl: string,
-    operationId: string,
-  ): Promise<ReceiveHistoryEntry | null> {
-    const row = await this.db.get<Row>(
-      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'receive'
-       ORDER BY createdAt DESC, id DESC LIMIT 1`,
-      [mintUrl, operationId],
-    );
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'receive' ? entry : null;
-  }
-
-  async updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry> {
-    let state: string | null = null;
-    let paymentRequest: string | null = null;
-    let tokenJson: string | null = null;
-
-    if (history.type === 'mint') {
-      const h = history as Omit<MintHistoryEntry, 'id' | 'createdAt'>;
-      if (!h.quoteId) throw new Error('quoteId required for mint entry');
-      state = h.state;
-      paymentRequest = h.paymentRequest;
-
-      await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?
-            , operationId = ?
-         WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
-        [
-          history.unit,
-          serializeAmount(history.amount),
-          state,
-          paymentRequest,
-          history.metadata ? JSON.stringify(history.metadata) : null,
-          h.operationId ?? null,
-          history.mintUrl,
-          h.quoteId,
-        ],
-      );
-
-      const row = await this.db.get<Row>(
-        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'
-         ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, h.quoteId],
-      );
-      if (!row) throw new Error('Updated history entry not found');
-      return this.rowToEntry(row);
-    } else if (history.type === 'melt') {
-      const h = history as Omit<MeltHistoryEntry, 'id' | 'createdAt'>;
-      if (!h.quoteId) throw new Error('quoteId required for melt entry');
-      state = h.state;
-
-      await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?, operationId = ?
-         WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
-        [
-          history.unit,
-          serializeAmount(history.amount),
-          state,
-          history.metadata ? JSON.stringify(history.metadata) : null,
-          h.operationId ?? null,
-          history.mintUrl,
-          h.quoteId,
-        ],
-      );
-
-      const row = await this.db.get<Row>(
-        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'
-         ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, h.quoteId],
-      );
-      if (!row) throw new Error('Updated history entry not found');
-      return this.rowToEntry(row);
-    } else if (history.type === 'send') {
-      const h = history as Omit<SendHistoryEntry, 'id' | 'createdAt'>;
-      if (!h.operationId) throw new Error('operationId required for send entry');
-      state = h.state;
-      tokenJson = h.token ? JSON.stringify(h.token as SendToken) : null;
-
-      await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, tokenJson = ?, metadata = ?
-         WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
-        [
-          history.unit,
-          serializeAmount(history.amount),
-          state,
-          tokenJson,
-          history.metadata ? JSON.stringify(history.metadata) : null,
-          history.mintUrl,
-          h.operationId,
-        ],
-      );
-
-      const row = await this.db.get<Row>(
-        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'send'
-         ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, h.operationId],
-      );
-      if (!row) throw new Error('Updated history entry not found');
-      return this.rowToEntry(row);
-    } else if (history.type === 'receive') {
-      const h = history as Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
-      if (!h.operationId) throw new Error('operationId required for receive entry');
-      state = h.state;
-      tokenJson = h.token ? JSON.stringify(h.token as ReceiveToken) : null;
-
-      await this.db.run(
-        `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, tokenJson = ?, metadata = ?
-         WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
-        [
-          history.unit,
-          serializeAmount(history.amount),
-          state,
-          tokenJson,
-          history.metadata ? JSON.stringify(history.metadata) : null,
-          history.mintUrl,
-          h.operationId,
-        ],
-      );
-
-      const row = await this.db.get<Row>(
-        `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'receive'
-         ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, h.operationId],
-      );
-      if (!row) throw new Error('Updated history entry not found');
-      return this.rowToEntry(row);
-    } else {
-      throw new Error(`Unsupported history entry type: ${String((history as HistoryEntry).type)}`);
-    }
-  }
-
-  async updateSendHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: SendHistoryState,
-  ): Promise<void> {
-    await this.db.run(
-      `UPDATE coco_cashu_history SET state = ?
-       WHERE mintUrl = ? AND operationId = ? AND type = 'send'`,
-      [state, mintUrl, operationId],
-    );
-  }
-
-  async updateReceiveHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: ReceiveHistoryState,
-  ): Promise<void> {
-    await this.db.run(
-      `UPDATE coco_cashu_history SET state = ?
-       WHERE mintUrl = ? AND operationId = ? AND type = 'receive'`,
-      [state, mintUrl, operationId],
-    );
-  }
-
-  async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
-    await this.db.run('DELETE FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ?', [
-      mintUrl,
-      quoteId,
-    ]);
-  }
-
-  private rowToEntry(row: Row): HistoryEntry {
-    const base = {
-      id: String(row.id),
-      createdAt: row.createdAt,
-      mintUrl: row.mintUrl,
-      unit: row.unit,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-    } as const;
-
-    if (row.type === 'mint') {
+  switch (row.type) {
+    case 'mint':
       return {
         ...base,
         type: 'mint',
-        paymentRequest: row.paymentRequest ?? '',
         quoteId: row.quoteId ?? '',
-        operationId: row.operationId ?? undefined,
-        state: (row.state ?? 'UNPAID') as MintQuoteState,
-        amount: deserializeAmount(row.amount),
-      };
-    }
-    if (row.type === 'melt') {
+        paymentRequest: row.paymentRequest ?? '',
+        state: row.state as HistoryEntry['state'],
+        ...(row.remoteState ? { remoteState: row.remoteState } : {}),
+      } as HistoryEntry;
+    case 'melt':
       return {
         ...base,
         type: 'melt',
         quoteId: row.quoteId ?? '',
-        operationId: row.operationId ?? undefined,
-        state: (row.state ?? 'UNPAID') as MeltQuoteState,
-        amount: deserializeAmount(row.amount),
-      };
-    }
-    if (row.type === 'send') {
+        state: row.state as HistoryEntry['state'],
+      } as HistoryEntry;
+    case 'send': {
+      const token = parseToken(row.tokenJson);
+
       return {
         ...base,
         type: 'send',
-        amount: deserializeAmount(row.amount),
-        operationId: row.operationId ?? '',
-        state: (row.state ?? 'pending') as SendHistoryState,
-        token: parseToken<SendToken>(row.tokenJson),
-      };
+        unit: token?.unit ?? base.unit,
+        state: row.state as HistoryEntry['state'],
+        ...(token ? { token } : {}),
+      } as HistoryEntry;
     }
-    const token = parseToken<ReceiveToken>(row.tokenJson);
-    return {
-      ...base,
-      type: 'receive',
-      amount: deserializeAmount(row.amount),
-      operationId: row.operationId ?? undefined,
-      state: (row.state ?? 'finalized') as ReceiveHistoryState,
-      token,
-    } satisfies HistoryEntry;
+    case 'receive':
+      return {
+        ...base,
+        type: 'receive',
+        state: row.state as HistoryEntry['state'],
+        ...(row.state === 'finalized'
+          ? {
+              token: {
+                mint: row.mintUrl,
+                proofs: parseTokenProofs(row.inputProofsJson),
+                unit: row.unit ?? 'sat',
+              },
+            }
+          : {}),
+      } as HistoryEntry;
   }
+}
+
+function rowToLegacyInput(row: HistoryProjectionRow): LegacyHistoryRowInput {
+  return {
+    legacyHistoryId: row.legacyHistoryId ?? row.id.slice('legacy:'.length),
+    type: row.type,
+    createdAt: row.createdAt,
+    mintUrl: row.mintUrl,
+    unit: row.unit ?? 'sat',
+    amount: deserializeAmount(row.amount),
+    quoteId: row.quoteId,
+    state: row.state || null,
+    paymentRequest: row.paymentRequest,
+    token: parseToken(row.tokenJson) as LegacyHistoryRowInput['token'],
+    metadata: parseMetadata(row.metadata),
+    operationId: row.operationId,
+  };
+}
+
+function parseTokenProofs(
+  inputProofsJson: string | null,
+): NonNullable<Extract<HistoryEntry, { type: 'receive' }>['token']>['proofs'] {
+  const proofs = inputProofsJson ? JSON.parse(inputProofsJson) : [];
+  return proofs.map((proof: { amount: string | number }) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
 }

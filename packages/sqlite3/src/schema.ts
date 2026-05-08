@@ -1093,6 +1093,24 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE receiveOperationId IS NOT NULL;
     `,
   },
+  {
+    id: '028_history_projection_indexes',
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_send_operations_createdAt
+        ON coco_cashu_send_operations(createdAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_createdAt
+        ON coco_cashu_melt_operations(createdAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_createdAt
+        ON coco_cashu_mint_operations(createdAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_createdAt
+        ON coco_cashu_receive_operations(createdAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_createdAt
+        ON coco_cashu_history(createdAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_history_type_operation
+        ON coco_cashu_history(type, operationId)
+        WHERE operationId IS NOT NULL;
+    `,
+  },
 ];
 
 // Export for testing

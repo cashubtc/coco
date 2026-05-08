@@ -1297,7 +1297,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should create melt history entry when a melt operation is prepared', async () => {
         const invoice = createFakeInvoice(15);
-        const historyPromise = waitForMeltHistoryState(mgr!, 'UNPAID');
+        const historyPromise = waitForMeltHistoryState(mgr!, 'prepared');
         const prepared = await mgr!.ops.melt.prepare({
           mintUrl,
           method: 'bolt11',
@@ -1318,7 +1318,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         if (meltEntry?.type === 'melt') {
           expect(meltEntry.operationId).toBe(prepared.id);
           expect(await mgr!.history.getOperationIdForHistoryEntry(meltEntry.id)).toBe(prepared.id);
-          expect(meltEntry.state).toBe('UNPAID');
+          expect(meltEntry.state).toBe('prepared');
           expectAmountEquals(expect, meltEntry.amount, prepared.amount);
         }
       });
@@ -1504,7 +1504,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(amountAfterRollback).toBeGreaterThan(amountAfterSend);
       });
 
-      it('should update history state to rolledBack on rollback', async () => {
+      it('should update history state to rolled_back on rollback', async () => {
         const sendAmount = 35;
         const pendingPromise = waitForEvent<{ operationId: string }>(mgr!, 'send:pending');
         const pendingHistoryPromise = waitForSendHistoryState(mgr!, 'pending', {
@@ -1527,7 +1527,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect((sendEntry as any).state).toBe('pending');
 
         // Rollback
-        const rolledBackHistoryPromise = waitForSendHistoryState(mgr!, 'rolledBack', {
+        const rolledBackHistoryPromise = waitForSendHistoryState(mgr!, 'rolled_back', {
           operationId,
         });
         await mgr!.ops.send.reclaim(operationId!);
@@ -1539,7 +1539,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           (e) => e.type === 'send' && (e as any).operationId === operationId,
         );
         expect(sendEntry).toBeDefined();
-        expect((sendEntry as any).state).toBe('rolledBack');
+        expect((sendEntry as any).state).toBe('rolled_back');
       });
 
       it('should finalize a pending send operation when proofs are spent', async () => {
