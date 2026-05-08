@@ -70,16 +70,31 @@ export class IdbHistoryRepository implements HistoryRepository {
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
     const pageWindow = offset + limit;
+    if (pageWindow <= 0) return [];
+
     const entries = await this.db.runTransaction('r', [...stores], async (tx) => {
       const [sendRows, meltRows, mintRows, receiveRows, legacyRows] = await Promise.all([
-        this.readRecentRows<SendOperationRow>(tx.table('coco_cashu_send_operations'), pageWindow),
-        this.readRecentRows<MeltOperationRow>(tx.table('coco_cashu_melt_operations'), pageWindow),
-        this.readRecentRows<MintOperationRow>(tx.table('coco_cashu_mint_operations'), pageWindow),
-        this.readRecentRows<ReceiveOperationRow>(
+        this.readRecentOperationRows<SendOperationRow>(
+          tx.table('coco_cashu_send_operations'),
+          pageWindow,
+          'send',
+        ),
+        this.readRecentOperationRows<MeltOperationRow>(
+          tx.table('coco_cashu_melt_operations'),
+          pageWindow,
+          'melt',
+        ),
+        this.readRecentOperationRows<MintOperationRow>(
+          tx.table('coco_cashu_mint_operations'),
+          pageWindow,
+          'mint',
+        ),
+        this.readRecentOperationRows<ReceiveOperationRow>(
           tx.table('coco_cashu_receive_operations'),
           pageWindow,
+          'receive',
         ),
-        this.readRecentRows<LegacyHistoryRow>(tx.table('coco_cashu_history'), pageWindow),
+        this.readVisibleLegacyRows(tx, tx.table('coco_cashu_history'), pageWindow),
       ]);
 
       const operationEntries = [
@@ -89,8 +104,7 @@ export class IdbHistoryRepository implements HistoryRepository {
         ...receiveRows.map((row) => this.receiveRowToEntry(row)).filter(Boolean),
       ] as HistoryEntry[];
 
-      const legacyEntries = await this.visibleLegacyEntries(tx, legacyRows);
-      return [...operationEntries, ...legacyEntries].sort(compareHistoryEntries);
+      return [...operationEntries, ...legacyRows].sort(compareHistoryEntries);
     });
 
     return entries.slice(offset, offset + limit);
@@ -138,11 +152,56 @@ export class IdbHistoryRepository implements HistoryRepository {
     });
   }
 
-  private async readRecentRows<TRow extends { createdAt: number }>(
+  private async readRecentOperationRows<TRow extends OperationRow & { createdAt: number }>(
     table: Table,
     limit: number,
+    type: LegacyHistoryRow['type'],
   ): Promise<TRow[]> {
-    return (await table.orderBy('createdAt').reverse().limit(limit).toArray()) as TRow[];
+    return (await table
+      .orderBy('createdAt')
+      .reverse()
+      .filter((row) => this.operationIsHistoryEligible(type, row as OperationRow))
+      .limit(limit)
+      .toArray()) as TRow[];
+  }
+
+  private async readRecentRows<TRow extends { createdAt: number }>(
+    table: Table,
+    offset: number,
+    limit: number,
+  ): Promise<TRow[]> {
+    return (await table
+      .orderBy('createdAt')
+      .reverse()
+      .offset(offset)
+      .limit(limit)
+      .toArray()) as TRow[];
+  }
+
+  private async readVisibleLegacyRows(
+    tx: { table(name: string): Table },
+    table: Table,
+    limit: number,
+  ): Promise<LegacyHistoryEntry[]> {
+    const entries: LegacyHistoryEntry[] = [];
+    const batchSize = Math.max(limit, 50);
+    let offset = 0;
+
+    while (entries.length < limit) {
+      const rows = await this.readRecentRows<LegacyHistoryRow>(table, offset, batchSize);
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        if (await this.legacyIsDeduped(tx, row)) continue;
+        entries.push(this.legacyRowToEntry(row));
+        if (entries.length >= limit) break;
+      }
+
+      if (rows.length < batchSize) break;
+      offset += rows.length;
+    }
+
+    return entries;
   }
 
   private sendRowToEntry(row: SendOperationRow): HistoryEntry | null {
@@ -226,18 +285,6 @@ export class IdbHistoryRepository implements HistoryRepository {
           }
         : {}),
     };
-  }
-
-  private async visibleLegacyEntries(
-    tx: { table(name: string): Table },
-    rows: LegacyHistoryRow[],
-  ): Promise<LegacyHistoryEntry[]> {
-    const entries: LegacyHistoryEntry[] = [];
-    for (const row of rows) {
-      if (await this.legacyIsDeduped(tx, row)) continue;
-      entries.push(this.legacyRowToEntry(row));
-    }
-    return entries;
   }
 
   private legacyRowToEntry(row: LegacyHistoryRow): LegacyHistoryEntry {

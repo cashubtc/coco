@@ -72,6 +72,40 @@ describe('MemoryHistoryRepository', () => {
     });
   });
 
+  it('preserves legacy null-state compatibility defaults', async () => {
+    await historyRepository.addLegacyHistoryEntry({
+      legacyHistoryId: 1,
+      type: 'send',
+      mintUrl: 'https://mint.test',
+      unit: 'sat',
+      amount: Amount.from(1),
+      createdAt: 1_000,
+    });
+    await historyRepository.addLegacyHistoryEntry({
+      legacyHistoryId: 2,
+      type: 'receive',
+      mintUrl: 'https://mint.test',
+      unit: 'sat',
+      amount: Amount.from(2),
+      createdAt: 2_000,
+    });
+
+    const history = await historyRepository.getPaginatedHistoryEntries(10, 0);
+
+    expect(history).toMatchObject([
+      {
+        id: 'legacy:2',
+        type: 'receive',
+        state: 'finalized',
+      },
+      {
+        id: 'legacy:1',
+        type: 'send',
+        state: 'pending',
+      },
+    ]);
+  });
+
   it('hides legacy rows with the same type and operationId as an operation projection', async () => {
     const send = makePreparedSendOperation('send-op-1', 2_000);
     await sendOperationRepository.create(send);

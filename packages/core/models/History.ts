@@ -353,14 +353,14 @@ export function projectLegacyHistoryRow(row: LegacyHistoryRowInput): LegacyHisto
       return {
         ...base,
         type: 'send',
-        state: row.state ?? 'prepared',
+        state: row.state ?? 'pending',
         ...(row.token ? { token: row.token } : {}),
       };
     case 'receive':
       return {
         ...base,
         type: 'receive',
-        state: row.state ?? 'prepared',
+        state: row.state ?? 'finalized',
         ...(row.token ? { token: row.token } : {}),
       };
   }
