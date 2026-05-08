@@ -113,6 +113,31 @@ async function addSendOperationUnitColumn(db: SqliteDb): Promise<void> {
   await db.run('UPDATE coco_cashu_send_operations SET unit = LOWER(TRIM(unit))');
 }
 
+async function backfillSendOperationTokensFromHistory(db: SqliteDb): Promise<void> {
+  await db.run(`
+    UPDATE coco_cashu_send_operations
+    SET tokenJson = (
+      SELECT h.tokenJson
+      FROM coco_cashu_history h
+      WHERE h.type = 'send'
+        AND h.operationId = coco_cashu_send_operations.id
+        AND h.mintUrl = coco_cashu_send_operations.mintUrl
+        AND h.tokenJson IS NOT NULL
+      ORDER BY h.createdAt DESC, h.id DESC
+      LIMIT 1
+    )
+    WHERE tokenJson IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM coco_cashu_history h
+        WHERE h.type = 'send'
+          AND h.operationId = coco_cashu_send_operations.id
+          AND h.mintUrl = coco_cashu_send_operations.mintUrl
+          AND h.tokenJson IS NOT NULL
+      )
+   `);
+}
+
 async function migrateAmountColumnsToText(db: SqliteDb): Promise<void> {
   if (await tableExists(db, 'coco_cashu_proofs')) {
     await db.exec(`
@@ -1110,6 +1135,10 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_history(type, operationId)
         WHERE operationId IS NOT NULL;
     `,
+  },
+  {
+    id: '029_backfill_send_operation_tokens',
+    run: backfillSendOperationTokensFromHistory,
   },
 ];
 

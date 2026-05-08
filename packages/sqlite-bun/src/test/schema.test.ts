@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
 import { Amount } from '@cashu/coco-core';
-import { SqliteDb, ensureSchemaUpTo } from '../index.ts';
+import { SqliteDb, SqliteHistoryRepository, ensureSchemaUpTo } from '../index.ts';
 import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -38,6 +38,54 @@ async function getColumnNames(db: SqliteDb, tableName: string): Promise<string[]
   const rows = await db.all<{ name: string }>(`PRAGMA table_info(${tableName})`);
 
   return rows.map((row) => row.name);
+}
+
+const LEGACY_SEND_TOKEN = {
+  mint: 'https://mint.test',
+  proofs: [{ id: 'keyset-1', amount: '100', secret: 'send-secret', C: 'C_send' }],
+  unit: 'sat',
+};
+
+async function seedSendOperationWithLegacyToken(db: SqliteDb): Promise<void> {
+  await db.run(
+    `INSERT INTO coco_cashu_send_operations
+      (id, mintUrl, amount, state, createdAt, updatedAt, error, method, methodDataJson,
+       needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'send-op-token-backfill',
+      'https://mint.test',
+      '100',
+      'pending',
+      2,
+      3,
+      null,
+      'default',
+      '{}',
+      0,
+      '0',
+      '100',
+      '["secret-1"]',
+      null,
+      null,
+    ],
+  );
+
+  await db.run(
+    `INSERT INTO coco_cashu_history
+      (mintUrl, type, unit, amount, createdAt, state, tokenJson, operationId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'https://mint.test',
+      'send',
+      'sat',
+      '100',
+      1_000,
+      'pending',
+      JSON.stringify(LEGACY_SEND_TOKEN),
+      'send-op-token-backfill',
+    ],
+  );
 }
 
 describe('sqlite-bun schema migrations', () => {
@@ -242,5 +290,34 @@ describe('sqlite-bun schema migrations', () => {
     expect(await getColumnNames(db, 'coco_cashu_send_operations')).toEqual(
       expect.arrayContaining(['method', 'methodDataJson']),
     );
+  });
+
+  it('backfills send operation tokens from matching legacy history rows', async () => {
+    await ensureSchemaUpTo(db, '029_backfill_send_operation_tokens');
+    await seedSendOperationWithLegacyToken(db);
+
+    await ensureSchemaUpTo(db);
+
+    const row = await db.get<{ tokenJson: string | null }>(
+      `SELECT tokenJson FROM coco_cashu_send_operations WHERE id = ?`,
+      ['send-op-token-backfill'],
+    );
+    expect(row?.tokenJson).toBe(JSON.stringify(LEGACY_SEND_TOKEN));
+
+    const repository = new SqliteHistoryRepository(db);
+    const history = await repository.getPaginatedHistoryEntries(10, 0);
+
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      id: 'send:send-op-token-backfill',
+      source: 'operation',
+      type: 'send',
+      operationId: 'send-op-token-backfill',
+      token: {
+        mint: 'https://mint.test',
+        unit: 'sat',
+        proofs: [{ amount: Amount.from(100), secret: 'send-secret' }],
+      },
+    });
   });
 });
