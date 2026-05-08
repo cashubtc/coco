@@ -38,6 +38,7 @@ type LegacyHistoryRow = {
 };
 
 type OperationRow = SendOperationRow | MeltOperationRow | MintOperationRow | ReceiveOperationRow;
+type HistoryVisibleMeltState = Exclude<MeltOperationRow['state'], 'init'>;
 
 const stores = [
   'coco_cashu_send_operations',
@@ -46,6 +47,19 @@ const stores = [
   'coco_cashu_receive_operations',
   'coco_cashu_history',
 ] as const;
+
+const historyVisibleMeltStates = new Set<HistoryVisibleMeltState>([
+  'prepared',
+  'executing',
+  'pending',
+  'finalized',
+  'rolling_back',
+  'rolled_back',
+]);
+
+function isHistoryVisibleMeltState(state: string): state is HistoryVisibleMeltState {
+  return historyVisibleMeltStates.has(state as HistoryVisibleMeltState);
+}
 
 function parseToken(tokenJson: string | null | undefined): Token | undefined {
   return tokenJson ? deserializeToken(JSON.parse(tokenJson)) : undefined;
@@ -224,7 +238,7 @@ export class IdbHistoryRepository implements HistoryRepository {
   }
 
   private meltRowToEntry(row: MeltOperationRow): HistoryEntry | null {
-    if (row.state === 'init') return null;
+    if (!isHistoryVisibleMeltState(row.state)) return null;
     return {
       id: operationHistoryId('melt', row.id),
       source: 'operation',
@@ -356,9 +370,10 @@ export class IdbHistoryRepository implements HistoryRepository {
   private operationIsHistoryEligible(type: LegacyHistoryRow['type'], row: OperationRow): boolean {
     switch (type) {
       case 'send':
-      case 'melt':
       case 'mint':
         return row.state !== 'init';
+      case 'melt':
+        return isHistoryVisibleMeltState(row.state);
       case 'receive':
         return row.state === 'finalized' || row.state === 'rolled_back';
     }
