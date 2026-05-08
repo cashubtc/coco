@@ -68,16 +68,6 @@ describe('ReceiveOperationService', () => {
         ),
     );
 
-  const createDeferred = <T>() => {
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    return { promise, resolve, reject };
-  };
-
   const createMockMintAdapter = (): MintAdapter =>
     ({
       checkProofStates: mock(() => Promise.resolve([])),
@@ -234,41 +224,21 @@ describe('ReceiveOperationService', () => {
     expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
   });
 
-  it('rollback waits for receive rolled-back history persistence', async () => {
+  it('rollback emits terminal receive history projection', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
     const initOp = await service.init(token);
     const prepared = await service.prepare(initOp);
-    const historyRepo = new MemoryHistoryRepository();
-    const historyWriteStarted = createDeferred<void>();
-    const historyWriteRelease = createDeferred<void>();
-    const addHistoryEntry = historyRepo.addHistoryEntry.bind(historyRepo);
-
-    historyRepo.addHistoryEntry = mock(async (entry) => {
-      historyWriteStarted.resolve();
-      await historyWriteRelease.promise;
-      return addHistoryEntry(entry);
+    const historyRepo = new MemoryHistoryRepository({
+      receiveOperationRepository: receiveOpRepo,
     });
 
     new HistoryService(historyRepo, eventBus);
 
-    let rollbackResolved = false;
-    const rollbackPromise = service.rollback(prepared.id).then(() => {
-      rollbackResolved = true;
-    });
-
-    await historyWriteStarted.promise;
-
-    expect(rollbackResolved).toBe(false);
-    expect((await receiveOpRepo.getById(prepared.id))?.state).toBe('rolled_back');
-    expect(await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id)).toBeNull();
-
-    historyWriteRelease.resolve();
-    await rollbackPromise;
+    await service.rollback(prepared.id);
 
     const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
-    expect(rollbackResolved).toBe(true);
-    expect(historyEntry?.state).toBe('rolledBack');
+    expect(historyEntry?.state).toBe('rolled_back');
   });
   it('init rejects untrusted mints', async () => {
     const proofs = [makeProof('p1')];
@@ -455,9 +425,11 @@ describe('ReceiveOperationService', () => {
     expect(stored?.error).toBe('Keyset unknown');
   });
 
-  it('updates receive history to rolledBack on generic mint protocol errors', async () => {
+  it('updates receive history to rolled_back on generic mint protocol errors', async () => {
     const proofs = [makeProof('p1')];
-    const historyRepo = new MemoryHistoryRepository();
+    const historyRepo = new MemoryHistoryRepository({
+      receiveOperationRepository: receiveOpRepo,
+    });
     new HistoryService(historyRepo, eventBus);
 
     const initOp = await service.init({ mint: mintUrl, proofs } as Token);
@@ -472,7 +444,7 @@ describe('ReceiveOperationService', () => {
     await expect(service.execute(prepared)).rejects.toThrow('Keyset unknown');
 
     const historyEntry = await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id);
-    expect(historyEntry?.state).toBe('rolledBack');
+    expect(historyEntry?.state).toBe('rolled_back');
     expect(historyEntry?.amount).toEqual(prepared.amount);
   });
 

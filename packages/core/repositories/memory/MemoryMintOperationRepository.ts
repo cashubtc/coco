@@ -67,6 +67,10 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results;
   }
 
+  async getAll(): Promise<MintOperation[]> {
+    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+  }
+
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
   }

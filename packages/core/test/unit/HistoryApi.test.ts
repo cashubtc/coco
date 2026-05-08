@@ -22,14 +22,16 @@ describe('HistoryApi', () => {
       historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
     ).mockResolvedValueOnce({
       id: 'history-1',
+      source: 'operation',
       type: 'melt',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-1',
       operationId: 'operation-1',
       amount: Amount.from(10),
-      state: 'UNPAID',
+      state: 'prepared',
       unit: 'sat',
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     } as HistoryEntry);
 
     await expect(api.getOperationIdForHistoryEntry('history-1')).resolves.toBe('operation-1');
@@ -46,6 +48,7 @@ describe('HistoryApi', () => {
       historyService.getHistoryEntryById as unknown as ReturnType<typeof mock>
     ).mockResolvedValueOnce({
       id: 'history-3',
+      source: 'operation',
       type: 'send',
       mintUrl: 'https://mint.test',
       operationId: '   ',
@@ -53,6 +56,7 @@ describe('HistoryApi', () => {
       state: 'pending',
       unit: 'sat',
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     } as HistoryEntry);
 
     await expect(api.getOperationIdForHistoryEntry('history-3')).resolves.toBeNull();

@@ -67,6 +67,10 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     return results;
   }
 
+  async getAll(): Promise<MeltOperation[]> {
+    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+  }
+
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
   }
