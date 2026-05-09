@@ -1,4 +1,10 @@
-import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
+import {
+  parsePersistedProofWitness,
+  stringifyProofWitness,
+  type ProofRepository,
+  type CoreProof,
+  type ProofState,
+} from '@cashu/coco-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function rowToProof(r: ProofRow): CoreProof {
@@ -8,7 +14,7 @@ function rowToProof(r: ProofRow): CoreProof {
     secret: r.secret,
     C: r.C,
     ...(r.dleqJson ? { dleq: JSON.parse(r.dleqJson) } : {}),
-    ...(r.witness ? { witness: JSON.parse(r.witness) } : {}),
+    ...(r.witness ? { witness: parsePersistedProofWitness(r.witness) } : {}),
   };
   return {
     ...base,
@@ -45,7 +51,7 @@ export class IdbProofRepository implements ProofRepository {
           secret: p.secret,
           C: p.C,
           dleqJson: p.dleq ? JSON.stringify(p.dleq) : null,
-          witness: p.witness ? JSON.stringify(p.witness) : null,
+          witness: stringifyProofWitness(p.witness),
           state: p.state,
           createdAt: now,
           usedByOperationId: p.usedByOperationId ?? null,
