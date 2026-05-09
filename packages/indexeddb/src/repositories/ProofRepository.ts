@@ -46,7 +46,11 @@ export class IdbProofRepository implements ProofRepository {
           secret: p.secret,
           C: p.C,
           dleqJson: p.dleq ? JSON.stringify(p.dleq) : null,
-         witness: p.witness ? (typeof p.witness === 'string' ? p.witness : JSON.stringify(p.witness)) : null,
+          witness: p.witness
+            ? typeof p.witness === 'string'
+              ? p.witness
+              : JSON.stringify(p.witness)
+            : null,
           state: p.state,
           createdAt: now,
           usedByOperationId: p.usedByOperationId ?? null,
