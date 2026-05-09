@@ -1,11 +1,11 @@
 import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
-import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair } from '@core/models/Keypair';
+import type { KeyRingRepository } from '@core/repositories';
+import type { SeedService } from '@core/services/SeedService.ts';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import type { SeedService } from '@core/services/SeedService.ts';
 import { HDKey } from '@scure/bip32';
 
 export class KeyRingService {
@@ -94,7 +94,7 @@ export class KeyRingService {
     const signature = schnorr.sign(sha256(message), keyPair.secretKey);
     const signedProof = {
       ...proof,
-      witness: JSON.stringify({ signatures: [bytesToHex(signature)] }),
+      witness: { signatures: [bytesToHex(signature)] },
     };
     this.logger?.debug('Proof signed successfully', { publicKey });
     return signedProof;

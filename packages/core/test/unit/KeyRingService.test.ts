@@ -1,11 +1,11 @@
+import type { Proof } from '@cashu/cashu-ts';
 import { Amount } from '@cashu/cashu-ts';
-import { describe, it, beforeEach, expect } from 'bun:test';
+import { schnorr } from '@noble/curves/secp256k1.js';
+import { bytesToHex } from '@noble/curves/utils.js';
+import { beforeEach, describe, expect, it } from 'bun:test';
+import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
-import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
-import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
-import type { Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
@@ -343,9 +343,9 @@ describe('KeyRingService', () => {
       const signed = await service.signProof(proof, kp.publicKeyHex);
 
       expect(signed.witness).toBeDefined();
-      expect(typeof signed.witness).toBe('string');
+      expect(typeof signed.witness).toBe('object');
 
-      const witness = JSON.parse(signed.witness as string);
+      const witness = signed.witness as any;
       expect(witness.signatures).toBeDefined();
       expect(Array.isArray(witness.signatures)).toBe(true);
       expect(witness.signatures.length).toBe(1);
@@ -382,7 +382,7 @@ describe('KeyRingService', () => {
       const signed = await service.signProof(proof, kp.publicKeyHex);
 
       // Verify the signature is valid
-      const witness = JSON.parse(signed.witness as string);
+      const witness = signed.witness as any;
       const signatureHex = witness.signatures[0];
       const signatureBytes = new Uint8Array(
         signatureHex.match(/.{2}/g)!.map((byte: string) => parseInt(byte, 16)),
