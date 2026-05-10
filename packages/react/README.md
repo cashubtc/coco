@@ -24,7 +24,13 @@ npm install @cashu/coco-react @cashu/coco-core react
 ## Usage
 
 ```tsx
-import { CocoCashuProvider, useSendOperation } from '@cashu/coco-react';
+import {
+  CocoCashuProvider,
+  localStorageSeedGetter,
+  useSendOperation,
+} from '@cashu/coco-react';
+
+const seedGetter = localStorageSeedGetter();
 
 function SendButton() {
   const { prepare, execute, currentOperation, executeResult, isLoading } = useSendOperation();
@@ -58,6 +64,10 @@ export function App() {
   );
 }
 ```
+
+`localStorageSeedGetter()` stores a generated browser seed under
+`COCO_REACT_SEED` by default. Pass `localStorageSeedGetter({ storageKey })` to
+use a different localStorage key.
 
 If your application already owns the manager lifecycle, pass an initialized
 manager instead:
