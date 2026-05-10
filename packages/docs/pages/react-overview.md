@@ -38,39 +38,20 @@ npm i @cashu/coco-react @cashu/coco-core
 
 ## Setup
 
-Create a `Manager` with `@cashu/coco-core`, then pass it to the provider. If
-your manager is created asynchronously, render a loading state until you have a
-`Manager` instance, then render the provider.
+Pass the same config accepted by `initializeCoco()` to `CocoCashuProvider`. The
+provider initializes the manager on initial mount and renders `fallback` until
+the manager is ready.
 
 ```tsx
-import { useEffect, useState } from 'react';
-import type { Manager } from '@cashu/coco-core';
-import { initializeCoco } from '@cashu/coco-core';
 import { CocoCashuProvider } from '@cashu/coco-react';
 
 export function App() {
-  const [manager, setManager] = useState<Manager | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void initializeCoco({ repo, seedGetter })
-      .then((instance) => {
-        if (!cancelled) setManager(instance);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) return <div>Failed</div>;
-  if (!manager) return <div>Loading wallet...</div>;
-
   return (
-    <CocoCashuProvider manager={manager}>
+    <CocoCashuProvider
+      config={{ repo, seedGetter }}
+      fallback={<div>Loading wallet...</div>}
+      errorFallback={<div>Failed</div>}
+    >
       <Wallet />
     </CocoCashuProvider>
   );
@@ -79,6 +60,17 @@ export function App() {
 
 `CocoCashuProvider` is a convenience wrapper that composes `ManagerProvider`,
 `MintProvider`, and `BalanceProvider`.
+
+The `config` prop is initial-only. If you need to rebuild Coco with a different
+configuration, remount `CocoCashuProvider` with a new React `key`.
+
+If your application already owns initialization, pass an existing manager:
+
+```tsx
+<CocoCashuProvider manager={manager}>
+  <Wallet />
+</CocoCashuProvider>
+```
 
 For operation hooks, `ManagerProvider` is the only required context. The mint
 and balance providers are only needed for derived-data hooks such as

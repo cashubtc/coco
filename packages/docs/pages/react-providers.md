@@ -5,21 +5,40 @@ the `CocoCashuProvider` convenience wrapper or compose providers individually.
 
 ## CocoCashuProvider
 
-Wraps `ManagerProvider`, `MintProvider`, and `BalanceProvider` in the correct
-order.
+Initializes Coco from config on initial mount, then wraps `ManagerProvider`,
+`MintProvider`, and `BalanceProvider` in the correct order. Pass `fallback` for
+the loading state and `errorFallback` for initialization failures.
 
 ```tsx
 import { CocoCashuProvider } from '@cashu/coco-react';
 
+<CocoCashuProvider
+  config={{ repo, seedGetter }}
+  fallback={<Spinner />}
+  errorFallback={(error) => <InitError error={error} />}
+>
+  {children}
+</CocoCashuProvider>;
+```
+
+The `config` prop is initial-only. To initialize with a different config,
+remount the provider with a new React `key`.
+
+For backwards compatibility or advanced lifecycle control, pass an initialized
+manager instead:
+
+```tsx
 <CocoCashuProvider manager={manager}>{children}</CocoCashuProvider>;
 ```
 
 ## ManagerProvider and ManagerGate
 
-`ManagerProvider` exposes the `Manager` instance. `ManagerGate` is a helper that
-only renders children when the manager is ready. The four operation hooks only
-require `ManagerProvider`. `MintProvider` and `BalanceProvider` are for
-derived-data hooks and require `ManagerProvider` to be above them in the tree.
+`ManagerProvider` exposes an already initialized `Manager` instance. It is the
+low-level provider for custom provider composition and tests. `ManagerGate` is a
+helper that only renders children when the manager is ready. The four operation
+hooks only require `ManagerProvider`. `MintProvider` and `BalanceProvider` are
+for derived-data hooks and require `ManagerProvider` to be above them in the
+tree.
 
 ```tsx
 import { ManagerProvider, ManagerGate, useManagerContext } from '@cashu/coco-react';
