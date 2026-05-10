@@ -24,11 +24,7 @@ npm install @cashu/coco-react @cashu/coco-core react
 ## Usage
 
 ```tsx
-import {
-  CocoCashuProvider,
-  localStorageSeedGetter,
-  useSendOperation,
-} from '@cashu/coco-react';
+import { CocoCashuProvider, localStorageSeedGetter, useSendOperation } from '@cashu/coco-react';
 
 const seedGetter = localStorageSeedGetter();
 

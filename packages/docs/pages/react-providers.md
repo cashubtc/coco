@@ -28,7 +28,7 @@ For backwards compatibility or advanced lifecycle control, pass an initialized
 manager instead:
 
 ```tsx
-<CocoCashuProvider manager={manager}>{children}</CocoCashuProvider>;
+<CocoCashuProvider manager={manager}>{children}</CocoCashuProvider>
 ```
 
 ## ManagerProvider and ManagerGate

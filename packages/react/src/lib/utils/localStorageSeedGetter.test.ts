@@ -14,16 +14,16 @@ const encodeSeed = (seed: Uint8Array): string => {
 };
 
 const mockRandomValues = (seed: Uint8Array) =>
-  vi.spyOn(window.crypto, 'getRandomValues').mockImplementation(<T extends ArrayBufferView | null>(
-    array: T,
-  ): T => {
-    if (!(array instanceof Uint8Array)) {
-      throw new Error('expected Uint8Array');
-    }
+  vi
+    .spyOn(window.crypto, 'getRandomValues')
+    .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+      if (!(array instanceof Uint8Array)) {
+        throw new Error('expected Uint8Array');
+      }
 
-    array.set(seed);
-    return array;
-  });
+      array.set(seed);
+      return array;
+    });
 
 const installLocalStorageMock = () => {
   const storage = new Map<string, string>();

@@ -72,8 +72,7 @@ const InitializingCocoCashuProvider = ({
     effectGenerationRef.current = effectGeneration;
     let cancelled = false;
 
-    const initialization =
-      initializationRef.current ?? initializeCoco(initialConfigRef.current);
+    const initialization = initializationRef.current ?? initializeCoco(initialConfigRef.current);
     initializationRef.current = initialization;
 
     initialization
@@ -129,9 +128,7 @@ const InitializingCocoCashuProvider = ({
 
 export const CocoCashuProvider = (props: CocoCashuProviderProps) => {
   if (props.manager !== undefined) {
-    return (
-      <CocoCashuProviderTree manager={props.manager}>{props.children}</CocoCashuProviderTree>
-    );
+    return <CocoCashuProviderTree manager={props.manager}>{props.children}</CocoCashuProviderTree>;
   }
 
   return (
