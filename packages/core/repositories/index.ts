@@ -23,6 +23,12 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 
+export {
+  normalizeProofWitness,
+  parsePersistedProofWitness,
+  stringifyProofWitness,
+} from './ProofWitnessSerialization.ts';
+
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;

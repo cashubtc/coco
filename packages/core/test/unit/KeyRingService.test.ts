@@ -4,7 +4,7 @@ import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { schnorr } from '@noble/curves/secp256k1.js';
-import type { Proof } from '@cashu/cashu-ts';
+import { getDecodedToken, getEncodedToken, type Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
@@ -342,14 +342,18 @@ describe('KeyRingService', () => {
       const signed = await service.signProof(proof, kp.publicKeyHex);
 
       expect(signed.witness).toBeDefined();
-      expect(typeof signed.witness).toBe('string');
+      expect(typeof signed.witness).toBe('object');
 
-      const witness = JSON.parse(signed.witness as string);
-      expect(witness.signatures).toBeDefined();
-      expect(Array.isArray(witness.signatures)).toBe(true);
-      expect(witness.signatures.length).toBe(1);
-      expect(typeof witness.signatures[0]).toBe('string');
-      expect(witness.signatures[0].length).toBe(128); // 64 bytes * 2 for hex
+      const witness = signed.witness as { signatures?: string[] };
+      const signatures = witness.signatures;
+      expect(signatures).toBeDefined();
+      expect(Array.isArray(signatures)).toBe(true);
+      if (!signatures) {
+        throw new Error('Expected witness signatures');
+      }
+      expect(signatures.length).toBe(1);
+      expect(typeof signatures[0]).toBe('string');
+      expect(signatures[0]?.length).toBe(128); // 64 bytes * 2 for hex
     });
 
     it('does not mutate the original proof', async () => {
@@ -381,8 +385,11 @@ describe('KeyRingService', () => {
       const signed = await service.signProof(proof, kp.publicKeyHex);
 
       // Verify the signature is valid
-      const witness = JSON.parse(signed.witness as string);
+      const witness = signed.witness as { signatures: string[] };
       const signatureHex = witness.signatures[0];
+      if (!signatureHex) {
+        throw new Error('Expected witness signature');
+      }
       const signatureBytes = new Uint8Array(
         signatureHex.match(/.{2}/g)!.map((byte: string) => parseInt(byte, 16)),
       );
@@ -399,6 +406,34 @@ describe('KeyRingService', () => {
       // We can't easily verify without the public key in the right format,
       // but we can verify the signature structure is correct
       expect(signatureBytes.length).toBe(64);
+    });
+
+    it('encodes signed proof witnesses without nested JSON strings', async () => {
+      const kp = await service.generateNewKeyPair();
+
+      const proof: Proof = {
+        id: '009a1f2b3c4d5e6f',
+        amount: 64,
+        secret: 'my-secret-string',
+        C: '02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      };
+
+      const signed = await service.signProof(proof, kp.publicKeyHex);
+      const encodedToken = getEncodedToken({
+        mint: 'https://mint.test',
+        proofs: [signed],
+        unit: 'sat',
+      });
+      const decoded = getDecodedToken(encodedToken);
+
+      const decodedWitness = decoded.proofs[0]?.witness;
+      expect(typeof decodedWitness).toBe('string');
+
+      const parsedWitness = JSON.parse(decodedWitness as string);
+      expect(typeof parsedWitness).toBe('object');
+      expect(parsedWitness.signatures).toEqual(
+        (signed.witness as { signatures: string[] }).signatures,
+      );
     });
 
     it('throws when keypair not found', async () => {

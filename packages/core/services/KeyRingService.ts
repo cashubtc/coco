@@ -94,7 +94,7 @@ export class KeyRingService {
     const signature = schnorr.sign(sha256(message), keyPair.secretKey);
     const signedProof = {
       ...proof,
-      witness: JSON.stringify({ signatures: [bytesToHex(signature)] }),
+      witness: { signatures: [bytesToHex(signature)] },
     };
     this.logger?.debug('Proof signed successfully', { publicKey });
     return signedProof;
