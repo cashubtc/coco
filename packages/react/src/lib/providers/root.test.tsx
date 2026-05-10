@@ -53,6 +53,8 @@ function createManagerMock(): Manager {
     },
     on: vi.fn(),
     off: vi.fn(),
+    pauseSubscriptions: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn().mockResolvedValue(undefined),
   } as unknown as Manager;
 }
 
@@ -111,7 +113,7 @@ describe('CocoCashuProvider', () => {
   it('continues to accept an already initialized manager', () => {
     const manager = createManagerMock();
 
-    const { getByText } = render(
+    const { getByText, unmount } = render(
       <CocoCashuProvider manager={manager}>
         <div>Wallet ready</div>
       </CocoCashuProvider>,
@@ -119,5 +121,61 @@ describe('CocoCashuProvider', () => {
 
     expect(getByText('Wallet ready')).not.toBeNull();
     expect(initializeCocoMock).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
+    expect(manager.dispose).not.toHaveBeenCalled();
+  });
+
+  it('tears down an owned manager on unmount after initialization', async () => {
+    const manager = createManagerMock();
+    const config = createConfigMock();
+    initializeCocoMock.mockResolvedValue(manager);
+
+    const { getByText, unmount } = render(
+      <CocoCashuProvider config={config}>
+        <div>Wallet ready</div>
+      </CocoCashuProvider>,
+    );
+
+    await waitForAssertion(() => {
+      expect(getByText('Wallet ready')).not.toBeNull();
+    });
+
+    unmount();
+
+    await waitForAssertion(() => {
+      expect(manager.pauseSubscriptions).toHaveBeenCalledTimes(1);
+      expect(manager.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('tears down an owned manager that resolves after unmount', async () => {
+    const manager = createManagerMock();
+    const config = createConfigMock();
+    let resolveInitialization: (manager: Manager) => void = () => {};
+    const initialization = new Promise<Manager>((resolve) => {
+      resolveInitialization = resolve;
+    });
+    initializeCocoMock.mockReturnValue(initialization);
+
+    const { unmount } = render(
+      <CocoCashuProvider config={config}>
+        <div>Wallet ready</div>
+      </CocoCashuProvider>,
+    );
+
+    unmount();
+
+    await act(async () => {
+      resolveInitialization(manager);
+      await initialization;
+    });
+
+    await waitForAssertion(() => {
+      expect(manager.pauseSubscriptions).toHaveBeenCalledTimes(1);
+      expect(manager.dispose).toHaveBeenCalledTimes(1);
+    });
   });
 });

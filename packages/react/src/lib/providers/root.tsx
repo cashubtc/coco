@@ -44,6 +44,16 @@ const renderErrorFallback = (
 const normalizeError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
 
+const teardownOwnedManager = async (manager: Manager): Promise<void> => {
+  // TODO: Replace this bandaid with manager.dispose() once core disposal tears down
+  // watchers, processors, and subscriptions.
+  try {
+    await manager.pauseSubscriptions();
+  } finally {
+    await manager.dispose();
+  }
+};
+
 const InitializingCocoCashuProvider = ({
   config,
   children,
@@ -52,10 +62,14 @@ const InitializingCocoCashuProvider = ({
 }: CocoCashuProviderBaseProps & { config: CocoConfig }) => {
   const initialConfigRef = useRef(config);
   const initializationRef = useRef<Promise<Manager> | null>(null);
+  const managerRef = useRef<Manager | null>(null);
+  const effectGenerationRef = useRef(0);
   const [manager, setManager] = useState<Manager | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
+    const effectGeneration = effectGenerationRef.current + 1;
+    effectGenerationRef.current = effectGeneration;
     let cancelled = false;
 
     const initialization =
@@ -64,13 +78,14 @@ const InitializingCocoCashuProvider = ({
 
     initialization
       .then((initializedManager) => {
-        if (!cancelled) {
+        if (!cancelled && effectGenerationRef.current === effectGeneration) {
+          managerRef.current = initializedManager;
           setManager(initializedManager);
           setError(null);
         }
       })
       .catch((initError: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && effectGenerationRef.current === effectGeneration) {
           setManager(null);
           setError(normalizeError(initError));
         }
@@ -78,6 +93,26 @@ const InitializingCocoCashuProvider = ({
 
     return () => {
       cancelled = true;
+
+      void Promise.resolve().then(() => {
+        if (effectGenerationRef.current !== effectGeneration) return;
+
+        const initializedManager = managerRef.current;
+        managerRef.current = null;
+
+        if (initializedManager) {
+          void teardownOwnedManager(initializedManager).catch(() => undefined);
+          return;
+        }
+
+        void initialization
+          .then((lateInitializedManager) => {
+            if (effectGenerationRef.current === effectGeneration) {
+              void teardownOwnedManager(lateInitializedManager).catch(() => undefined);
+            }
+          })
+          .catch(() => undefined);
+      });
     };
   }, []);
 
