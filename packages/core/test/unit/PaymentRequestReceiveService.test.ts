@@ -9,6 +9,7 @@ import type {
   FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
+  ReceiveOperation,
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
 import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
@@ -48,6 +49,23 @@ describe('PaymentRequestReceiveService', () => {
       inputProofs: createPayload().proofs,
       fee: Amount.from(1),
       outputData: { keep: [], send: [] },
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
+
+  function createInitReceiveOperation(
+    overrides: Partial<InitReceiveOperation> = {},
+  ): InitReceiveOperation {
+    const now = Date.now();
+    return {
+      id: 'receive-op-init',
+      state: 'init',
+      mintUrl,
+      unit: 'sat',
+      amount: Amount.from(100),
+      inputProofs: createPayload().proofs,
       createdAt: now,
       updatedAt: now,
       ...overrides,
@@ -259,6 +277,138 @@ describe('PaymentRequestReceiveService', () => {
     expect(storedAttempt?.payload).toBeUndefined();
     const storedOperation = await operationRepository.getById(operation.id);
     expect(storedOperation?.state).toBe('completed');
+  });
+
+  it('resumes init child receive operations before generic receive cleanup', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    const initReceive = createInitReceiveOperation();
+    let currentReceive: ReceiveOperation | null = initReceive;
+    const order: string[] = [];
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-1',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash,
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      state: 'receiving',
+      receiveOperationId: initReceive.id,
+      payload,
+      createdAt: now,
+      updatedAt: now,
+    });
+    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>).mockImplementation(
+      async () => currentReceive,
+    );
+    (receiveOperationService.prepare as unknown as ReturnType<typeof mock>).mockImplementation(
+      async (receiveOperation: InitReceiveOperation): Promise<PreparedReceiveOperation> => {
+        order.push('prepare');
+        const preparedReceive = {
+          ...receiveOperation,
+          state: 'prepared' as const,
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        };
+        currentReceive = preparedReceive;
+        return preparedReceive;
+      },
+    );
+    (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockImplementation(
+      async (receiveOperation: PreparedReceiveOperation): Promise<FinalizedReceiveOperation> => {
+        order.push('execute');
+        const finalizedReceive = { ...receiveOperation, state: 'finalized' as const };
+        currentReceive = finalizedReceive;
+        return finalizedReceive;
+      },
+    );
+    (
+      receiveOperationService.recoverPendingOperations as unknown as ReturnType<typeof mock>
+    ).mockImplementation(async () => {
+      order.push('generic');
+      if (currentReceive?.state === 'init') {
+        currentReceive = null;
+      }
+    });
+
+    await service.recoverPendingAttempts();
+
+    expect(order).toEqual(['prepare', 'execute', 'generic']);
+    const storedAttempt = await attemptRepository.getById('attempt-1');
+    expect(storedAttempt?.state).toBe('finalized');
+    expect(storedAttempt?.payload).toBeUndefined();
+    const storedOperation = await operationRepository.getById(operation.id);
+    expect(storedOperation?.state).toBe('completed');
+  });
+
+  it('drops receiving attempts with missing child operations so redelivery can retry', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-1',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash,
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      state: 'receiving',
+      receiveOperationId: 'missing-receive-op',
+      payload,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await service.recoverPendingAttempts();
+
+    expect(await attemptRepository.getById('attempt-1')).toBeNull();
+
+    const result = await service.claimPayload(operation.id, payload);
+    expect(result.attempt.id).not.toBe('attempt-1');
+    expect(result.attempt.state).toBe('finalized');
+  });
+
+  it('does not pin validated payloads when child receive init fails', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    (receiveOperationService.init as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('temporary mint metadata failure'),
+    );
+
+    await expect(service.claimPayload(operation.id, payload)).rejects.toThrow(
+      'temporary mint metadata failure',
+    );
+
+    expect(await attemptRepository.getByPayloadHash(operation.id, payloadHash)).toBeNull();
+
+    const result = await service.claimPayload(operation.id, payload);
+    expect(result.attempt.state).toBe('finalized');
   });
 
   it('rejects recovering attempts when prepared child receive execution rolls back', async () => {

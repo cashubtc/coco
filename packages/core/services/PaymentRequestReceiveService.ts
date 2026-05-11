@@ -12,11 +12,16 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 import type { Logger } from '@core/logging';
-import { PaymentRequestError, ProofValidationError } from '../models/Error';
+import {
+  OperationInProgressError,
+  PaymentRequestError,
+  ProofValidationError,
+} from '../models/Error';
 import type { MintService } from './MintService';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type {
   FinalizedReceiveOperation,
+  InitReceiveOperation,
   PreparedReceiveOperation,
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
@@ -214,8 +219,6 @@ export class PaymentRequestReceiveService {
   }
 
   async recoverPendingAttempts(): Promise<void> {
-    await this.receiveOperationService.recoverPendingOperations();
-
     const interruptedBeforeReceive = [
       ...(await this.attemptRepository.getByState('received')),
       ...(await this.attemptRepository.getByState('validating')),
@@ -224,31 +227,70 @@ export class PaymentRequestReceiveService {
       await this.attemptRepository.delete(attempt.id);
     }
 
+    await this.recoverReceivingAttempts();
+    await this.receiveOperationService.recoverPendingOperations();
+    await this.recoverReceivingAttempts();
+  }
+
+  private async recoverReceivingAttempts(): Promise<void> {
     const attempts = await this.attemptRepository.getByState('receiving');
     for (const attempt of attempts) {
-      if (!attempt.receiveOperationId) {
-        await this.rejectAttempt(attempt, 'Missing child receive operation id');
-        continue;
+      let releaseLock: (() => void) | undefined;
+      try {
+        releaseLock = await this.lock.acquire(attempt.requestOperationId);
+      } catch (error) {
+        if (error instanceof OperationInProgressError) {
+          this.logger?.debug(
+            'Payment request receive operation is in progress, skipping recovery',
+            {
+              operationId: attempt.requestOperationId,
+              attemptId: attempt.id,
+            },
+          );
+          continue;
+        }
+        throw error;
       }
 
-      const receiveOperation = await this.receiveOperationService.getOperation(
-        attempt.receiveOperationId,
+      try {
+        const currentAttempt = await this.attemptRepository.getById(attempt.id);
+        if (!currentAttempt || currentAttempt.state !== 'receiving') {
+          continue;
+        }
+        await this.recoverReceivingAttemptLocked(currentAttempt);
+      } finally {
+        releaseLock();
+      }
+    }
+  }
+
+  private async recoverReceivingAttemptLocked(
+    attempt: PaymentRequestReceiveAttempt,
+  ): Promise<void> {
+    if (!attempt.receiveOperationId) {
+      await this.dropAttemptForRetryOrReject(attempt, 'Missing child receive operation id');
+      return;
+    }
+
+    const receiveOperation = await this.receiveOperationService.getOperation(
+      attempt.receiveOperationId,
+    );
+    if (!receiveOperation) {
+      await this.dropAttemptForRetryOrReject(attempt, 'Child receive operation was not found');
+      return;
+    }
+
+    if (receiveOperation.state === 'finalized') {
+      await this.finalizeAttemptFromReceive(attempt, receiveOperation);
+    } else if (receiveOperation.state === 'rolled_back') {
+      await this.rejectAttempt(
+        attempt,
+        receiveOperation.error ?? 'Child receive operation rolled back',
       );
-      if (!receiveOperation) {
-        await this.rejectAttempt(attempt, 'Child receive operation was not found');
-        continue;
-      }
-
-      if (receiveOperation.state === 'finalized') {
-        await this.finalizeAttemptFromReceive(attempt, receiveOperation);
-      } else if (receiveOperation.state === 'rolled_back') {
-        await this.rejectAttempt(
-          attempt,
-          receiveOperation.error ?? 'Child receive operation rolled back',
-        );
-      } else if (receiveOperation.state === 'prepared') {
-        await this.resumePreparedChildReceive(attempt, receiveOperation);
-      }
+    } else if (receiveOperation.state === 'prepared') {
+      await this.resumePreparedChildReceive(attempt, receiveOperation);
+    } else if (receiveOperation.state === 'init') {
+      await this.resumeInitChildReceive(attempt, receiveOperation);
     }
   }
 
@@ -304,10 +346,12 @@ export class PaymentRequestReceiveService {
     };
     await this.attemptRepository.create(attempt);
 
+    let validationCompleted = false;
     try {
       attempt = await this.updateAttempt({ ...attempt, state: 'validating' });
       await this.validatePayload(operation, payload, grossAmount);
       await this.assertSingleUseAvailable(operation);
+      validationCompleted = true;
 
       const sourceMetadata = {
         type: 'payment-request' as const,
@@ -351,10 +395,31 @@ export class PaymentRequestReceiveService {
       const receiveOperation = attempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(attempt.receiveOperationId)
         : undefined;
-      if (receiveOperation?.state === 'executing') {
+      if (receiveOperation?.state === 'finalized') {
+        attempt = await this.finalizeAttemptFromReceive(attempt, receiveOperation);
+        const updatedOperation = await this.operationRepository.getById(operation.id);
+        return { operation: updatedOperation ?? operation, attempt, receiveOperation };
+      }
+
+      if (receiveOperation?.state === 'prepared' || receiveOperation?.state === 'executing') {
         this.logger?.warn('Payment request receive attempt left for recovery', {
           attemptId: attempt.id,
           receiveOperationId: receiveOperation.id,
+          childState: receiveOperation.state,
+        });
+        throw error;
+      }
+
+      if (
+        validationCompleted &&
+        (!receiveOperation || receiveOperation.state === 'init') &&
+        attempt.payload
+      ) {
+        await this.attemptRepository.delete(attempt.id);
+        this.logger?.warn('Payment request receive attempt removed for retry', {
+          attemptId: attempt.id,
+          receiveOperationId: attempt.receiveOperationId,
+          error: error instanceof Error ? error.message : String(error),
         });
         throw error;
       }
@@ -477,10 +542,27 @@ export class PaymentRequestReceiveService {
     return this.updateAttempt({ ...attempt, state: 'rejected', error, payload: undefined });
   }
 
+  private async dropAttemptForRetryOrReject(
+    attempt: PaymentRequestReceiveAttempt,
+    error: string,
+  ): Promise<void> {
+    if (attempt.payload) {
+      await this.attemptRepository.delete(attempt.id);
+      this.logger?.warn('Payment request receive attempt removed for redelivery retry', {
+        attemptId: attempt.id,
+        receiveOperationId: attempt.receiveOperationId,
+        error,
+      });
+      return;
+    }
+
+    await this.rejectAttempt(attempt, error);
+  }
+
   private async finalizeAttemptFromReceive(
     attempt: PaymentRequestReceiveAttempt,
     receiveOperation: FinalizedReceiveOperation,
-  ): Promise<void> {
+  ): Promise<PaymentRequestReceiveAttempt> {
     const finalized = await this.updateAttempt({
       ...attempt,
       state: 'finalized',
@@ -492,6 +574,7 @@ export class PaymentRequestReceiveService {
     if (operation) {
       await this.completeIfSingleUse(operation);
     }
+    return finalized;
   }
 
   private async resumePreparedChildReceive(
@@ -522,6 +605,56 @@ export class PaymentRequestReceiveService {
       }
 
       this.logger?.warn('Payment request prepared child receive left for recovery retry', {
+        attemptId: attempt.id,
+        receiveOperationId: receiveOperation.id,
+        childState: latestReceive.state,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async resumeInitChildReceive(
+    attempt: PaymentRequestReceiveAttempt,
+    receiveOperation: InitReceiveOperation,
+  ): Promise<void> {
+    try {
+      const preparedReceive = await this.receiveOperationService.prepare(receiveOperation);
+      const netAmount = preparedReceive.amount.subtract(preparedReceive.fee);
+      const updatedAttempt = await this.updateAttempt({
+        ...attempt,
+        fee: preparedReceive.fee,
+        netAmount,
+      });
+      await this.resumePreparedChildReceive(updatedAttempt, preparedReceive);
+    } catch (error) {
+      const latestReceive = await this.receiveOperationService.getOperation(receiveOperation.id);
+      if (!latestReceive || latestReceive.state === 'init') {
+        await this.dropAttemptForRetryOrReject(
+          attempt,
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
+      }
+
+      if (latestReceive.state === 'finalized') {
+        await this.finalizeAttemptFromReceive(attempt, latestReceive);
+        return;
+      }
+
+      if (latestReceive.state === 'rolled_back') {
+        await this.rejectAttempt(
+          attempt,
+          latestReceive.error ?? 'Child receive operation rolled back',
+        );
+        return;
+      }
+
+      if (latestReceive.state === 'prepared') {
+        await this.resumePreparedChildReceive(attempt, latestReceive);
+        return;
+      }
+
+      this.logger?.warn('Payment request init child receive left for recovery retry', {
         attemptId: attempt.id,
         receiveOperationId: receiveOperation.id,
         childState: latestReceive.state,
