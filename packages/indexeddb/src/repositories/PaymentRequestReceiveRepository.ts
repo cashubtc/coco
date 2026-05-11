@@ -250,15 +250,12 @@ export class IdbPaymentRequestReceiveAttemptRepository implements PaymentRequest
     requestOperationId: string,
     payloadHash: string,
   ): Promise<PaymentRequestReceiveAttempt | null> {
-    const rows = (await (this.db as any)
+    const row = (await (this.db as any)
       .table('coco_cashu_payment_request_receive_attempts')
-      .where('payloadHash')
-      .equals(payloadHash)
-      .filter(
-        (row: PaymentRequestReceiveAttemptRow) => row.requestOperationId === requestOperationId,
-      )
-      .toArray()) as PaymentRequestReceiveAttemptRow[];
-    return rows[0] ? rowToAttempt(rows[0]) : null;
+      .where('[requestOperationId+payloadHash]')
+      .equals([requestOperationId, payloadHash])
+      .first()) as PaymentRequestReceiveAttemptRow | undefined;
+    return row ? rowToAttempt(row) : null;
   }
 
   async getByState(
