@@ -11,6 +11,8 @@ import type {
   MeltOperationRepository,
   AuthSessionRepository,
   MintOperationRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
@@ -29,6 +31,10 @@ import { IdbMeltOperationRepository } from './repositories/MeltOperationReposito
 import { IdbAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { IdbMintOperationRepository } from './repositories/MintOperationRepository.ts';
 import { IdbReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
+import {
+  IdbPaymentRequestReceiveAttemptRepository,
+  IdbPaymentRequestReceiveOperationRepository,
+} from './repositories/PaymentRequestReceiveRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -46,6 +52,8 @@ export class IndexedDbRepositories implements Repositories {
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
+  readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+  readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -64,6 +72,10 @@ export class IndexedDbRepositories implements Repositories {
     this.authSessionRepository = new IdbAuthSessionRepository(this.db);
     this.mintOperationRepository = new IdbMintOperationRepository(this.db);
     this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveOperationRepository =
+      new IdbPaymentRequestReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveAttemptRepository =
+      new IdbPaymentRequestReceiveAttemptRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -94,6 +106,10 @@ export class IndexedDbRepositories implements Repositories {
         authSessionRepository: new IdbAuthSessionRepository(scopedDb),
         mintOperationRepository: new IdbMintOperationRepository(scopedDb),
         receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
+        paymentRequestReceiveOperationRepository:
+          new IdbPaymentRequestReceiveOperationRepository(scopedDb),
+        paymentRequestReceiveAttemptRepository:
+          new IdbPaymentRequestReceiveAttemptRepository(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -116,4 +132,6 @@ export {
   IdbAuthSessionRepository,
   IdbMintOperationRepository,
   IdbReceiveOperationRepository,
+  IdbPaymentRequestReceiveOperationRepository,
+  IdbPaymentRequestReceiveAttemptRepository,
 };

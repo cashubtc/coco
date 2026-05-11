@@ -11,6 +11,8 @@ import type {
   MeltOperationRepository,
   AuthSessionRepository,
   MintOperationRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
@@ -29,6 +31,10 @@ import { ExpoMeltOperationRepository } from './repositories/MeltOperationReposit
 import { ExpoAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { ExpoMintOperationRepository } from './repositories/MintOperationRepository.ts';
 import { ExpoReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
+import {
+  ExpoPaymentRequestReceiveAttemptRepository,
+  ExpoPaymentRequestReceiveOperationRepository,
+} from './repositories/PaymentRequestReceiveRepository.ts';
 
 export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
@@ -46,6 +52,8 @@ export class ExpoSqliteRepositories implements Repositories {
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
+  readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+  readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly db: ExpoSqliteDb;
 
   constructor(options: ExpoSqliteRepositoriesOptions) {
@@ -63,6 +71,10 @@ export class ExpoSqliteRepositories implements Repositories {
     this.authSessionRepository = new ExpoAuthSessionRepository(this.db);
     this.mintOperationRepository = new ExpoMintOperationRepository(this.db);
     this.receiveOperationRepository = new ExpoReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveOperationRepository =
+      new ExpoPaymentRequestReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveAttemptRepository =
+      new ExpoPaymentRequestReceiveAttemptRepository(this.db);
   }
 
   async init(): Promise<void> {
@@ -85,6 +97,10 @@ export class ExpoSqliteRepositories implements Repositories {
         authSessionRepository: new ExpoAuthSessionRepository(txDb),
         mintOperationRepository: new ExpoMintOperationRepository(txDb),
         receiveOperationRepository: new ExpoReceiveOperationRepository(txDb),
+        paymentRequestReceiveOperationRepository:
+          new ExpoPaymentRequestReceiveOperationRepository(txDb),
+        paymentRequestReceiveAttemptRepository:
+          new ExpoPaymentRequestReceiveAttemptRepository(txDb),
       };
 
       return fn(scopedRepositories);
@@ -110,6 +126,8 @@ export {
   ExpoAuthSessionRepository,
   ExpoMintOperationRepository,
   ExpoReceiveOperationRepository,
+  ExpoPaymentRequestReceiveOperationRepository,
+  ExpoPaymentRequestReceiveAttemptRepository,
 };
 
 export type { Migration };

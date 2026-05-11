@@ -22,6 +22,7 @@ interface ReceiveOperationRow {
   fee: string | number | null;
   inputProofsJson: string | null;
   outputDataJson: string | null;
+  sourceJson: string | null;
 }
 
 function parseInputProofs(inputProofsJson: string | null): ReceiveOperation['inputProofs'] {
@@ -44,6 +45,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
   };
 
   if (row.state === 'init') {
@@ -86,6 +88,7 @@ function operationToParams(op: ReceiveOperation): unknown[] {
       null, //fee
       JSON.stringify(op.inputProofs),
       null, // outputDataJson
+      op.source ? JSON.stringify(op.source) : null,
     ];
   }
 
@@ -101,6 +104,7 @@ function operationToParams(op: ReceiveOperation): unknown[] {
     serializeAmount(op.fee),
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
+    op.source ? JSON.stringify(op.source) : null,
   ];
 }
 
@@ -123,8 +127,8 @@ export class ExpoReceiveOperationRepository implements ReceiveOperationRepositor
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_receive_operations
-        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -143,7 +147,7 @@ export class ExpoReceiveOperationRepository implements ReceiveOperationRepositor
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?, sourceJson = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -151,13 +155,14 @@ export class ExpoReceiveOperationRepository implements ReceiveOperationRepositor
           operation.error ?? null,
           getOperationUnit(operation),
           JSON.stringify(operation.inputProofs),
+          operation.source ? JSON.stringify(operation.source) : null,
           operation.id,
         ],
       );
     } else {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -167,6 +172,7 @@ export class ExpoReceiveOperationRepository implements ReceiveOperationRepositor
           serializeAmount(operation.fee),
           JSON.stringify(operation.inputProofs),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
+          operation.source ? JSON.stringify(operation.source) : null,
           operation.id,
         ],
       );

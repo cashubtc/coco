@@ -1030,6 +1030,69 @@ const MIGRATIONS: readonly Migration[] = [
     id: '026_send_operation_unit',
     run: addSendOperationUnitColumn,
   },
+  {
+    id: '027_payment_request_receive',
+    sql: `
+      ALTER TABLE coco_cashu_receive_operations ADD COLUMN sourceJson TEXT;
+
+      CREATE TABLE IF NOT EXISTS coco_cashu_payment_request_receive_operations (
+        id TEXT PRIMARY KEY,
+        requestId TEXT,
+        encodedRequest TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('draft', 'active', 'completed', 'cancelled', 'expired')),
+        transport TEXT NOT NULL CHECK (transport IN ('inband', 'nostr', 'post')),
+        amount TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        mintsJson TEXT NOT NULL,
+        singleUse INTEGER NOT NULL,
+        description TEXT,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        completedAt INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_pr_receive_operations_state
+        ON coco_cashu_payment_request_receive_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_pr_receive_operations_request_id
+        ON coco_cashu_payment_request_receive_operations(requestId);
+
+      CREATE TABLE IF NOT EXISTS coco_cashu_payment_request_receive_attempts (
+        id TEXT PRIMARY KEY,
+        requestOperationId TEXT NOT NULL,
+        requestId TEXT,
+        transport TEXT NOT NULL CHECK (transport IN ('inband', 'nostr', 'post')),
+        transportMessageId TEXT,
+        payloadHash TEXT NOT NULL,
+        senderPubkey TEXT,
+        memo TEXT,
+        mintUrl TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        grossAmount TEXT NOT NULL,
+        fee TEXT,
+        netAmount TEXT,
+        receiveOperationId TEXT,
+        state TEXT NOT NULL CHECK (state IN ('received', 'validating', 'receiving', 'finalized', 'rejected', 'duplicate')),
+        error TEXT,
+        payloadJson TEXT,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_pr_receive_attempts_request_operation
+        ON coco_cashu_payment_request_receive_attempts(requestOperationId);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_pr_receive_attempts_state
+        ON coco_cashu_payment_request_receive_attempts(state);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_pr_receive_attempts_message
+        ON coco_cashu_payment_request_receive_attempts(transportMessageId)
+        WHERE transportMessageId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_pr_receive_attempts_payload
+        ON coco_cashu_payment_request_receive_attempts(requestOperationId, payloadHash);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_pr_receive_attempts_receive
+        ON coco_cashu_payment_request_receive_attempts(receiveOperationId)
+        WHERE receiveOperationId IS NOT NULL;
+    `,
+  },
 ];
 
 // Export for testing
