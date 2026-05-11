@@ -5,6 +5,8 @@ import type {
   SendOperationRepository,
   MeltOperationRepository,
   ReceiveOperationRepository,
+  PaymentRequestReceiveOperationRepository,
+  PaymentRequestReceiveAttemptRepository,
 } from './repositories';
 import {
   CounterService,
@@ -20,6 +22,7 @@ import {
   HistoryService,
   KeyRingService,
   PaymentRequestService,
+  PaymentRequestReceiveService,
   AuthSessionService,
   AuthService,
   TokenService,
@@ -216,6 +219,7 @@ export class Manager {
   private counterService: CounterService;
   private tokenService: TokenService;
   private paymentRequestService: PaymentRequestService;
+  private paymentRequestReceiveService: PaymentRequestReceiveService;
   private authSessionService: AuthSessionService;
   private authService: AuthService;
   private sendOperationService: SendOperationService;
@@ -226,6 +230,8 @@ export class Manager {
   private mintOperationRepository: MintOperationRepository;
   private receiveOperationService: ReceiveOperationService;
   private receiveOperationRepository: ReceiveOperationRepository;
+  private paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+  private paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   private proofRepository: Repositories['proofRepository'];
   private readonly pluginHost: PluginHost = new PluginHost();
   private subscriptionsPaused = false;
@@ -278,6 +284,9 @@ export class Manager {
     this.sendOperationRepository = core.sendOperationRepository;
     this.receiveOperationService = core.receiveOperationService;
     this.receiveOperationRepository = core.receiveOperationRepository;
+    this.paymentRequestReceiveService = core.paymentRequestReceiveService;
+    this.paymentRequestReceiveOperationRepository = core.paymentRequestReceiveOperationRepository;
+    this.paymentRequestReceiveAttemptRepository = core.paymentRequestReceiveAttemptRepository;
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
     this.authSessionService = core.authSessionService;
@@ -351,6 +360,7 @@ export class Manager {
       historyService: this.historyService,
       sendOperationService: this.sendOperationService,
       receiveOperationService: this.receiveOperationService,
+      paymentRequestReceiveService: this.paymentRequestReceiveService,
       tokenService: this.tokenService,
       subscriptions: this.subscriptions,
       eventBus: this.eventBus,
@@ -654,6 +664,9 @@ export class Manager {
     sendOperationRepository: SendOperationRepository;
     receiveOperationService: ReceiveOperationService;
     receiveOperationRepository: ReceiveOperationRepository;
+    paymentRequestReceiveService: PaymentRequestReceiveService;
+    paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+    paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
     meltOperationService: MeltOperationService;
     meltOperationRepository: MeltOperationRepository;
     authSessionService: AuthSessionService;
@@ -763,6 +776,9 @@ export class Manager {
       receiveOperationLogger,
     );
     const receiveOperationRepository = repositories.receiveOperationRepository;
+    const paymentRequestReceiveOperationRepository =
+      repositories.paymentRequestReceiveOperationRepository;
+    const paymentRequestReceiveAttemptRepository = repositories.paymentRequestReceiveAttemptRepository;
 
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({
@@ -808,6 +824,14 @@ export class Manager {
       proofService,
       paymentRequestLogger,
     );
+    const paymentRequestReceiveLogger = this.getChildLogger('PaymentRequestReceiveService');
+    const paymentRequestReceiveService = new PaymentRequestReceiveService(
+      paymentRequestReceiveOperationRepository,
+      paymentRequestReceiveAttemptRepository,
+      receiveOperationService,
+      mintService,
+      paymentRequestReceiveLogger,
+    );
 
     const authSessionLogger = this.getChildLogger('AuthSessionService');
     const authSessionService = new AuthSessionService(
@@ -836,6 +860,9 @@ export class Manager {
       sendOperationRepository,
       receiveOperationService,
       receiveOperationRepository,
+      paymentRequestReceiveService,
+      paymentRequestReceiveOperationRepository,
+      paymentRequestReceiveAttemptRepository,
       meltOperationService,
       meltOperationRepository,
       authSessionService,
@@ -876,7 +903,10 @@ export class Manager {
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
     const auth = new AuthApi(this.authService);
-    const paymentRequests = new PaymentRequestsApi(this.paymentRequestService);
+    const paymentRequests = new PaymentRequestsApi(
+      this.paymentRequestService,
+      this.paymentRequestReceiveService,
+    );
     return {
       mint,
       wallet,

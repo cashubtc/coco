@@ -4,6 +4,7 @@ import { PaymentRequest } from '@cashu/cashu-ts';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import type {
   PaymentRequestExecutionResult,
+  PaymentRequestReceiveService,
   PaymentRequestService,
   PreparedPaymentRequest,
   ResolvedPaymentRequest,
@@ -12,6 +13,7 @@ import type {
 describe('PaymentRequestsApi', () => {
   let api: PaymentRequestsApi;
   let service: PaymentRequestService;
+  let incomingService: PaymentRequestReceiveService;
 
   const resolvedRequest: ResolvedPaymentRequest = {
     paymentRequest: new PaymentRequest([], 'request-id', 100, 'sat', ['https://mint.test']),
@@ -57,8 +59,19 @@ describe('PaymentRequestsApi', () => {
       prepare: mock(async () => preparedRequest),
       execute: mock(async () => executionResult),
     } as unknown as PaymentRequestService;
+    incomingService = {
+      create: mock(),
+      activate: mock(),
+      cancel: mock(),
+      get: mock(),
+      list: mock(),
+      claimPayload: mock(),
+      ingestPayload: mock(),
+      recoverPendingAttempts: mock(),
+      isOperationLocked: mock(),
+    } as unknown as PaymentRequestReceiveService;
 
-    api = new PaymentRequestsApi(service);
+    api = new PaymentRequestsApi(service, incomingService);
   });
 
   it('should parse a payment request', async () => {

@@ -190,6 +190,7 @@ export class HistoryService {
         existing.amount = operation.amount;
         existing.unit = operation.unit || existing.unit || 'sat';
         existing.state = state;
+        existing.metadata = this.getReceiveMetadata(operation) ?? existing.metadata;
         if (token) {
           existing.token = token;
         }
@@ -207,6 +208,7 @@ export class HistoryService {
         operationId: operation.id,
         state,
         token,
+        metadata: this.getReceiveMetadata(operation),
       };
       const entry = await this.historyRepository.addHistoryEntry(entryPayload);
       await this.handleHistoryUpdated(mintUrl, entry);
@@ -218,6 +220,25 @@ export class HistoryService {
         err,
       });
     }
+  }
+
+  private getReceiveMetadata(operation: ReceiveOperation): Record<string, string> | undefined {
+    if (operation.source?.type !== 'payment-request') {
+      return undefined;
+    }
+
+    return {
+      source: 'payment-request',
+      requestOperationId: operation.source.requestOperationId,
+      attemptId: operation.source.attemptId,
+      ...(operation.source.requestId ? { requestId: operation.source.requestId } : {}),
+      transport: operation.source.transport,
+      ...(operation.source.transportMessageId
+        ? { transportMessageId: operation.source.transportMessageId }
+        : {}),
+      ...(operation.source.senderPubkey ? { senderPubkey: operation.source.senderPubkey } : {}),
+      ...(operation.source.memo ? { memo: operation.source.memo } : {}),
+    };
   }
 
   async handleMintOperationQuoteStateChanged(

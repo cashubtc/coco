@@ -17,6 +17,12 @@ import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../operations/receive/ReceiveOperation';
+import type {
+  PaymentRequestReceiveAttempt,
+  PaymentRequestReceiveAttemptState,
+  PaymentRequestReceiveOperation,
+  PaymentRequestReceiveState,
+} from '../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
 import type { Counter } from '../models/Counter';
 import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
@@ -266,6 +272,31 @@ export interface ReceiveOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+export interface PaymentRequestReceiveOperationRepository {
+  create(operation: PaymentRequestReceiveOperation): Promise<void>;
+  update(operation: PaymentRequestReceiveOperation): Promise<void>;
+  getById(id: string): Promise<PaymentRequestReceiveOperation | null>;
+  getByState(state: PaymentRequestReceiveState): Promise<PaymentRequestReceiveOperation[]>;
+  getActiveByRequestId(requestId: string): Promise<PaymentRequestReceiveOperation[]>;
+  list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
+  delete(id: string): Promise<void>;
+}
+
+export interface PaymentRequestReceiveAttemptRepository {
+  create(attempt: PaymentRequestReceiveAttempt): Promise<void>;
+  update(attempt: PaymentRequestReceiveAttempt): Promise<void>;
+  getById(id: string): Promise<PaymentRequestReceiveAttempt | null>;
+  getByRequestOperationId(requestOperationId: string): Promise<PaymentRequestReceiveAttempt[]>;
+  getByReceiveOperationId(receiveOperationId: string): Promise<PaymentRequestReceiveAttempt | null>;
+  getByTransportMessageId(transportMessageId: string): Promise<PaymentRequestReceiveAttempt | null>;
+  getByPayloadHash(
+    requestOperationId: string,
+    payloadHash: string,
+  ): Promise<PaymentRequestReceiveAttempt | null>;
+  getByState(state: PaymentRequestReceiveAttemptState): Promise<PaymentRequestReceiveAttempt[]>;
+  delete(id: string): Promise<void>;
+}
+
 interface RepositoriesBase {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
@@ -280,6 +311,8 @@ interface RepositoriesBase {
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
   receiveOperationRepository: ReceiveOperationRepository;
+  paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+  paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
 }
 
 export interface Repositories extends RepositoriesBase {

@@ -6,6 +6,7 @@ export * from './KeyRingService';
 export * from './MeltQuoteService';
 export * from './MintService';
 export * from './PaymentRequestService';
+export * from './PaymentRequestReceiveService';
 export * from './ProofService';
 export * from './SeedService';
 export * from './WalletRestoreService';

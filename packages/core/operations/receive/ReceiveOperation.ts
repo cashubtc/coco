@@ -17,6 +17,19 @@ import type { Amount, Proof } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
+export type ReceiveOperationSource =
+  | { type: 'manual-token' }
+  | {
+      type: 'payment-request';
+      requestOperationId: string;
+      requestId?: string;
+      attemptId: string;
+      transport: 'inband' | 'nostr' | 'post';
+      transportMessageId?: string;
+      senderPubkey?: string;
+      memo?: string;
+    };
+
 // ============================================================================
 // Base and Data Interfaces
 // ============================================================================
@@ -48,6 +61,9 @@ interface ReceiveOperationBase {
 
   /** Error message if the operation failed */
   error?: string;
+
+  /** Optional origin metadata for receives created by higher-level sagas. */
+  source?: ReceiveOperationSource;
 }
 
 /**
@@ -185,6 +201,7 @@ export function createReceiveOperation(
   mintUrl: string,
   intent: UnitAmount,
   inputProofs: Proof[],
+  source?: ReceiveOperationSource,
 ): InitReceiveOperation {
   const now = Date.now();
   const amount = normalizeUnitAmount(intent);
@@ -195,6 +212,7 @@ export function createReceiveOperation(
     unit: amount.unit,
     amount: amount.amount,
     inputProofs,
+    source,
     createdAt: now,
     updatedAt: now,
   };

@@ -23,6 +23,7 @@ import {
 } from '../../models/Error';
 import type {
   ReceiveOperation,
+  ReceiveOperationSource,
   InitReceiveOperation,
   PreparedReceiveOperation,
   PreparedOrLaterOperation,
@@ -122,7 +123,7 @@ export class ReceiveOperationService {
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
    */
-  async init(token: Token | string): Promise<InitReceiveOperation> {
+  async init(token: Token | string, source?: ReceiveOperationSource): Promise<InitReceiveOperation> {
     const mintUrl = this.extractMintUrl(token);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -146,7 +147,13 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs);
+    const operation = createReceiveOperation(
+      id,
+      mintUrl,
+      { amount, unit },
+      preparedProofs,
+      source,
+    );
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {
