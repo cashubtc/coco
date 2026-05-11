@@ -17,6 +17,7 @@ import type { MintService } from './MintService';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type {
   FinalizedReceiveOperation,
+  PreparedReceiveOperation,
   ReceiveOperation,
 } from '../operations/receive/ReceiveOperation';
 import type {
@@ -245,6 +246,8 @@ export class PaymentRequestReceiveService {
           attempt,
           receiveOperation.error ?? 'Child receive operation rolled back',
         );
+      } else if (receiveOperation.state === 'prepared') {
+        await this.resumePreparedChildReceive(attempt, receiveOperation);
       }
     }
   }
@@ -488,6 +491,42 @@ export class PaymentRequestReceiveService {
     const operation = await this.operationRepository.getById(finalized.requestOperationId);
     if (operation) {
       await this.completeIfSingleUse(operation);
+    }
+  }
+
+  private async resumePreparedChildReceive(
+    attempt: PaymentRequestReceiveAttempt,
+    receiveOperation: PreparedReceiveOperation,
+  ): Promise<void> {
+    try {
+      const finalizedReceive = await this.receiveOperationService.execute(receiveOperation);
+      await this.finalizeAttemptFromReceive(attempt, finalizedReceive);
+    } catch (error) {
+      const latestReceive = await this.receiveOperationService.getOperation(receiveOperation.id);
+      if (!latestReceive) {
+        await this.rejectAttempt(attempt, 'Child receive operation was not found after resume');
+        return;
+      }
+
+      if (latestReceive.state === 'finalized') {
+        await this.finalizeAttemptFromReceive(attempt, latestReceive);
+        return;
+      }
+
+      if (latestReceive.state === 'rolled_back') {
+        await this.rejectAttempt(
+          attempt,
+          latestReceive.error ?? 'Child receive operation rolled back',
+        );
+        return;
+      }
+
+      this.logger?.warn('Payment request prepared child receive left for recovery retry', {
+        attemptId: attempt.id,
+        receiveOperationId: receiveOperation.id,
+        childState: latestReceive.state,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

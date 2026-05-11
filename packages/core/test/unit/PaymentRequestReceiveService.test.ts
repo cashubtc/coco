@@ -35,6 +35,25 @@ describe('PaymentRequestReceiveService', () => {
     };
   }
 
+  function createPreparedReceiveOperation(
+    overrides: Partial<PreparedReceiveOperation> = {},
+  ): PreparedReceiveOperation {
+    const now = Date.now();
+    return {
+      id: 'receive-op-prepared',
+      state: 'prepared',
+      mintUrl,
+      unit: 'sat',
+      amount: Amount.from(100),
+      inputProofs: createPayload().proofs,
+      fee: Amount.from(1),
+      outputData: { keep: [], send: [] },
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
+
   beforeEach(() => {
     operationRepository = new MemoryPaymentRequestReceiveOperationRepository();
     attemptRepository = new MemoryPaymentRequestReceiveAttemptRepository();
@@ -197,5 +216,97 @@ describe('PaymentRequestReceiveService', () => {
     expect(result.attempt.state).toBe('finalized');
     expect(result.attempt.receiveOperationId).toBe('receive-op-1');
     expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes prepared child receive operations during recovery', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    const preparedReceive = createPreparedReceiveOperation();
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-1',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash,
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      state: 'receiving',
+      receiveOperationId: preparedReceive.id,
+      payload,
+      createdAt: now,
+      updatedAt: now,
+    });
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(preparedReceive);
+
+    await service.recoverPendingAttempts();
+
+    expect(receiveOperationService.execute).toHaveBeenCalledWith(preparedReceive);
+    const storedAttempt = await attemptRepository.getById('attempt-1');
+    expect(storedAttempt?.state).toBe('finalized');
+    expect(storedAttempt?.fee?.equals(Amount.from(1))).toBe(true);
+    expect(storedAttempt?.netAmount?.equals(Amount.from(99))).toBe(true);
+    expect(storedAttempt?.payload).toBeUndefined();
+    const storedOperation = await operationRepository.getById(operation.id);
+    expect(storedOperation?.state).toBe('completed');
+  });
+
+  it('rejects recovering attempts when prepared child receive execution rolls back', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    const preparedReceive = createPreparedReceiveOperation();
+    const rolledBackReceive = {
+      ...preparedReceive,
+      state: 'rolled_back' as const,
+      error: 'Child receive operation rolled back by mint',
+    };
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-1',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash,
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      state: 'receiving',
+      receiveOperationId: preparedReceive.id,
+      payload,
+      createdAt: now,
+      updatedAt: now,
+    });
+    (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(preparedReceive)
+      .mockResolvedValueOnce(rolledBackReceive);
+    (receiveOperationService.execute as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('receive failed'),
+    );
+
+    await service.recoverPendingAttempts();
+
+    const storedAttempt = await attemptRepository.getById('attempt-1');
+    expect(storedAttempt?.state).toBe('rejected');
+    expect(storedAttempt?.error).toBe('Child receive operation rolled back by mint');
+    expect(storedAttempt?.payload).toBeUndefined();
+    const storedOperation = await operationRepository.getById(operation.id);
+    expect(storedOperation?.state).toBe('active');
   });
 });
