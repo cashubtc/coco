@@ -182,8 +182,8 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   // Recover any pending melt operations from previous session
   await coco.ops.melt.recovery.run();
 
-  // Recover any pending receive operations from previous session
-  await coco.ops.receive.recovery.run();
+  // Recover any pending receive operations and payment-request receive attempts from previous session
+  await coco.recoverPendingPaymentRequestReceiveAttempts();
 
   // Recover any pending mint operations from previous session
   await coco.recoverPendingMintOperations();
@@ -464,6 +464,10 @@ export class Manager {
 
   async recoverPendingMintOperations(): Promise<void> {
     await this.mintOperationService.recoverPendingOperations();
+  }
+
+  async recoverPendingPaymentRequestReceiveAttempts(): Promise<void> {
+    await this.paymentRequestReceiveService.recoverPendingAttempts();
   }
 
   async reconcileLegacyMintQuotes(
