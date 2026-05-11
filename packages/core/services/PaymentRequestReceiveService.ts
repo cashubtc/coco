@@ -220,7 +220,7 @@ export class PaymentRequestReceiveService {
       ...(await this.attemptRepository.getByState('validating')),
     ];
     for (const attempt of interruptedBeforeReceive) {
-      await this.rejectAttempt(attempt, 'Interrupted before child receive operation was created');
+      await this.attemptRepository.delete(attempt.id);
     }
 
     const attempts = await this.attemptRepository.getByState('receiving');

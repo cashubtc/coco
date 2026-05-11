@@ -11,6 +11,7 @@ import type {
   PreparedReceiveOperation,
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
+import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
@@ -161,31 +162,40 @@ describe('PaymentRequestReceiveService', () => {
     );
   });
 
-  it('rejects interrupted pre-child attempts during recovery', async () => {
+  it('removes interrupted pre-child attempts during recovery so payloads can retry', async () => {
     const operation = await service.activate(
       await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
     );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
     const now = Date.now();
     await attemptRepository.create({
       id: 'attempt-1',
       requestOperationId: operation.id,
       requestId: operation.requestId,
       transport: 'inband',
-      payloadHash: 'payload-hash-1',
+      payloadHash,
       mintUrl,
       unit: 'sat',
       grossAmount: Amount.from(100),
       state: 'validating',
-      payload: createPayload(),
+      payload,
       createdAt: now,
       updatedAt: now,
     });
 
     await service.recoverPendingAttempts();
 
-    const attempt = await attemptRepository.getById('attempt-1');
-    expect(attempt?.state).toBe('rejected');
-    expect(attempt?.payload).toBeUndefined();
-    expect(attempt?.error).toContain('Interrupted before child receive operation');
+    expect(await attemptRepository.getById('attempt-1')).toBeNull();
+
+    const result = await service.claimPayload(operation.id, payload);
+    expect(result.attempt.id).not.toBe('attempt-1');
+    expect(result.attempt.state).toBe('finalized');
+    expect(result.attempt.receiveOperationId).toBe('receive-op-1');
+    expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
   });
 });
