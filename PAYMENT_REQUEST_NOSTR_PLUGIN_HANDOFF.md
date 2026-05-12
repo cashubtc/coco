@@ -24,7 +24,6 @@ Incoming payment-request API:
 
 ```ts
 manager.paymentRequests.incoming.create(input);
-manager.paymentRequests.incoming.activate(operationOrId);
 manager.paymentRequests.incoming.cancel(operationId, reason?);
 manager.paymentRequests.incoming.get(operationId);
 manager.paymentRequests.incoming.list(filter?);
@@ -58,8 +57,8 @@ export interface PaymentRequestReceiveTransportHandler {
   createRequestTransport?(
     input: PaymentRequestReceiveTransportCreateInput,
   ): PaymentRequestTransport;
-  activate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
-  deactivate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+  activate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+  deactivate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
 }
 ```
 
@@ -102,8 +101,9 @@ const unregister = paymentRequestReceiveService.registerTransportHandler({
 ```
 
 Then the app-facing plugin API can create an incoming Nostr payment request
-through core directly. `create()` activates the operation by default, so the
-plugin does not need a second activation call in the normal path:
+through core directly. `create()` stores an active operation and calls the
+registered transport handler, so the plugin does not expose a separate
+activation step:
 
 ```ts
 const operation = await paymentRequestReceiveService.create({
@@ -128,21 +128,9 @@ Nostr descriptor into the Cashu payment request, then call the registered
 transport handler's `activate(operation)` hook. The plugin no longer needs to
 create an in-band request and a separate plugin-owned encoded request.
 
-If the plugin needs to prepare a request without subscribing yet, opt into draft
-creation explicitly:
-
-```ts
-const draft = await paymentRequestReceiveService.create({
-  amount,
-  mints,
-  transport: 'nostr',
-  activate: false,
-});
-
-await paymentRequestReceiveService.activate(draft.id);
-```
-
-Core also accepts a direct descriptor for tests or advanced callers:
+Core also accepts a direct descriptor for tests or advanced callers. Since all
+created requests are active, a handler for the descriptor's transport type must
+still be registered before creation:
 
 ```ts
 await paymentRequestReceiveService.create({
@@ -254,18 +242,19 @@ Suggested public entrypoints:
 ```ts
 export function createNostrPaymentRequestsPlugin(
   options: NostrPaymentRequestsPluginOptions,
-): Plugin<[
-  'paymentRequestReceiveService',
-  'paymentRequestService',
-  'sendOperationService',
-  'proofService',
-  'logger',
-]>;
+): Plugin<
+  [
+    'paymentRequestReceiveService',
+    'paymentRequestService',
+    'sendOperationService',
+    'proofService',
+    'logger',
+  ]
+>;
 
 export interface NostrPaymentRequestsApi {
   createRequest(input: CreateNostrPaymentRequestInput): Promise<NostrPaymentRequestCreated>;
-  activateRequest(operationId: string): Promise<void>;
-  deactivateRequest(operationId: string): Promise<void>;
+  cancelRequest(operationId: string, reason?: string): Promise<void>;
   payRequest(input: PayNostrPaymentRequestInput): Promise<NostrPaymentRequestPaymentResult>;
   start(): Promise<void>;
   stop(): Promise<void>;

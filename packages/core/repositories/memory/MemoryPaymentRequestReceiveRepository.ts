@@ -63,10 +63,6 @@ export class MemoryPaymentRequestReceiveOperationRepository implements PaymentRe
       .filter((operation) => !filter?.state || operation.state === filter.state)
       .map(cloneOperation);
   }
-
-  async delete(id: string): Promise<void> {
-    this.operations.delete(id);
-  }
 }
 
 export class MemoryPaymentRequestReceiveAttemptRepository implements PaymentRequestReceiveAttemptRepository {

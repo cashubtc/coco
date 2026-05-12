@@ -213,12 +213,6 @@ export class ExpoPaymentRequestReceiveOperationRepository implements PaymentRequ
         );
     return rows.map(rowToOperation);
   }
-
-  async delete(id: string): Promise<void> {
-    await this.db.run('DELETE FROM coco_cashu_payment_request_receive_operations WHERE id = ?', [
-      id,
-    ]);
-  }
 }
 
 export class ExpoPaymentRequestReceiveAttemptRepository implements PaymentRequestReceiveAttemptRepository {

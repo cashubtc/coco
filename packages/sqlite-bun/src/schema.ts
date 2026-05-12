@@ -1039,7 +1039,7 @@ const MIGRATIONS: readonly Migration[] = [
         id TEXT PRIMARY KEY,
         requestId TEXT,
         encodedRequest TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('draft', 'active', 'completed', 'cancelled', 'expired')),
+        state TEXT NOT NULL CHECK (state IN ('active', 'completed', 'cancelled', 'expired')),
         transport TEXT NOT NULL CHECK (transport IN ('inband', 'nostr', 'post')),
         amount TEXT NOT NULL,
         unit TEXT NOT NULL,

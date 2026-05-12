@@ -279,7 +279,6 @@ export interface PaymentRequestReceiveOperationRepository {
   getByState(state: PaymentRequestReceiveState): Promise<PaymentRequestReceiveOperation[]>;
   getActiveByRequestId(requestId: string): Promise<PaymentRequestReceiveOperation[]>;
   list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
-  delete(id: string): Promise<void>;
 }
 
 export interface PaymentRequestReceiveAttemptRepository {

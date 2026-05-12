@@ -1,6 +1,6 @@
 import type { Amount, PaymentRequestPayload, Proof } from '@cashu/cashu-ts';
 
-export type PaymentRequestReceiveState = 'draft' | 'active' | 'completed' | 'cancelled' | 'expired';
+export type PaymentRequestReceiveState = 'active' | 'completed' | 'cancelled' | 'expired';
 
 export type PaymentRequestReceiveAttemptState =
   | 'received'

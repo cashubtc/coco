@@ -69,8 +69,8 @@ export interface PaymentRequestReceiveTransportHandler {
   createRequestTransport?(
     input: PaymentRequestReceiveTransportCreateInput,
   ): Promise<PaymentRequestTransport> | PaymentRequestTransport;
-  activate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
-  deactivate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+  activate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+  deactivate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
 }
 
 export interface CreatePaymentRequestReceiveInput {
@@ -83,7 +83,6 @@ export interface CreatePaymentRequestReceiveInput {
   transport?: PaymentRequestReceiveTransportInput;
   encoding?: 'creqA' | 'creqB';
   nut10?: NUT10Option;
-  activate?: boolean;
 }
 
 export interface PaymentRequestReceiveClaimResult {
@@ -178,7 +177,7 @@ export class PaymentRequestReceiveService {
       id: generateSubId(),
       requestId,
       encodedRequest,
-      state: 'draft',
+      state: 'active',
       transport,
       amount,
       unit,
@@ -190,47 +189,30 @@ export class PaymentRequestReceiveService {
     };
 
     await this.operationRepository.create(operation);
-    if (input.activate === false) {
-      return operation;
-    }
-    return this.activate(operation);
-  }
-
-  async activate(
-    operationOrId: PaymentRequestReceiveOperation | string,
-  ): Promise<PaymentRequestReceiveOperation> {
-    const operation = await this.requireOperation(operationOrId);
-    if (operation.state === 'active') {
+    try {
       await this.activateTransport(operation);
       return operation;
+    } catch (error) {
+      const cancelled: PaymentRequestReceiveOperation = {
+        ...operation,
+        state: 'cancelled',
+        error: error instanceof Error ? error.message : String(error),
+        updatedAt: Date.now(),
+      };
+      await this.operationRepository.update(cancelled);
+      throw error;
     }
-    if (operation.state !== 'draft') {
-      throw new PaymentRequestError(
-        `Cannot activate payment request receive operation in state '${operation.state}'`,
-      );
-    }
-
-    const active: PaymentRequestReceiveOperation = {
-      ...operation,
-      state: 'active',
-      updatedAt: Date.now(),
-    };
-    await this.operationRepository.update(active);
-    await this.activateTransport(active);
-    return active;
   }
 
   async cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation> {
     const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'draft' && operation.state !== 'active') {
+    if (operation.state !== 'active') {
       throw new PaymentRequestError(
         `Cannot cancel payment request receive operation in state '${operation.state}'`,
       );
     }
 
-    if (operation.state === 'active') {
-      await this.deactivateTransport(operation);
-    }
+    await this.deactivateTransport(operation);
     const cancelled: PaymentRequestReceiveOperation = {
       ...operation,
       state: 'cancelled',
@@ -330,7 +312,7 @@ export class PaymentRequestReceiveService {
   private async activateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
     if (operation.transport === 'inband') return;
     const handler = this.transportHandlers.get(operation.transport);
-    if (!handler?.activate) {
+    if (!handler) {
       throw new PaymentRequestError(
         `No payment request receive transport handler registered for '${operation.transport}'`,
       );
@@ -341,7 +323,7 @@ export class PaymentRequestReceiveService {
   private async deactivateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
     if (operation.transport === 'inband') return;
     const handler = this.transportHandlers.get(operation.transport);
-    if (!handler?.deactivate) {
+    if (!handler) {
       throw new PaymentRequestError(
         `No payment request receive transport handler registered for '${operation.transport}'`,
       );

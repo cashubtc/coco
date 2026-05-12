@@ -17,9 +17,7 @@ import type {
   ReceiveOperation,
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
-import type {
-  ParsedPaymentRequestPayload,
-} from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
+import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
@@ -145,19 +143,6 @@ describe('PaymentRequestReceiveService', () => {
     expect(operation.requestId).toBe('request-id');
   });
 
-  it('can create draft payment requests when activation is explicitly disabled', async () => {
-    const operation = await service.create({
-      amount: Amount.from(100),
-      mints: [mintUrl],
-      requestId: 'request-id',
-      activate: false,
-    });
-
-    expect(operation.state).toBe('draft');
-    const active = await service.activate(operation.id);
-    expect(active.state).toBe('active');
-  });
-
   it('creates and activates Nostr payment requests through a registered handler', async () => {
     const createRequestTransport = mock(async () => ({
       type: PaymentRequestTransportType.NOSTR,
@@ -165,10 +150,12 @@ describe('PaymentRequestReceiveService', () => {
       tags: [['n', '17']],
     }));
     const activate = mock(async () => undefined);
+    const deactivate = mock(async () => undefined);
     const unregister = service.registerTransportHandler({
       type: 'nostr',
       createRequestTransport,
       activate,
+      deactivate,
     });
 
     const operation = await service.create({
@@ -196,10 +183,43 @@ describe('PaymentRequestReceiveService', () => {
     unregister();
   });
 
+  it('records a cancelled operation when transport activation fails', async () => {
+    const createRequestTransport = mock(async () => ({
+      type: PaymentRequestTransportType.NOSTR,
+      target: nostrTarget,
+    }));
+    const unregister = service.registerTransportHandler({
+      type: 'nostr',
+      createRequestTransport,
+      activate: mock(async () => {
+        throw new Error('subscription failed');
+      }),
+      deactivate: mock(async () => undefined),
+    });
+
+    await expect(
+      service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: 'request-id',
+        transport: 'nostr',
+      }),
+    ).rejects.toThrow('subscription failed');
+
+    const cancelled = await operationRepository.list({ state: 'cancelled' });
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]!.requestId).toBe('request-id');
+    expect(cancelled[0]!.error).toBe('subscription failed');
+
+    unregister();
+  });
+
   it('claims a valid payload through a child receive operation', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
 
     const result = await service.claimPayload(operation.id, createPayload(), {
       transport: 'inband',
@@ -222,9 +242,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('returns the existing finalized attempt for duplicate payload delivery', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
 
     const first = await service.claimPayload(operation.id, payload);
@@ -235,9 +257,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('returns the finalized attempt for duplicate payload ingestion after completion', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
 
     const first = await service.ingestPayload(payload);
@@ -252,9 +276,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('records a rejected attempt for an underpaid payload', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
 
     const result = await service.claimPayload(
       operation.id,
@@ -270,9 +296,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('blocks new payloads while a single-use request has an in-flight attempt', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const now = Date.now();
     await attemptRepository.create({
       id: 'attempt-in-flight',
@@ -302,20 +330,16 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('rejects a reused transport message id from a different request', async () => {
-    const firstOperation = await service.activate(
-      await service.create({
-        amount: Amount.from(100),
-        mints: [mintUrl],
-        requestId: 'request-id',
-      }),
-    );
-    const secondOperation = await service.activate(
-      await service.create({
-        amount: Amount.from(100),
-        mints: [mintUrl],
-        requestId: 'request-id-2',
-      }),
-    );
+    const firstOperation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
+    const secondOperation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id-2',
+    });
 
     await service.claimPayload(firstOperation.id, createPayload(), {
       transport: 'inband',
@@ -344,9 +368,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('removes interrupted pre-child attempts during recovery so payloads can retry', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -381,9 +407,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('completes single-use parents for already-finalized attempts during recovery', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const now = Date.now();
     await attemptRepository.create({
       id: 'attempt-finalized',
@@ -409,9 +437,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('resumes prepared child receive operations during recovery', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -452,9 +482,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('resumes init child receive operations before generic receive cleanup', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -524,9 +556,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('drops receiving attempts with missing child operations so redelivery can retry', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -560,9 +594,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('does not pin validated payloads when child receive init fails', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -584,9 +620,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('rejects permanent child receive init validation failures', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {
@@ -605,9 +643,11 @@ describe('PaymentRequestReceiveService', () => {
   });
 
   it('rejects recovering attempts when prepared child receive execution rolls back', async () => {
-    const operation = await service.activate(
-      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
-    );
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
     const payload = createPayload();
     const payloadHash = (
       service as unknown as {

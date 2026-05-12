@@ -169,16 +169,6 @@ export class IdbPaymentRequestReceiveOperationRepository implements PaymentReque
       .toArray()) as PaymentRequestReceiveOperationRow[];
     return rows.map(rowToOperation);
   }
-
-  async delete(id: string): Promise<void> {
-    await this.db.runTransaction(
-      'rw',
-      ['coco_cashu_payment_request_receive_operations'],
-      async (tx) => {
-        await tx.table('coco_cashu_payment_request_receive_operations').delete(id);
-      },
-    );
-  }
 }
 
 export class IdbPaymentRequestReceiveAttemptRepository implements PaymentRequestReceiveAttemptRepository {

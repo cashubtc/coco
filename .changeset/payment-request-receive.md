@@ -16,8 +16,8 @@ operations during recovery.
 Transport plugins can now register receive handlers for external transports such
 as Nostr, and outgoing payment-request parsing exposes Nostr transport
 descriptors for plugin delivery.
-Incoming request creation activates the request by default; callers that need a
-draft can pass `activate: false`.
+Incoming request creation stores active requests immediately; callers can
+cancel requests to stop accepting future payloads while keeping request history.
 Pre-child crash attempts are discarded during recovery so redelivered payloads
 can retry instead of being pinned to synthetic rejections.
 

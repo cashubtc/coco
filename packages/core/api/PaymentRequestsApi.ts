@@ -17,9 +17,6 @@ import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 export interface IncomingPaymentRequestsApi {
   create(input: CreatePaymentRequestReceiveInput): Promise<PaymentRequestReceiveOperation>;
-  activate(
-    operationOrId: PaymentRequestReceiveOperation | string,
-  ): Promise<PaymentRequestReceiveOperation>;
   cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation>;
   get(operationId: string): Promise<PaymentRequestReceiveOperation | null>;
   list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
@@ -54,13 +51,13 @@ export class PaymentRequestsApi {
     this.paymentRequestService = paymentRequestService;
     this.incoming = {
       create: (input) => paymentRequestReceiveService.create(input),
-      activate: (operationOrId) => paymentRequestReceiveService.activate(operationOrId),
       cancel: (operationId, reason) => paymentRequestReceiveService.cancel(operationId, reason),
       get: (operationId) => paymentRequestReceiveService.get(operationId),
       list: (filter) => paymentRequestReceiveService.list(filter),
       claimPayload: (operationOrId, payload, source) =>
         paymentRequestReceiveService.claimPayload(operationOrId, payload, source),
-      ingestPayload: (payload, source) => paymentRequestReceiveService.ingestPayload(payload, source),
+      ingestPayload: (payload, source) =>
+        paymentRequestReceiveService.ingestPayload(payload, source),
       recovery: {
         run: () => paymentRequestReceiveService.recoverPendingAttempts(),
       },

@@ -104,7 +104,7 @@ PaymentRequestReceiveOperation
   id: local saga id
   requestId: NUT-18 payment id (`i`)
   encodedRequest: creqA or CREQB
-  state: draft | active | completed | cancelled | expired
+  state: active | completed | cancelled | expired
   transport: inband | nostr | post
   amount/unit/mints/singleUse/description/nut10
   children: PaymentRequestReceiveAttempt[]
@@ -223,7 +223,6 @@ Add an incoming namespace to avoid overloading the outgoing names:
 
 ```ts
 manager.paymentRequests.incoming.create(input)
-manager.paymentRequests.incoming.activate(operationOrId)
 manager.paymentRequests.incoming.cancel(operationId, reason?)
 manager.paymentRequests.incoming.get(operationId)
 manager.paymentRequests.incoming.list(filter?)
@@ -239,16 +238,9 @@ manager.paymentRequests.incoming.diagnostics.isLocked(operationId)
 - Generates a unique request id unless the caller supplies one.
 - Builds `PaymentRequest` with requested fields.
 - Encodes to `CREQB` by default for QR efficiency, with `creqA` as an option.
-- Persists the request operation.
-- Activates the operation by default and starts registered transport listener state.
-- Supports `activate: false` for callers that explicitly need a draft.
+- Persists the request operation as active.
+- Starts registered transport listener state before returning.
 - Returns the operation and encoded request.
-
-`activate(operationOrId)`:
-
-- Moves `draft` to `active`, or re-runs transport activation for an already-active request.
-- Starts or confirms any registered transport listener state.
-- Does not perform mint interaction.
 
 `claimPayload(operationOrId, payload, source?)`:
 
@@ -331,8 +323,8 @@ Core should define a small incoming transport contract:
 interface IncomingPaymentRequestTransport {
   readonly type: 'nostr' | 'post' | 'inband';
   createRequestTransport(input: CreateTransportInput): Promise<PaymentRequestTransport>;
-  activate(operation: PaymentRequestReceiveOperation): Promise<TransportActivation>;
-  deactivate(operationId: string): Promise<void>;
+  activate(operation: PaymentRequestReceiveOperation): Promise<void>;
+  deactivate(operation: PaymentRequestReceiveOperation): Promise<void>;
 }
 ```
 
@@ -364,8 +356,8 @@ Receiving Nostr payloads:
 2. Unwrap NIP-17 events and verify the kind 13 seal sender matches the kind 14 rumor
    sender.
 3. Parse kind 14 content as `PaymentRequestPayload` JSON.
-4. Use payload `id` to find active request operations.
-5. Call core `claimPayload(...)` with source `{ transport: 'nostr', eventId, senderPubkey }`.
+4. Use core ingestion to find the active request operation by payload `id`.
+5. Call core `ingestPayload(...)` with source `{ transport: 'nostr', transportMessageId: eventId, senderPubkey }`.
 6. Persist relay/event metadata only as metadata. The proofs and mint interaction remain
    in the child receive operation.
 
@@ -382,12 +374,12 @@ Security stance:
 Incoming request operation:
 
 ```text
-draft -> active -> completed
-   |       |          ^
-   |       |          |
-   |       +-> expired+
-   |       |
-   +------> cancelled
+active -> completed
+  |          ^
+  |          |
+  +-> expired+
+  |
+  +-> cancelled
 ```
 
 Attempt:
@@ -421,11 +413,7 @@ Parent/child consistency:
 
 Crash after request create:
 
-- Default-created requests are already active and recovered as active requests.
-- Explicit `activate: false` drafts remain visible and can be activated or cancelled.
-
-Crash after activation:
-
+- Created requests are active and recovered as active requests.
 - Recovery restarts the transport listener for `active` requests.
 
 Crash after Nostr event received but before child receive creation:
@@ -464,7 +452,7 @@ Duplicate relay delivery after finalized:
 - Add models, repositories, adapters, and contracts.
 - Add `PaymentRequestReceiveService`.
 - Add `manager.paymentRequests.incoming`.
-- Implement create, activate, cancel, list, get, and manual `claimPayload(...)`.
+- Implement create, cancel, list, get, and manual `claimPayload(...)`.
 - Extend `ReceiveOperation` source metadata.
 - Add unit tests for validation, single-use locking, duplicate payloads, and child
   receive linkage.
@@ -530,7 +518,7 @@ Nostr plugin tests:
 
 - Creates NUT-18 Nostr transport with `nprofile` and `n=17`.
 - Decodes `CREQB` Nostr targets back to usable pubkey and relays.
-- Unwraps a mocked NIP-17 event and calls `claimPayload`.
+- Unwraps a mocked NIP-17 event and calls `ingestPayload`.
 - Ignores malformed content.
 - Deduplicates event ids.
 - Stops subscriptions on pause/dispose.

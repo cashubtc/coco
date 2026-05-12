@@ -61,7 +61,6 @@ describe('PaymentRequestsApi', () => {
     } as unknown as PaymentRequestService;
     incomingService = {
       create: mock(),
-      activate: mock(),
       cancel: mock(),
       get: mock(),
       list: mock(),
