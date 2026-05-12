@@ -524,6 +524,31 @@ export async function runPaymentRequestReceiveRepositoryContract(
       }
     });
 
+    it('enforces idempotency by transport message id', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt(),
+        );
+
+        let duplicateRejected = false;
+        try {
+          await repositories.paymentRequestReceiveAttemptRepository.create(
+            createDummyPaymentRequestReceiveAttempt({
+              id: 'duplicate-message-attempt',
+              payloadHash: 'different-payload-hash',
+            }),
+          );
+        } catch {
+          duplicateRejected = true;
+        }
+
+        expect(duplicateRejected).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('looks up attempts by transport message id and child receive id', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

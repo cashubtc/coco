@@ -142,6 +142,16 @@ export class MemoryPaymentRequestReceiveAttemptRepository implements PaymentRequ
     return attempt ? cloneAttempt(attempt) : null;
   }
 
+  async getByRequestIdAndPayloadHash(
+    requestId: string,
+    payloadHash: string,
+  ): Promise<PaymentRequestReceiveAttempt | null> {
+    const attempt = Array.from(this.attempts.values()).find(
+      (candidate) => candidate.requestId === requestId && candidate.payloadHash === payloadHash,
+    );
+    return attempt ? cloneAttempt(attempt) : null;
+  }
+
   async getByState(
     state: PaymentRequestReceiveAttemptState,
   ): Promise<PaymentRequestReceiveAttempt[]> {

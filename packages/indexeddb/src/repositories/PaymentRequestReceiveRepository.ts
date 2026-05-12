@@ -189,7 +189,30 @@ export class IdbPaymentRequestReceiveAttemptRepository implements PaymentRequest
       'rw',
       ['coco_cashu_payment_request_receive_attempts'],
       async (tx) => {
-        await tx.table('coco_cashu_payment_request_receive_attempts').add(attemptToRow(attempt));
+        const table = tx.table('coco_cashu_payment_request_receive_attempts');
+        if (attempt.transportMessageId) {
+          const existingByMessage = await table
+            .where('transportMessageId')
+            .equals(attempt.transportMessageId)
+            .first();
+          if (existingByMessage) {
+            throw new Error(
+              `PaymentRequestReceiveAttempt with transport message id ${attempt.transportMessageId} already exists`,
+            );
+          }
+        }
+        if (attempt.receiveOperationId) {
+          const existingByReceive = await table
+            .where('receiveOperationId')
+            .equals(attempt.receiveOperationId)
+            .first();
+          if (existingByReceive) {
+            throw new Error(
+              `PaymentRequestReceiveAttempt with receive operation id ${attempt.receiveOperationId} already exists`,
+            );
+          }
+        }
+        await table.add(attemptToRow(attempt));
       },
     );
   }
@@ -254,6 +277,19 @@ export class IdbPaymentRequestReceiveAttemptRepository implements PaymentRequest
       .table('coco_cashu_payment_request_receive_attempts')
       .where('[requestOperationId+payloadHash]')
       .equals([requestOperationId, payloadHash])
+      .first()) as PaymentRequestReceiveAttemptRow | undefined;
+    return row ? rowToAttempt(row) : null;
+  }
+
+  async getByRequestIdAndPayloadHash(
+    requestId: string,
+    payloadHash: string,
+  ): Promise<PaymentRequestReceiveAttempt | null> {
+    const row = (await (this.db as any)
+      .table('coco_cashu_payment_request_receive_attempts')
+      .where('requestId')
+      .equals(requestId)
+      .filter((candidate: PaymentRequestReceiveAttemptRow) => candidate.payloadHash === payloadHash)
       .first()) as PaymentRequestReceiveAttemptRow | undefined;
     return row ? rowToAttempt(row) : null;
   }

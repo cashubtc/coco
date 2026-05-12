@@ -2,9 +2,11 @@ import {
   Amount,
   JSONInt,
   PaymentRequest,
+  PaymentRequestTransportType,
   type AmountLike,
   type NUT10Option,
   type PaymentRequestPayload,
+  type PaymentRequestTransport,
   type Proof,
   sumProofs,
 } from '@cashu/cashu-ts';
@@ -40,6 +42,37 @@ import type {
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
 
+type CashuPaymentRequestTransportInput =
+  | PaymentRequestTransport
+  | {
+      type: 'nostr' | 'post' | PaymentRequestTransportType;
+      target: string;
+      tags?: string[][];
+    };
+
+export type PaymentRequestReceiveTransportInput =
+  | PaymentRequestReceiveTransport
+  | { type: 'inband' }
+  | CashuPaymentRequestTransportInput;
+
+export interface PaymentRequestReceiveTransportCreateInput {
+  requestId: string;
+  amount: Amount;
+  unit: string;
+  mints: string[];
+  description?: string;
+  singleUse: boolean;
+}
+
+export interface PaymentRequestReceiveTransportHandler {
+  readonly type: Exclude<PaymentRequestReceiveTransport, 'inband'>;
+  createRequestTransport?(
+    input: PaymentRequestReceiveTransportCreateInput,
+  ): Promise<PaymentRequestTransport> | PaymentRequestTransport;
+  activate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+  deactivate?(operation: PaymentRequestReceiveOperation): Promise<void> | void;
+}
+
 export interface CreatePaymentRequestReceiveInput {
   amount: AmountLike;
   unit?: string;
@@ -47,9 +80,10 @@ export interface CreatePaymentRequestReceiveInput {
   requestId?: string;
   description?: string;
   singleUse?: boolean;
-  transport?: PaymentRequestReceiveTransport;
+  transport?: PaymentRequestReceiveTransportInput;
   encoding?: 'creqA' | 'creqB';
   nut10?: NUT10Option;
+  activate?: boolean;
 }
 
 export interface PaymentRequestReceiveClaimResult {
@@ -60,6 +94,10 @@ export interface PaymentRequestReceiveClaimResult {
 
 export class PaymentRequestReceiveService {
   private readonly lock = new OperationIdLock();
+  private readonly transportHandlers = new Map<
+    Exclude<PaymentRequestReceiveTransport, 'inband'>,
+    PaymentRequestReceiveTransportHandler
+  >();
 
   constructor(
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
@@ -73,6 +111,20 @@ export class PaymentRequestReceiveService {
     return this.lock.isLocked(operationId);
   }
 
+  registerTransportHandler(handler: PaymentRequestReceiveTransportHandler): () => void {
+    if (this.transportHandlers.has(handler.type)) {
+      throw new PaymentRequestError(
+        `Payment request receive transport handler '${handler.type}' is already registered`,
+      );
+    }
+    this.transportHandlers.set(handler.type, handler);
+    return () => {
+      if (this.transportHandlers.get(handler.type) === handler) {
+        this.transportHandlers.delete(handler.type);
+      }
+    };
+  }
+
   async create(input: CreatePaymentRequestReceiveInput): Promise<PaymentRequestReceiveOperation> {
     const unit = input.unit ?? 'sat';
     if (unit !== 'sat') {
@@ -80,11 +132,6 @@ export class PaymentRequestReceiveService {
     }
     if (input.nut10) {
       throw new PaymentRequestError('NUT-10 receive requirements are not supported yet');
-    }
-
-    const transport = input.transport ?? 'inband';
-    if (transport !== 'inband') {
-      throw new PaymentRequestError(`Transport '${transport}' is not supported yet`);
     }
 
     const amount = Amount.from(input.amount);
@@ -101,14 +148,26 @@ export class PaymentRequestReceiveService {
     }
 
     const requestId = input.requestId ?? generateSubId();
+    const singleUse = input.singleUse ?? true;
+    const { transport, paymentRequestTransports } = await this.resolveTransportInput(
+      input.transport,
+      {
+        requestId,
+        amount,
+        unit,
+        mints,
+        description: input.description,
+        singleUse,
+      },
+    );
     const paymentRequest = new PaymentRequest(
-      [],
+      paymentRequestTransports,
       requestId,
       amount,
       unit,
       mints.length > 0 ? mints : undefined,
       input.description,
-      input.singleUse ?? true,
+      singleUse,
     );
     const encodedRequest =
       input.encoding === 'creqA'
@@ -124,14 +183,17 @@ export class PaymentRequestReceiveService {
       amount,
       unit,
       mints,
-      singleUse: input.singleUse ?? true,
+      singleUse,
       description: input.description,
       createdAt: now,
       updatedAt: now,
     };
 
     await this.operationRepository.create(operation);
-    return operation;
+    if (input.activate === false) {
+      return operation;
+    }
+    return this.activate(operation);
   }
 
   async activate(
@@ -139,6 +201,7 @@ export class PaymentRequestReceiveService {
   ): Promise<PaymentRequestReceiveOperation> {
     const operation = await this.requireOperation(operationOrId);
     if (operation.state === 'active') {
+      await this.activateTransport(operation);
       return operation;
     }
     if (operation.state !== 'draft') {
@@ -153,6 +216,7 @@ export class PaymentRequestReceiveService {
       updatedAt: Date.now(),
     };
     await this.operationRepository.update(active);
+    await this.activateTransport(active);
     return active;
   }
 
@@ -164,6 +228,9 @@ export class PaymentRequestReceiveService {
       );
     }
 
+    if (operation.state === 'active') {
+      await this.deactivateTransport(operation);
+    }
     const cancelled: PaymentRequestReceiveOperation = {
       ...operation,
       state: 'cancelled',
@@ -207,6 +274,24 @@ export class PaymentRequestReceiveService {
       throw new PaymentRequestError('Payment request payload id is required for ingestion');
     }
 
+    const payloadHash = this.hashPayload(payload);
+    if (source?.transportMessageId) {
+      const existingByMessage = await this.attemptRepository.getByTransportMessageId(
+        source.transportMessageId,
+      );
+      if (existingByMessage) {
+        return this.resultForStoredAttempt(existingByMessage);
+      }
+    }
+
+    const existingByPayload = await this.attemptRepository.getByRequestIdAndPayloadHash(
+      payload.id,
+      payloadHash,
+    );
+    if (existingByPayload) {
+      return this.resultForStoredAttempt(existingByPayload);
+    }
+
     const candidates = await this.operationRepository.getActiveByRequestId(payload.id);
     if (candidates.length === 0) {
       throw new PaymentRequestError(`No active payment request found for id ${payload.id}`);
@@ -219,6 +304,8 @@ export class PaymentRequestReceiveService {
   }
 
   async recoverPendingAttempts(): Promise<void> {
+    await this.recoverActiveTransports();
+
     const interruptedBeforeReceive = [
       ...(await this.attemptRepository.getByState('received')),
       ...(await this.attemptRepository.getByState('validating')),
@@ -230,6 +317,72 @@ export class PaymentRequestReceiveService {
     await this.recoverReceivingAttempts();
     await this.receiveOperationService.recoverPendingOperations();
     await this.recoverReceivingAttempts();
+    await this.recoverFinalizedAttempts();
+  }
+
+  private async recoverActiveTransports(): Promise<void> {
+    const activeOperations = await this.operationRepository.getByState('active');
+    for (const operation of activeOperations) {
+      await this.activateTransport(operation);
+    }
+  }
+
+  private async activateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
+    if (operation.transport === 'inband') return;
+    const handler = this.transportHandlers.get(operation.transport);
+    if (!handler?.activate) {
+      throw new PaymentRequestError(
+        `No payment request receive transport handler registered for '${operation.transport}'`,
+      );
+    }
+    await handler.activate(operation);
+  }
+
+  private async deactivateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
+    if (operation.transport === 'inband') return;
+    const handler = this.transportHandlers.get(operation.transport);
+    if (!handler?.deactivate) {
+      throw new PaymentRequestError(
+        `No payment request receive transport handler registered for '${operation.transport}'`,
+      );
+    }
+    await handler.deactivate(operation);
+  }
+
+  private async recoverFinalizedAttempts(): Promise<void> {
+    const attempts = await this.attemptRepository.getByState('finalized');
+    for (const attempt of attempts) {
+      const operation = await this.operationRepository.getById(attempt.requestOperationId);
+      if (!operation || !operation.singleUse || operation.state !== 'active') {
+        continue;
+      }
+
+      let releaseLock: (() => void) | undefined;
+      try {
+        releaseLock = await this.lock.acquire(operation.id);
+      } catch (error) {
+        if (error instanceof OperationInProgressError) {
+          this.logger?.debug(
+            'Payment request receive operation is in progress, skipping finalized recovery',
+            {
+              operationId: operation.id,
+              attemptId: attempt.id,
+            },
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      try {
+        const currentOperation = await this.operationRepository.getById(operation.id);
+        if (currentOperation?.singleUse && currentOperation.state === 'active') {
+          await this.completeIfSingleUse(currentOperation);
+        }
+      } finally {
+        releaseLock();
+      }
+    }
   }
 
   private async recoverReceivingAttempts(): Promise<void> {
@@ -307,6 +460,12 @@ export class PaymentRequestReceiveService {
         source.transportMessageId,
       );
       if (existingByMessage) {
+        if (existingByMessage.requestOperationId !== operation.id) {
+          throw new PaymentRequestError(
+            `Transport message ${source.transportMessageId} belongs to another ` +
+              'payment request receive operation',
+          );
+        }
         return this.resultForAttempt(operation, existingByMessage);
       }
     }
@@ -350,7 +509,7 @@ export class PaymentRequestReceiveService {
     try {
       attempt = await this.updateAttempt({ ...attempt, state: 'validating' });
       await this.validatePayload(operation, payload, grossAmount);
-      await this.assertSingleUseAvailable(operation);
+      await this.assertSingleUseAvailable(operation, attempt.id);
       validationCompleted = true;
 
       const sourceMetadata = {
@@ -415,13 +574,21 @@ export class PaymentRequestReceiveService {
         (!receiveOperation || receiveOperation.state === 'init') &&
         attempt.payload
       ) {
-        await this.attemptRepository.delete(attempt.id);
-        this.logger?.warn('Payment request receive attempt removed for retry', {
-          attemptId: attempt.id,
-          receiveOperationId: attempt.receiveOperationId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
+        if (this.shouldDropAttemptForRetry(error)) {
+          await this.attemptRepository.delete(attempt.id);
+          this.logger?.warn('Payment request receive attempt removed for retry', {
+            attemptId: attempt.id,
+            receiveOperationId: attempt.receiveOperationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+
+        attempt = await this.rejectAttempt(
+          attempt,
+          error instanceof Error ? error.message : String(error),
+        );
+        return { operation, attempt, receiveOperation: receiveOperation ?? undefined };
       }
 
       attempt = await this.rejectAttempt(
@@ -429,6 +596,74 @@ export class PaymentRequestReceiveService {
         error instanceof Error ? error.message : String(error),
       );
       return { operation, attempt, receiveOperation: receiveOperation ?? undefined };
+    }
+  }
+
+  private async resolveTransportInput(
+    input: PaymentRequestReceiveTransportInput | undefined,
+    createInput: PaymentRequestReceiveTransportCreateInput,
+  ): Promise<{
+    transport: PaymentRequestReceiveTransport;
+    paymentRequestTransports: PaymentRequestTransport[];
+  }> {
+    if (!input || input === 'inband' || (typeof input === 'object' && input.type === 'inband')) {
+      return { transport: 'inband', paymentRequestTransports: [] };
+    }
+
+    if (typeof input === 'string') {
+      const handler = this.transportHandlers.get(input);
+      if (!handler?.createRequestTransport) {
+        throw new PaymentRequestError(`Transport '${input}' is not supported yet`);
+      }
+      const paymentRequestTransport = await handler.createRequestTransport(createInput);
+      return {
+        transport: input,
+        paymentRequestTransports: [this.normalizePaymentRequestTransport(paymentRequestTransport)],
+      };
+    }
+
+    const paymentRequestTransport = this.normalizePaymentRequestTransport(input);
+    return {
+      transport: this.toReceiveTransport(paymentRequestTransport.type),
+      paymentRequestTransports: [paymentRequestTransport],
+    };
+  }
+
+  private toReceiveTransport(type: PaymentRequestTransportType): PaymentRequestReceiveTransport {
+    switch (type) {
+      case PaymentRequestTransportType.NOSTR:
+        return 'nostr';
+      case PaymentRequestTransportType.POST:
+        return 'post';
+      default:
+        throw new PaymentRequestError(`Unsupported payment request transport '${type}'`);
+    }
+  }
+
+  private normalizePaymentRequestTransport(
+    transport: CashuPaymentRequestTransportInput,
+  ): PaymentRequestTransport {
+    if (!transport.target || transport.target.trim().length === 0) {
+      throw new PaymentRequestError(`Transport '${transport.type}' target is required`);
+    }
+
+    switch (transport.type) {
+      case 'nostr':
+      case PaymentRequestTransportType.NOSTR:
+        return {
+          type: PaymentRequestTransportType.NOSTR,
+          target: transport.target,
+          tags: transport.tags,
+        };
+      case 'post':
+      case PaymentRequestTransportType.POST:
+        return {
+          type: PaymentRequestTransportType.POST,
+          target: transport.target,
+          tags: transport.tags,
+        };
+      default:
+        throw new PaymentRequestError('Unsupported payment request transport');
     }
   }
 
@@ -499,12 +734,25 @@ export class PaymentRequestReceiveService {
     }
   }
 
-  private async assertSingleUseAvailable(operation: PaymentRequestReceiveOperation): Promise<void> {
+  private async assertSingleUseAvailable(
+    operation: PaymentRequestReceiveOperation,
+    currentAttemptId: string,
+  ): Promise<void> {
     if (!operation.singleUse) return;
     const attempts = await this.attemptRepository.getByRequestOperationId(operation.id);
-    if (attempts.some((attempt) => attempt.state === 'finalized')) {
+    const blockingAttempt = attempts.find(
+      (attempt) =>
+        attempt.id !== currentAttemptId &&
+        (attempt.state === 'received' ||
+          attempt.state === 'validating' ||
+          attempt.state === 'receiving' ||
+          attempt.state === 'finalized'),
+    );
+    if (!blockingAttempt) return;
+    if (blockingAttempt.state === 'finalized') {
       throw new PaymentRequestError('Single-use payment request has already been paid');
     }
+    throw new PaymentRequestError('Single-use payment request has an in-flight claim');
   }
 
   private hashPayload(payload: ParsedPaymentRequestPayload): string {
@@ -557,6 +805,10 @@ export class PaymentRequestReceiveService {
     }
 
     await this.rejectAttempt(attempt, error);
+  }
+
+  private shouldDropAttemptForRetry(error: unknown): boolean {
+    return !(error instanceof PaymentRequestError || error instanceof ProofValidationError);
   }
 
   private async finalizeAttemptFromReceive(
@@ -629,10 +881,12 @@ export class PaymentRequestReceiveService {
     } catch (error) {
       const latestReceive = await this.receiveOperationService.getOperation(receiveOperation.id);
       if (!latestReceive || latestReceive.state === 'init') {
-        await this.dropAttemptForRetryOrReject(
-          attempt,
-          error instanceof Error ? error.message : String(error),
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.shouldDropAttemptForRetry(error)) {
+          await this.dropAttemptForRetryOrReject(attempt, message);
+        } else {
+          await this.rejectAttempt(attempt, message);
+        }
         return;
       }
 
@@ -692,6 +946,18 @@ export class PaymentRequestReceiveService {
       attempt,
       receiveOperation: receiveOperation ?? undefined,
     };
+  }
+
+  private async resultForStoredAttempt(
+    attempt: PaymentRequestReceiveAttempt,
+  ): Promise<PaymentRequestReceiveClaimResult> {
+    const operation = await this.operationRepository.getById(attempt.requestOperationId);
+    if (!operation) {
+      throw new PaymentRequestError(
+        `Payment request receive operation ${attempt.requestOperationId} not found`,
+      );
+    }
+    return this.resultForAttempt(operation, attempt);
   }
 
   private async requireOperation(

@@ -17,7 +17,15 @@ import { DEFAULT_UNIT, normalizeUnit, type UnitAmount } from '../amounts.ts';
 
 type InbandPaymentRequestTransport = { type: 'inband' };
 type HttpPaymentRequestTransport = { type: 'http'; url: string };
-type PaymentRequestTransport = InbandPaymentRequestTransport | HttpPaymentRequestTransport;
+type NostrPaymentRequestTransport = {
+  type: 'nostr';
+  target: string;
+  tags?: string[][];
+};
+type PaymentRequestTransport =
+  | InbandPaymentRequestTransport
+  | HttpPaymentRequestTransport
+  | NostrPaymentRequestTransport;
 
 type ResolvedPaymentRequest = {
   paymentRequest: PaymentRequest;
@@ -53,15 +61,18 @@ export type PaymentRequestExecutionResult =
 
 type InbandTransport = InbandPaymentRequestTransport;
 type HttpTransport = HttpPaymentRequestTransport;
+type NostrTransport = NostrPaymentRequestTransport;
 type Transport = PaymentRequestTransport;
 
 export type {
   ResolvedPaymentRequest,
   InbandPaymentRequestTransport,
   HttpPaymentRequestTransport,
+  NostrPaymentRequestTransport,
   PaymentRequestTransport,
   InbandTransport,
   HttpTransport,
+  NostrTransport,
   Transport,
 };
 
@@ -166,6 +177,10 @@ export class PaymentRequestService {
           request: transaction.request,
         };
       }
+      case 'nostr':
+        throw new PaymentRequestError(
+          'Nostr payment request execution requires a transport plugin',
+        );
     }
   }
 
@@ -197,9 +212,18 @@ export class PaymentRequestService {
     if (httpTransport) {
       return { type: 'http', url: httpTransport.target };
     }
+    const nostrTransport = pr.transport.find((t) => t.type === PaymentRequestTransportType.NOSTR);
+    if (nostrTransport) {
+      return {
+        type: 'nostr',
+        target: nostrTransport.target,
+        tags: nostrTransport.tags,
+      };
+    }
     const supportedTypes = pr.transport.map((t) => t.type).join(', ');
     throw new PaymentRequestError(
-      `Unsupported transport type. Only HTTP POST is supported, found: ${supportedTypes}`,
+      'Unsupported transport type. Only HTTP POST and Nostr are supported, found: ' +
+        supportedTypes,
     );
   }
 

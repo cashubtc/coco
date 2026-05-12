@@ -315,6 +315,17 @@ export class ExpoPaymentRequestReceiveAttemptRepository implements PaymentReques
     return row ? rowToAttempt(row) : null;
   }
 
+  async getByRequestIdAndPayloadHash(
+    requestId: string,
+    payloadHash: string,
+  ): Promise<PaymentRequestReceiveAttempt | null> {
+    const row = await this.db.get<AttemptRow>(
+      'SELECT * FROM coco_cashu_payment_request_receive_attempts WHERE requestId = ? AND payloadHash = ?',
+      [requestId, payloadHash],
+    );
+    return row ? rowToAttempt(row) : null;
+  }
+
   async getByState(
     state: PaymentRequestReceiveAttemptState,
   ): Promise<PaymentRequestReceiveAttempt[]> {

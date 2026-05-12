@@ -1,8 +1,13 @@
-import { Amount, type PaymentRequestPayload } from '@cashu/cashu-ts';
+import {
+  Amount,
+  PaymentRequest,
+  PaymentRequestTransportType,
+  type PaymentRequestPayload,
+} from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
 import { PaymentRequestReceiveService } from '../../services/PaymentRequestReceiveService';
-import { PaymentRequestError } from '../../models/Error';
+import { PaymentRequestError, ProofValidationError } from '../../models/Error';
 import type { MintService } from '../../services/MintService';
 import type { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import type {
@@ -12,7 +17,9 @@ import type {
   ReceiveOperation,
   ReceiveOperationSource,
 } from '../../operations/receive/ReceiveOperation';
-import type { ParsedPaymentRequestPayload } from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
+import type {
+  ParsedPaymentRequestPayload,
+} from '../../operations/paymentRequestReceive/PaymentRequestReceiveOperation';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
@@ -20,6 +27,10 @@ import {
 
 describe('PaymentRequestReceiveService', () => {
   const mintUrl = 'https://mint.test';
+  const nostrTarget = [
+    'nprofile1qqsqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgp',
+    'zpmhxue69uhhyetvv9ujuar9wd6qymamsk',
+  ].join('');
   let operationRepository: MemoryPaymentRequestReceiveOperationRepository;
   let attemptRepository: MemoryPaymentRequestReceiveAttemptRepository;
   let mintService: MintService;
@@ -120,7 +131,7 @@ describe('PaymentRequestReceiveService', () => {
     );
   });
 
-  it('creates CREQB payment requests and activates them', async () => {
+  it('creates active CREQB payment requests by default', async () => {
     const operation = await service.create({
       amount: Amount.from(100),
       unit: 'sat',
@@ -129,12 +140,60 @@ describe('PaymentRequestReceiveService', () => {
       description: 'test request',
     });
 
-    expect(operation.state).toBe('draft');
+    expect(operation.state).toBe('active');
     expect(operation.encodedRequest).toStartWith('CREQB');
     expect(operation.requestId).toBe('request-id');
+  });
 
+  it('can create draft payment requests when activation is explicitly disabled', async () => {
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+      activate: false,
+    });
+
+    expect(operation.state).toBe('draft');
     const active = await service.activate(operation.id);
     expect(active.state).toBe('active');
+  });
+
+  it('creates and activates Nostr payment requests through a registered handler', async () => {
+    const createRequestTransport = mock(async () => ({
+      type: PaymentRequestTransportType.NOSTR,
+      target: nostrTarget,
+      tags: [['n', '17']],
+    }));
+    const activate = mock(async () => undefined);
+    const unregister = service.registerTransportHandler({
+      type: 'nostr',
+      createRequestTransport,
+      activate,
+    });
+
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+      transport: 'nostr',
+    });
+
+    expect(operation.transport).toBe('nostr');
+    expect(operation.state).toBe('active');
+    expect(createRequestTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'request-id',
+        unit: 'sat',
+        singleUse: true,
+      }),
+    );
+    const decoded = PaymentRequest.fromEncodedRequest(operation.encodedRequest);
+    expect(decoded.getTransport(PaymentRequestTransportType.NOSTR)?.target).toBe(nostrTarget);
+    expect(decoded.getTransport(PaymentRequestTransportType.NOSTR)?.tags).toEqual([['n', '17']]);
+    expect(activate).toHaveBeenCalledWith(expect.objectContaining({ id: operation.id }));
+    expect(activate).toHaveBeenCalledTimes(1);
+
+    unregister();
   });
 
   it('claims a valid payload through a child receive operation', async () => {
@@ -175,6 +234,23 @@ describe('PaymentRequestReceiveService', () => {
     expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
   });
 
+  it('returns the finalized attempt for duplicate payload ingestion after completion', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+
+    const first = await service.ingestPayload(payload);
+    expect(first.operation.state).toBe('completed');
+
+    const second = await service.ingestPayload(payload);
+
+    expect(second.operation.id).toBe(operation.id);
+    expect(second.operation.state).toBe('completed');
+    expect(second.attempt.id).toBe(first.attempt.id);
+    expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
+  });
+
   it('records a rejected attempt for an underpaid payload', async () => {
     const operation = await service.activate(
       await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
@@ -191,6 +267,74 @@ describe('PaymentRequestReceiveService', () => {
     expect(result.attempt.state).toBe('rejected');
     expect(result.attempt.error).toContain('below requested amount');
     expect(receiveOperationService.init).not.toHaveBeenCalled();
+  });
+
+  it('blocks new payloads while a single-use request has an in-flight attempt', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-in-flight',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash: 'in-flight-payload-hash',
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      state: 'receiving',
+      receiveOperationId: 'receive-op-in-flight',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await service.claimPayload(
+      operation.id,
+      createPayload({
+        proofs: [{ id: 'keyset-id', amount: Amount.from(100), secret: 'secret-2', C: 'C-2' }],
+      }),
+    );
+
+    expect(result.attempt.state).toBe('rejected');
+    expect(result.attempt.error).toContain('in-flight claim');
+    expect(receiveOperationService.init).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reused transport message id from a different request', async () => {
+    const firstOperation = await service.activate(
+      await service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: 'request-id',
+      }),
+    );
+    const secondOperation = await service.activate(
+      await service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: 'request-id-2',
+      }),
+    );
+
+    await service.claimPayload(firstOperation.id, createPayload(), {
+      transport: 'inband',
+      transportMessageId: 'message-1',
+    });
+
+    await expect(
+      service.claimPayload(
+        secondOperation.id,
+        createPayload({
+          id: 'request-id-2',
+          proofs: [{ id: 'keyset-id', amount: Amount.from(100), secret: 'secret-2', C: 'C-2' }],
+        }),
+        {
+          transport: 'inband',
+          transportMessageId: 'message-1',
+        },
+      ),
+    ).rejects.toThrow('belongs to another payment request receive operation');
   });
 
   it('rejects unsupported transports at create time', async () => {
@@ -234,6 +378,34 @@ describe('PaymentRequestReceiveService', () => {
     expect(result.attempt.state).toBe('finalized');
     expect(result.attempt.receiveOperationId).toBe('receive-op-1');
     expect(receiveOperationService.init).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes single-use parents for already-finalized attempts during recovery', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const now = Date.now();
+    await attemptRepository.create({
+      id: 'attempt-finalized',
+      requestOperationId: operation.id,
+      requestId: operation.requestId,
+      transport: 'inband',
+      payloadHash: 'payload-hash',
+      mintUrl,
+      unit: 'sat',
+      grossAmount: Amount.from(100),
+      fee: Amount.from(1),
+      netAmount: Amount.from(99),
+      state: 'finalized',
+      receiveOperationId: 'receive-op-finalized',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await service.recoverPendingAttempts();
+
+    const storedOperation = await operationRepository.getById(operation.id);
+    expect(storedOperation?.state).toBe('completed');
   });
 
   it('resumes prepared child receive operations during recovery', async () => {
@@ -409,6 +581,27 @@ describe('PaymentRequestReceiveService', () => {
 
     const result = await service.claimPayload(operation.id, payload);
     expect(result.attempt.state).toBe('finalized');
+  });
+
+  it('rejects permanent child receive init validation failures', async () => {
+    const operation = await service.activate(
+      await service.create({ amount: Amount.from(100), mints: [mintUrl], requestId: 'request-id' }),
+    );
+    const payload = createPayload();
+    const payloadHash = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload(payload);
+    (receiveOperationService.init as unknown as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new ProofValidationError('Only P2PK locking scripts are supported'),
+    );
+
+    const result = await service.claimPayload(operation.id, payload);
+
+    expect(result.attempt.state).toBe('rejected');
+    expect(result.attempt.error).toBe('Only P2PK locking scripts are supported');
+    expect(await attemptRepository.getByPayloadHash(operation.id, payloadHash)).toBeDefined();
   });
 
   it('rejects recovering attempts when prepared child receive execution rolls back', async () => {

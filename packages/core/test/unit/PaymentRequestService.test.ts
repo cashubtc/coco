@@ -197,7 +197,7 @@ describe('PaymentRequestService', () => {
       expect(result.amount).toBeUndefined();
     });
 
-    it('should throw for unsupported transport', async () => {
+    it('should decode a Nostr payment request for plugin delivery', async () => {
       const pr = new PaymentRequest(
         [{ type: PaymentRequestTransportType.NOSTR, target: 'npub123...' }],
         'request-id-4',
@@ -206,8 +206,27 @@ describe('PaymentRequestService', () => {
       );
       const encoded = pr.toEncodedRequest();
 
-      await expect(service.parse(encoded)).rejects.toThrow(PaymentRequestError);
-      await expect(service.parse(encoded)).rejects.toThrow('Unsupported transport type');
+      const result = await service.parse(encoded);
+
+      expect(result.transport.type).toBe('nostr');
+      if (result.transport.type === 'nostr') {
+        expect(result.transport.target).toBe('npub123...');
+      }
+    });
+
+    it('should require a plugin to execute Nostr payment requests', async () => {
+      const request = createResolvedRequest({
+        transport: { type: 'nostr', target: 'npub123...' },
+      });
+      const prepared = await service.prepare(request, {
+        mintUrl: testMintUrl,
+        amount: Amount.from(100),
+      });
+
+      await expect(service.execute(prepared)).rejects.toThrow(PaymentRequestError);
+      await expect(service.execute(prepared)).rejects.toThrow(
+        'Nostr payment request execution requires a transport plugin',
+      );
     });
 
     it('should return an empty payable mint list if no matching mints are found', async () => {
