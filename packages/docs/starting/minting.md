@@ -1,6 +1,8 @@
 # Minting Cashu Token
 
-The process of swapping sats for Cashu token is called "minting". To mint with Coco you prepare a mint operation, specifying a `mintUrl` and an `amount` in sats.
+The process of swapping value for a Cashu token is called "minting". To mint
+with Coco you prepare a mint operation, specifying a `mintUrl` and an `amount`.
+Bare amounts default to sats; for custom units pass `{ amount, unit }`.
 
 Before minting, ensure the mint is added and trusted (see [Adding a Mint](./adding-mints.md)):
 
@@ -14,6 +16,14 @@ const pendingMint = await coco.ops.mint.prepare({
   amount: 21,
   method: 'bolt11',
   methodData: {},
+});
+```
+
+```ts
+const customUnitMint = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  amount: { amount: 10, unit: 'usd' },
+  method: 'bolt11',
 });
 ```
 
@@ -39,4 +49,5 @@ coco.on('mint-op:finalized', (payload) => {
 ```
 
 For the full state machine and action reference, see
-[Mint Operations](../pages/mint-operations.md).
+[Mint Operations](../pages/mint-operations.md). For multi-unit behavior, see
+[Multi-Unit Support](../pages/multi-unit-support.md).

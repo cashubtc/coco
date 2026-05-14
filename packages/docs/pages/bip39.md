@@ -23,12 +23,26 @@ Coco will call this function whenever it needs to access the seed
 
 ## Restore
 
-Once instantiated you can use the deterministic secret restore `coco.wallet.restore()` to restore secrets and counters based on the seed on a certain mint. Coco will get all available keysets from the mint and perform a restore for each one.
+Once instantiated you can use the deterministic secret restore `coco.wallet.restore()` to restore secrets and counters based on the seed on a certain mint. Coco will get all available keysets from the mint and perform a restore for each one, including custom-unit keysets.
 
 ```ts
 await coco.wallet.restore('https://mint.url');
 // After this the balance for this mint will be restored.
 // Note: Restore will automatically cache the mint info if not already present
+```
+
+To restore only selected units, pass a unit filter:
+
+```ts
+await coco.wallet.restore('https://mint.url', { units: ['usd'] });
+```
+
+The same unit filter is available for sweeping an older seed into the current
+wallet:
+
+```ts
+await coco.wallet.sweep('https://mint.url', oldSeed);
+await coco.wallet.sweep('https://mint.url', oldSeed, { units: ['usd'] });
 ```
 
 > **Note:** The `restore()` method will add and trust the mint automatically. If you want to display mint info to the user before proceeding use `addMint()` as described in [Adding a Mint](../starting/adding-mints.md)
