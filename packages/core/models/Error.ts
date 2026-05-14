@@ -34,6 +34,21 @@ export class ProofValidationError extends Error {
     this.name = 'ProofValidationError';
   }
 }
+
+export class UnitValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnitValidationError';
+  }
+}
+
+export class UnitMismatchError extends UnitValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnitMismatchError';
+  }
+}
+
 export class TokenValidationError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);

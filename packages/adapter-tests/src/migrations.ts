@@ -189,6 +189,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
               secret: 'migration-test-secret-1',
               C: 'C1',
               mintUrl: testMintUrl,
+              unit: 'sat',
               state: 'ready',
             },
             {
@@ -197,6 +198,7 @@ export function runMigrationTests<TRepositories extends Repositories = Repositor
               secret: 'migration-test-secret-2',
               C: 'C2',
               mintUrl: testMintUrl,
+              unit: 'sat',
               state: 'ready',
             },
           ]);

@@ -23,6 +23,11 @@ import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
 
+export interface ProofUnitFilter {
+  unit?: string;
+  units?: string[];
+}
+
 export interface MintRepository {
   isTrustedMint(mintUrl: string): Promise<boolean>;
   getMintByUrl(mintUrl: string): Promise<Mint>;
@@ -50,15 +55,19 @@ export interface CounterRepository {
 
 export interface ProofRepository {
   saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void>;
-  getReadyProofs(mintUrl: string): Promise<CoreProof[]>;
+  getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]>;
   /**
    * Retrieves all proofs marked as inflight. Can be optionally filtered by a list of mint URLs.
    */
-  getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]>;
-  getAllReadyProofs(): Promise<CoreProof[]>;
+  getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]>;
+  getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]>;
   setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void>;
   deleteProofs(mintUrl: string, secrets: string[]): Promise<void>;
-  getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]>;
+  getProofsByKeysetId(
+    mintUrl: string,
+    keysetId: string,
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]>;
   wipeProofsByKeysetId(mintUrl: string, keysetId: string): Promise<void>;
 
   /**
@@ -96,7 +105,7 @@ export interface ProofRepository {
    * Get available (ready and not reserved) proofs for a mint.
    * This filters out proofs that have usedByOperationId set.
    */
-  getAvailableProofs(mintUrl: string): Promise<CoreProof[]>;
+  getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]>;
 
   /**
    * Get all proofs that are reserved (have usedByOperationId set) and are still in ready state.

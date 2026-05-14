@@ -1,4 +1,5 @@
 export * from './Manager.ts';
+export * from './amounts.ts';
 export * from './repositories/index.ts';
 export * from './models/index.ts';
 export * from './api/index.ts';
@@ -10,6 +11,8 @@ export type {
   BalanceQuery,
   BalanceSnapshot,
   BalancesByMint,
+  BalancesByMintAndUnit,
+  BalancesByUnit,
   BalanceBreakdown,
   BalancesBreakdownByMint,
 } from './types.ts';
