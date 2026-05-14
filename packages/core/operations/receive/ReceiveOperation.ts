@@ -19,6 +19,7 @@ import {
   toAmount,
   type SerializedOutputData,
 } from '../../utils';
+import { normalizeUnit } from '../../amounts.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -195,7 +196,7 @@ export function createReceiveOperation(
     id,
     state: 'init',
     mintUrl,
-    unit,
+    unit: normalizeUnit(unit),
     amount: toAmount(amount),
     inputProofs,
     createdAt: now,

@@ -1,4 +1,4 @@
-import type { AmountLike, Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
+import type { Token, ProofState as CashuProofState } from '@cashu/cashu-ts';
 import type { SendOperationRepository, ProofRepository } from '../../repositories';
 import type {
   SendOperation,
@@ -26,7 +26,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, toAmount } from '../../utils';
+import { generateSubId } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -34,6 +34,7 @@ import {
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
+import { parseUnitAmount, type UnitAmountLike } from '../../amounts.ts';
 
 /**
  * Service that manages send operations as sagas.
@@ -120,29 +121,31 @@ export class SendOperationService {
    */
   async init<M extends SendMethod = 'default'>(
     mintUrl: string,
-    amount: AmountLike,
+    amount: UnitAmountLike,
     options: CreateSendOperationOptions<M> = {
       method: 'default' as M,
       methodData: {} as SendMethodData<M>,
     },
   ): Promise<InitSendOperation> {
+    const parsed = parseUnitAmount(amount);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (toAmount(amount).isZero()) {
+    if (parsed.amount.isZero()) {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
     const id = generateSubId();
-    const operation = createSendOperation(id, mintUrl, amount, options);
+    const operation = createSendOperation(id, mintUrl, parsed, options);
 
     await this.sendOperationRepository.create(operation);
     this.logger?.debug('Send operation created', {
       operationId: id,
       mintUrl,
-      amount,
+      amount: parsed.amount,
+      unit: parsed.unit,
       method: options.method,
     });
 
@@ -173,7 +176,10 @@ export class SendOperationService {
           throw new Error(`No handler registered for method: ${operation.method}`);
         }
 
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          operation.mintUrl,
+          operation.unit,
+        );
         const ctx = {
           operation,
           wallet,
@@ -244,7 +250,10 @@ export class SendOperationService {
           throw new Error(`No handler registered for method: ${operation.method}`);
         }
 
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          operation.mintUrl,
+          operation.unit,
+        );
         const reservedProofs = await this.proofRepository.getProofsByOperationId(
           operation.mintUrl,
           operation.id,
@@ -314,7 +323,7 @@ export class SendOperationService {
    * High-level send method that orchestrates init → prepare → execute.
    * This is the main entry point for consumers.
    */
-  async send(mintUrl: string, amount: AmountLike): Promise<Token> {
+  async send(mintUrl: string, amount: UnitAmountLike): Promise<Token> {
     const initOp = await this.init(mintUrl, amount);
     const preparedOp = await this.prepare(initOp);
     const { token } = await this.execute(preparedOp);
@@ -464,7 +473,10 @@ export class SendOperationService {
         throw new Error('Cannot rollback pending P2PK send operation');
       }
 
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        operation.mintUrl,
+        operation.unit,
+      );
 
       let opForRollback: PreparedOrLaterOperation = operation;
       if (operation.state === 'pending') {
@@ -632,7 +644,7 @@ export class SendOperationService {
    */
   private async recoverExecutingOperation(op: ExecutingSendOperation): Promise<void> {
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
     const result = await handler.recoverExecuting({
       ...this.buildDeps(),
@@ -688,7 +700,7 @@ export class SendOperationService {
    */
   async checkPendingOperation(op: PendingSendOperation): Promise<void> {
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
     const decision =
       (await handler.checkPending?.({
@@ -716,7 +728,7 @@ export class SendOperationService {
 
     let sendStates: CashuProofState[];
     try {
-      sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets);
+      sendStates = await this.checkProofStatesWithMint(op.mintUrl, sendSecrets, op.unit);
     } catch (_e) {
       this.logger?.warn('Could not reach mint for recovery, will retry later', {
         operationId: op.id,
@@ -734,8 +746,9 @@ export class SendOperationService {
   private async checkProofStatesWithMint(
     mintUrl: string,
     secrets: string[],
+    unit: string,
   ): Promise<CashuProofState[]> {
-    const wallet = await this.walletService.getWallet(mintUrl);
+    const wallet = await this.walletService.getWallet(mintUrl, unit);
     const proofInputs = secrets.map((secret) => ({ secret }));
     return wallet.checkProofsStates(proofInputs);
   }

@@ -14,9 +14,12 @@ import type {
   BalanceSnapshot,
   BalancesBreakdownByMint,
   BalancesByMint,
+  BalancesByMintAndUnit,
+  BalancesByUnit,
   CoreProof,
 } from '../types';
 import type { CounterService } from './CounterService';
+import type { ProofUnitFilter } from '../repositories';
 import type { ProofRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
@@ -26,6 +29,7 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
+import { DEFAULT_UNIT, assertSameUnit, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 import {
   deserializeOutputData,
   mapProofToCoreProof,
@@ -40,6 +44,24 @@ function countBlankOutputsForAmount(amount: Amount): number {
     return 0;
   }
   return Math.max((value - 1n).toString(2).length, 1);
+}
+
+type ProofSelectionOptions = {
+  unit?: string;
+  includeFees?: boolean;
+};
+
+function normalizeProofSelectionOptions(options?: boolean | ProofSelectionOptions): {
+  unit: string;
+  includeFees: boolean;
+} {
+  if (typeof options === 'boolean') {
+    return { unit: DEFAULT_UNIT, includeFees: options };
+  }
+  return {
+    unit: normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT }),
+    includeFees: options?.includeFees ?? true,
+  };
 }
 
 export class ProofService {
@@ -75,9 +97,16 @@ export class ProofService {
    * Calculates the send amount including receiver fees.
    * This is used when the sender pays fees for the receiver.
    */
-  async calculateSendAmountWithFees(mintUrl: string, sendAmount: AmountLike): Promise<Amount> {
-    const { wallet, keys, keysetId } =
-      await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+  async calculateSendAmountWithFees(
+    mintUrl: string,
+    sendAmount: AmountLike,
+    options?: { unit?: string },
+  ): Promise<Amount> {
+    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
+    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+      unit,
+    );
     const requestedSendAmount = toAmount(sendAmount);
     // Split the send amount to determine number of outputs
     let denominations = splitAmount(requestedSendAmount, keys.keys);
@@ -105,25 +134,35 @@ export class ProofService {
     if (inflightProofs.length === 0) {
       return;
     }
-    const batchedByMint: { [mintUrl: string]: CoreProof[] } = {};
+    const batchedByMintAndUnit = new Map<
+      string,
+      { mintUrl: string; unit: string; proofs: CoreProof[] }
+    >();
     for (const proof of inflightProofs) {
       const mintUrl = proof.mintUrl;
       if (!mintUrl) continue;
-      const batch = batchedByMint[mintUrl] ?? (batchedByMint[mintUrl] = []);
-      batch.push(proof);
+      const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
+      const batchKey = `${mintUrl}::${unit}`;
+      const batch =
+        batchedByMintAndUnit.get(batchKey) ??
+        (() => {
+          const next = { mintUrl, unit, proofs: [] };
+          batchedByMintAndUnit.set(batchKey, next);
+          return next;
+        })();
+      batch.proofs.push(proof);
     }
-    const mintUrls = Object.keys(batchedByMint);
-    for (const mintUrl of mintUrls) {
-      const proofs = batchedByMint[mintUrl];
+    for (const { mintUrl, unit, proofs } of batchedByMintAndUnit.values()) {
       if (!proofs || proofs.length === 0) {
         continue;
       }
       this.logger?.debug('Checking inflight proofs for mint', {
         mintUrl,
+        unit,
         count: proofs.length,
       });
       try {
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
         const proofStates = await wallet.checkProofsStates(proofs);
         if (!Array.isArray(proofStates) || proofStates.length !== proofs.length) {
           this.logger?.warn('Malformed proof state check response', {
@@ -143,12 +182,14 @@ export class ProofService {
           await this.setProofState(mintUrl, spentSecrets, 'spent');
           this.logger?.info('Marked inflight proofs as spent after check', {
             mintUrl,
+            unit,
             count: spentSecrets.length,
           });
         }
       } catch (error) {
         this.logger?.warn('Failed to check inflight proofs for mint', {
           mintUrl,
+          unit,
           error,
         });
       }
@@ -158,11 +199,12 @@ export class ProofService {
   async createOutputsAndIncrementCounters(
     mintUrl: string,
     amount: { keep: AmountLike; send: AmountLike },
-    options?: { includeFees?: boolean },
+    options?: { includeFees?: boolean; unit?: string },
   ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: Amount; keepAmount: Amount }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
     let requestedKeep: Amount;
     let requestedSend: Amount;
     try {
@@ -171,8 +213,10 @@ export class ProofService {
     } catch {
       return { keep: [], send: [], sendAmount: Amount.zero(), keepAmount: Amount.zero() };
     }
-    const { wallet, keys, keysetId } =
-      await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+      unit,
+    );
     const seed = await this.seedService.getSeed();
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
     const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
@@ -181,7 +225,7 @@ export class ProofService {
     let sendAmount = requestedSend;
     let keepAmount = requestedKeep;
     if (options?.includeFees && !requestedSend.isZero()) {
-      sendAmount = await this.calculateSendAmountWithFees(mintUrl, requestedSend);
+      sendAmount = await this.calculateSendAmountWithFees(mintUrl, requestedSend, { unit });
       const feeAmount = sendAmount.subtract(requestedSend);
       // Adjust keep amount: if send increases due to fees, keep decreases
       keepAmount = requestedKeep.greaterThanOrEqual(feeAmount)
@@ -189,6 +233,7 @@ export class ProofService {
         : Amount.zero();
       this.logger?.debug('Fee calculation for send amount', {
         mintUrl,
+        unit,
         originalSendAmount: requestedSend.toString(),
         originalKeepAmount: requestedKeep.toString(),
         feeAmount: feeAmount.toString(),
@@ -221,6 +266,7 @@ export class ProofService {
     }
     this.logger?.debug('Deterministic outputs created', {
       mintUrl,
+      unit,
       keysetId: keys.id,
       amount,
       outputs: data.keep.length + data.send.length,
@@ -234,7 +280,11 @@ export class ProofService {
     }
     if (!Array.isArray(proofs) || proofs.length === 0) return;
 
-    const groupedByKeyset = this.groupProofsByKeysetId(proofs);
+    const normalizedProofs = proofs.map((proof) => ({
+      ...proof,
+      unit: normalizeUnit((proof as { unit?: string }).unit),
+    }));
+    const groupedByKeyset = this.groupProofsByKeysetId(normalizedProofs);
 
     const entries = Array.from(groupedByKeyset.entries());
     const tasks = entries.map(([keysetId, group]) =>
@@ -278,12 +328,12 @@ export class ProofService {
     }
   }
 
-  async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
-    return this.proofRepository.getReadyProofs(mintUrl);
+  async getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.proofRepository.getReadyProofs(mintUrl, filter);
   }
 
-  async getAllReadyProofs(): Promise<CoreProof[]> {
-    return this.proofRepository.getAllReadyProofs();
+  async getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    return this.proofRepository.getAllReadyProofs(filter);
   }
 
   /**
@@ -352,29 +402,51 @@ export class ProofService {
    * @returns An object mapping mint URLs to their balances
    */
   async getBalancesByMint(scope?: BalanceQuery): Promise<BalancesByMint> {
+    const unit = this.getSingleBalanceUnit(scope, 'getBalancesByMint');
+    const balancesByMintAndUnit = await this.getBalancesByMintAndUnit({
+      ...scope,
+      units: [unit],
+    });
+
+    return Object.fromEntries(
+      Object.entries(balancesByMintAndUnit).map(([mintUrl, balancesByUnit]) => [
+        mintUrl,
+        balancesByUnit[unit] ?? this.emptyBalanceSnapshot(unit),
+      ]),
+    );
+  }
+
+  async getBalancesByMintAndUnit(scope?: BalanceQuery): Promise<BalancesByMintAndUnit> {
     const requestedMintUrls = scope?.mintUrls ? Array.from(new Set(scope.mintUrls)) : undefined;
+    const requestedUnits = normalizeUnitList(scope?.units);
+    if (requestedUnits && requestedUnits.length === 0) {
+      return {};
+    }
     const trustedMintUrls = scope?.trustedOnly
       ? new Set((await this.mintService.getAllTrustedMints()).map((mint) => mint.mintUrl))
       : undefined;
-    const balances: BalancesByMint = {};
+    const balances: BalancesByMintAndUnit = {};
     const scopedMintUrls = requestedMintUrls?.filter(
       (mintUrl) => !trustedMintUrls || trustedMintUrls.has(mintUrl),
     );
+    const proofFilter = requestedUnits ? { units: requestedUnits } : undefined;
     const proofs = scopedMintUrls
       ? (
           await Promise.all(
-            scopedMintUrls.map((mintUrl) => this.proofRepository.getReadyProofs(mintUrl)),
+            scopedMintUrls.map((mintUrl) =>
+              this.proofRepository.getReadyProofs(mintUrl, proofFilter),
+            ),
           )
         ).flat()
       : trustedMintUrls
         ? (
             await Promise.all(
               Array.from(trustedMintUrls).map((mintUrl) =>
-                this.proofRepository.getReadyProofs(mintUrl),
+                this.proofRepository.getReadyProofs(mintUrl, proofFilter),
               ),
             )
           ).flat()
-        : await this.getAllReadyProofs();
+        : await this.getAllReadyProofs(proofFilter);
 
     for (const proof of proofs) {
       const mintUrl = proof.mintUrl;
@@ -382,19 +454,24 @@ export class ProofService {
         continue;
       }
 
-      const balance = balances[mintUrl] || this.emptyBalanceSnapshot();
+      const unit = normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT });
+      const balancesForMint = balances[mintUrl] ?? (balances[mintUrl] = {});
+      const balance = balancesForMint[unit] || this.emptyBalanceSnapshot(unit);
       if (proof.usedByOperationId) {
         balance.reserved = balance.reserved.add(proof.amount);
       } else {
         balance.spendable = balance.spendable.add(proof.amount);
       }
       balance.total = balance.spendable.add(balance.reserved);
-      balances[mintUrl] = balance;
+      balancesForMint[unit] = balance;
     }
 
-    if (scopedMintUrls) {
+    if (scopedMintUrls && requestedUnits) {
       for (const mintUrl of scopedMintUrls) {
-        balances[mintUrl] ??= this.emptyBalanceSnapshot();
+        const balancesForMint = balances[mintUrl] ?? (balances[mintUrl] = {});
+        for (const unit of requestedUnits) {
+          balancesForMint[unit] ??= this.emptyBalanceSnapshot(unit);
+        }
       }
     }
 
@@ -406,15 +483,48 @@ export class ProofService {
    * @returns A single balance snapshot with spendable, reserved, and total amounts
    */
   async getBalanceTotal(scope?: BalanceQuery): Promise<BalanceSnapshot> {
+    const unit = this.getSingleBalanceUnit(scope, 'getBalanceTotal');
     const balances = await this.getBalancesByMint(scope);
     return Object.values(balances).reduce<BalanceSnapshot>(
       (total, balance) => ({
         spendable: total.spendable.add(balance.spendable),
         reserved: total.reserved.add(balance.reserved),
         total: total.total.add(balance.total),
+        unit,
       }),
-      this.emptyBalanceSnapshot(),
+      this.emptyBalanceSnapshot(unit),
     );
+  }
+
+  async getBalancesByUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
+    return this.getBalanceTotalByUnit(scope);
+  }
+
+  async getBalanceTotalByUnit(scope?: BalanceQuery): Promise<BalancesByUnit> {
+    const requestedUnits = normalizeUnitList(scope?.units);
+    if (requestedUnits && requestedUnits.length === 0) {
+      return {};
+    }
+    const balancesByMintAndUnit = await this.getBalancesByMintAndUnit(scope);
+    const totals: BalancesByUnit = {};
+
+    for (const balancesByUnit of Object.values(balancesByMintAndUnit)) {
+      for (const [unit, balance] of Object.entries(balancesByUnit)) {
+        const total = totals[unit] ?? this.emptyBalanceSnapshot(unit);
+        total.spendable = total.spendable.add(balance.spendable);
+        total.reserved = total.reserved.add(balance.reserved);
+        total.total = total.total.add(balance.total);
+        totals[unit] = total;
+      }
+    }
+
+    if (requestedUnits) {
+      for (const unit of requestedUnits) {
+        totals[unit] ??= this.emptyBalanceSnapshot(unit);
+      }
+    }
+
+    return totals;
   }
 
   /**
@@ -467,8 +577,27 @@ export class ProofService {
     );
   }
 
-  private emptyBalanceSnapshot(): BalanceSnapshot {
-    return { spendable: Amount.zero(), reserved: Amount.zero(), total: Amount.zero() };
+  private getSingleBalanceUnit(scope: BalanceQuery | undefined, caller: string): string {
+    const units = normalizeUnitList(scope?.units);
+    if (!units || units.length === 0) {
+      return DEFAULT_UNIT;
+    }
+    if (units.length > 1) {
+      throw new ProofValidationError(
+        `${caller} cannot aggregate multiple units; use getBalanceTotalByUnit or getBalancesByMintAndUnit`,
+      );
+    }
+    return units[0]!;
+  }
+
+  private emptyBalanceSnapshot(unit = DEFAULT_UNIT): BalanceSnapshot {
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    return {
+      spendable: Amount.zero(),
+      reserved: Amount.zero(),
+      total: Amount.zero(),
+      unit: normalizedUnit,
+    };
   }
 
   private snapshotToBreakdown(balance: BalanceSnapshot): BalanceBreakdown {
@@ -508,7 +637,8 @@ export class ProofService {
     mintUrl: string,
     secrets: string[],
     operationId: string,
-  ): Promise<{ amount: Amount }> {
+    options?: { unit?: string },
+  ): Promise<{ amount: Amount; unit: string }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -516,30 +646,50 @@ export class ProofService {
       throw new ProofValidationError('operationId is required');
     }
     if (!secrets || secrets.length === 0) {
-      return { amount: Amount.zero() };
+      return {
+        amount: Amount.zero(),
+        unit: normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT }),
+      };
+    }
+
+    const proofsToReserve = await this.proofRepository.getProofsBySecrets(mintUrl, secrets);
+    const proofUnits = Array.from(
+      new Set(
+        proofsToReserve.map((proof) => normalizeUnit(proof.unit, { defaultUnit: DEFAULT_UNIT })),
+      ),
+    );
+    if (proofUnits.length > 1) {
+      throw new ProofValidationError('Cannot reserve proofs across multiple units');
+    }
+    const unit = normalizeUnit(options?.unit ?? proofUnits[0], { defaultUnit: DEFAULT_UNIT });
+    for (const proofUnit of proofUnits) {
+      assertSameUnit(proofUnit, unit, 'Proof reservation');
     }
 
     // Repository will validate proofs are ready and not already reserved
     await this.proofRepository.reserveProofs(mintUrl, secrets, operationId);
 
-    // Calculate the reserved amount for the event
-    const reservedProofs = await this.proofRepository.getProofsByOperationId(mintUrl, operationId);
+    // Calculate the reserved amount from the exact input proofs, not other proofs associated
+    // with the operation as outputs.
+    const reservedProofs = await this.proofRepository.getProofsBySecrets(mintUrl, secrets);
     const amount = sumProofs(reservedProofs);
 
     await this.eventBus?.emit('proofs:reserved', {
       mintUrl,
+      unit,
       operationId,
       secrets,
       amount,
     });
     this.logger?.debug('Proofs reserved', {
       mintUrl,
+      unit,
       operationId,
       count: secrets.length,
       amount,
     });
 
-    return { amount };
+    return { amount, unit };
   }
 
   /**
@@ -614,18 +764,20 @@ export class ProofService {
   async selectProofsToSend(
     mintUrl: string,
     amount: AmountLike,
-    includeFees: boolean = true,
+    options: boolean | ProofSelectionOptions = true,
   ): Promise<Proof[]> {
-    const proofs = await this.proofRepository.getAvailableProofs(mintUrl);
+    const { unit, includeFees } = normalizeProofSelectionOptions(options);
+    const proofs = await this.proofRepository.getAvailableProofs(mintUrl, { unit });
     const requestedAmount = toAmount(amount);
     const totalAmount = sumProofs(proofs);
     if (totalAmount.lessThan(requestedAmount)) {
       throw new ProofValidationError('Not enough proofs to send');
     }
-    const wallet = await this.walletService.getWallet(mintUrl);
+    const wallet = await this.walletService.getWallet(mintUrl, unit);
     const selectedProofs = wallet.selectProofsToSend(proofs, requestedAmount, includeFees);
     this.logger?.debug('Selected proofs to send', {
       mintUrl,
+      unit,
       amount: requestedAmount.toString(),
       selectedProofs,
       count: selectedProofs.send.length,
@@ -636,6 +788,7 @@ export class ProofService {
     const map = new Map<string, CoreProof[]>();
     for (const proof of proofs) {
       if (!proof.secret) throw new ProofValidationError('Proof missing secret');
+      normalizeUnit((proof as { unit?: string }).unit);
       const keysetId = proof.id;
       if (!keysetId || keysetId.trim().length === 0) {
         throw new ProofValidationError('Proof missing keyset id');
@@ -650,8 +803,12 @@ export class ProofService {
     return map;
   }
 
-  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
-    return this.proofRepository.getProofsByKeysetId(mintUrl, keysetId);
+  async getProofsByKeysetId(
+    mintUrl: string,
+    keysetId: string,
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
+    return this.proofRepository.getProofsByKeysetId(mintUrl, keysetId, filter);
   }
 
   async hasProofsForKeyset(mintUrl: string, keysetId: string): Promise<boolean> {
@@ -742,9 +899,14 @@ export class ProofService {
     return preparedProofs;
   }
 
-  async createBlankOutputs(amount: AmountLike, mintUrl: string): Promise<OutputData[]> {
+  async createBlankOutputs(
+    amount: AmountLike,
+    mintUrl: string,
+    options?: { unit?: string },
+  ): Promise<OutputData[]> {
+    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
     const requestedAmount = toAmount(amount);
-    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
     if (requestedAmount.isZero()) {
       return [];
     }
@@ -782,11 +944,12 @@ export class ProofService {
     mintUrl: string,
     outputData: OutputData[],
     changeSignatures: SerializedBlindedSignature[],
-    options?: { createdByOperationId?: string },
+    options?: { unit?: string; createdByOperationId?: string },
   ): Promise<CoreProof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
+    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
     if (
       !outputData ||
       outputData.length === 0 ||
@@ -813,6 +976,11 @@ export class ProofService {
         this.logger?.warn('Failed to create change proof', { reason, index: i });
         return [];
       }
+      assertSameUnit(
+        normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
+        unit,
+        'Change proof keyset',
+      );
       return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs as Keys })];
     });
 
@@ -822,6 +990,7 @@ export class ProofService {
 
     // Map to CoreProof and save
     const coreProofs = mapProofToCoreProof(mintUrl, 'ready', proofs, {
+      unit,
       createdByOperationId: options?.createdByOperationId,
     });
 
@@ -829,6 +998,7 @@ export class ProofService {
 
     this.logger?.info('Change proofs unblinded and saved', {
       mintUrl,
+      unit,
       count: coreProofs.length,
       operationId: options?.createdByOperationId,
     });
@@ -851,7 +1021,7 @@ export class ProofService {
   async recoverProofsFromOutputData(
     mintUrl: string,
     serializedOutputData: SerializedOutputData,
-    options?: { createdByOperationId?: string; persistRecoveredProofs?: boolean },
+    options?: { unit?: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
   ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -860,7 +1030,8 @@ export class ProofService {
       throw new ProofValidationError('serializedOutputData is required');
     }
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     // Deserialize OutputData
     const outputData = deserializeOutputData(serializedOutputData);
@@ -917,6 +1088,7 @@ export class ProofService {
       await this.saveProofs(
         mintUrl,
         mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
+          unit,
           createdByOperationId: options?.createdByOperationId,
         }),
       );
@@ -924,6 +1096,7 @@ export class ProofService {
 
     this.logger?.info('Recovered proofs from output data', {
       mintUrl,
+      unit,
       totalRestored: restoredProofs.length,
       unspentCount: unspentProofs.length,
       spentCount: restoredProofs.length - unspentProofs.length,

@@ -17,6 +17,7 @@ import type { Amount, AmountLike } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData, toAmount } from '../../utils';
 import type { MintMethod, MintMethodMeta, MintMethodRemoteState } from './MintMethodHandler';
+import { normalizeUnit } from '../../amounts.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;
@@ -149,6 +150,7 @@ export function createMintOperation<M extends MintMethod>(
     ...meta,
     ...intent,
     amount: toAmount(intent.amount),
+    unit: normalizeUnit(intent.unit),
     ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
     id,
     state: 'init',

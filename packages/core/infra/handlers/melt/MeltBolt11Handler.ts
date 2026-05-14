@@ -37,6 +37,7 @@ import {
   getSwapSendSecrets,
   type MeltQuoteData,
 } from './MeltBolt11Handler.utils.ts';
+import { assertSameUnit } from '@core/amounts';
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   // ============================================================================
@@ -117,6 +118,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       ctx.operation.methodData.invoice,
       amountMsat,
     );
+    assertSameUnit(quote.unit, ctx.operation.unit, `Melt quote ${quote.quote}`);
     const { amount, fee_reserve } = quote;
     const totalAmount = amount.add(fee_reserve);
 
@@ -128,7 +130,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       totalAmount,
     });
 
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, {
+      unit: ctx.operation.unit,
+      includeFees: true,
+    });
     const selectedAmount = sumProofs(selectedProofs);
     if (selectedAmount.lessThan(totalAmount)) {
       throw new ProofValidationError('Melt amount is not sufficient after fees');
@@ -169,7 +174,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     ctx.logger?.debug('Preparing direct melt (no swap)', { operationId, selectedAmount });
 
-    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
+    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId, {
+      unit: ctx.operation.unit,
+    });
 
     const blankOutputs = await this.createChangeOutputs(amount, selectedAmount, ctx);
 
@@ -185,7 +192,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       ...ctx.operation,
       ...ctx.operation.methodData,
       quoteId: quote.quote,
-      unit: quote.unit,
+      unit: ctx.operation.unit,
       changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
       needsSwap: false,
       amount,
@@ -212,7 +219,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx.logger?.debug('Preparing swap-then-melt', { operationId, totalAmount });
 
     // Re-select proofs including the swap fee
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, true);
+    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, {
+      unit: ctx.operation.unit,
+      includeFees: true,
+    });
     const selectedAmount = sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
@@ -232,7 +242,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       swapFee,
     });
 
-    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId);
+    await ctx.proofService.reserveProofs(mintUrl, inputSecrets, operationId, {
+      unit: ctx.operation.unit,
+    });
 
     const blankOutputs = await this.createChangeOutputs(amount, sendAmount, ctx);
 
@@ -245,7 +257,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         keep: keepAmount,
         send: sendAmount,
       },
-      { includeFees: true },
+      { includeFees: true, unit: ctx.operation.unit },
     );
 
     ctx.logger?.info('Swap-then-melt prepared', {
@@ -261,7 +273,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       ...ctx.operation,
       ...ctx.operation.methodData,
       quoteId: quote.quote,
-      unit: quote.unit,
+      unit: ctx.operation.unit,
       swapOutputData: serializeOutputData(swapOutputData),
       changeOutputData: serializeOutputData({ keep: blankOutputs, send: [] }),
       needsSwap: true,
@@ -284,7 +296,9 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx: BasePrepareContext<'bolt11'>,
   ) {
     const changeDelta = sendAmount.subtract(quoteAmount);
-    return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl);
+    return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl, {
+      unit: ctx.operation.unit,
+    });
   }
 
   // ============================================================================
@@ -420,7 +434,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     const swapData = deserializeOutputData(swapOutputData);
     const sendAmount = OutputData.sumOutputAmounts(swapData.send);
-    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await ctx.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+      ctx.operation.unit,
+    );
 
     ctx.logger?.debug('Executing pre-melt swap', {
       operationId,
@@ -437,8 +454,14 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     await ctx.proofService.setProofState(mintUrl, inputProofSecrets, 'spent');
 
     const newProofs = [
-      ...mapProofToCoreProof(mintUrl, 'ready', keep, { createdByOperationId: operationId }),
-      ...mapProofToCoreProof(mintUrl, 'inflight', send, { createdByOperationId: operationId }),
+      ...mapProofToCoreProof(mintUrl, 'ready', keep, {
+        unit: ctx.operation.unit,
+        createdByOperationId: operationId,
+      }),
+      ...mapProofToCoreProof(mintUrl, 'inflight', send, {
+        unit: ctx.operation.unit,
+        createdByOperationId: operationId,
+      }),
     ];
     await ctx.proofService.saveProofs(mintUrl, newProofs);
 
@@ -519,6 +542,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     if (change && change.length > 0) {
       const changeOutputData = deserializeOutputData(serializedChangeOutputData).keep;
       await ctx.proofService.unblindAndSaveChangeProofs(mintUrl, changeOutputData, change, {
+        unit: ctx.operation.unit,
         createdByOperationId: operationId,
       });
     }
@@ -774,7 +798,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
 
     ctx.logger?.debug('Swap proofs not found locally, recovering from mint', { operationId });
 
-    await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData);
+    await ctx.proofService.recoverProofsFromOutputData(mintUrl, swapOutputData, {
+      unit: operation.unit,
+      createdByOperationId: operationId,
+    });
 
     try {
       await ctx.proofService.setProofState(mintUrl, operation.inputProofSecrets, 'spent');

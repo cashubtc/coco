@@ -33,10 +33,13 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
     const { operation, wallet, proofService, logger } = ctx;
-    const { mintUrl, amount } = operation;
+    const { mintUrl, amount, unit } = operation;
 
     // Try exact match first (no swap needed)
-    const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, false);
+    const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, {
+      unit,
+      includeFees: false,
+    });
     const exactAmount = sumProofs(exactProofs);
     const needsSwap = !exactAmount.equals(amount);
 
@@ -55,7 +58,10 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     } else {
       // Need to swap - select proofs including fees
 
-      const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
+      const selected = await proofService.selectProofsToSend(mintUrl, amount, {
+        unit,
+        includeFees: true,
+      });
       selectedProofs = selected;
       const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);
@@ -66,10 +72,14 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       const keepAmount = selectedAmount.subtract(requiredAmount);
 
       // Use ProofService to create outputs and increment counters
-      const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
-        keep: keepAmount,
-        send: amount,
-      });
+      const outputResult = await proofService.createOutputsAndIncrementCounters(
+        mintUrl,
+        {
+          keep: keepAmount,
+          send: amount,
+        },
+        { unit },
+      );
 
       // Serialize for storage
       serializedOutputData = serializeOutputData({
@@ -91,7 +101,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
     // Reserve the selected proofs
     const inputSecrets = selectedProofs.map((p: Proof) => p.secret);
-    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id);
+    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id, { unit });
 
     // Build prepared operation
     const prepared: PreparedSendOperation = {
@@ -99,6 +109,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       state: 'prepared',
       mintUrl: operation.mintUrl,
       amount: operation.amount,
+      unit: operation.unit,
       createdAt: operation.createdAt,
       updatedAt: Date.now(),
       error: operation.error,
@@ -174,9 +185,11 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
       // Save new proofs with correct states and operationId in a single call
       const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
+        unit: operation.unit,
         createdByOperationId: operation.id,
       });
       const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
+        unit: operation.unit,
         createdByOperationId: operation.id,
       });
       await proofService.saveProofs(mintUrl, [...keepCoreProofs, ...sendCoreProofs]);
@@ -188,7 +201,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const token: Token = {
       mint: mintUrl,
       proofs: sendProofs,
-      unit: wallet.unit,
+      unit: operation.unit,
     };
 
     // Build pending operation
@@ -265,20 +278,27 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
 
             if (!reclaimAmount.isZero()) {
               // Use ProofService to create outputs for reclaim
-              const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
-                keep: reclaimAmount,
-                send: 0,
-              });
+              const outputResult = await proofService.createOutputsAndIncrementCounters(
+                mintUrl,
+                {
+                  keep: reclaimAmount,
+                  send: 0,
+                },
+                { unit: operation.unit },
+              );
 
               // Swap to reclaim
               const keep = await wallet.receive(
-                { mint: mintUrl, proofs: sendProofs, unit: wallet.unit },
+                { mint: mintUrl, proofs: sendProofs, unit: operation.unit },
                 undefined,
                 { type: 'custom', data: outputResult.keep },
               );
 
               // Save reclaimed proofs
-              await proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', keep));
+              await proofService.saveProofs(
+                mintUrl,
+                mapProofToCoreProof(mintUrl, 'ready', keep, { unit: operation.unit }),
+              );
 
               // Mark send proofs as spent
               await proofService.setProofState(
@@ -363,7 +383,10 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       );
 
       if (!alreadySaved) {
-        await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData);
+        await proofService.recoverProofsFromOutputData(operation.mintUrl, operation.outputData, {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+        });
       }
     }
 

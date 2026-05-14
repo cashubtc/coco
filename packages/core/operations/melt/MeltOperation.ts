@@ -31,6 +31,7 @@ export type MeltOperationState =
 import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
+import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -46,6 +47,9 @@ interface MeltOperationBase extends MeltMethodMeta {
   /** The mint URL for this operation */
   mintUrl: string;
 
+  /** Unit for all amounts, proofs, quotes, outputs, and change in this operation. */
+  unit: string;
+
   /** Timestamp when the operation was created */
   createdAt: number;
 
@@ -60,9 +64,6 @@ interface MeltOperationBase extends MeltMethodMeta {
  * Data set during the prepare phase
  */
 interface PreparedData {
-  /** The unit used by this melt operation */
-  unit: string;
-
   /** Whether the operation requires a swap (false = exact match melt) */
   needsSwap: boolean;
 
@@ -295,6 +296,7 @@ export function createMeltOperation(
   id: string,
   mintUrl: string,
   meta: MeltMethodMeta,
+  unit = DEFAULT_UNIT,
 ): InitMeltOperation {
   const now = Date.now();
   return {
@@ -302,6 +304,7 @@ export function createMeltOperation(
     id,
     state: 'init',
     mintUrl,
+    unit: normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT }),
     createdAt: now,
     updatedAt: now,
   };

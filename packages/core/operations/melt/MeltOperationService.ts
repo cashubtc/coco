@@ -26,6 +26,7 @@ import type { MeltHandlerProvider } from '../../infra/handlers/melt';
 import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
+import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -98,7 +99,9 @@ export class MeltOperationService {
     mintUrl: string,
     method: MeltMethod,
     methodData: MeltMethodInputData,
+    unit = DEFAULT_UNIT,
   ): Promise<InitMeltOperation> {
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -122,13 +125,23 @@ export class MeltOperationService {
     }
 
     const id = generateSubId();
-    const operation = createMeltOperation(id, mintUrl, {
-      method,
-      methodData: normalizedMethodData,
-    });
+    const operation = createMeltOperation(
+      id,
+      mintUrl,
+      {
+        method,
+        methodData: normalizedMethodData,
+      },
+      normalizedUnit,
+    );
 
     await this.meltOperationRepository.create(operation);
-    this.logger?.debug('Melt operation created', { operationId: id, mintUrl, method });
+    this.logger?.debug('Melt operation created', {
+      operationId: id,
+      mintUrl,
+      method,
+      unit: normalizedUnit,
+    });
 
     return operation;
   }
@@ -157,7 +170,16 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(initOp.mintUrl);
+        await this.mintService.assertMintMethodUnitSupported(
+          initOp.mintUrl,
+          5,
+          initOp.method,
+          initOp.unit,
+        );
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          initOp.mintUrl,
+          initOp.unit,
+        );
         const prepared = await handler.prepare({
           ...this.buildDeps(),
           operation: initOp,
@@ -227,7 +249,10 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          executing.mintUrl,
+          executing.unit,
+        );
         const operationProofs = await this.proofRepository.getProofsByOperationId(
           executing.mintUrl,
           executing.id,
@@ -390,7 +415,10 @@ export class MeltOperationService {
       }
 
       const handler = this.handlerProvider.get(operation.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(operation.mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        operation.mintUrl,
+        operation.unit,
+      );
 
       // For pending operations, verify the quote is actually UNPAID before rolling back.
       // This prevents releasing proofs that are still inflight with the Lightning network.
@@ -532,7 +560,7 @@ export class MeltOperationService {
       );
     }
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
     const decision: PendingCheckResult =
       (await handler.checkPending?.({
         ...this.buildDeps(),
@@ -649,7 +677,10 @@ export class MeltOperationService {
 
       const executing = current as ExecutingMeltOperation;
       const handler = this.handlerProvider.get(executing.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        executing.mintUrl,
+        executing.unit,
+      );
 
       const result = await handler.recoverExecuting({
         ...this.buildDeps(),

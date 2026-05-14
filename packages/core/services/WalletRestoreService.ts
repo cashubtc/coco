@@ -5,6 +5,7 @@ import type { CounterService } from './CounterService';
 import type { Logger } from '../logging/Logger.ts';
 import type { WalletService } from './WalletService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
+import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
 
 export class WalletRestoreService {
   private readonly proofService: ProofService;
@@ -32,12 +33,22 @@ export class WalletRestoreService {
     this.logger = logger;
   }
 
-  async sweepKeyset(mintUrl: string, keysetId: string, bip39seed: Uint8Array): Promise<void> {
+  async sweepKeyset(
+    mintUrl: string,
+    keysetId: string,
+    bip39seed: Uint8Array,
+    unit = DEFAULT_UNIT,
+  ): Promise<void> {
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     this.logger?.debug('Sweeping keyset', { mintUrl, keysetId });
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+      normalizedUnit,
+    );
     const requestFn = this.requestProvider.getRequestFn(mintUrl);
     const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       bip39seed,
+      unit: normalizedUnit,
     });
     await sweepWallet.loadMint();
 
@@ -121,10 +132,16 @@ export class WalletRestoreService {
       total: sweepTotalAmount,
     });
 
-    const outputResults = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
+    const outputAmounts = {
       keep: 0,
       send: sweepTotalAmount,
-    });
+    };
+    const outputResults =
+      normalizedUnit === DEFAULT_UNIT
+        ? await this.proofService.createOutputsAndIncrementCounters(mintUrl, outputAmounts)
+        : await this.proofService.createOutputsAndIncrementCounters(mintUrl, outputAmounts, {
+            unit: normalizedUnit,
+          });
     const outputConfig: OutputConfig = {
       send: { type: 'custom', data: outputResults.send },
       keep: { type: 'custom', data: outputResults.keep },
@@ -137,7 +154,12 @@ export class WalletRestoreService {
     );
     await this.proofService.saveProofs(
       mintUrl,
-      mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
+      mapProofToCoreProof(
+        mintUrl,
+        'ready',
+        [...keep, ...send],
+        normalizedUnit === DEFAULT_UNIT ? undefined : { unit: normalizedUnit },
+      ),
     );
 
     this.logger?.info('Keyset sweep completed', {
@@ -155,7 +177,13 @@ export class WalletRestoreService {
    * Enforces the invariant: restored proofs must be >= previously stored proofs.
    * Throws on any validation or persistence error. No transactions are used here.
    */
-  async restoreKeyset(mintUrl: string, wallet: Wallet, keysetId: string): Promise<void> {
+  async restoreKeyset(
+    mintUrl: string,
+    wallet: Wallet,
+    keysetId: string,
+    unit = DEFAULT_UNIT,
+  ): Promise<void> {
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     this.logger?.debug('Restoring keyset', { mintUrl, keysetId });
     const oldProofs = await this.proofService.getProofsByKeysetId(mintUrl, keysetId);
     this.logger?.debug('Existing proofs before restore', {
@@ -236,7 +264,12 @@ export class WalletRestoreService {
 
     await this.proofService.saveProofs(
       mintUrl,
-      mapProofToCoreProof(mintUrl, 'ready', checkedProofs.ready),
+      mapProofToCoreProof(
+        mintUrl,
+        'ready',
+        checkedProofs.ready,
+        normalizedUnit === DEFAULT_UNIT ? undefined : { unit: normalizedUnit },
+      ),
     );
     this.logger?.info('Saved restored proofs for keyset', {
       mintUrl,

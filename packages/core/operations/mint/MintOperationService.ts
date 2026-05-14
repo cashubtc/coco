@@ -1,4 +1,4 @@
-import type { AmountLike, Proof } from '@cashu/cashu-ts';
+import type { Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -30,13 +30,14 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof, toAmount } from '../../utils';
+import { generateSubId, mapProofToCoreProof } from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error';
+import { DEFAULT_UNIT, parseUnitAmount, type UnitAmountLike } from '../../amounts.ts';
 import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
@@ -120,35 +121,22 @@ export class MintOperationService {
     return this.recoveryLock !== null;
   }
 
-  private assertSupportedUnit(unit: string): void {
-    if (unit !== 'sat') {
-      throw new ProofValidationError(
-        `Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`,
-      );
-    }
-  }
-
   async init(
     mintUrl: string,
-    intent: { amount: AmountLike; unit: string },
+    intent: UnitAmountLike,
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
     options?: { quoteId?: string },
   ): Promise<InitMintOperation> {
+    const parsed = parseUnitAmount(intent);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (toAmount(intent.amount).isZero()) {
+    if (parsed.amount.isZero()) {
       throw new ProofValidationError('Amount must be a positive number');
     }
-
-    if (!intent.unit) {
-      throw new ProofValidationError('Unit is required');
-    }
-
-    this.assertSupportedUnit(intent.unit);
 
     const operationId = generateSubId();
     const operation = createMintOperation(
@@ -158,7 +146,7 @@ export class MintOperationService {
         method,
         methodData,
       } as MintMethodMeta,
-      intent,
+      parsed,
       options,
     );
 
@@ -168,8 +156,8 @@ export class MintOperationService {
       mintUrl,
       quoteId: options?.quoteId,
       method,
-      amount: intent.amount,
-      unit: intent.unit,
+      amount: parsed.amount,
+      unit: parsed.unit,
     });
 
     return operation;
@@ -177,12 +165,13 @@ export class MintOperationService {
 
   async prepareNewQuote(
     mintUrl: string,
-    amount: AmountLike,
-    unit = 'sat',
+    amount: UnitAmountLike,
+    unit = DEFAULT_UNIT,
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
   ): Promise<PendingMintOperation> {
-    const initOperation = await this.init(mintUrl, { amount, unit }, method, methodData);
+    const parsed = parseUnitAmount(amount, { explicitUnit: unit });
+    const initOperation = await this.init(mintUrl, parsed, method, methodData);
     return this.prepare(initOperation.id);
   }
 
@@ -254,7 +243,17 @@ export class MintOperationService {
       }
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(initOp.mintUrl);
+        await this.mintService.assertMintMethodUnitSupported(
+          initOp.mintUrl,
+          4,
+          initOp.method,
+          initOp.unit,
+          initOp.amount,
+        );
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          initOp.mintUrl,
+          initOp.unit,
+        );
         const pending = await handler.prepare({
           ...this.buildDeps(),
           operation: initOp as any,
@@ -329,7 +328,10 @@ export class MintOperationService {
 
       try {
         const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+          executing.mintUrl,
+          executing.unit,
+        );
         const result = await handler.execute({
           ...this.buildDeps(),
           operation: executing as any,
@@ -536,7 +538,10 @@ export class MintOperationService {
       }
 
       const handler = this.handlerProvider.get(executing.method);
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        executing.mintUrl,
+        executing.unit,
+      );
       const result = await handler.recoverExecuting({
         ...this.buildDeps(),
         operation: executing as any,
@@ -670,6 +675,7 @@ export class MintOperationService {
       await this.proofService.saveProofs(
         op.mintUrl,
         mapProofToCoreProof(op.mintUrl, 'ready', proofsFromExecute, {
+          unit: op.unit,
           createdByOperationId: op.id,
         }),
       );
@@ -680,6 +686,7 @@ export class MintOperationService {
     }
 
     await this.proofService.recoverProofsFromOutputData(op.mintUrl, op.outputData, {
+      unit: op.unit,
       createdByOperationId: op.id,
     });
 
@@ -827,7 +834,7 @@ export class MintOperationService {
       );
     }
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
     const result = await handler.checkPending({
       ...this.buildDeps(),

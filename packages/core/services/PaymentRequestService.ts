@@ -4,7 +4,6 @@ import {
   JSONInt,
   PaymentRequest,
   PaymentRequestTransportType,
-  type AmountLike,
   type Token,
 } from '@cashu/cashu-ts';
 import { PaymentRequestError } from '../models/Error';
@@ -14,6 +13,7 @@ import type {
   PreparedSendOperation,
   SendOperationService,
 } from '../operations/send';
+import { DEFAULT_UNIT, parseUnitAmount, normalizeUnit, type UnitAmountLike } from '../amounts.ts';
 
 type InbandPaymentRequestTransport = { type: 'inband' };
 type HttpPaymentRequestTransport = { type: 'http'; url: string };
@@ -24,6 +24,7 @@ type ResolvedPaymentRequest = {
   payableMints: string[];
   allowedMints: string[];
   amount?: Amount;
+  unit: string;
   transport: PaymentRequestTransport;
 };
 
@@ -87,13 +88,15 @@ export class PaymentRequestService {
   async parse(paymentRequest: string): Promise<ResolvedPaymentRequest> {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
-    const payableMints = await this.findMatchingMints(decodedPaymentRequest);
+    const unit = normalizeUnit(decodedPaymentRequest.unit, { defaultUnit: DEFAULT_UNIT });
+    const payableMints = await this.findMatchingMints(decodedPaymentRequest, unit);
     const allowedMints = decodedPaymentRequest.mints ?? [];
     return {
       paymentRequest: decodedPaymentRequest,
       payableMints,
       allowedMints,
       amount: decodedPaymentRequest.amount,
+      unit,
       transport,
     };
   }
@@ -103,14 +106,17 @@ export class PaymentRequestService {
    */
   async prepare(
     request: ResolvedPaymentRequest,
-    options: { mintUrl: string; amount?: AmountLike },
+    options: { mintUrl: string; amount?: UnitAmountLike },
   ): Promise<PreparedPaymentRequest> {
     const { mintUrl, amount } = options;
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
     const preparedRequest = await this.resolvePreparedRequest(request, finalAmount);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
-    const initSend = await this.sendOperationService.init(mintUrl, finalAmount);
+    const initSend = await this.sendOperationService.init(mintUrl, {
+      amount: finalAmount,
+      unit: preparedRequest.unit,
+    });
     const preparedSend = await this.sendOperationService.prepare(initSend);
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
     return { sendOperation: preparedSend, request: preparedRequest };
@@ -200,8 +206,12 @@ export class PaymentRequestService {
     );
   }
 
-  private async findMatchingMints(paymentRequest: PaymentRequest): Promise<string[]> {
-    const balances = await this.proofService.getBalancesByMint({ trustedOnly: true });
+  private async findMatchingMints(paymentRequest: PaymentRequest, unit: string): Promise<string[]> {
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const balances = await this.proofService.getBalancesByMint({
+      trustedOnly: true,
+      units: [normalizedUnit],
+    });
     const amount = paymentRequest.amount ?? Amount.zero();
     const mintRequirement = paymentRequest.mints;
     const matchingMints: string[] = [];
@@ -216,8 +226,14 @@ export class PaymentRequestService {
     return matchingMints;
   }
 
-  private validateAmount(request: ResolvedPaymentRequest, amount?: AmountLike): Amount {
-    const providedAmount = amount === undefined ? undefined : Amount.from(amount);
+  private validateAmount(request: ResolvedPaymentRequest, amount?: UnitAmountLike): Amount {
+    const providedAmount =
+      amount === undefined
+        ? undefined
+        : parseUnitAmount(amount, {
+            defaultUnit: request.unit,
+            explicitUnit: request.unit,
+          }).amount;
     if (request.amount && providedAmount && !request.amount.equals(providedAmount)) {
       throw new PaymentRequestError(
         `Amount mismatch: request specifies ${request.amount} but ${providedAmount} was provided`,
@@ -242,17 +258,18 @@ export class PaymentRequestService {
       request.paymentRequest.transport,
       request.paymentRequest.id,
       amount,
-      request.paymentRequest.unit,
+      request.unit,
       request.paymentRequest.mints,
       request.paymentRequest.description,
       request.paymentRequest.singleUse,
       request.paymentRequest.nut10,
     );
-    const payableMints = await this.findMatchingMints(paymentRequest);
+    const payableMints = await this.findMatchingMints(paymentRequest, request.unit);
 
     return {
       ...request,
       amount,
+      unit: request.unit,
       payableMints,
       paymentRequest,
     };

@@ -1,4 +1,10 @@
-import { KeysetSyncError, MintFetchError, UnknownMintError } from '../models/Error';
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
+import {
+  KeysetSyncError,
+  MintFetchError,
+  ProofValidationError,
+  UnknownMintError,
+} from '../models/Error';
 import type { Mint } from '../models/Mint';
 import type { Keyset } from '../models/Keyset';
 import type { MintAdapter } from '../infra/MintAdapter';
@@ -8,8 +14,35 @@ import type { CoreEvents } from '../events/types';
 import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
 import { normalizeMintUrl } from '../utils';
+import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
+
+export interface MethodUnitCapability {
+  supported: boolean;
+  disabled: boolean;
+  nut: 4 | 5;
+  method: string;
+  unit: string;
+  minAmount?: Amount | null;
+  maxAmount?: Amount | null;
+  options?: unknown;
+  legacySatAllowed?: boolean;
+  reason?: string;
+}
+
+type NutMethodSetting = {
+  method: string;
+  unit: string;
+  min_amount?: AmountLike | null;
+  max_amount?: AmountLike | null;
+  options?: unknown;
+};
+
+type NutMethodSettings = {
+  methods?: NutMethodSetting[];
+  disabled?: boolean;
+};
 
 export class MintService {
   private readonly mintRepo: MintRepository;
@@ -152,6 +185,111 @@ export class MintService {
     return mint.mintInfo;
   }
 
+  async getMintMethodUnitCapability(
+    mintUrl: string,
+    nut: 4 | 5,
+    method: string,
+    unit: string,
+  ): Promise<MethodUnitCapability> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const mintInfo = await this.getMintInfo(normalizedMintUrl);
+    const settings = this.getNutMethodSettings(mintInfo, nut);
+
+    if (!settings || !Array.isArray(settings.methods)) {
+      if (normalizedUnit === DEFAULT_UNIT) {
+        return {
+          supported: true,
+          disabled: false,
+          nut,
+          method,
+          unit: normalizedUnit,
+          legacySatAllowed: true,
+          reason: `NUT-${nut} method-unit metadata is missing; allowing legacy sat flow`,
+        };
+      }
+
+      return {
+        supported: false,
+        disabled: false,
+        nut,
+        method,
+        unit: normalizedUnit,
+        reason: `NUT-${nut} method-unit metadata is missing for unit ${normalizedUnit}`,
+      };
+    }
+
+    if (settings.disabled === true) {
+      return {
+        supported: false,
+        disabled: true,
+        nut,
+        method,
+        unit: normalizedUnit,
+        reason: `NUT-${nut} is disabled`,
+      };
+    }
+
+    const matchingMethod = settings.methods.find((entry) => {
+      try {
+        return entry.method === method && normalizeUnit(entry.unit) === normalizedUnit;
+      } catch {
+        return false;
+      }
+    });
+
+    if (!matchingMethod) {
+      return {
+        supported: false,
+        disabled: false,
+        nut,
+        method,
+        unit: normalizedUnit,
+        reason: `NUT-${nut} method ${method} does not support unit ${normalizedUnit}`,
+      };
+    }
+
+    return {
+      supported: true,
+      disabled: false,
+      nut,
+      method,
+      unit: normalizedUnit,
+      minAmount: this.parseOptionalAmount(matchingMethod.min_amount),
+      maxAmount: this.parseOptionalAmount(matchingMethod.max_amount),
+      options: matchingMethod.options,
+    };
+  }
+
+  async assertMintMethodUnitSupported(
+    mintUrl: string,
+    nut: 4 | 5,
+    method: string,
+    unit: string,
+    amount?: AmountLike,
+  ): Promise<void> {
+    const capability = await this.getMintMethodUnitCapability(mintUrl, nut, method, unit);
+    if (!capability.supported) {
+      throw new ProofValidationError(
+        capability.reason ?? `NUT-${nut} method ${method} does not support unit ${capability.unit}`,
+      );
+    }
+
+    if (amount === undefined) return;
+
+    const requestedAmount = Amount.from(amount);
+    if (capability.minAmount && requestedAmount.lessThan(capability.minAmount)) {
+      throw new ProofValidationError(
+        `NUT-${nut} method ${method} unit ${capability.unit} requires amount >= ${capability.minAmount}`,
+      );
+    }
+    if (capability.maxAmount && requestedAmount.greaterThan(capability.maxAmount)) {
+      throw new ProofValidationError(
+        `NUT-${nut} method ${method} unit ${capability.unit} requires amount <= ${capability.maxAmount}`,
+      );
+    }
+  }
+
   async getAllMints(): Promise<Mint[]> {
     const mints = await this.mintRepo.getAllMints();
     return mints;
@@ -176,6 +314,15 @@ export class MintService {
     await this.mintRepo.setMintTrusted(mintUrl, false);
     await this.eventBus?.emit('mint:untrusted', { mintUrl });
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
+  }
+
+  private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5): NutMethodSettings | undefined {
+    const nuts = mintInfo.nuts as Record<string, unknown> | undefined;
+    return nuts?.[String(nut)] as NutMethodSettings | undefined;
+  }
+
+  private parseOptionalAmount(amount: AmountLike | null | undefined): Amount | null {
+    return amount === undefined || amount === null ? null : Amount.from(amount);
   }
 
   private async updateMint(mint: Mint): Promise<{ mint: Mint; keysets: Keyset[] }> {

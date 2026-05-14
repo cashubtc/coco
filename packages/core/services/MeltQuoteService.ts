@@ -13,6 +13,11 @@ import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
 import { mapProofToCoreProof } from '@core/utils';
 import { UnknownMintError } from '../models/Error';
+import { DEFAULT_UNIT, assertSameUnit, normalizeUnit } from '../amounts.ts';
+
+export interface MeltQuoteOptions {
+  unit?: string;
+}
 
 export class MeltQuoteService {
   private readonly mintService: MintService;
@@ -38,7 +43,12 @@ export class MeltQuoteService {
     this.logger = logger;
   }
 
-  async createMeltQuote(mintUrl: string, invoice: string): Promise<MeltQuoteBolt11Response> {
+  async createMeltQuote(
+    mintUrl: string,
+    invoice: string,
+    options: MeltQuoteOptions = {},
+  ): Promise<MeltQuoteBolt11Response> {
+    const unit = normalizeUnit(options.unit, { defaultUnit: DEFAULT_UNIT });
     if (!mintUrl || !mintUrl.trim()) {
       this.logger?.warn('Invalid parameter: mintUrl is required for createMeltQuote');
       throw new Error('mintUrl is required');
@@ -55,20 +65,32 @@ export class MeltQuoteService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    this.logger?.info('Creating melt quote', { mintUrl });
+    await this.mintService.assertMintMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
+
+    this.logger?.info('Creating melt quote', { mintUrl, unit });
     try {
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
       const quote = await wallet.createMeltQuoteBolt11(invoice);
-      await this.meltQuoteRepo.addMeltQuote({ ...quote, mintUrl });
-      await this.eventBus.emit('melt-quote:created', { mintUrl, quoteId: quote.quote, quote });
-      return quote;
+      assertSameUnit(quote.unit, unit, `Melt quote ${quote.quote}`);
+      const normalizedQuote = { ...quote, unit };
+      await this.meltQuoteRepo.addMeltQuote({ ...normalizedQuote, mintUrl });
+      await this.eventBus.emit('melt-quote:created', {
+        mintUrl,
+        quoteId: normalizedQuote.quote,
+        quote: normalizedQuote,
+      });
+      return normalizedQuote;
     } catch (err) {
-      this.logger?.error('Failed to create melt quote', { mintUrl, err });
+      this.logger?.error('Failed to create melt quote', { mintUrl, unit, err });
       throw err;
     }
   }
 
-  async payMeltQuote(mintUrl: string, quoteId: string): Promise<void> {
+  async payMeltQuote(
+    mintUrl: string,
+    quoteId: string,
+    options: MeltQuoteOptions = {},
+  ): Promise<void> {
     if (!mintUrl || !mintUrl.trim()) {
       this.logger?.warn('Invalid parameter: mintUrl is required for payMeltQuote');
       throw new Error('mintUrl is required');
@@ -90,10 +112,18 @@ export class MeltQuoteService {
         this.logger?.warn('Melt quote not found', { mintUrl, quoteId });
         throw new Error('Quote not found');
       }
-      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+      const unit = normalizeUnit(quote.unit, { defaultUnit: DEFAULT_UNIT });
+      if (options.unit !== undefined) {
+        assertSameUnit(unit, options.unit, `Melt quote ${quoteId}`);
+      }
+      await this.mintService.assertMintMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
+      const scopedQuote = { ...quote, unit };
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
-      let targetAmount = quote.amount.add(quote.fee_reserve);
-      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount);
+      let targetAmount = scopedQuote.amount.add(scopedQuote.fee_reserve);
+      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount, {
+        unit,
+      });
       const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
       targetAmount = targetAmount.add(selectedInputFee);
       const selectedAmount = sumProofs(selectedProofs);
@@ -119,8 +149,11 @@ export class MeltQuoteService {
           selectedProofs.map((proof) => proof.secret),
           'inflight',
         );
-        const { change } = await wallet.meltProofsBolt11(quote, selectedProofs);
-        await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
+        const { change } = await wallet.meltProofsBolt11(scopedQuote, selectedProofs);
+        await this.proofService.saveProofs(
+          mintUrl,
+          mapProofToCoreProof(mintUrl, 'ready', change ?? [], { unit }),
+        );
         await this.proofService.setProofState(
           mintUrl,
           selectedProofs.map((proof) => proof.secret),
@@ -135,7 +168,7 @@ export class MeltQuoteService {
           selectedProofs,
         });
         const swapFees = wallet.getFeesForProofs(selectedProofs);
-        const totalSendAmount = quote.amount.add(quote.fee_reserve).add(swapFees);
+        const totalSendAmount = scopedQuote.amount.add(scopedQuote.fee_reserve).add(swapFees);
         if (selectedAmount.lessThan(totalSendAmount)) {
           this.logger?.warn('Insufficient proofs after fee calculation', {
             mintUrl,
@@ -146,12 +179,14 @@ export class MeltQuoteService {
           });
           throw new Error('Insufficient proofs to pay melt quote after fees');
         }
-        const sendAmount = quote.amount.add(quote.fee_reserve);
+        const sendAmount = scopedQuote.amount.add(scopedQuote.fee_reserve);
         const keepAmount = selectedAmount.subtract(sendAmount).subtract(swapFees);
 
         // Create deterministic blank outputs for receiving change and reserve counters
-        const changeDelta = sendAmount.subtract(quote.amount);
-        const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl);
+        const changeDelta = sendAmount.subtract(scopedQuote.amount);
+        const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl, {
+          unit,
+        });
 
         const outputData = await this.proofService.createOutputsAndIncrementCounters(
           mintUrl,
@@ -159,7 +194,7 @@ export class MeltQuoteService {
             keep: keepAmount,
             send: sendAmount,
           },
-          { includeFees: true },
+          { includeFees: true, unit },
         );
         const outputConfig: OutputConfig = {
           send: { type: 'custom', data: outputData.send },
@@ -181,7 +216,7 @@ export class MeltQuoteService {
 
         await this.proofService.saveProofs(
           mintUrl,
-          mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send]),
+          mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send], { unit }),
         );
         await this.proofService.setProofState(
           mintUrl,
@@ -194,11 +229,14 @@ export class MeltQuoteService {
           'inflight',
         );
 
-        const { change } = await wallet.meltProofsBolt11(quote, send, undefined, {
+        const { change } = await wallet.meltProofsBolt11(scopedQuote, send, undefined, {
           type: 'custom',
           data: blankOutputs,
         });
-        await this.proofService.saveProofs(mintUrl, mapProofToCoreProof(mintUrl, 'ready', change));
+        await this.proofService.saveProofs(
+          mintUrl,
+          mapProofToCoreProof(mintUrl, 'ready', change ?? [], { unit }),
+        );
         await this.proofService.setProofState(
           mintUrl,
           send.map((proof) => proof.secret),
@@ -206,7 +244,7 @@ export class MeltQuoteService {
         );
       }
       await this.setMeltQuoteState(mintUrl, quoteId, 'PAID');
-      await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote });
+      await this.eventBus.emit('melt-quote:paid', { mintUrl, quoteId, quote: scopedQuote });
     } catch (err) {
       this.logger?.error('Failed to pay melt quote', { mintUrl, quoteId, err });
       throw err;
