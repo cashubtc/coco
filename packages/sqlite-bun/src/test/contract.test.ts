@@ -6,6 +6,8 @@ import {
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
   runReceiveOperationRepositoryContract,
+  runSendOperationRepositoryContract,
+  runMeltOperationRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -49,6 +51,10 @@ runProofRepositoryContract({ createRepositories }, { describe, it, expect });
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('sqlite-bun adapter transactions', () => {
   it('commits across repositories', async () => {

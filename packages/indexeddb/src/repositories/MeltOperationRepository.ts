@@ -2,6 +2,7 @@ import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-c
 import {
   deserializeAmount,
   normalizeMeltMethodData,
+  normalizeUnit,
   serializeAmount,
   stringifyJson,
 } from '@cashu/coco-core';
@@ -37,6 +38,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     mintUrl: row.mintUrl,
     method: row.method as MeltOperation['method'],
     methodData: parseMethodData(row),
+    unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -48,7 +50,6 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 
   const preparedData = {
     quoteId: row.quoteId ?? '',
-    unit: row.unit ?? 'sat',
     amount: deserializeAmount(row.amount ?? 0),
     fee_reserve: deserializeAmount(row.fee_reserve ?? 0),
     swap_fee: deserializeAmount(row.swap_fee ?? 0),
@@ -104,6 +105,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       error: operation.error ?? null,
       method: operation.method,
       methodDataJson,
+      unit: operation.unit,
       quoteId: null,
       amount: null,
       fee_reserve: null,

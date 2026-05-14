@@ -44,6 +44,7 @@ describe('IdbSendOperationRepository', () => {
       id: 'op-1',
       mintUrl: 'https://mint.test',
       amount: Amount.from(100),
+      unit: 'sat',
       state: 'init',
       createdAt: 1000,
       updatedAt: 2000,
@@ -58,6 +59,7 @@ describe('IdbSendOperationRepository', () => {
       id: 'op-p2pk',
       mintUrl: 'https://mint.test',
       amount: 100,
+      unit: 'USD',
       state: 'pending',
       createdAt: 1,
       updatedAt: 2,
@@ -72,7 +74,7 @@ describe('IdbSendOperationRepository', () => {
       tokenJson: JSON.stringify({
         mint: 'https://mint.test',
         proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
-        unit: 'sat',
+        unit: 'usd',
       }),
     } satisfies SendOperationRow;
 
@@ -82,6 +84,7 @@ describe('IdbSendOperationRepository', () => {
       id: 'op-p2pk',
       mintUrl: 'https://mint.test',
       amount: Amount.from(100),
+      unit: 'usd',
       state: 'pending',
       createdAt: 1000,
       updatedAt: 2000,
@@ -96,7 +99,7 @@ describe('IdbSendOperationRepository', () => {
       token: {
         mint: 'https://mint.test',
         proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
-        unit: 'sat',
+        unit: 'usd',
       },
     });
   });

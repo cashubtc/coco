@@ -1,6 +1,23 @@
-import type { ProofRepository, CoreProof, ProofState } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+import type { ProofRepository, ProofUnitFilter, CoreProof, ProofState } from '@cashu/coco-core';
+import { DEFAULT_UNIT, deserializeAmount, normalizeUnit, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
+
+function normalizeProofUnit(proof: CoreProof): string {
+  return normalizeUnit((proof as { unit?: string }).unit);
+}
+
+function getUnitFilter(filter?: ProofUnitFilter): Set<string> | undefined {
+  const units = [...(filter?.units ?? []), ...(filter?.unit ? [filter.unit] : [])];
+  if (units.length === 0) return undefined;
+  return new Set(units.map((unit) => normalizeUnit(unit)));
+}
+
+function matchesUnit(row: ProofRow, unitFilter?: Set<string>): boolean {
+  return (
+    !unitFilter ||
+    unitFilter.has(normalizeUnit(row.unit ?? undefined, { defaultUnit: DEFAULT_UNIT }))
+  );
+}
 
 function rowToProof(r: ProofRow): CoreProof {
   const base = {
@@ -14,6 +31,7 @@ function rowToProof(r: ProofRow): CoreProof {
   return {
     ...base,
     mintUrl: r.mintUrl,
+    unit: normalizeUnit(r.unit ?? undefined, { defaultUnit: DEFAULT_UNIT }),
     state: r.state,
     ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
     ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
@@ -30,18 +48,23 @@ export class IdbProofRepository implements ProofRepository {
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!proofs || proofs.length === 0) return;
     const now = Math.floor(Date.now() / 1000);
+    const normalizedProofs = proofs.map((proof) => ({
+      ...proof,
+      unit: normalizeProofUnit(proof),
+    }));
     await this.db.runTransaction('rw', ['coco_cashu_proofs'], async (tx) => {
       const table = tx.table('coco_cashu_proofs');
-      for (const p of proofs) {
+      for (const p of normalizedProofs) {
         const existing = await table.get([mintUrl, p.secret]);
         if (existing) {
           throw new Error(`Proof with secret already exists: ${p.secret}`);
         }
       }
-      for (const p of proofs) {
+      for (const p of normalizedProofs) {
         const row: ProofRow = {
           mintUrl,
           id: p.id,
+          unit: p.unit,
           amount: serializeAmount(p.amount),
           secret: p.secret,
           C: p.C,
@@ -57,23 +80,25 @@ export class IdbProofRepository implements ProofRepository {
     });
   }
 
-  async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('[mintUrl+state]')
       .equals([mintUrl, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.map(rowToProof);
+    return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
   }
 
-  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
+  async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     if (!mintUrls || mintUrls.length === 0) {
       const rows = (await (this.db as any)
         .table('coco_cashu_proofs')
         .where('state')
         .equals('inflight')
         .toArray()) as ProofRow[];
-      return rows.map(rowToProof);
+      return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
     }
     const mintUrlList = mintUrls.map((url) => url.trim()).filter((url) => url.length > 0);
     if (mintUrlList.length === 0) return [];
@@ -84,25 +109,31 @@ export class IdbProofRepository implements ProofRepository {
       .where('[mintUrl+state]')
       .anyOf(keys)
       .toArray()) as ProofRow[];
-    return rows.map(rowToProof);
+    return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
   }
 
-  async getAllReadyProofs(): Promise<CoreProof[]> {
+  async getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('state')
       .equals('ready')
       .toArray()) as ProofRow[];
-    return rows.map(rowToProof);
+    return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
   }
 
-  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+  async getProofsByKeysetId(
+    mintUrl: string,
+    keysetId: string,
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('[mintUrl+id+state]')
       .equals([mintUrl, keysetId, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.map(rowToProof);
+    return rows.filter((row) => matchesUnit(row, unitFilter)).map(rowToProof);
   }
 
   async setProofState(mintUrl: string, secrets: string[], state: ProofState): Promise<void> {
@@ -250,13 +281,14 @@ export class IdbProofRepository implements ProofRepository {
     return results;
   }
 
-  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     const rows = (await (this.db as any)
       .table('coco_cashu_proofs')
       .where('[mintUrl+state]')
       .equals([mintUrl, 'ready'])
       .toArray()) as ProofRow[];
-    return rows.filter((r) => !r.usedByOperationId).map(rowToProof);
+    return rows.filter((r) => !r.usedByOperationId && matchesUnit(r, unitFilter)).map(rowToProof);
   }
 
   async getReservedProofs(): Promise<CoreProof[]> {

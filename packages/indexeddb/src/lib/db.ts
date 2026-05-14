@@ -134,6 +134,7 @@ export interface CounterRow {
 export interface ProofRow {
   mintUrl: string;
   id: string;
+  unit?: string | null;
   amount: string | number;
   secret: string;
   C: string;
@@ -172,6 +173,7 @@ export interface SendOperationRow {
   id: string;
   mintUrl: string;
   amount: string | number;
+  unit?: string | null;
   state:
     | 'init'
     | 'prepared'

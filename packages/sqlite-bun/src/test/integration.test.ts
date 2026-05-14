@@ -8,6 +8,7 @@ import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 const expect = bunExpect as unknown as IntegrationTestRunner['expect'];
 
 const mintUrl = process.env.MINT_URL;
+const customUnit = process.env.CUSTOM_UNIT;
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');
@@ -39,6 +40,7 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
+    customUnit,
     logger: getTestLogger(),
     suiteName: 'SQLite Bun Integration Tests',
   },
