@@ -55,6 +55,7 @@ describe('MeltOperationService', () => {
       id: keysetId,
       secret,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       ...overrides,
     }) as CoreProof;
@@ -68,6 +69,7 @@ describe('MeltOperationService', () => {
     createdAt: Date.now() - 1000,
     updatedAt: Date.now() - 1000,
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePreparedOp = (
@@ -77,7 +79,6 @@ describe('MeltOperationService', () => {
     ...makeInitOp(id),
     state: 'prepared',
     quoteId: 'quote-1',
-    unit: 'sat',
     amount: Amount.from(100),
     fee_reserve: Amount.from(1),
     swap_fee: Amount.from(0),
@@ -86,6 +87,7 @@ describe('MeltOperationService', () => {
     inputProofSecrets: ['proof-1'],
     changeOutputData: { keep: [], send: [] },
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeExecutingOp = (
@@ -95,6 +97,7 @@ describe('MeltOperationService', () => {
     ...makePreparedOp(id),
     state: 'executing',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePendingOp = (
@@ -104,6 +107,7 @@ describe('MeltOperationService', () => {
     ...makePreparedOp(id),
     state: 'pending',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeFinalizedOp = (
@@ -116,6 +120,7 @@ describe('MeltOperationService', () => {
     effectiveFee: Amount.from(1),
     finalizedData: { preimage: 'preimage-123' },
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeLegacyFinalizedOp = (id: string): FinalizedMeltOperation => ({
@@ -131,6 +136,7 @@ describe('MeltOperationService', () => {
     state: 'rolled_back',
     error: 'Rolled back',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   beforeEach(() => {
@@ -142,6 +148,7 @@ describe('MeltOperationService', () => {
       prepare: mock(async ({ operation }) =>
         makePreparedOp(operation.id, {
           mintUrl: operation.mintUrl,
+          unit: operation.unit,
           method: operation.method,
           methodData: operation.methodData,
         }),
@@ -150,6 +157,7 @@ describe('MeltOperationService', () => {
         status: 'PAID',
         finalized: makeFinalizedOp(operation.id, {
           mintUrl: operation.mintUrl,
+          unit: operation.unit,
           method: operation.method,
           methodData: operation.methodData,
         }),
@@ -183,6 +191,7 @@ describe('MeltOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
+      assertMintMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
@@ -220,6 +229,14 @@ describe('MeltOperationService', () => {
       expect(stored?.mintUrl).toBe(mintUrl);
     });
 
+    it('normalizes and persists custom-unit init operations', async () => {
+      const operation = await service.init(mintUrl, 'bolt11', { invoice }, 'USD');
+
+      expect(operation.unit).toBe('usd');
+      const stored = await meltOperationRepository.getById(operation.id);
+      expect(stored?.unit).toBe('usd');
+    });
+
     it('normalizes AmountLike amountSats before storing the operation', async () => {
       const operation = await service.init(mintUrl, 'bolt11', { invoice, amountSats: 1n });
 
@@ -255,6 +272,34 @@ describe('MeltOperationService', () => {
       expect(events.length).toBe(1);
       const stored = await meltOperationRepository.getById('op-1');
       expect(stored?.state).toBe('prepared');
+    });
+
+    it('validates NUT-05 support and uses the operation unit wallet', async () => {
+      const initOp = makeInitOp('op-usd', { unit: 'usd' });
+      await meltOperationRepository.create(initOp);
+
+      const prepared = await service.prepare('op-usd');
+
+      expect(prepared.unit).toBe('usd');
+      expect(mintService.assertMintMethodUnitSupported).toHaveBeenCalledWith(
+        mintUrl,
+        5,
+        'bolt11',
+        'usd',
+      );
+      expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+    });
+
+    it('rejects non-sat melts when NUT-05 capability validation rejects the unit', async () => {
+      const initOp = makeInitOp('op-usd-rejected', { unit: 'usd' });
+      await meltOperationRepository.create(initOp);
+      (mintService.assertMintMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
+        new ProofValidationError('Mint does not advertise NUT-05 support for bolt11/usd'),
+      );
+
+      await expect(service.prepare('op-usd-rejected')).rejects.toThrow(ProofValidationError);
+      expect(handler.prepare).not.toHaveBeenCalled();
+      expect(await meltOperationRepository.getById('op-usd-rejected')).toBeNull();
     });
 
     it('recovers init operation when handler fails', async () => {

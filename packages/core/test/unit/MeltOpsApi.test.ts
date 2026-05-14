@@ -93,6 +93,24 @@ describe('MeltOpsApi', () => {
     expect(result).toBe(preparedOperation);
   });
 
+  it('prepare passes non-sat units to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      method: 'bolt11',
+      methodData: { invoice: 'lnbc1test' },
+      unit: 'USD',
+    });
+
+    expect(meltOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      {
+        invoice: 'lnbc1test',
+      },
+      'USD',
+    );
+  });
+
   it('execute resolves ids before executing', async () => {
     const result = await api.execute(preparedOperation.id);
 

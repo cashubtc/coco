@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MintService } from '../../services/MintService';
+import { ProofValidationError } from '../../models/Error';
 import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
 import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository';
 import { EventBus } from '../../events/EventBus';
@@ -274,6 +275,102 @@ describe('MintService', () => {
       const mint = await mintRepo.getMintByUrl(testMintUrl);
       expect(mint).toBeDefined();
       expect(mint.trusted).toBe(false);
+    });
+  });
+
+  describe('method-unit capabilities', () => {
+    const mintInfoWithMethods = (
+      methods4: Array<{
+        method: string;
+        unit: string;
+        min_amount?: number;
+        max_amount?: number;
+      }> = [],
+      methods5 = methods4,
+      disabled4 = false,
+      disabled5 = false,
+    ): MintInfo =>
+      ({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: methods4, disabled: disabled4 },
+          '5': { methods: methods5, disabled: disabled5 },
+        },
+      }) as MintInfo;
+
+    const useMintInfo = (mintInfo: MintInfo) => {
+      mockAdapter.fetchMintInfo = mock(() => Promise.resolve(mintInfo));
+    };
+
+    it('allows legacy sat when NUT-04 metadata is missing', async () => {
+      useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
+
+      const capability = await service.getMintMethodUnitCapability(testMintUrl, 4, 'bolt11', 'sat');
+
+      expect(capability.supported).toBe(true);
+      expect(capability.legacySatAllowed).toBe(true);
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects non-sat when NUT-04 metadata is missing', async () => {
+      useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
+
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'usd', 100),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('allows legacy sat when NUT-05 metadata is missing', async () => {
+      useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
+
+      const capability = await service.getMintMethodUnitCapability(testMintUrl, 5, 'bolt11', 'sat');
+
+      expect(capability.supported).toBe(true);
+      expect(capability.legacySatAllowed).toBe(true);
+    });
+
+    it('rejects disabled NUT settings', async () => {
+      useMintInfo(mintInfoWithMethods([{ method: 'bolt11', unit: 'sat' }], undefined, true));
+
+      const capability = await service.getMintMethodUnitCapability(testMintUrl, 4, 'bolt11', 'sat');
+
+      expect(capability.supported).toBe(false);
+      expect(capability.disabled).toBe(true);
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('requires a matching method and unit pair', async () => {
+      useMintInfo(mintInfoWithMethods([{ method: 'bolt11', unit: 'usd' }]));
+
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'USD', 100),
+      ).resolves.toBeUndefined();
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+      ).rejects.toThrow(ProofValidationError);
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt12', 'usd', 100),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('enforces advertised min and max amounts', async () => {
+      useMintInfo(
+        mintInfoWithMethods([{ method: 'bolt11', unit: 'sat', min_amount: 10, max_amount: 100 }]),
+      );
+
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 9),
+      ).rejects.toThrow(ProofValidationError);
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 101),
+      ).rejects.toThrow(ProofValidationError);
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+      ).resolves.toBeUndefined();
     });
   });
 

@@ -34,13 +34,14 @@ describe('SendOperationService', () => {
   let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
 
-  const makeProof = (secret: string, amount: number): CoreProof =>
+  const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
       amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
       mintUrl,
+      unit,
       state: 'ready',
     }) as CoreProof;
 
@@ -93,8 +94,15 @@ describe('SendOperationService', () => {
 
     proofService = {
       selectProofsToSend: mock(
-        async (selectedMintUrl: string, amount: Amount, includeFees: boolean = true) => {
-          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl);
+        async (
+          selectedMintUrl: string,
+          amount: Amount,
+          options: boolean | { includeFees?: boolean; unit?: string } = true,
+        ) => {
+          const includeFees =
+            typeof options === 'boolean' ? options : (options.includeFees ?? true);
+          const unit = typeof options === 'boolean' ? 'sat' : (options.unit ?? 'sat');
+          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit });
           return wallet.selectProofsToSend(proofs, amount, includeFees).send;
         },
       ),
@@ -220,12 +228,35 @@ describe('SendOperationService', () => {
     expect(lockedDuringEvent).toBe(true);
   });
 
+  it('prepares and executes a custom-unit send without selecting sat proofs', async () => {
+    await proofRepo.saveProofs(mintUrl, [
+      makeProof('sat-proof', 100, 'sat'),
+      makeProof('usd-proof', 100, 'usd'),
+    ]);
+
+    const initOp = await service.init(mintUrl, { amount: 100, unit: 'USD' });
+    const preparedOp = await service.prepare(initOp);
+    const result = await service.execute(preparedOp);
+
+    expect(preparedOp.unit).toBe('usd');
+    expect(preparedOp.inputProofSecrets).toEqual(['usd-proof']);
+    expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+    expect(result.token.unit).toBe('usd');
+    expect(result.operation.unit).toBe('usd');
+    expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['usd-proof']);
+
+    const satProof = await proofRepo.getProofBySecret(mintUrl, 'sat-proof');
+    expect(satProof?.state).toBe('ready');
+    expect(satProof?.usedByOperationId).toBeUndefined();
+  });
+
   it('persists explicit handler failures without running executing recovery', async () => {
     const preparedOp: PreparedSendOperation = {
       id: 'send-op-failed',
       state: 'prepared',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,
@@ -301,6 +332,7 @@ describe('SendOperationService', () => {
       state: 'pending',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: true,
@@ -358,6 +390,7 @@ describe('SendOperationService', () => {
       state: 'pending',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,

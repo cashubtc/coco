@@ -11,6 +11,7 @@ describe('MemoryProofRepository', () => {
 
   const makeProof = (secret: string, selectedMintUrl = mintUrl): CoreProof => ({
     id: 'keyset-1',
+    unit: 'sat',
     amount: Amount.from(1),
     secret,
     C: `C_${secret}`,
@@ -37,5 +38,31 @@ describe('MemoryProofRepository', () => {
     const proofs = await repository.getProofsBySecrets(mintUrl, []);
 
     expect(proofs).toEqual([]);
+  });
+
+  it('requires proofs to carry a unit', async () => {
+    const proof = makeProof('missing-unit') as unknown as Omit<CoreProof, 'unit'>;
+    delete (proof as { unit?: string }).unit;
+
+    await expect(repository.saveProofs(mintUrl, [proof as CoreProof])).rejects.toThrow(
+      'Unit is required',
+    );
+  });
+
+  it('filters ready and available proofs by unit', async () => {
+    await repository.saveProofs(mintUrl, [
+      makeProof('sat-1'),
+      { ...makeProof('usd-1'), unit: 'usd', amount: Amount.from(2) },
+      { ...makeProof('USD-2'), unit: 'USD', amount: Amount.from(3) },
+    ]);
+
+    const readyUsd = await repository.getReadyProofs(mintUrl, { unit: 'USD' });
+    const availableSat = await repository.getAvailableProofs(mintUrl, { unit: 'sat' });
+    const allUsd = await repository.getAllReadyProofs({ units: ['usd'] });
+
+    expect(readyUsd.map((proof) => proof.secret).sort()).toEqual(['USD-2', 'usd-1']);
+    expect(readyUsd.every((proof) => proof.unit === 'usd')).toBe(true);
+    expect(availableSat.map((proof) => proof.secret)).toEqual(['sat-1']);
+    expect(allUsd).toHaveLength(2);
   });
 });

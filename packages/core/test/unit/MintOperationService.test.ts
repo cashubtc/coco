@@ -71,6 +71,7 @@ describe('MintOperationService', () => {
     secret,
     C: `C_${secret}`,
     mintUrl,
+    unit: 'sat',
     state: 'ready',
     createdByOperationId: operationId,
   });
@@ -156,6 +157,7 @@ describe('MintOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
+      assertMintMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
@@ -241,7 +243,7 @@ describe('MintOperationService', () => {
     expect(importedOperation?.lastObservedRemoteState).toBe(importedQuote.state);
   });
 
-  it('importQuote rejects unsupported quote units', async () => {
+  it('importQuote delegates unsupported quote units to capability validation', async () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
@@ -250,9 +252,12 @@ describe('MintOperationService', () => {
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
     };
+    (mintService.assertMintMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
+      new Error('Mint https://mint.test does not advertise NUT-04 support for bolt11/usd'),
+    );
 
     await expect(service.importQuote(mintUrl, importedQuote, 'bolt11', {})).rejects.toThrow(
-      "Unsupported mint unit 'usd'. Only 'sat' is currently supported.",
+      'does not advertise NUT-04 support for bolt11/usd',
     );
 
     expect(handler.prepare).not.toHaveBeenCalled();

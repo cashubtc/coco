@@ -189,6 +189,20 @@ describe('MintBolt11Handler', () => {
       expect(result.quoteId).toBe(importedQuote.quote);
       expect(result.lastObservedRemoteState).toBe('UNPAID');
     });
+
+    it('normalizes quote unit comparison and persists the operation unit', async () => {
+      const usdOperation = { ...operation, unit: 'usd' };
+      const usdQuote = { ...quote, unit: 'USD' };
+      (wallet.createMintQuoteBolt11 as Mock<any>).mockImplementation(async () => usdQuote);
+
+      const result = await handler.prepare({
+        ...buildPrepareContext(),
+        operation: usdOperation,
+      });
+
+      expect(result.unit).toBe('usd');
+      expect(result.quoteId).toBe(quoteId);
+    });
   });
 
   describe('checkPending', () => {

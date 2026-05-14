@@ -49,6 +49,25 @@ describe('WalletApi - Trust Enforcement', () => {
         ),
     );
 
+  const encodeLegacyTokenWithoutUnit = (token: { mint: string; proofs: Proof[] }): string => {
+    const legacyToken = {
+      token: [
+        {
+          mint: token.mint,
+          proofs: token.proofs.map((proof) => ({
+            ...proof,
+            amount: proof.amount.toNumber(),
+          })),
+        },
+      ],
+    };
+    return `cashuA${Buffer.from(JSON.stringify(legacyToken))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')}`;
+  };
+
   const createMockMintAdapter = (): MintAdapter =>
     ({
       checkProofStates: mock(() => Promise.resolve([])),
@@ -80,6 +99,10 @@ describe('WalletApi - Trust Enforcement', () => {
     };
 
     mockWalletService = {
+      getWallet: mock(async () => ({
+        receive: mock(async () => []),
+        getFeesForProofs: mock(() => Amount.zero()),
+      })),
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
           receive: mock(async () => []),
@@ -98,12 +121,40 @@ describe('WalletApi - Trust Enforcement', () => {
           spendable: Amount.from(10),
           reserved: Amount.from(5),
           total: Amount.from(15),
+          unit: 'sat',
+        },
+      })),
+      getBalancesByMintAndUnit: mock(async () => ({
+        [testMintUrl]: {
+          sat: {
+            spendable: Amount.from(10),
+            reserved: Amount.from(5),
+            total: Amount.from(15),
+            unit: 'sat',
+          },
+        },
+      })),
+      getBalancesByUnit: mock(async () => ({
+        sat: {
+          spendable: Amount.from(10),
+          reserved: Amount.from(5),
+          total: Amount.from(15),
+          unit: 'sat',
         },
       })),
       getBalanceTotal: mock(async () => ({
         spendable: Amount.from(10),
         reserved: Amount.from(5),
         total: Amount.from(15),
+        unit: 'sat',
+      })),
+      getBalanceTotalByUnit: mock(async () => ({
+        sat: {
+          spendable: Amount.from(10),
+          reserved: Amount.from(5),
+          total: Amount.from(15),
+          unit: 'sat',
+        },
       })),
       saveProofs: mock(async () => {}),
       prepareProofsForReceiving: mock(async (proofs: any[]) => proofs),
@@ -144,12 +195,14 @@ describe('WalletApi - Trust Enforcement', () => {
           spendable: Amount.from(10),
           reserved: Amount.from(5),
           total: Amount.from(15),
+          unit: 'sat',
         },
       });
       await expect(walletApi.balances.total()).resolves.toEqual({
         spendable: Amount.from(10),
         reserved: Amount.from(5),
         total: Amount.from(15),
+        unit: 'sat',
       });
     });
 
@@ -176,7 +229,10 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(token);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(testMintUrl);
+      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
+        testMintUrl,
+        'sat',
+      );
     });
 
     it('should check trust status before processing token', async () => {
@@ -218,7 +274,10 @@ describe('WalletApi - Trust Enforcement', () => {
       // Should not throw
       await walletApi.receive(encodedToken);
 
-      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(testMintUrl);
+      expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(
+        testMintUrl,
+        'sat',
+      );
     });
 
     it('should provide clear error message for untrusted mints', async () => {
@@ -273,15 +332,95 @@ describe('WalletApi - Trust Enforcement', () => {
 
   describe('restore', () => {
     it('should add mint during restore (creating as trusted by default)', async () => {
-      mockWalletService.getWalletWithActiveKeysetId.mockImplementation(async () => ({
-        wallet: {},
-      }));
+      mockWalletService.getWallet.mockImplementation(async () => ({}));
 
       mockWalletRestoreService.restoreKeyset = mock(async () => {});
 
       await walletApi.restore(testMintUrl);
 
       expect(mockMintService.addMintByUrl).toHaveBeenCalledWith(testMintUrl, { trusted: true });
+    });
+
+    it('restores every advertised keyset unit by default', async () => {
+      const satWallet = { unit: 'sat-wallet' };
+      const usdWallet = { unit: 'usd-wallet' };
+      mockMintService.addMintByUrl.mockImplementation(async () => ({
+        mint: {},
+        keysets: [
+          { id: 'sat-keyset', unit: 'sat' },
+          { id: 'usd-keyset', unit: 'USD' },
+        ],
+      }));
+      mockWalletService.getWallet.mockImplementation(async (_mintUrl: string, unit: string) =>
+        unit === 'usd' ? usdWallet : satWallet,
+      );
+      mockWalletRestoreService.restoreKeyset = mock(async () => {});
+
+      await walletApi.restore(testMintUrl);
+
+      expect(mockWalletService.getWallet).toHaveBeenCalledWith(testMintUrl, 'sat');
+      expect(mockWalletService.getWallet).toHaveBeenCalledWith(testMintUrl, 'usd');
+      expect(mockWalletRestoreService.restoreKeyset).toHaveBeenCalledWith(
+        testMintUrl,
+        satWallet,
+        'sat-keyset',
+        'sat',
+      );
+      expect(mockWalletRestoreService.restoreKeyset).toHaveBeenCalledWith(
+        testMintUrl,
+        usdWallet,
+        'usd-keyset',
+        'usd',
+      );
+    });
+
+    it('restores only requested units when a unit filter is provided', async () => {
+      const usdWallet = { unit: 'usd-wallet' };
+      mockMintService.addMintByUrl.mockImplementation(async () => ({
+        mint: {},
+        keysets: [
+          { id: 'sat-keyset', unit: 'sat' },
+          { id: 'usd-keyset', unit: 'USD' },
+        ],
+      }));
+      mockWalletService.getWallet.mockResolvedValue(usdWallet);
+      mockWalletRestoreService.restoreKeyset = mock(async () => {});
+
+      await walletApi.restore(testMintUrl, { units: ['USD'] });
+
+      expect(mockWalletService.getWallet).toHaveBeenCalledTimes(1);
+      expect(mockWalletService.getWallet).toHaveBeenCalledWith(testMintUrl, 'usd');
+      expect(mockWalletRestoreService.restoreKeyset).toHaveBeenCalledTimes(1);
+      expect(mockWalletRestoreService.restoreKeyset).toHaveBeenCalledWith(
+        testMintUrl,
+        usdWallet,
+        'usd-keyset',
+        'usd',
+      );
+    });
+  });
+
+  describe('sweep', () => {
+    it('sweeps only requested units when a unit filter is provided', async () => {
+      const bip39seed = new Uint8Array(64).fill(1);
+      mockMintService.addMintByUrl.mockImplementation(async () => ({
+        mint: {},
+        keysets: [
+          { id: 'sat-keyset', unit: 'sat' },
+          { id: 'usd-keyset', unit: 'USD' },
+        ],
+      }));
+      mockWalletRestoreService.sweepKeyset = mock(async () => {});
+
+      await walletApi.sweep(testMintUrl, bip39seed, { units: ['USD'] });
+
+      expect(mockWalletRestoreService.sweepKeyset).toHaveBeenCalledTimes(1);
+      expect(mockWalletRestoreService.sweepKeyset).toHaveBeenCalledWith(
+        testMintUrl,
+        'usd-keyset',
+        bip39seed,
+        'usd',
+      );
     });
   });
 
@@ -297,18 +436,26 @@ describe('WalletApi - Trust Enforcement', () => {
         proofs: testProofs,
       };
 
-      const decodeTokenMock = mock(async () => decodedToken);
-      mockWalletService.getWallet = mock(async (mintUrl: string) => {
-        return {
-          decodeToken: decodeTokenMock,
-        };
-      });
+      const result = await walletApi.decodeToken(encodedToken);
+
+      expect(mockMintService.ensureUpdatedMint).toHaveBeenCalledWith(testMintUrl);
+      expect(result).toEqual({ ...decodedToken, unit: 'sat' });
+    });
+
+    it('infers a unitless token unit from proof keysets when no mint URL is provided', async () => {
+      const token = {
+        mint: testMintUrl,
+        proofs: testProofs,
+      };
+      const encodedToken = encodeLegacyTokenWithoutUnit(token);
+      mockMintService.ensureUpdatedMint.mockImplementation(async () => ({
+        mint: { url: testMintUrl },
+        keysets: [{ id: keysetId, unit: 'USD', active: true }],
+      }));
 
       const result = await walletApi.decodeToken(encodedToken);
 
-      expect(mockWalletService.getWallet).toHaveBeenCalledWith(testMintUrl);
-      expect(decodeTokenMock).toHaveBeenCalledWith(encodedToken);
-      expect(result).toEqual(decodedToken);
+      expect(result.unit).toBe('usd');
     });
   });
 

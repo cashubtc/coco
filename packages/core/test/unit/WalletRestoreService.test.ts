@@ -122,6 +122,32 @@ describe('WalletRestoreService', () => {
       });
     });
 
+    it('should sweep with a unit-scoped wallet and persist swept proofs with that unit', async () => {
+      const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
+
+      Wallet.prototype.batchRestore = mock(() => Promise.resolve({ proofs }));
+      Wallet.prototype.checkProofsStates = mock(() =>
+        Promise.resolve([{ state: 'UNSPENT' } as ProofState, { state: 'UNSPENT' } as ProofState]),
+      );
+      Wallet.prototype.getFeesForProofs = mock(() => Amount.from(1));
+
+      await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD');
+
+      expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: 0,
+          send: Amount.from(99),
+        },
+        { unit: 'usd' },
+      );
+
+      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
+      expect(savedProofsCall[0]).toBe(mintUrl);
+      expect(savedProofsCall[1].map((proof: { unit: string }) => proof.unit)).toEqual(['usd']);
+    });
+
     it('should return early when no proofs are found', async () => {
       const mockBatchRestore = mock(() => Promise.resolve({ proofs: [] }));
       Wallet.prototype.batchRestore = mockBatchRestore;
@@ -313,6 +339,15 @@ describe('WalletRestoreService', () => {
         keysetId,
         total: 1,
       });
+    });
+
+    it('should persist restored proofs with the requested unit', async () => {
+      await service.restoreKeyset(mintUrl, mockWallet, keysetId, 'USD');
+
+      const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
+      expect(savedProofsCall[0]).toBe(mintUrl);
+      expect(savedProofsCall[1]).toHaveLength(1);
+      expect(savedProofsCall[1][0].unit).toBe('usd');
     });
 
     it('should return early when no proofs are restored', async () => {

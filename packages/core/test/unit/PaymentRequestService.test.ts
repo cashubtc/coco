@@ -29,6 +29,7 @@ describe('PaymentRequestService', () => {
     state: 'pending',
     mintUrl: testMintUrl,
     amount: Amount.from(100),
+    unit: 'sat',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     needsSwap: false,
@@ -42,16 +43,19 @@ describe('PaymentRequestService', () => {
   const mockToken: Token = {
     mint: testMintUrl,
     proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'secret-1', C: 'C-1' }],
+    unit: 'sat',
   };
 
   const createMockPreparedSendOperation = (
     mintUrl: string,
     amount: Amount,
+    unit = 'sat',
   ): PreparedSendOperation => ({
     id: 'test-op-id',
     state: 'prepared',
     mintUrl,
     amount,
+    unit,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     needsSwap: false,
@@ -67,6 +71,7 @@ describe('PaymentRequestService', () => {
       amount?: Amount;
       allowedMints?: string[];
       transport?: ResolvedPaymentRequest['transport'];
+      unit?: string;
     } = {},
   ): ResolvedPaymentRequest => {
     const transport = options.transport ?? { type: 'inband' as const };
@@ -81,12 +86,13 @@ describe('PaymentRequestService', () => {
         paymentRequestTransport,
         'test-id',
         options.amount,
-        'sat',
+        options.unit ?? 'sat',
         allowedMints,
       ),
       payableMints: [...allowedMints],
       allowedMints,
       amount: options.amount,
+      unit: options.unit ?? 'sat',
       transport,
     };
   };
@@ -101,16 +107,17 @@ describe('PaymentRequestService', () => {
 
   beforeEach(() => {
     mockSendOperationService = {
-      init: mock(async (mintUrl: string, amount: Amount) => ({
+      init: mock(async (mintUrl: string, amountInput: { amount: Amount; unit: string }) => ({
         id: 'test-op-id',
         state: 'init',
         mintUrl,
-        amount,
+        amount: amountInput.amount,
+        unit: amountInput.unit,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })),
-      prepare: mock(async (initOp: { mintUrl: string; amount: Amount }) =>
-        createMockPreparedSendOperation(initOp.mintUrl, initOp.amount),
+      prepare: mock(async (initOp: { mintUrl: string; amount: Amount; unit: string }) =>
+        createMockPreparedSendOperation(initOp.mintUrl, initOp.amount, initOp.unit),
       ),
       execute: mock(async () => ({
         operation: mockPendingOperation,
@@ -124,11 +131,13 @@ describe('PaymentRequestService', () => {
           spendable: Amount.from(1000),
           reserved: Amount.zero(),
           total: Amount.from(1000),
+          unit: 'sat',
         },
         [testMintUrl2]: {
           spendable: Amount.from(500),
           reserved: Amount.zero(),
           total: Amount.from(500),
+          unit: 'sat',
         },
       })),
     } as unknown as ProofService;
@@ -208,6 +217,7 @@ describe('PaymentRequestService', () => {
             spendable: Amount.from(50),
             reserved: Amount.zero(),
             total: Amount.from(50),
+            unit: 'sat',
           },
         }),
       );
@@ -221,6 +231,20 @@ describe('PaymentRequestService', () => {
       expect(result.allowedMints).toEqual([testMintUrl]);
       expect(result.amount).toEqual(Amount.from(100));
     });
+
+    it('matches custom-unit payment requests against balances for that unit only', async () => {
+      const pr = new PaymentRequest([], 'request-id-usd', 100, 'USD', [testMintUrl]);
+      const encoded = pr.toEncodedRequest();
+
+      const result = await service.parse(encoded);
+
+      expect(result.unit).toBe('usd');
+      expect(mockProofService.getBalancesByMint).toHaveBeenCalledWith({
+        trustedOnly: true,
+        units: ['usd'],
+      });
+      expect(result.payableMints).toEqual([testMintUrl]);
+    });
   });
 
   describe('prepare', () => {
@@ -232,7 +256,10 @@ describe('PaymentRequestService', () => {
       expect(transaction.sendOperation).toBeDefined();
       expect(transaction.sendOperation.mintUrl).toBe(testMintUrl);
       expect(transaction.request).toBe(request);
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(100));
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, {
+        amount: Amount.from(100),
+        unit: 'sat',
+      });
       expect(mockSendOperationService.prepare).toHaveBeenCalled();
     });
 
@@ -247,7 +274,10 @@ describe('PaymentRequestService', () => {
         amount: Amount.from(750),
       });
 
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(750));
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, {
+        amount: Amount.from(750),
+        unit: 'sat',
+      });
       expect(transaction.request).not.toBe(request);
       expect(transaction.request.amount).toEqual(Amount.from(750));
       expect(transaction.request.paymentRequest.amount).toEqual(Amount.from(750));
@@ -273,7 +303,10 @@ describe('PaymentRequestService', () => {
 
       await service.prepare(request, { mintUrl: testMintUrl });
 
-      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, Amount.from(100));
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, {
+        amount: Amount.from(100),
+        unit: 'sat',
+      });
     });
 
     it('should throw if no amount is provided anywhere', async () => {
@@ -296,6 +329,29 @@ describe('PaymentRequestService', () => {
       await expect(
         service.prepare(request, { mintUrl: testMintUrl, amount: Amount.from(200) }),
       ).rejects.toThrow('Amount mismatch');
+    });
+
+    it('rejects a sat amount override for a custom-unit request', async () => {
+      const request = createResolvedRequest({ amount: undefined, unit: 'usd' });
+
+      await expect(
+        service.prepare(request, {
+          mintUrl: testMintUrl,
+          amount: { amount: Amount.from(100), unit: 'sat' },
+        }),
+      ).rejects.toThrow('Unit mismatch');
+    });
+
+    it('prepares send operations in the request unit', async () => {
+      const request = createResolvedRequest({ amount: Amount.from(100), unit: 'usd' });
+
+      const transaction = await service.prepare(request, { mintUrl: testMintUrl });
+
+      expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, {
+        amount: Amount.from(100),
+        unit: 'usd',
+      });
+      expect(transaction.sendOperation.unit).toBe('usd');
     });
   });
 

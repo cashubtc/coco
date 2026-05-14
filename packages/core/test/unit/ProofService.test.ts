@@ -7,7 +7,11 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
 import { CounterService } from '../../services/CounterService.ts';
 import { SeedService } from '../../services/SeedService.ts';
-import { ProofOperationError, ProofValidationError } from '../../models/Error.ts';
+import {
+  ProofOperationError,
+  ProofValidationError,
+  UnitValidationError,
+} from '../../models/Error.ts';
 import type { CoreProof } from '../../types.ts';
 import { OutputData } from '@cashu/cashu-ts';
 
@@ -23,9 +27,10 @@ describe('ProofService', () => {
 
   // Minimal wallet service stub with only used methods
   let walletService: {
-    getWalletWithActiveKeysetId: (mintUrl: string) => Promise<any>;
+    getWalletWithActiveKeysetId: (mintUrl: string, unit?: string) => Promise<any>;
     getWallet: (
       mintUrl: string,
+      unit?: string,
     ) => Promise<{ selectProofsToSend: (proofs: any[], amount: Amount) => { send: any[] } }>;
   };
 
@@ -44,6 +49,7 @@ describe('ProofService', () => {
       amount: Amount.from(1),
       C: 'C_' as unknown as any,
       id: keysetId,
+      unit: 'sat',
       secret: Math.random().toString(36).slice(2),
       mintUrl,
       state: 'ready',
@@ -184,6 +190,45 @@ describe('ProofService', () => {
       const finalCounter = await counterRepo.getCounter(mintUrl, keysetId);
       expect(finalCounter?.counter).toBe(6);
     });
+
+    it('uses the requested unit when creating outputs', async () => {
+      const getWalletWithActiveKeysetId = mock(async (_mintUrl: string, unit?: string) => {
+        expect(unit).toBe('usd');
+        return { keys: { id: 'usd-keyset' }, keysetId: 'usd-keyset' };
+      });
+      walletService = {
+        getWalletWithActiveKeysetId,
+        async getWallet() {
+          return {
+            selectProofsToSend() {
+              return { send: [] };
+            },
+          };
+        },
+      };
+      OutputData.createDeterministicData = (() => [{}]) as any;
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await service.createOutputsAndIncrementCounters(
+        mintUrl,
+        { keep: 1, send: 0 },
+        { unit: 'USD' },
+      );
+
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+      const counter = await counterRepo.getCounter(mintUrl, 'usd-keyset');
+      expect(counter?.counter).toBe(1);
+    });
   });
 
   describe('createBlankOutputs', () => {
@@ -312,6 +357,25 @@ describe('ProofService', () => {
   });
 
   describe('saveProofs', () => {
+    it('throws when a proof is missing unit metadata', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+      const proof = makeProof({ secret: 'missing-unit' }) as unknown as Omit<CoreProof, 'unit'>;
+      delete (proof as { unit?: string }).unit;
+
+      await expect(service.saveProofs(mintUrl, [proof as CoreProof])).rejects.toThrow(
+        UnitValidationError,
+      );
+    });
+
     it('emits per-group events and persists on success', async () => {
       const service = new ProofService(
         counterService,
@@ -547,8 +611,44 @@ describe('ProofService', () => {
       expect(proof2?.state).toBe('inflight');
       expect(proof3?.state).toBe('spent');
       expect(getWalletWithActiveKeysetId).toHaveBeenCalledTimes(2);
-      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl);
-      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(otherMintUrl);
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'sat');
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(otherMintUrl, 'sat');
+      expect(checkProofsStates).toHaveBeenCalledTimes(2);
+    });
+
+    it('checks inflight proofs separately for each unit', async () => {
+      const satProof = makeProof({ secret: 'sat-inflight', state: 'inflight', unit: 'sat' });
+      const usdProof = makeProof({ secret: 'usd-inflight', state: 'inflight', unit: 'usd' });
+      await proofRepo.saveProofs(mintUrl, [satProof, usdProof]);
+      proofRepo.getInflightProofs = mock(async () => [satProof, usdProof]);
+
+      const checkProofsStates = mock(async (proofs: CoreProof[]) => {
+        expect(new Set(proofs.map((proof) => proof.unit)).size).toBe(1);
+        return proofs.map(() => ({ state: 'UNSPENT' }));
+      });
+      const getWalletWithActiveKeysetId = mock(async () => ({
+        wallet: { checkProofsStates },
+      }));
+      walletService = {
+        getWalletWithActiveKeysetId,
+        getWallet: walletService.getWallet,
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await service.checkInflightProofs();
+
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'sat');
+      expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
       expect(checkProofsStates).toHaveBeenCalledTimes(2);
     });
 
@@ -711,6 +811,119 @@ describe('ProofService', () => {
       // Expect our wallet stub to choose p1 + p2
       expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
     });
+
+    it('selects only proofs for the requested unit', async () => {
+      const getWallet = mock(async (_mintUrl: string, unit?: string) => ({
+        selectProofsToSend(proofs: any[], amount: Amount) {
+          expect(unit).toBe('usd');
+          expect(proofs.every((proof) => proof.unit === 'usd')).toBe(true);
+          const selected: any[] = [];
+          let total = Amount.zero();
+          for (const proof of proofs) {
+            if (total.greaterThanOrEqual(amount)) break;
+            selected.push(proof);
+            total = total.add(proof.amount);
+          }
+          return { send: selected };
+        },
+      }));
+      walletService = {
+        async getWalletWithActiveKeysetId() {
+          return { keys: { id: keysetId } };
+        },
+        getWallet,
+      };
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'sat-large', id: 'k1', amount: Amount.from(100), unit: 'sat' }),
+        makeProof({ secret: 'usd-1', id: 'k1', amount: Amount.from(30), unit: 'usd' }),
+        makeProof({ secret: 'usd-2', id: 'k1', amount: Amount.from(25), unit: 'usd' }),
+      ]);
+
+      const selected = await service.selectProofsToSend(mintUrl, 50, {
+        unit: 'USD',
+        includeFees: false,
+      });
+
+      expect(getWallet).toHaveBeenCalledWith(mintUrl, 'usd');
+      expect(selected.map((proof) => proof.secret)).toEqual(['usd-1', 'usd-2']);
+    });
+
+    it('does not use sat balance to satisfy an insufficient custom-unit selection', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'sat-large', id: 'k1', amount: Amount.from(100), unit: 'sat' }),
+        makeProof({ secret: 'usd-small', id: 'k1', amount: Amount.from(10), unit: 'usd' }),
+      ]);
+
+      await expect(service.selectProofsToSend(mintUrl, 50, { unit: 'usd' })).rejects.toThrow(
+        ProofValidationError,
+      );
+    });
+  });
+
+  describe('reserveProofs', () => {
+    it('emits the reserved input amount without counting operation output proofs', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+      const operationId = 'reserve-op';
+      const events: CoreEvents['proofs:reserved'][] = [];
+      bus.on('proofs:reserved', (payload) => {
+        events.push(payload);
+      });
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'reserve-input', amount: Amount.from(5), unit: 'usd' }),
+        makeProof({
+          secret: 'reserve-output',
+          amount: Amount.from(100),
+          unit: 'usd',
+          createdByOperationId: operationId,
+        }),
+      ]);
+
+      const result = await service.reserveProofs(mintUrl, ['reserve-input'], operationId, {
+        unit: 'USD',
+      });
+
+      expect(result).toEqual({ amount: Amount.from(5), unit: 'usd' });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        mintUrl,
+        operationId,
+        secrets: ['reserve-input'],
+        unit: 'usd',
+      });
+      expect(events[0]?.amount).toEqual(Amount.from(5));
+    });
   });
 
   describe('balance queries', () => {
@@ -740,12 +953,14 @@ describe('ProofService', () => {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
           total: Amount.from(150),
+          unit: 'sat',
         },
       });
       await expect(service.getBalanceTotal({ mintUrls: [mintUrl] })).resolves.toEqual({
         spendable: Amount.from(50),
         reserved: Amount.from(100),
         total: Amount.from(150),
+        unit: 'sat',
       });
       await expect(service.getBalance(mintUrl)).resolves.toEqual(Amount.from(150));
       await expect(service.getSpendableBalance(mintUrl)).resolves.toEqual(Amount.from(50));
@@ -760,8 +975,10 @@ describe('ProofService', () => {
       const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
       const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
 
-      proofRepo.getReadyProofs = mock((mintUrl: string) => originalGetReadyProofs(mintUrl));
-      proofRepo.getAllReadyProofs = mock(() => originalGetAllReadyProofs());
+      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
+        originalGetReadyProofs(mintUrl, filter),
+      );
+      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
 
       const service = new ProofService(
         counterService,
@@ -788,11 +1005,12 @@ describe('ProofService', () => {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
           total: Amount.from(150),
+          unit: 'sat',
         },
       });
 
       expect(proofRepo.getReadyProofs).toHaveBeenCalledTimes(1);
-      expect(proofRepo.getReadyProofs).toHaveBeenCalledWith(mintUrl);
+      expect(proofRepo.getReadyProofs).toHaveBeenCalledWith(mintUrl, { units: ['sat'] });
       expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
     });
 
@@ -800,8 +1018,10 @@ describe('ProofService', () => {
       const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
       const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
 
-      proofRepo.getReadyProofs = mock((mintUrl: string) => originalGetReadyProofs(mintUrl));
-      proofRepo.getAllReadyProofs = mock(() => originalGetAllReadyProofs());
+      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
+        originalGetReadyProofs(mintUrl, filter),
+      );
+      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
 
       const service = new ProofService(
         counterService,
@@ -826,6 +1046,7 @@ describe('ProofService', () => {
         spendable: Amount.from(0),
         reserved: Amount.from(0),
         total: Amount.from(0),
+        unit: 'sat',
       });
 
       expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
@@ -858,17 +1079,20 @@ describe('ProofService', () => {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
           total: Amount.from(150),
+          unit: 'sat',
         },
         [otherMintUrl]: {
           spendable: Amount.from(200),
           reserved: Amount.from(0),
           total: Amount.from(200),
+          unit: 'sat',
         },
       });
       await expect(service.getBalanceTotal()).resolves.toEqual({
         spendable: Amount.from(250),
         reserved: Amount.from(100),
         total: Amount.from(350),
+        unit: 'sat',
       });
       await expect(service.getBalances()).resolves.toEqual({
         [mintUrl]: Amount.from(150),
@@ -884,6 +1108,98 @@ describe('ProofService', () => {
           ready: Amount.from(200),
           reserved: Amount.zero(),
           total: Amount.from(200),
+        },
+      });
+    });
+
+    it('keeps mixed-unit balances separated', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'sat-ready', amount: Amount.from(100), unit: 'sat' }),
+        makeProof({ secret: 'usd-ready', amount: Amount.from(40), unit: 'usd' }),
+        makeProof({ secret: 'usd-reserved', amount: Amount.from(10), unit: 'usd' }),
+      ]);
+      await proofRepo.saveProofs(otherMintUrl, [
+        makeProof({
+          secret: 'other-usd',
+          amount: Amount.from(7),
+          mintUrl: otherMintUrl,
+          unit: 'usd',
+        }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['usd-reserved'], operationId);
+
+      await expect(service.getBalancesByMint()).resolves.toEqual({
+        [mintUrl]: {
+          spendable: Amount.from(100),
+          reserved: Amount.zero(),
+          total: Amount.from(100),
+          unit: 'sat',
+        },
+      });
+      await expect(service.getBalancesByMint({ units: ['usd'] })).resolves.toEqual({
+        [mintUrl]: {
+          spendable: Amount.from(40),
+          reserved: Amount.from(10),
+          total: Amount.from(50),
+          unit: 'usd',
+        },
+        [otherMintUrl]: {
+          spendable: Amount.from(7),
+          reserved: Amount.zero(),
+          total: Amount.from(7),
+          unit: 'usd',
+        },
+      });
+      await expect(service.getBalancesByMintAndUnit()).resolves.toEqual({
+        [mintUrl]: {
+          sat: {
+            spendable: Amount.from(100),
+            reserved: Amount.zero(),
+            total: Amount.from(100),
+            unit: 'sat',
+          },
+          usd: {
+            spendable: Amount.from(40),
+            reserved: Amount.from(10),
+            total: Amount.from(50),
+            unit: 'usd',
+          },
+        },
+        [otherMintUrl]: {
+          usd: {
+            spendable: Amount.from(7),
+            reserved: Amount.zero(),
+            total: Amount.from(7),
+            unit: 'usd',
+          },
+        },
+      });
+      await expect(service.getBalanceTotal({ units: ['sat', 'usd'] })).rejects.toThrow(
+        ProofValidationError,
+      );
+      await expect(service.getBalanceTotalByUnit()).resolves.toEqual({
+        sat: {
+          spendable: Amount.from(100),
+          reserved: Amount.zero(),
+          total: Amount.from(100),
+          unit: 'sat',
+        },
+        usd: {
+          spendable: Amount.from(47),
+          reserved: Amount.from(10),
+          total: Amount.from(57),
+          unit: 'usd',
         },
       });
     });
@@ -914,12 +1230,14 @@ describe('ProofService', () => {
           spendable: Amount.from(50),
           reserved: Amount.from(100),
           total: Amount.from(150),
+          unit: 'sat',
         },
       });
       await expect(service.getBalanceTotal({ trustedOnly: true })).resolves.toEqual({
         spendable: Amount.from(50),
         reserved: Amount.from(100),
         total: Amount.from(150),
+        unit: 'sat',
       });
       await expect(service.getTrustedBalances()).resolves.toEqual({
         [mintUrl]: Amount.from(150),
