@@ -17,6 +17,8 @@ export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMel
     method: M;
     /** Method-specific payload required for the selected melt method. */
     methodData: MeltMethodInputData<M>;
+    /** Unit to melt. Defaults to `sat`. */
+    unit?: string;
   };
 }[TSupported];
 
@@ -60,11 +62,15 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * before committing to the external payment.
    */
   async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
-    const initOperation = await this.meltOperationService.init(
-      input.mintUrl,
-      input.method,
-      input.methodData,
-    );
+    const initOperation =
+      input.unit === undefined
+        ? await this.meltOperationService.init(input.mintUrl, input.method, input.methodData)
+        : await this.meltOperationService.init(
+            input.mintUrl,
+            input.method,
+            input.methodData,
+            input.unit,
+          );
     return this.meltOperationService.prepare(initOperation.id);
   }
 

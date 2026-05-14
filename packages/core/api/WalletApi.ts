@@ -14,6 +14,23 @@ import type {
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
 import type { Logger } from '../logging/Logger.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
+import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
+
+export interface WalletRestoreOptions {
+  /**
+   * Optional unit filter. Units are normalized to lowercase.
+   * Omit this to restore every keyset unit known by the mint.
+   */
+  units?: string[];
+}
+
+export interface WalletSweepOptions {
+  /**
+   * Optional unit filter. Units are normalized to lowercase.
+   * Omit this to sweep every keyset unit known by the mint.
+   */
+  units?: string[];
+}
 
 export class WalletApi {
   private mintService: MintService;
@@ -56,20 +73,26 @@ export class WalletApi {
 
   // Restoration logic is delegated to WalletRestoreService
 
-  async restore(mintUrl: string) {
+  async restore(mintUrl: string, options?: WalletRestoreOptions) {
     this.logger?.info('Starting restore', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for restore', {
       mintUrl,
       keysetCount: mint.keysets.length,
     });
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const unitFilter = this.getUnitFilter(options?.units);
     const failedKeysetIds: { [keysetId: string]: Error } = {};
-    for (const keyset of mint.keysets) {
+    for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
       try {
-        await this.walletRestoreService.restoreKeyset(mintUrl, wallet, keyset.id);
+        const wallet = await this.walletService.getWallet(mintUrl, unit);
+        await this.walletRestoreService.restoreKeyset(mintUrl, wallet, keyset.id, unit);
       } catch (error) {
-        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, error });
+        this.logger?.error('Keyset restore failed', {
+          mintUrl,
+          keysetId: keyset.id,
+          unit,
+          error,
+        });
         failedKeysetIds[keyset.id] = error as Error;
       }
     }
@@ -88,19 +111,20 @@ export class WalletApi {
    * @param mintUrl - The URL of the mint to sweep
    * @param bip39seed - The BIP39 seed of the wallet to sweep
    */
-  async sweep(mintUrl: string, bip39seed: Uint8Array) {
+  async sweep(mintUrl: string, bip39seed: Uint8Array, options?: WalletSweepOptions) {
     this.logger?.info('Starting sweep', { mintUrl });
     const mint = await this.mintService.addMintByUrl(mintUrl, { trusted: true });
     this.logger?.debug('Mint fetched for sweep', {
       mintUrl,
       keysetCount: mint.keysets.length,
     });
+    const unitFilter = this.getUnitFilter(options?.units);
     const failedKeysetIds: { [keysetId: string]: Error } = {};
-    for (const keyset of mint.keysets) {
+    for (const { keyset, unit } of this.getUnitScopedKeysets(mint.keysets, unitFilter)) {
       try {
-        await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed);
+        await this.walletRestoreService.sweepKeyset(mintUrl, keyset.id, bip39seed, unit);
       } catch (error) {
-        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, error });
+        this.logger?.error('Keyset restore failed', { mintUrl, keysetId: keyset.id, unit, error });
         failedKeysetIds[keyset.id] = error as Error;
       }
     }
@@ -131,8 +155,7 @@ export class WalletApi {
     }
 
     const metadata = getTokenMetadata(tokenString);
-    const wallet = await this.walletService.getWallet(metadata.mint);
-    return wallet.decodeToken(tokenString);
+    return this.tokenService.decodeToken(tokenString, metadata.mint);
   }
 
   /**
@@ -156,5 +179,22 @@ export class WalletApi {
       return paymentRequest.toEncodedCreqB();
     }
     return paymentRequest.toEncodedCreqA();
+  }
+
+  private getUnitFilter(units?: string[]): Set<string> | undefined {
+    const normalizedUnits = normalizeUnitList(units);
+    return normalizedUnits ? new Set(normalizedUnits) : undefined;
+  }
+
+  private getUnitScopedKeysets<T extends { id: string; unit?: string | null }>(
+    keysets: T[],
+    unitFilter?: Set<string>,
+  ): Array<{ keyset: T; unit: string }> {
+    return keysets
+      .map((keyset) => ({
+        keyset,
+        unit: normalizeUnit(keyset.unit ?? DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT }),
+      }))
+      .filter(({ unit }) => !unitFilter || unitFilter.has(unit));
   }
 }
