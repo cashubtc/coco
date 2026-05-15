@@ -108,8 +108,8 @@ describe('WalletRestoreService', () => {
       expect(mockBatchRestore).toHaveBeenCalledTimes(1);
       expect(mockCheckProofsStates).toHaveBeenCalledTimes(1);
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: 0,
-        send: Amount.from(99), // 50 + 50 - 1 fee
+        keep: { amount: Amount.zero(), unit: 'sat' },
+        send: { amount: Amount.from(99), unit: 'sat' }, // 50 + 50 - 1 fee
       });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {
@@ -134,14 +134,10 @@ describe('WalletRestoreService', () => {
       await service.sweepKeyset(mintUrl, keysetId, bip39seed, 'USD');
 
       expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
-        mintUrl,
-        {
-          keep: 0,
-          send: Amount.from(99),
-        },
-        { unit: 'usd' },
-      );
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
+        keep: { amount: Amount.zero(), unit: 'usd' },
+        send: { amount: Amount.from(99), unit: 'usd' },
+      });
 
       const savedProofsCall = (proofService.saveProofs as any).mock.calls[0];
       expect(savedProofsCall[0]).toBe(mintUrl);
@@ -206,8 +202,8 @@ describe('WalletRestoreService', () => {
         spent: 1,
       });
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: 0,
-        send: Amount.from(74), // 50 + 25 - 1 fee
+        keep: { amount: Amount.zero(), unit: 'sat' },
+        send: { amount: Amount.from(74), unit: 'sat' }, // 50 + 25 - 1 fee
       });
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
       expect(logger.info).toHaveBeenCalledWith('Keyset sweep completed', {

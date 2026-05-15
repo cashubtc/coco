@@ -96,7 +96,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     return this.mintOperationService.prepareNewQuote(
       input.mintUrl,
       parsed,
-      parsed.unit,
       input.method,
       methodData,
     );

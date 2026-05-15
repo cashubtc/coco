@@ -167,7 +167,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called with correct amount (before fees)
-    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, exactAmount, {
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: exactAmount,
       unit: 'sat',
     });
 
@@ -255,16 +256,16 @@ describe('MeltQuoteService.payMeltQuote', () => {
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called
-    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, amountWithFee, {
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: amountWithFee,
       unit: 'sat',
     });
 
     // Verify createBlankOutputs was called with the correct amount
     // sendAmount ( quote.amount = 100 + quote.fee_reserve = 10) - quote.amount = 100
     expect(createBlanksSpy).toHaveBeenCalledWith(
-      Amount.from(10), // 100 + 10 - 100
       mintUrl,
-      { unit: 'sat' },
+      { amount: Amount.from(10), unit: 'sat' }, // 100 + 10 - 100
     );
     // Verify createOutputsAndIncrementCounters was called with includeFees option
     // selectedAmount = 150, quote.amount = 100, quote.fee_reserve = 10, swapFees = 0
@@ -273,10 +274,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(createOutputsSpy).toHaveBeenCalledWith(
       mintUrl,
       {
-        keep: Amount.from(40), // selectedAmount - quote.amount - quote.fee_reserve - swapFees
-        send: Amount.from(110), // quote.amount + quote.fee_reserve
+        keep: { amount: Amount.from(40), unit: 'sat' }, // selectedAmount - quote.amount - quote.fee_reserve - swapFees
+        send: { amount: Amount.from(110), unit: 'sat' }, // quote.amount + quote.fee_reserve
       },
-      { includeFees: true, unit: 'sat' },
+      { includeFees: true },
     );
 
     // Verify wallet.send was called with sendAmount from outputData (includes receiver fees)
@@ -454,7 +455,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
       'usd',
     );
     expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
-    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, exactAmount, {
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: exactAmount,
       unit: 'usd',
     });
     expect(meltProofsBolt11Spy).toHaveBeenCalledWith(

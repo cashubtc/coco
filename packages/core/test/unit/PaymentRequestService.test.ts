@@ -271,7 +271,7 @@ describe('PaymentRequestService', () => {
 
       const transaction = await service.prepare(request, {
         mintUrl: testMintUrl,
-        amount: Amount.from(750),
+        amount: { amount: Amount.from(750), unit: 'sat' },
       });
 
       expect(mockSendOperationService.init).toHaveBeenCalledWith(testMintUrl, {
@@ -324,10 +324,16 @@ describe('PaymentRequestService', () => {
       const request = createResolvedRequest({ amount: Amount.from(100) });
 
       await expect(
-        service.prepare(request, { mintUrl: testMintUrl, amount: Amount.from(200) }),
+        service.prepare(request, {
+          mintUrl: testMintUrl,
+          amount: { amount: Amount.from(200), unit: 'sat' },
+        }),
       ).rejects.toThrow(PaymentRequestError);
       await expect(
-        service.prepare(request, { mintUrl: testMintUrl, amount: Amount.from(200) }),
+        service.prepare(request, {
+          mintUrl: testMintUrl,
+          amount: { amount: Amount.from(200), unit: 'sat' },
+        }),
       ).rejects.toThrow('Amount mismatch');
     });
 

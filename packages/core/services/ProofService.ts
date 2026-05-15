@@ -3,7 +3,6 @@ import {
   OutputData,
   splitAmount,
   sumProofs,
-  type AmountLike,
   type Keys,
   type Proof,
   type SerializedBlindedSignature,
@@ -29,13 +28,15 @@ import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
 import type { SeedService } from './SeedService.ts';
 import type { KeyRingService } from './KeyRingService.ts';
-import { DEFAULT_UNIT, assertSameUnit, normalizeUnit, normalizeUnitList } from '../amounts.ts';
 import {
-  deserializeOutputData,
-  mapProofToCoreProof,
-  toAmount,
-  type SerializedOutputData,
-} from '../utils';
+  DEFAULT_UNIT,
+  assertSameUnit,
+  normalizeUnit,
+  normalizeUnitList,
+  normalizeUnitAmount,
+  type UnitAmount,
+} from '../amounts.ts';
+import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
@@ -47,19 +48,16 @@ function countBlankOutputsForAmount(amount: Amount): number {
 }
 
 type ProofSelectionOptions = {
-  unit?: string;
   includeFees?: boolean;
 };
 
 function normalizeProofSelectionOptions(options?: boolean | ProofSelectionOptions): {
-  unit: string;
   includeFees: boolean;
 } {
   if (typeof options === 'boolean') {
-    return { unit: DEFAULT_UNIT, includeFees: options };
+    return { includeFees: options };
   }
   return {
-    unit: normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT }),
     includeFees: options?.includeFees ?? true,
   };
 }
@@ -97,17 +95,12 @@ export class ProofService {
    * Calculates the send amount including receiver fees.
    * This is used when the sender pays fees for the receiver.
    */
-  async calculateSendAmountWithFees(
-    mintUrl: string,
-    sendAmount: AmountLike,
-    options?: { unit?: string },
-  ): Promise<Amount> {
-    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
+  async calculateSendAmountWithFees(mintUrl: string, intent: UnitAmount): Promise<Amount> {
+    const { amount: requestedSendAmount, unit } = normalizeUnitAmount(intent);
     const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
       mintUrl,
       unit,
     );
-    const requestedSendAmount = toAmount(sendAmount);
     // Split the send amount to determine number of outputs
     let denominations = splitAmount(requestedSendAmount, keys.keys);
 
@@ -198,21 +191,18 @@ export class ProofService {
 
   async createOutputsAndIncrementCounters(
     mintUrl: string,
-    amount: { keep: AmountLike; send: AmountLike },
-    options?: { includeFees?: boolean; unit?: string },
+    amount: { keep: UnitAmount; send: UnitAmount },
+    options?: { includeFees?: boolean },
   ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: Amount; keepAmount: Amount }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
-    let requestedKeep: Amount;
-    let requestedSend: Amount;
-    try {
-      requestedKeep = toAmount(amount.keep);
-      requestedSend = toAmount(amount.send);
-    } catch {
-      return { keep: [], send: [], sendAmount: Amount.zero(), keepAmount: Amount.zero() };
-    }
+    const keep = normalizeUnitAmount(amount.keep);
+    const send = normalizeUnitAmount(amount.send);
+    assertSameUnit(keep.unit, send.unit, 'Output amount');
+    const requestedKeep = keep.amount;
+    const requestedSend = send.amount;
+    const unit = keep.unit;
     const { wallet, keys, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
       mintUrl,
       unit,
@@ -225,7 +215,10 @@ export class ProofService {
     let sendAmount = requestedSend;
     let keepAmount = requestedKeep;
     if (options?.includeFees && !requestedSend.isZero()) {
-      sendAmount = await this.calculateSendAmountWithFees(mintUrl, requestedSend, { unit });
+      sendAmount = await this.calculateSendAmountWithFees(mintUrl, {
+        amount: requestedSend,
+        unit,
+      });
       const feeAmount = sendAmount.subtract(requestedSend);
       // Adjust keep amount: if send increases due to fees, keep decreases
       keepAmount = requestedKeep.greaterThanOrEqual(feeAmount)
@@ -638,7 +631,7 @@ export class ProofService {
     secrets: string[],
     operationId: string,
     options?: { unit?: string },
-  ): Promise<{ amount: Amount; unit: string }> {
+  ): Promise<UnitAmount> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -676,10 +669,9 @@ export class ProofService {
 
     await this.eventBus?.emit('proofs:reserved', {
       mintUrl,
-      unit,
       operationId,
       secrets,
-      amount,
+      amount: { amount, unit },
     });
     this.logger?.debug('Proofs reserved', {
       mintUrl,
@@ -763,12 +755,12 @@ export class ProofService {
    */
   async selectProofsToSend(
     mintUrl: string,
-    amount: AmountLike,
+    intent: UnitAmount,
     options: boolean | ProofSelectionOptions = true,
   ): Promise<Proof[]> {
-    const { unit, includeFees } = normalizeProofSelectionOptions(options);
+    const { amount: requestedAmount, unit } = normalizeUnitAmount(intent);
+    const { includeFees } = normalizeProofSelectionOptions(options);
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl, { unit });
-    const requestedAmount = toAmount(amount);
     const totalAmount = sumProofs(proofs);
     if (totalAmount.lessThan(requestedAmount)) {
       throw new ProofValidationError('Not enough proofs to send');
@@ -899,13 +891,8 @@ export class ProofService {
     return preparedProofs;
   }
 
-  async createBlankOutputs(
-    amount: AmountLike,
-    mintUrl: string,
-    options?: { unit?: string },
-  ): Promise<OutputData[]> {
-    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
-    const requestedAmount = toAmount(amount);
+  async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputData[]> {
+    const { amount: requestedAmount, unit } = normalizeUnitAmount(intent);
     const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
     if (requestedAmount.isZero()) {
       return [];
@@ -944,12 +931,12 @@ export class ProofService {
     mintUrl: string,
     outputData: OutputData[],
     changeSignatures: SerializedBlindedSignature[],
-    options?: { unit?: string; createdByOperationId?: string },
+    options: { unit: string; createdByOperationId?: string },
   ): Promise<CoreProof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
-    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
+    const unit = normalizeUnit(options.unit);
     if (
       !outputData ||
       outputData.length === 0 ||
@@ -1021,7 +1008,7 @@ export class ProofService {
   async recoverProofsFromOutputData(
     mintUrl: string,
     serializedOutputData: SerializedOutputData,
-    options?: { unit?: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
+    options: { unit: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
   ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -1030,7 +1017,7 @@ export class ProofService {
       throw new ProofValidationError('serializedOutputData is required');
     }
 
-    const unit = normalizeUnit(options?.unit, { defaultUnit: DEFAULT_UNIT });
+    const unit = normalizeUnit(options.unit);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     // Deserialize OutputData

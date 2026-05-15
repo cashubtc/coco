@@ -4,7 +4,7 @@ import type {
   PreparedPaymentRequest,
   ResolvedPaymentRequest,
 } from '@core/services';
-import type { UnitAmountLike } from '../amounts.ts';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /**
  * API for parsing, preparing, and executing payment requests.
@@ -30,7 +30,16 @@ export class PaymentRequestsApi {
     request: ResolvedPaymentRequest,
     options: { mintUrl: string; amount?: UnitAmountLike },
   ): Promise<PreparedPaymentRequest> {
-    return this.paymentRequestService.prepare(request, options);
+    return this.paymentRequestService.prepare(request, {
+      mintUrl: options.mintUrl,
+      amount:
+        options.amount === undefined
+          ? undefined
+          : parseUnitAmount(options.amount, {
+              defaultUnit: request.unit,
+              explicitUnit: request.unit,
+            }),
+    });
   }
 
   /**

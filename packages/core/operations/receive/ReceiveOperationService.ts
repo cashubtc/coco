@@ -4,6 +4,7 @@ import {
   type Proof,
   type ProofState as CashuProofState,
   type Token,
+  Amount,
 } from '@cashu/cashu-ts';
 
 import {
@@ -145,7 +146,7 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(id, mintUrl, amount, preparedProofs, unit);
+    const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs);
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {
@@ -210,10 +211,10 @@ export class ReceiveOperationService {
     const outputResult = await this.proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
-        keep: keepAmount,
-        send: 0,
+        keep: { amount: keepAmount, unit: operation.unit },
+        send: { amount: Amount.zero(), unit: operation.unit },
       },
-      { unit: operation.unit },
+      {},
     );
 
     if (!outputResult.keep || outputResult.keep.length === 0) {

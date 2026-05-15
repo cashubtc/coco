@@ -37,7 +37,7 @@ import {
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error';
-import { DEFAULT_UNIT, parseUnitAmount, type UnitAmountLike } from '../../amounts.ts';
+import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
@@ -123,12 +123,12 @@ export class MintOperationService {
 
   async init(
     mintUrl: string,
-    intent: UnitAmountLike,
+    intent: UnitAmount,
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
     options?: { quoteId?: string },
   ): Promise<InitMintOperation> {
-    const parsed = parseUnitAmount(intent);
+    const parsed = normalizeUnitAmount(intent);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -165,13 +165,11 @@ export class MintOperationService {
 
   async prepareNewQuote(
     mintUrl: string,
-    amount: UnitAmountLike,
-    unit = DEFAULT_UNIT,
+    intent: UnitAmount,
     method: MintMethod = 'bolt11',
     methodData: MintMethodData = {},
   ): Promise<PendingMintOperation> {
-    const parsed = parseUnitAmount(amount, { explicitUnit: unit });
-    const initOperation = await this.init(mintUrl, parsed, method, methodData);
+    const initOperation = await this.init(mintUrl, normalizeUnitAmount(intent), method, methodData);
     return this.prepare(initOperation.id);
   }
 
@@ -243,13 +241,10 @@ export class MintOperationService {
       }
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMintMethodUnitSupported(
-          initOp.mintUrl,
-          4,
-          initOp.method,
-          initOp.unit,
-          initOp.amount,
-        );
+        await this.mintService.assertMintMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
+          amount: initOp.amount,
+          unit: initOp.unit,
+        });
         const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
           initOp.mintUrl,
           initOp.unit,

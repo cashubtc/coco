@@ -36,10 +36,13 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const { mintUrl, amount, unit } = operation;
 
     // Try exact match first (no swap needed)
-    const exactProofs = await proofService.selectProofsToSend(mintUrl, amount, {
-      unit,
-      includeFees: false,
-    });
+    const exactProofs = await proofService.selectProofsToSend(
+      mintUrl,
+      { amount, unit },
+      {
+        includeFees: false,
+      },
+    );
     const exactAmount = sumProofs(exactProofs);
     const needsSwap = !exactAmount.equals(amount);
 
@@ -58,10 +61,13 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     } else {
       // Need to swap - select proofs including fees
 
-      const selected = await proofService.selectProofsToSend(mintUrl, amount, {
-        unit,
-        includeFees: true,
-      });
+      const selected = await proofService.selectProofsToSend(
+        mintUrl,
+        { amount, unit },
+        {
+          includeFees: true,
+        },
+      );
       selectedProofs = selected;
       const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);
@@ -75,10 +81,10 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
       const outputResult = await proofService.createOutputsAndIncrementCounters(
         mintUrl,
         {
-          keep: keepAmount,
-          send: amount,
+          keep: { amount: keepAmount, unit },
+          send: { amount, unit },
         },
-        { unit },
+        {},
       );
 
       // Serialize for storage
@@ -281,10 +287,10 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
               const outputResult = await proofService.createOutputsAndIncrementCounters(
                 mintUrl,
                 {
-                  keep: reclaimAmount,
-                  send: 0,
+                  keep: { amount: reclaimAmount, unit: operation.unit },
+                  send: { amount: Amount.zero(), unit: operation.unit },
                 },
-                { unit: operation.unit },
+                {},
               );
 
               // Swap to reclaim

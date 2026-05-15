@@ -45,6 +45,11 @@ describe('SendOperationService', () => {
       state: 'ready',
     }) as CoreProof;
 
+  const unitAmount = (amount: number, unit = 'sat') => ({
+    amount: Amount.from(amount),
+    unit,
+  });
+
   beforeEach(() => {
     sendOpRepo = new MemorySendOperationRepository();
     proofRepo = new MemoryProofRepository();
@@ -96,14 +101,13 @@ describe('SendOperationService', () => {
       selectProofsToSend: mock(
         async (
           selectedMintUrl: string,
-          amount: Amount,
-          options: boolean | { includeFees?: boolean; unit?: string } = true,
+          intent: { amount: Amount; unit: string },
+          options: boolean | { includeFees?: boolean } = true,
         ) => {
           const includeFees =
             typeof options === 'boolean' ? options : (options.includeFees ?? true);
-          const unit = typeof options === 'boolean' ? 'sat' : (options.unit ?? 'sat');
-          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit });
-          return wallet.selectProofsToSend(proofs, amount, includeFees).send;
+          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit: intent.unit });
+          return wallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
       reserveProofs: mock((selectedMintUrl: string, secrets: string[], operationId: string) =>
@@ -151,8 +155,8 @@ describe('SendOperationService', () => {
   it('serializes prepare calls for the same mint', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
 
-    const firstInit = await service.init(mintUrl, 10);
-    const secondInit = await service.init(mintUrl, 10);
+    const firstInit = await service.init(mintUrl, unitAmount(10));
+    const secondInit = await service.init(mintUrl, unitAmount(10));
 
     let releaseFirstReservation: () => void;
     const firstReservationBlocked = new Promise<void>((resolve) => {
@@ -192,7 +196,7 @@ describe('SendOperationService', () => {
   it('emits send:prepared after the prepared state is persisted', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
 
-    const initOp = await service.init(mintUrl, 100);
+    const initOp = await service.init(mintUrl, unitAmount(100));
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
 
@@ -211,7 +215,7 @@ describe('SendOperationService', () => {
   it('emits send:pending after the pending state is persisted', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
 
-    const initOp = await service.init(mintUrl, 100);
+    const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
@@ -234,7 +238,7 @@ describe('SendOperationService', () => {
       makeProof('usd-proof', 100, 'usd'),
     ]);
 
-    const initOp = await service.init(mintUrl, { amount: 100, unit: 'USD' });
+    const initOp = await service.init(mintUrl, unitAmount(100, 'USD'));
     const preparedOp = await service.prepare(initOp);
     const result = await service.execute(preparedOp);
 

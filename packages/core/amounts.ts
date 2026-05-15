@@ -52,6 +52,13 @@ export function assertSameUnit(actual: string, expected: string, context?: strin
   }
 }
 
+/**
+ * Parse ergonomic public-boundary amount input into canonical `UnitAmount`.
+ *
+ * Use this at API and hook boundaries only. Internal services, operations, and
+ * handlers should accept `UnitAmount` directly so amount+unit cannot be split or
+ * accidentally defaulted.
+ */
 export function parseUnitAmount(
   input: UnitAmountLike,
   options?: {
@@ -74,4 +81,41 @@ export function parseUnitAmount(
     amount: Amount.from(amountInput),
     unit,
   };
+}
+
+/**
+ * Normalize an already-coupled amount/unit value for internal service use.
+ *
+ * `parseUnitAmount()` is the public-boundary parser for ergonomic inputs. Internal
+ * service and operation layers should accept `UnitAmount` and use this helper only
+ * to canonicalize the `Amount` instance and lower-case the unit.
+ */
+export function normalizeUnitAmount(value: UnitAmount): UnitAmount {
+  return {
+    amount: Amount.from(value.amount),
+    unit: normalizeUnit(value.unit),
+  };
+}
+
+export function assertUnitAmount(value: UnitAmount, context = 'Unit amount'): UnitAmount {
+  if (!value || typeof value !== 'object') {
+    throw new UnitValidationError(`${context} is required`);
+  }
+  if (!('amount' in value)) {
+    throw new UnitValidationError(`${context} amount is required`);
+  }
+  if (!('unit' in value)) {
+    throw new UnitValidationError(`${context} unit is required`);
+  }
+  return normalizeUnitAmount(value);
+}
+
+export function sameUnitAmount(
+  amount: UnitAmount,
+  expectedUnit: string,
+  context?: string,
+): UnitAmount {
+  const normalized = assertUnitAmount(amount, context ?? 'Unit amount');
+  assertSameUnit(normalized.unit, expectedUnit, context);
+  return normalized;
 }

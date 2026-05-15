@@ -130,10 +130,16 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
       totalAmount,
     });
 
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, {
-      unit: ctx.operation.unit,
-      includeFees: true,
-    });
+    const selectedProofs = await ctx.proofService.selectProofsToSend(
+      mintUrl,
+      {
+        amount: totalAmount,
+        unit: ctx.operation.unit,
+      },
+      {
+        includeFees: true,
+      },
+    );
     const selectedAmount = sumProofs(selectedProofs);
     if (selectedAmount.lessThan(totalAmount)) {
       throw new ProofValidationError('Melt amount is not sufficient after fees');
@@ -219,10 +225,16 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx.logger?.debug('Preparing swap-then-melt', { operationId, totalAmount });
 
     // Re-select proofs including the swap fee
-    const selectedProofs = await ctx.proofService.selectProofsToSend(mintUrl, totalAmount, {
-      unit: ctx.operation.unit,
-      includeFees: true,
-    });
+    const selectedProofs = await ctx.proofService.selectProofsToSend(
+      mintUrl,
+      {
+        amount: totalAmount,
+        unit: ctx.operation.unit,
+      },
+      {
+        includeFees: true,
+      },
+    );
     const selectedAmount = sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);
 
@@ -254,10 +266,10 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
-        keep: keepAmount,
-        send: sendAmount,
+        keep: { amount: keepAmount, unit: ctx.operation.unit },
+        send: { amount: sendAmount, unit: ctx.operation.unit },
       },
-      { includeFees: true, unit: ctx.operation.unit },
+      { includeFees: true },
     );
 
     ctx.logger?.info('Swap-then-melt prepared', {
@@ -296,7 +308,8 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     ctx: BasePrepareContext<'bolt11'>,
   ) {
     const changeDelta = sendAmount.subtract(quoteAmount);
-    return ctx.proofService.createBlankOutputs(changeDelta, ctx.operation.mintUrl, {
+    return ctx.proofService.createBlankOutputs(ctx.operation.mintUrl, {
+      amount: changeDelta,
       unit: ctx.operation.unit,
     });
   }

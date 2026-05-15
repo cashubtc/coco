@@ -34,7 +34,7 @@ import {
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import { parseUnitAmount, type UnitAmountLike } from '../../amounts.ts';
+import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
 /**
  * Service that manages send operations as sagas.
@@ -121,13 +121,13 @@ export class SendOperationService {
    */
   async init<M extends SendMethod = 'default'>(
     mintUrl: string,
-    amount: UnitAmountLike,
+    amount: UnitAmount,
     options: CreateSendOperationOptions<M> = {
       method: 'default' as M,
       methodData: {} as SendMethodData<M>,
     },
   ): Promise<InitSendOperation> {
-    const parsed = parseUnitAmount(amount);
+    const parsed = normalizeUnitAmount(amount);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
@@ -323,7 +323,7 @@ export class SendOperationService {
    * High-level send method that orchestrates init → prepare → execute.
    * This is the main entry point for consumers.
    */
-  async send(mintUrl: string, amount: UnitAmountLike): Promise<Token> {
+  async send(mintUrl: string, amount: UnitAmount): Promise<Token> {
     const initOp = await this.init(mintUrl, amount);
     const preparedOp = await this.prepare(initOp);
     const { token } = await this.execute(preparedOp);

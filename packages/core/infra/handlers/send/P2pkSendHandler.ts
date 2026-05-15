@@ -44,10 +44,13 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
-    const selected = await proofService.selectProofsToSend(mintUrl, amount, {
-      unit,
-      includeFees: true,
-    });
+    const selected = await proofService.selectProofsToSend(
+      mintUrl,
+      { amount, unit },
+      {
+        includeFees: true,
+      },
+    );
     const selectedAmount = sumProofs(selected);
     const fee = wallet.getFeesForProofs(selected);
     const requiredAmount = amount.add(fee);
@@ -60,10 +63,10 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const outputResult = await proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
-        keep: keepAmount,
-        send: 0,
+        keep: { amount: keepAmount, unit },
+        send: { amount: keepAmount.subtract(keepAmount), unit },
       },
-      { unit },
+      {},
     );
 
     const keyset = wallet.getKeyset();

@@ -56,6 +56,11 @@ describe('ProofService', () => {
       ...overrides,
     }) as unknown as CoreProof;
 
+  const unitAmount = (amount: number | bigint | Amount, unit = 'sat') => ({
+    amount: Amount.from(amount),
+    unit,
+  });
+
   const makeSeed = () => new Uint8Array(64).fill(7);
 
   let originalCreateDeterministicData: typeof OutputData.createDeterministicData;
@@ -118,11 +123,14 @@ describe('ProofService', () => {
         bus,
       );
       await expect(
-        service.createOutputsAndIncrementCounters('', { keep: 1, send: 1 }),
+        service.createOutputsAndIncrementCounters('', {
+          keep: unitAmount(1),
+          send: unitAmount(1),
+        }),
       ).rejects.toThrow(ProofValidationError);
     });
 
-    it('returns empty arrays for invalid or negative amounts', async () => {
+    it('rejects invalid or negative internal unit amounts', async () => {
       const service = new ProofService(
         counterService,
         proofRepo,
@@ -134,19 +142,19 @@ describe('ProofService', () => {
         bus,
       );
 
-      const res1 = await service.createOutputsAndIncrementCounters(mintUrl, {
-        keep: -1,
-        send: 0,
-      });
-      expect(res1.keep.length).toBe(0);
-      expect(res1.send.length).toBe(0);
+      await expect(
+        service.createOutputsAndIncrementCounters(mintUrl, {
+          keep: { amount: -1 as unknown as Amount, unit: 'sat' },
+          send: unitAmount(0),
+        }),
+      ).rejects.toThrow();
 
-      const res2 = await service.createOutputsAndIncrementCounters(mintUrl, {
-        keep: Number.NaN as unknown as number,
-        send: 5,
-      });
-      expect(res2.keep.length).toBe(0);
-      expect(res2.send.length).toBe(0);
+      await expect(
+        service.createOutputsAndIncrementCounters(mintUrl, {
+          keep: { amount: Number.NaN as unknown as Amount, unit: 'sat' },
+          send: unitAmount(5),
+        }),
+      ).rejects.toThrow();
     });
 
     it('creates deterministic outputs and increments counters accordingly', async () => {
@@ -174,8 +182,8 @@ describe('ProofService', () => {
       );
 
       const result = await service.createOutputsAndIncrementCounters(mintUrl, {
-        keep: 3,
-        send: 7,
+        keep: unitAmount(3),
+        send: unitAmount(7),
       });
 
       expect(calls.length).toBe(2);
@@ -221,8 +229,8 @@ describe('ProofService', () => {
 
       await service.createOutputsAndIncrementCounters(
         mintUrl,
-        { keep: 1, send: 0 },
-        { unit: 'USD' },
+        { keep: unitAmount(1, 'USD'), send: unitAmount(0, 'USD') },
+        {},
       );
 
       expect(getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
@@ -257,7 +265,7 @@ describe('ProofService', () => {
 
       const amount = Amount.from(1n << 60n);
 
-      const result = await service.createBlankOutputs(amount, mintUrl);
+      const result = await service.createBlankOutputs(mintUrl, { amount, unit: 'sat' });
 
       expect(result.length).toBe(60);
       expect(counters).toEqual(Array.from({ length: 60 }, (_, index) => index));
@@ -308,7 +316,7 @@ describe('ProofService', () => {
         bus,
       );
 
-      await expect(service.calculateSendAmountWithFees(mintUrl, 3)).resolves.toEqual(
+      await expect(service.calculateSendAmountWithFees(mintUrl, unitAmount(3))).resolves.toEqual(
         Amount.from(3),
       );
     });
@@ -350,7 +358,7 @@ describe('ProofService', () => {
         bus,
       );
 
-      await expect(service.calculateSendAmountWithFees(mintUrl, 1)).rejects.toThrow(
+      await expect(service.calculateSendAmountWithFees(mintUrl, unitAmount(1))).rejects.toThrow(
         'Unable to split remaining amount: 1',
       );
     });
@@ -739,7 +747,9 @@ describe('ProofService', () => {
         makeProof({ secret: 'a2', id: 'k1', amount: Amount.from(10) }),
       ]);
 
-      await expect(service.selectProofsToSend(mintUrl, 100)).rejects.toThrow(ProofValidationError);
+      await expect(service.selectProofsToSend(mintUrl, unitAmount(100))).rejects.toThrow(
+        ProofValidationError,
+      );
     });
 
     it('ignores proofs that are already reserved by another operation', async () => {
@@ -764,7 +774,7 @@ describe('ProofService', () => {
         }),
       ]);
 
-      const selected = await service.selectProofsToSend(mintUrl, 40);
+      const selected = await service.selectProofsToSend(mintUrl, unitAmount(40));
       expect(selected.map((p) => p.secret)).toEqual(['available-1']);
     });
 
@@ -807,7 +817,7 @@ describe('ProofService', () => {
       const p3 = makeProof({ secret: 'b3', id: 'k1', amount: Amount.from(80) });
       await proofRepo.saveProofs(mintUrl, [p1, p2, p3]);
 
-      const selected = await service.selectProofsToSend(mintUrl, 60);
+      const selected = await service.selectProofsToSend(mintUrl, unitAmount(60));
       // Expect our wallet stub to choose p1 + p2
       expect(selected.map((p) => p.secret)).toEqual(['b1', 'b2']);
     });
@@ -850,8 +860,7 @@ describe('ProofService', () => {
         makeProof({ secret: 'usd-2', id: 'k1', amount: Amount.from(25), unit: 'usd' }),
       ]);
 
-      const selected = await service.selectProofsToSend(mintUrl, 50, {
-        unit: 'USD',
+      const selected = await service.selectProofsToSend(mintUrl, unitAmount(50, 'USD'), {
         includeFees: false,
       });
 
@@ -876,7 +885,7 @@ describe('ProofService', () => {
         makeProof({ secret: 'usd-small', id: 'k1', amount: Amount.from(10), unit: 'usd' }),
       ]);
 
-      await expect(service.selectProofsToSend(mintUrl, 50, { unit: 'usd' })).rejects.toThrow(
+      await expect(service.selectProofsToSend(mintUrl, unitAmount(50, 'usd'))).rejects.toThrow(
         ProofValidationError,
       );
     });
@@ -920,9 +929,8 @@ describe('ProofService', () => {
         mintUrl,
         operationId,
         secrets: ['reserve-input'],
-        unit: 'usd',
       });
-      expect(events[0]?.amount).toEqual(Amount.from(5));
+      expect(events[0]?.amount).toEqual({ amount: Amount.from(5), unit: 'usd' });
     });
   });
 

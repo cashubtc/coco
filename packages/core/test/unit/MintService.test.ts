@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { MintService } from '../../services/MintService';
 import { ProofValidationError } from '../../models/Error';
@@ -310,7 +311,10 @@ describe('MintService', () => {
       expect(capability.supported).toBe(true);
       expect(capability.legacySatAllowed).toBe(true);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'sat',
+        }),
       ).resolves.toBeUndefined();
     });
 
@@ -318,7 +322,10 @@ describe('MintService', () => {
       useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'usd', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'usd',
+        }),
       ).rejects.toThrow(ProofValidationError);
     });
 
@@ -339,7 +346,31 @@ describe('MintService', () => {
       expect(capability.supported).toBe(false);
       expect(capability.disabled).toBe(true);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'sat',
+        }),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('rejects disabled NUT settings even when method metadata is omitted', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { disabled: true },
+        },
+      } as MintInfo);
+
+      const capability = await service.getMintMethodUnitCapability(testMintUrl, 4, 'bolt11', 'sat');
+
+      expect(capability.supported).toBe(false);
+      expect(capability.disabled).toBe(true);
+      expect(capability.legacySatAllowed).toBeUndefined();
+      await expect(
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'sat',
+        }),
       ).rejects.toThrow(ProofValidationError);
     });
 
@@ -347,13 +378,22 @@ describe('MintService', () => {
       useMintInfo(mintInfoWithMethods([{ method: 'bolt11', unit: 'usd' }]));
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'USD', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'USD',
+        }),
       ).resolves.toBeUndefined();
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'sat',
+        }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt12', 'usd', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt12', {
+          amount: Amount.from(100),
+          unit: 'usd',
+        }),
       ).rejects.toThrow(ProofValidationError);
     });
 
@@ -363,13 +403,22 @@ describe('MintService', () => {
       );
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 9),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(9),
+          unit: 'sat',
+        }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 101),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(101),
+          unit: 'sat',
+        }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', 'sat', 100),
+        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+          amount: Amount.from(100),
+          unit: 'sat',
+        }),
       ).resolves.toBeUndefined();
     });
   });

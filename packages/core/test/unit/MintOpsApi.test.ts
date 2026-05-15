@@ -109,7 +109,6 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
-      'sat',
       'bolt11',
       {},
     );
@@ -126,7 +125,6 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
-      'sat',
       'bolt11',
       {},
     );
@@ -145,7 +143,6 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
       { amount: Amount.from(10), unit: 'usd' },
-      'usd',
       'bolt11',
       {},
     );

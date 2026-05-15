@@ -173,19 +173,19 @@ describe('P2pkSendHandler', () => {
       selectProofsToSend: mock(
         async (
           _mintUrl: string,
-          amount: Amount,
+          intent: { amount: Amount; unit: string },
           options: boolean | { includeFees?: boolean } = true,
         ) => {
           const includeFees =
             typeof options === 'boolean' ? options : (options.includeFees ?? true);
           const proofs = await proofRepository.getAvailableProofs(mintUrl);
           const totalAvailable = Amount.sum(proofs.map((proof) => proof.amount));
-          if (totalAvailable.lessThan(amount)) {
+          if (totalAvailable.lessThan(intent.amount)) {
             throw new ProofValidationError(
-              `Insufficient balance: need ${amount}, have ${totalAvailable}`,
+              `Insufficient balance: need ${intent.amount}, have ${totalAvailable}`,
             );
           }
-          return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+          return mockWallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
       reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(110) })),
@@ -369,10 +369,10 @@ describe('P2pkSendHandler', () => {
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,
         {
-          keep: Amount.from(9),
-          send: 0,
+          keep: { amount: Amount.from(9), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
         },
-        { unit: 'sat' },
+        {},
       );
     });
 
@@ -382,17 +382,18 @@ describe('P2pkSendHandler', () => {
       const result = await handler.prepare(buildPrepareContext(operation));
 
       expect(result.unit).toBe('usd');
-      expect(proofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, Amount.from(100), {
-        unit: 'usd',
-        includeFees: true,
-      });
+      expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+        mintUrl,
+        { amount: Amount.from(100), unit: 'usd' },
+        { includeFees: true },
+      );
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,
         {
-          keep: Amount.from(9),
-          send: 0,
+          keep: { amount: Amount.from(9), unit: 'usd' },
+          send: { amount: Amount.zero(), unit: 'usd' },
         },
-        { unit: 'usd' },
+        {},
       );
       expect(proofService.reserveProofs).toHaveBeenCalledWith(
         mintUrl,

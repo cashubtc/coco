@@ -13,7 +13,7 @@ import type { CoreEvents } from '../events/types';
 import type { MeltQuoteRepository } from '../repositories';
 import { mapProofToCoreProof } from '@core/utils';
 import { UnknownMintError } from '../models/Error';
-import { DEFAULT_UNIT, assertSameUnit, normalizeUnit } from '../amounts.ts';
+import { DEFAULT_UNIT, assertSameUnit, normalizeUnit, type UnitAmount } from '../amounts.ts';
 
 export interface MeltQuoteOptions {
   unit?: string;
@@ -118,10 +118,13 @@ export class MeltQuoteService {
       }
       await this.mintService.assertMintMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
       const scopedQuote = { ...quote, unit };
+      const quoteAmount: UnitAmount = { amount: scopedQuote.amount, unit };
+      const feeReserve: UnitAmount = { amount: scopedQuote.fee_reserve, unit };
       const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
-      let targetAmount = scopedQuote.amount.add(scopedQuote.fee_reserve);
-      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, targetAmount, {
+      let targetAmount = quoteAmount.amount.add(feeReserve.amount);
+      const selectedProofs = await this.proofService.selectProofsToSend(mintUrl, {
+        amount: targetAmount,
         unit,
       });
       const selectedInputFee = wallet.getFeesForProofs(selectedProofs);
@@ -184,17 +187,18 @@ export class MeltQuoteService {
 
         // Create deterministic blank outputs for receiving change and reserve counters
         const changeDelta = sendAmount.subtract(scopedQuote.amount);
-        const blankOutputs = await this.proofService.createBlankOutputs(changeDelta, mintUrl, {
+        const blankOutputs = await this.proofService.createBlankOutputs(mintUrl, {
+          amount: changeDelta,
           unit,
         });
 
         const outputData = await this.proofService.createOutputsAndIncrementCounters(
           mintUrl,
           {
-            keep: keepAmount,
-            send: sendAmount,
+            keep: { amount: keepAmount, unit },
+            send: { amount: sendAmount, unit },
           },
-          { includeFees: true, unit },
+          { includeFees: true },
         );
         const outputConfig: OutputConfig = {
           send: { type: 'custom', data: outputData.send },

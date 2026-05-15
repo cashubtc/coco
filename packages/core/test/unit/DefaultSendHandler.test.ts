@@ -177,13 +177,13 @@ describe('DefaultSendHandler', () => {
       selectProofsToSend: mock(
         async (
           selectedMintUrl: string,
-          amount: Amount,
+          intent: { amount: Amount; unit: string },
           options: boolean | { includeFees?: boolean } = true,
         ) => {
           const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
           const includeFees =
             typeof options === 'boolean' ? options : (options.includeFees ?? true);
-          return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+          return mockWallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
       reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(100) })),
@@ -315,10 +315,10 @@ describe('DefaultSendHandler', () => {
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,
         {
-          keep: Amount.from(9),
-          send: Amount.from(100),
+          keep: { amount: Amount.from(9), unit: 'sat' },
+          send: { amount: Amount.from(100), unit: 'sat' },
         },
-        { unit: 'sat' },
+        {},
       );
     });
 
@@ -326,7 +326,7 @@ describe('DefaultSendHandler', () => {
       (proofService.selectProofsToSend as Mock<any>).mockImplementation(
         (
           _mintUrl: string,
-          _amount: Amount,
+          _intent: { amount: Amount; unit: string },
           options: boolean | { includeFees?: boolean } = true,
         ) => {
           const includeFees =
@@ -472,10 +472,10 @@ describe('DefaultSendHandler', () => {
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,
         {
-          keep: Amount.from(99),
-          send: 0,
+          keep: { amount: Amount.from(99), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
         },
-        { unit: 'sat' },
+        {},
       );
       expect(receiveArgs).toBeDefined();
       expect(

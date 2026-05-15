@@ -86,9 +86,14 @@ describe('MeltOpsApi', () => {
   it('prepare creates and prepares a melt operation', async () => {
     const result = await api.prepare(supportedPrepareInput);
 
-    expect(meltOperationService.init).toHaveBeenCalledWith(mintUrl, 'bolt11', {
-      invoice: 'lnbc1test',
-    });
+    expect(meltOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      {
+        invoice: 'lnbc1test',
+      },
+      undefined,
+    );
     expect(meltOperationService.prepare).toHaveBeenCalledWith('op-1');
     expect(result).toBe(preparedOperation);
   });

@@ -13,7 +13,7 @@ import type {
   PreparedSendOperation,
   SendOperationService,
 } from '../operations/send';
-import { DEFAULT_UNIT, parseUnitAmount, normalizeUnit, type UnitAmountLike } from '../amounts.ts';
+import { DEFAULT_UNIT, normalizeUnit, type UnitAmount } from '../amounts.ts';
 
 type InbandPaymentRequestTransport = { type: 'inband' };
 type HttpPaymentRequestTransport = { type: 'http'; url: string };
@@ -106,17 +106,14 @@ export class PaymentRequestService {
    */
   async prepare(
     request: ResolvedPaymentRequest,
-    options: { mintUrl: string; amount?: UnitAmountLike },
+    options: { mintUrl: string; amount?: UnitAmount },
   ): Promise<PreparedPaymentRequest> {
     const { mintUrl, amount } = options;
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
     const preparedRequest = await this.resolvePreparedRequest(request, finalAmount);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
-    const initSend = await this.sendOperationService.init(mintUrl, {
-      amount: finalAmount,
-      unit: preparedRequest.unit,
-    });
+    const initSend = await this.sendOperationService.init(mintUrl, finalAmount);
     const preparedSend = await this.sendOperationService.prepare(initSend);
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
     return { sendOperation: preparedSend, request: preparedRequest };
@@ -226,14 +223,15 @@ export class PaymentRequestService {
     return matchingMints;
   }
 
-  private validateAmount(request: ResolvedPaymentRequest, amount?: UnitAmountLike): Amount {
-    const providedAmount =
-      amount === undefined
-        ? undefined
-        : parseUnitAmount(amount, {
-            defaultUnit: request.unit,
-            explicitUnit: request.unit,
-          }).amount;
+  private validateAmount(request: ResolvedPaymentRequest, amount?: UnitAmount): UnitAmount {
+    const providedAmount = amount?.amount;
+    if (amount) {
+      if (normalizeUnit(amount.unit) !== request.unit) {
+        throw new PaymentRequestError(
+          `Unit mismatch: request specifies ${request.unit} but ${amount.unit} was provided`,
+        );
+      }
+    }
     if (request.amount && providedAmount && !request.amount.equals(providedAmount)) {
       throw new PaymentRequestError(
         `Amount mismatch: request specifies ${request.amount} but ${providedAmount} was provided`,
@@ -243,13 +241,14 @@ export class PaymentRequestService {
     if (!finalAmount) {
       throw new PaymentRequestError('Amount is required but was not provided');
     }
-    return finalAmount;
+    return { amount: finalAmount, unit: request.unit };
   }
 
   private async resolvePreparedRequest(
     request: ResolvedPaymentRequest,
-    amount: Amount,
+    intent: UnitAmount,
   ): Promise<ResolvedPaymentRequest> {
+    const amount = intent.amount;
     if (request.amount?.equals(amount)) {
       return request;
     }

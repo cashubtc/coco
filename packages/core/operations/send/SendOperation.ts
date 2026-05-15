@@ -26,7 +26,7 @@ export type SendOperationState =
 
 import type { Amount, Token } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
-import { parseUnitAmount, type UnitAmountLike } from '../../amounts.ts';
+import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 
 // ============================================================================
@@ -292,17 +292,16 @@ export interface CreateSendOperationOptions<M extends SendMethod = SendMethod> {
 export function createSendOperation<M extends SendMethod = SendMethod>(
   id: string,
   mintUrl: string,
-  amount: UnitAmountLike,
+  amount: UnitAmount,
   options: CreateSendOperationOptions<M>,
 ): InitSendOperation {
   const now = Date.now();
-  const parsed = parseUnitAmount(amount);
   return {
     id,
     state: 'init',
     mintUrl,
-    amount: parsed.amount,
-    unit: parsed.unit,
+    amount: amount.amount,
+    unit: normalizeUnit(amount.unit),
     method: options.method,
     methodData: options.methodData,
     createdAt: now,

@@ -62,15 +62,12 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * before committing to the external payment.
    */
   async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
-    const initOperation =
-      input.unit === undefined
-        ? await this.meltOperationService.init(input.mintUrl, input.method, input.methodData)
-        : await this.meltOperationService.init(
-            input.mintUrl,
-            input.method,
-            input.methodData,
-            input.unit,
-          );
+    const initOperation = await this.meltOperationService.init(
+      input.mintUrl,
+      input.method,
+      input.methodData,
+      input.unit,
+    );
     return this.meltOperationService.prepare(initOperation.id);
   }
 

@@ -77,7 +77,19 @@ describe('PaymentRequestsApi', () => {
     expect(result).toBe(preparedRequest);
     expect(service.prepare).toHaveBeenCalledWith(resolvedRequest, {
       mintUrl: 'https://mint.test',
-      amount: Amount.from(100),
+      amount: { amount: Amount.from(100), unit: 'sat' },
+    });
+  });
+
+  it('normalizes object-form payment request amounts at the API boundary', async () => {
+    await api.prepare(resolvedRequest, {
+      mintUrl: 'https://mint.test',
+      amount: { amount: Amount.from(100), unit: 'SAT' },
+    });
+
+    expect(service.prepare).toHaveBeenCalledWith(resolvedRequest, {
+      mintUrl: 'https://mint.test',
+      amount: { amount: Amount.from(100), unit: 'sat' },
     });
   });
 

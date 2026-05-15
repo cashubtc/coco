@@ -133,15 +133,13 @@ export class WalletRestoreService {
     });
 
     const outputAmounts = {
-      keep: 0,
-      send: sweepTotalAmount,
+      keep: { amount: sweepTotalAmount.subtract(sweepTotalAmount), unit: normalizedUnit },
+      send: { amount: sweepTotalAmount, unit: normalizedUnit },
     };
-    const outputResults =
-      normalizedUnit === DEFAULT_UNIT
-        ? await this.proofService.createOutputsAndIncrementCounters(mintUrl, outputAmounts)
-        : await this.proofService.createOutputsAndIncrementCounters(mintUrl, outputAmounts, {
-            unit: normalizedUnit,
-          });
+    const outputResults = await this.proofService.createOutputsAndIncrementCounters(
+      mintUrl,
+      outputAmounts,
+    );
     const outputConfig: OutputConfig = {
       send: { type: 'custom', data: outputResults.send },
       keep: { type: 'custom', data: outputResults.keep },
@@ -154,12 +152,7 @@ export class WalletRestoreService {
     );
     await this.proofService.saveProofs(
       mintUrl,
-      mapProofToCoreProof(
-        mintUrl,
-        'ready',
-        [...keep, ...send],
-        normalizedUnit === DEFAULT_UNIT ? undefined : { unit: normalizedUnit },
-      ),
+      mapProofToCoreProof(mintUrl, 'ready', [...keep, ...send], { unit: normalizedUnit }),
     );
 
     this.logger?.info('Keyset sweep completed', {
@@ -264,12 +257,7 @@ export class WalletRestoreService {
 
     await this.proofService.saveProofs(
       mintUrl,
-      mapProofToCoreProof(
-        mintUrl,
-        'ready',
-        checkedProofs.ready,
-        normalizedUnit === DEFAULT_UNIT ? undefined : { unit: normalizedUnit },
-      ),
+      mapProofToCoreProof(mintUrl, 'ready', checkedProofs.ready, { unit: normalizedUnit }),
     );
     this.logger?.info('Saved restored proofs for keyset', {
       mintUrl,
