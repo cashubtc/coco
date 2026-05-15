@@ -42,7 +42,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     mockMintService = {
       isTrustedMint: mock(() => Promise.resolve(true)),
-      assertMintMethodUnitSupported: mock(() => Promise.resolve()),
+      assertMethodUnitSupported: mock(() => Promise.resolve()),
     } as any;
 
     mockMeltQuoteRepo = {
@@ -116,7 +116,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     const result = await service.createMeltQuote(mintUrl, 'lnbc110...', { unit: 'USD' });
 
-    expect(mockMintService.assertMintMethodUnitSupported).toHaveBeenCalledWith(
+    expect(mockMintService.assertMethodUnitSupported).toHaveBeenCalledWith(
       mintUrl,
       5,
       'bolt11',
@@ -448,7 +448,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     await service.payMeltQuote(mintUrl, quoteId, { unit: 'usd' });
 
-    expect(mockMintService.assertMintMethodUnitSupported).toHaveBeenCalledWith(
+    expect(mockMintService.assertMethodUnitSupported).toHaveBeenCalledWith(
       mintUrl,
       5,
       'bolt11',

@@ -170,7 +170,7 @@ export class MeltOperationService {
 
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMintMethodUnitSupported(
+        await this.mintService.assertMethodUnitSupported(
           initOp.mintUrl,
           5,
           initOp.method,

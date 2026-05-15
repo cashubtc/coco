@@ -47,21 +47,6 @@ function countBlankOutputsForAmount(amount: Amount): number {
   return Math.max((value - 1n).toString(2).length, 1);
 }
 
-type ProofSelectionOptions = {
-  includeFees?: boolean;
-};
-
-function normalizeProofSelectionOptions(options?: boolean | ProofSelectionOptions): {
-  includeFees: boolean;
-} {
-  if (typeof options === 'boolean') {
-    return { includeFees: options };
-  }
-  return {
-    includeFees: options?.includeFees ?? true,
-  };
-}
-
 export class ProofService {
   private readonly counterService: CounterService;
   private readonly proofRepository: ProofRepository;
@@ -127,6 +112,9 @@ export class ProofService {
     if (inflightProofs.length === 0) {
       return;
     }
+
+    // TODO: Use either `wallet.checkProofsStates()` or
+    // `wallet.groupProofsByState()` to batch check proof states across units by mint.
     const batchedByMintAndUnit = new Map<
       string,
       { mintUrl: string; unit: string; proofs: CoreProof[] }
@@ -396,6 +384,9 @@ export class ProofService {
    */
   async getBalancesByMint(scope?: BalanceQuery): Promise<BalancesByMint> {
     const unit = this.getSingleBalanceUnit(scope, 'getBalancesByMint');
+    if (unit === undefined) {
+      return {};
+    }
     const balancesByMintAndUnit = await this.getBalancesByMintAndUnit({
       ...scope,
       units: [unit],
@@ -477,6 +468,9 @@ export class ProofService {
    */
   async getBalanceTotal(scope?: BalanceQuery): Promise<BalanceSnapshot> {
     const unit = this.getSingleBalanceUnit(scope, 'getBalanceTotal');
+    if (unit === undefined) {
+      return this.emptyBalanceSnapshot();
+    }
     const balances = await this.getBalancesByMint(scope);
     return Object.values(balances).reduce<BalanceSnapshot>(
       (total, balance) => ({
@@ -570,10 +564,16 @@ export class ProofService {
     );
   }
 
-  private getSingleBalanceUnit(scope: BalanceQuery | undefined, caller: string): string {
+  private getSingleBalanceUnit(
+    scope: BalanceQuery | undefined,
+    caller: string,
+  ): string | undefined {
     const units = normalizeUnitList(scope?.units);
-    if (!units || units.length === 0) {
+    if (!units) {
       return DEFAULT_UNIT;
+    }
+    if (units.length === 0) {
+      return undefined;
     }
     if (units.length > 1) {
       throw new ProofValidationError(
@@ -756,10 +756,9 @@ export class ProofService {
   async selectProofsToSend(
     mintUrl: string,
     intent: UnitAmount,
-    options: boolean | ProofSelectionOptions = true,
+    includeFees: boolean = true,
   ): Promise<Proof[]> {
     const { amount: requestedAmount, unit } = normalizeUnitAmount(intent);
-    const { includeFees } = normalizeProofSelectionOptions(options);
     const proofs = await this.proofRepository.getAvailableProofs(mintUrl, { unit });
     const totalAmount = sumProofs(proofs);
     if (totalAmount.lessThan(requestedAmount)) {

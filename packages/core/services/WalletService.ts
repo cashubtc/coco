@@ -43,13 +43,13 @@ export class WalletService {
     this.authProviderGetter = authProviderGetter;
   }
 
-  async getWallet(mintUrl: string, unit = DEFAULT_UNIT): Promise<Wallet> {
+  async getWallet(mintUrl: string, unit: string): Promise<Wallet> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new Error('mintUrl is required');
     }
 
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const normalizedUnit = normalizeUnit(unit);
     const cacheKey = this.getWalletCacheKey(normalizedMintUrl, normalizedUnit);
 
     // Serve from cache when fresh
@@ -76,7 +76,7 @@ export class WalletService {
 
   async getWalletWithActiveKeysetId(
     mintUrl: string,
-    unit = DEFAULT_UNIT,
+    unit: string,
   ): Promise<{
     wallet: Wallet;
     keysetId: string;
@@ -84,7 +84,7 @@ export class WalletService {
     keys: MintKeys;
     unit: string;
   }> {
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const normalizedUnit = normalizeUnit(unit);
     const wallet = await this.getWallet(mintUrl, normalizedUnit);
     const keyset = wallet.keyChain.getCheapestKeyset();
     const mintKeys = keyset.toMintKeys();
@@ -153,9 +153,9 @@ export class WalletService {
   /**
    * Force refresh mint data and get fresh wallet
    */
-  async refreshWallet(mintUrl: string, unit = DEFAULT_UNIT): Promise<Wallet> {
+  async refreshWallet(mintUrl: string, unit: string): Promise<Wallet> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const normalizedUnit = normalizeUnit(unit);
     this.clearCache(normalizedMintUrl, normalizedUnit);
     await this.mintService.updateMintData(normalizedMintUrl);
     return this.getWallet(normalizedMintUrl, normalizedUnit);
@@ -169,9 +169,9 @@ export class WalletService {
     return normalizeUnit(unit || DEFAULT_UNIT, { defaultUnit: DEFAULT_UNIT });
   }
 
-  private async buildWallet(mintUrl: string, unit = DEFAULT_UNIT): Promise<Wallet> {
+  private async buildWallet(mintUrl: string, unit: string): Promise<Wallet> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
+    const normalizedUnit = normalizeUnit(unit);
     const { mint, keysets } = await this.mintService.ensureUpdatedMint(normalizedMintUrl);
 
     const validKeysets = keysets.filter(

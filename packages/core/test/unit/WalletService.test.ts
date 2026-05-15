@@ -75,10 +75,10 @@ function makeService(keysets: Keyset[]) {
 }
 
 describe('WalletService unit scoping', () => {
-  it('builds sat wallets by default', async () => {
+  it('builds sat wallets when sat is requested explicitly', async () => {
     const { service } = makeService([makeKeyset('sat')]);
 
-    const wallet = await service.getWallet(mintUrl);
+    const wallet = await service.getWallet(mintUrl, 'sat');
 
     expect(wallet.unit).toBe('sat');
   });

@@ -102,10 +102,8 @@ describe('SendOperationService', () => {
         async (
           selectedMintUrl: string,
           intent: { amount: Amount; unit: string },
-          options: boolean | { includeFees?: boolean } = true,
+          includeFees: boolean = true,
         ) => {
-          const includeFees =
-            typeof options === 'boolean' ? options : (options.includeFees ?? true);
           const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit: intent.unit });
           return wallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },

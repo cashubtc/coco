@@ -174,10 +174,8 @@ describe('P2pkSendHandler', () => {
         async (
           _mintUrl: string,
           intent: { amount: Amount; unit: string },
-          options: boolean | { includeFees?: boolean } = true,
+          includeFees: boolean = true,
         ) => {
-          const includeFees =
-            typeof options === 'boolean' ? options : (options.includeFees ?? true);
           const proofs = await proofRepository.getAvailableProofs(mintUrl);
           const totalAvailable = Amount.sum(proofs.map((proof) => proof.amount));
           if (totalAvailable.lessThan(intent.amount)) {
@@ -385,7 +383,7 @@ describe('P2pkSendHandler', () => {
       expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
         mintUrl,
         { amount: Amount.from(100), unit: 'usd' },
-        { includeFees: true },
+        true,
       );
       expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
         mintUrl,

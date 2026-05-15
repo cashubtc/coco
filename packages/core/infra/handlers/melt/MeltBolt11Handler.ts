@@ -136,9 +136,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         amount: totalAmount,
         unit: ctx.operation.unit,
       },
-      {
-        includeFees: true,
-      },
+      true,
     );
     const selectedAmount = sumProofs(selectedProofs);
     if (selectedAmount.lessThan(totalAmount)) {
@@ -231,9 +229,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
         amount: totalAmount,
         unit: ctx.operation.unit,
       },
-      {
-        includeFees: true,
-      },
+      true,
     );
     const selectedAmount = sumProofs(selectedProofs);
     const inputSecrets = selectedProofs.map((p) => p.secret);

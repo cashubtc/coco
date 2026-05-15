@@ -387,7 +387,7 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
           mintUrl,
           { amount: Amount.from(110), unit: 'sat' },
-          { includeFees: true },
+          true,
         );
       });
 
@@ -396,9 +396,7 @@ describe('MeltBolt11Handler', () => {
         const ctx = buildPrepareContext(operation);
 
         (proofService.selectProofsToSend as Mock<any>).mockImplementation(
-          (_mintUrl: string, _amount: number, options: boolean | { includeFees?: boolean }) => {
-            const includeFees =
-              typeof options === 'boolean' ? options : (options.includeFees ?? true);
+          (_mintUrl: string, _amount: number, includeFees: boolean) => {
             return Promise.resolve(
               includeFees
                 ? [makeProof('input-1', 60), makeProof('input-2', 50), makeProof('input-3', 1)]
@@ -415,7 +413,7 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
           mintUrl,
           { amount: Amount.from(110), unit: 'sat' },
-          { includeFees: true },
+          true,
         );
       });
 
@@ -473,7 +471,7 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
           mintUrl,
           { amount: Amount.from(110), unit: 'usd' },
-          { includeFees: true },
+          true,
         );
         expect(proofService.reserveProofs).toHaveBeenCalledWith(
           mintUrl,
@@ -540,12 +538,12 @@ describe('MeltBolt11Handler', () => {
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[0]).toEqual([
           mintUrl,
           { amount: Amount.from(110), unit: 'sat' },
-          { includeFees: true },
+          true,
         ]);
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[1]).toEqual([
           mintUrl,
           { amount: Amount.from(110), unit: 'sat' },
-          { includeFees: true },
+          true,
         ]);
       });
 

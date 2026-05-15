@@ -191,7 +191,7 @@ describe('MeltOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
-      assertMintMethodUnitSupported: mock(async () => {}),
+      assertMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
@@ -281,7 +281,7 @@ describe('MeltOperationService', () => {
       const prepared = await service.prepare('op-usd');
 
       expect(prepared.unit).toBe('usd');
-      expect(mintService.assertMintMethodUnitSupported).toHaveBeenCalledWith(
+      expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(
         mintUrl,
         5,
         'bolt11',
@@ -293,7 +293,7 @@ describe('MeltOperationService', () => {
     it('rejects non-sat melts when NUT-05 capability validation rejects the unit', async () => {
       const initOp = makeInitOp('op-usd-rejected', { unit: 'usd' });
       await meltOperationRepository.create(initOp);
-      (mintService.assertMintMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
+      (mintService.assertMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
         new ProofValidationError('Mint does not advertise NUT-05 support for bolt11/usd'),
       );
 

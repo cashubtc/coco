@@ -36,13 +36,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     const { mintUrl, amount, unit } = operation;
 
     // Try exact match first (no swap needed)
-    const exactProofs = await proofService.selectProofsToSend(
-      mintUrl,
-      { amount, unit },
-      {
-        includeFees: false,
-      },
-    );
+    const exactProofs = await proofService.selectProofsToSend(mintUrl, { amount, unit }, false);
     const exactAmount = sumProofs(exactProofs);
     const needsSwap = !exactAmount.equals(amount);
 
@@ -61,13 +55,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     } else {
       // Need to swap - select proofs including fees
 
-      const selected = await proofService.selectProofsToSend(
-        mintUrl,
-        { amount, unit },
-        {
-          includeFees: true,
-        },
-      );
+      const selected = await proofService.selectProofsToSend(mintUrl, { amount, unit }, true);
       selectedProofs = selected;
       const selectedAmount = sumProofs(selectedProofs);
       fee = wallet.getFeesForProofs(selectedProofs);

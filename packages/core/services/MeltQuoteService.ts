@@ -65,7 +65,7 @@ export class MeltQuoteService {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    await this.mintService.assertMintMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
+    await this.mintService.assertMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
 
     this.logger?.info('Creating melt quote', { mintUrl, unit });
     try {
@@ -116,7 +116,7 @@ export class MeltQuoteService {
       if (options.unit !== undefined) {
         assertSameUnit(unit, options.unit, `Melt quote ${quoteId}`);
       }
-      await this.mintService.assertMintMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
+      await this.mintService.assertMethodUnitSupported(mintUrl, 5, 'bolt11', unit);
       const scopedQuote = { ...quote, unit };
       const quoteAmount: UnitAmount = { amount: scopedQuote.amount, unit };
       const feeReserve: UnitAmount = { amount: scopedQuote.fee_reserve, unit };

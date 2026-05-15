@@ -261,7 +261,7 @@ export class MintService {
     };
   }
 
-  async assertMintMethodUnitSupported(
+  async assertMethodUnitSupported(
     mintUrl: string,
     nut: 4 | 5,
     method: string,

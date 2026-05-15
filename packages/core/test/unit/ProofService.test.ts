@@ -860,9 +860,7 @@ describe('ProofService', () => {
         makeProof({ secret: 'usd-2', id: 'k1', amount: Amount.from(25), unit: 'usd' }),
       ]);
 
-      const selected = await service.selectProofsToSend(mintUrl, unitAmount(50, 'USD'), {
-        includeFees: false,
-      });
+      const selected = await service.selectProofsToSend(mintUrl, unitAmount(50, 'USD'), false);
 
       expect(getWallet).toHaveBeenCalledWith(mintUrl, 'usd');
       expect(selected.map((proof) => proof.secret)).toEqual(['usd-1', 'usd-2']);
@@ -1054,6 +1052,43 @@ describe('ProofService', () => {
         spendable: Amount.from(0),
         reserved: Amount.from(0),
         total: Amount.from(0),
+        unit: 'sat',
+      });
+
+      expect(proofRepo.getReadyProofs).not.toHaveBeenCalled();
+      expect(proofRepo.getAllReadyProofs).not.toHaveBeenCalled();
+    });
+
+    it('treats an explicit empty unit selection as no balance results', async () => {
+      const originalGetReadyProofs = proofRepo.getReadyProofs.bind(proofRepo);
+      const originalGetAllReadyProofs = proofRepo.getAllReadyProofs.bind(proofRepo);
+
+      proofRepo.getReadyProofs = mock((mintUrl: string, filter?: any) =>
+        originalGetReadyProofs(mintUrl, filter),
+      );
+      proofRepo.getAllReadyProofs = mock((filter?: any) => originalGetAllReadyProofs(filter));
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'empty-unit-a1', amount: Amount.from(100), unit: 'sat' }),
+        makeProof({ secret: 'empty-unit-u1', amount: Amount.from(40), unit: 'usd' }),
+      ]);
+
+      await expect(service.getBalancesByMint({ units: [] })).resolves.toEqual({});
+      await expect(service.getBalanceTotal({ units: [] })).resolves.toEqual({
+        spendable: Amount.zero(),
+        reserved: Amount.zero(),
+        total: Amount.zero(),
         unit: 'sat',
       });
 

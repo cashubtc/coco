@@ -178,11 +178,9 @@ describe('DefaultSendHandler', () => {
         async (
           selectedMintUrl: string,
           intent: { amount: Amount; unit: string },
-          options: boolean | { includeFees?: boolean } = true,
+          includeFees: boolean = true,
         ) => {
           const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
-          const includeFees =
-            typeof options === 'boolean' ? options : (options.includeFees ?? true);
           return mockWallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
@@ -327,10 +325,8 @@ describe('DefaultSendHandler', () => {
         (
           _mintUrl: string,
           _intent: { amount: Amount; unit: string },
-          options: boolean | { includeFees?: boolean } = true,
+          includeFees: boolean = true,
         ) => {
-          const includeFees =
-            typeof options === 'boolean' ? options : (options.includeFees ?? true);
           return Promise.resolve(
             includeFees ? [makeProof('input-1', 60), makeProof('input-2', 40)] : [],
           );

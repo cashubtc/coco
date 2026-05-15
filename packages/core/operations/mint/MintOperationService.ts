@@ -241,7 +241,7 @@ export class MintOperationService {
       }
       try {
         const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMintMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
+        await this.mintService.assertMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
           amount: initOp.amount,
           unit: initOp.unit,
         });

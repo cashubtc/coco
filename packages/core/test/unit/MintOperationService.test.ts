@@ -157,7 +157,7 @@ describe('MintOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
-      assertMintMethodUnitSupported: mock(async () => {}),
+      assertMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
     walletService = {
@@ -226,7 +226,7 @@ describe('MintOperationService', () => {
     });
 
     expect(pending.unit).toBe('usd');
-    expect(mintService.assertMintMethodUnitSupported).toHaveBeenCalledWith(mintUrl, 4, 'bolt11', {
+    expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(mintUrl, 4, 'bolt11', {
       amount: Amount.from(10),
       unit: 'usd',
     });
@@ -279,7 +279,7 @@ describe('MintOperationService', () => {
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
     };
-    (mintService.assertMintMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
+    (mintService.assertMethodUnitSupported as Mock<any>).mockRejectedValueOnce(
       new Error('Mint https://mint.test does not advertise NUT-04 support for bolt11/usd'),
     );
 

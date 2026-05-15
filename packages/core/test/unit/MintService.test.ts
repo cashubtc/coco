@@ -311,7 +311,7 @@ describe('MintService', () => {
       expect(capability.supported).toBe(true);
       expect(capability.legacySatAllowed).toBe(true);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'sat',
         }),
@@ -322,7 +322,7 @@ describe('MintService', () => {
       useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'usd',
         }),
@@ -346,7 +346,7 @@ describe('MintService', () => {
       expect(capability.supported).toBe(false);
       expect(capability.disabled).toBe(true);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'sat',
         }),
@@ -367,7 +367,7 @@ describe('MintService', () => {
       expect(capability.disabled).toBe(true);
       expect(capability.legacySatAllowed).toBeUndefined();
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'sat',
         }),
@@ -378,19 +378,19 @@ describe('MintService', () => {
       useMintInfo(mintInfoWithMethods([{ method: 'bolt11', unit: 'usd' }]));
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'USD',
         }),
       ).resolves.toBeUndefined();
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'sat',
         }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt12', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt12', {
           amount: Amount.from(100),
           unit: 'usd',
         }),
@@ -403,19 +403,19 @@ describe('MintService', () => {
       );
 
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(9),
           unit: 'sat',
         }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(101),
           unit: 'sat',
         }),
       ).rejects.toThrow(ProofValidationError);
       await expect(
-        service.assertMintMethodUnitSupported(testMintUrl, 4, 'bolt11', {
+        service.assertMethodUnitSupported(testMintUrl, 4, 'bolt11', {
           amount: Amount.from(100),
           unit: 'sat',
         }),
