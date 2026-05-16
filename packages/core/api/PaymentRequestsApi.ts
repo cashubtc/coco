@@ -1,10 +1,10 @@
-import type { AmountLike } from '@cashu/cashu-ts';
 import type {
   PaymentRequestExecutionResult,
   PaymentRequestService,
   PreparedPaymentRequest,
   ResolvedPaymentRequest,
 } from '@core/services';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /**
  * API for parsing, preparing, and executing payment requests.
@@ -28,9 +28,18 @@ export class PaymentRequestsApi {
    */
   async prepare(
     request: ResolvedPaymentRequest,
-    options: { mintUrl: string; amount?: AmountLike },
+    options: { mintUrl: string; amount?: UnitAmountLike },
   ): Promise<PreparedPaymentRequest> {
-    return this.paymentRequestService.prepare(request, options);
+    return this.paymentRequestService.prepare(request, {
+      mintUrl: options.mintUrl,
+      amount:
+        options.amount === undefined
+          ? undefined
+          : parseUnitAmount(options.amount, {
+              defaultUnit: request.unit,
+              explicitUnit: request.unit,
+            }),
+    });
   }
 
   /**

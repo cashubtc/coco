@@ -1,4 +1,3 @@
-import type { AmountLike } from '@cashu/cashu-ts';
 import type {
   MintMethod,
   MintMethodData,
@@ -9,6 +8,7 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '@core/operations/mint';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
@@ -16,10 +16,10 @@ export type DefaultSupportedMintMethod = 'bolt11';
 type PrepareMintInputCommon = {
   /** Mint that will execute the quote-backed mint operation. */
   mintUrl: string;
-  /** Amount to request from the mint. */
-  amount: AmountLike;
-  /** Unit to request from the mint. Only `sat` is currently supported. */
-  unit?: 'sat';
+  /** Amount to request from the mint. Bare amounts use `sat` unless `unit` is set. */
+  amount: UnitAmountLike;
+  /** Unit to request from the mint. */
+  unit?: string;
 };
 
 type ImportMintQuoteInputCommon = {
@@ -86,24 +86,16 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
 
   constructor(private readonly mintOperationService: MintOperationService) {}
 
-  private assertSupportedUnit(unit: string): void {
-    if (unit !== 'sat') {
-      throw new Error(`Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`);
-    }
-  }
-
   /**
    * Creates a new remote quote, then persists a prepared mint operation without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
-    const unit = input.unit ?? 'sat';
-    this.assertSupportedUnit(unit);
+    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
     return this.mintOperationService.prepareNewQuote(
       input.mintUrl,
-      input.amount,
-      unit,
+      parsed,
       input.method,
       methodData,
     );
@@ -113,7 +105,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Imports an existing quote snapshot into a prepared mint operation without executing it.
    */
   async importQuote(input: ImportMintQuoteInput<TSupported>): Promise<PendingMintOperation> {
-    this.assertSupportedUnit(input.quote.unit);
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
     return this.mintOperationService.importQuote(

@@ -232,6 +232,7 @@ function createPreparedSendOperation(
     state: 'prepared',
     mintUrl: MINT_URL,
     amount: Amount.from(100),
+    unit: 'sat',
     method: 'default',
     methodData: {},
     createdAt: 1_700_000_000_000,
@@ -440,6 +441,31 @@ function createRolledBackMeltOperation(
 }
 
 describe('useSendOperation', () => {
+  it('passes object-form custom-unit amount inputs through to send prepare', async () => {
+    const { manager, send } = createSendManagerMock();
+    const prepared = createPreparedSendOperation({
+      amount: Amount.from(25),
+      unit: 'usd',
+    });
+    const input: SendOperationPrepareInput = {
+      mintUrl: MINT_URL,
+      amount: { amount: Amount.from(25), unit: 'USD' },
+    };
+
+    send.prepare.mockResolvedValue(prepared);
+
+    const { result } = renderHook(() => useSendOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(input);
+    });
+
+    expect(send.prepare).toHaveBeenCalledWith(input);
+    expect(result.current.currentOperation).toEqual(prepared);
+  });
+
   it('prepares, executes the bound operation by default, and synchronizes after finalize', async () => {
     const { manager, send } = createSendManagerMock();
     const prepared = createPreparedSendOperation();
@@ -996,6 +1022,32 @@ describe('useReceiveOperation', () => {
 });
 
 describe('useMintOperation', () => {
+  it('passes object-form custom-unit amount inputs through to mint prepare', async () => {
+    const { manager, mint } = createMintManagerMock();
+    const pending = createPendingMintOperation({
+      amount: Amount.from(50),
+      unit: 'usd',
+    });
+    const input: MintOperationPrepareInput = {
+      mintUrl: MINT_URL,
+      amount: { amount: Amount.from(50), unit: 'USD' },
+      method: 'bolt11',
+    };
+
+    mint.prepare.mockResolvedValue(pending);
+
+    const { result } = renderHook(() => useMintOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(input);
+    });
+
+    expect(mint.prepare).toHaveBeenCalledWith(input);
+    expect(result.current.currentOperation).toEqual(pending);
+  });
+
   it('binds newly prepared and imported quotes when starting unbound', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation();
@@ -1251,6 +1303,30 @@ describe('useMintOperation', () => {
 });
 
 describe('useMeltOperation', () => {
+  it('passes custom-unit melt inputs through to melt prepare', async () => {
+    const { manager, melt } = createMeltManagerMock();
+    const prepared = createPreparedMeltOperation({ unit: 'usd' });
+    melt.prepare.mockResolvedValue(prepared);
+
+    const { result } = renderHook(() => useMeltOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    const input: MeltOperationPrepareInput = {
+      mintUrl: MINT_URL,
+      method: 'bolt11',
+      methodData: { invoice: 'lnbc1meltinvoice' },
+      unit: 'USD',
+    };
+
+    await act(async () => {
+      await result.current.prepare(input);
+    });
+
+    expect(melt.prepare).toHaveBeenCalledWith(input);
+    expect(result.current.currentOperation).toEqual(prepared);
+  });
+
   it('prepares, executes the bound operation by default, and synchronizes after finalize', async () => {
     const { manager, melt } = createMeltManagerMock();
     const prepared = createPreparedMeltOperation();

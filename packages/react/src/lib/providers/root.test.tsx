@@ -49,6 +49,9 @@ function createManagerMock(): Manager {
     wallet: {
       balances: {
         byMint: vi.fn().mockResolvedValue({}),
+        byMintAndUnit: vi.fn().mockResolvedValue({}),
+        byUnit: vi.fn().mockResolvedValue({}),
+        totalByUnit: vi.fn().mockResolvedValue({}),
       },
     },
     on: vi.fn(),

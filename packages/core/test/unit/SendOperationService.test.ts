@@ -34,15 +34,21 @@ describe('SendOperationService', () => {
   let handlerProvider: SendHandlerProvider;
   let service: SendOperationService;
 
-  const makeProof = (secret: string, amount: number): CoreProof =>
+  const makeProof = (secret: string, amount: number, unit = 'sat'): CoreProof =>
     ({
       amount: Amount.from(amount),
       C: `C_${secret}`,
       id: keysetId,
       secret,
       mintUrl,
+      unit,
       state: 'ready',
     }) as CoreProof;
+
+  const unitAmount = (amount: number, unit = 'sat') => ({
+    amount: Amount.from(amount),
+    unit,
+  });
 
   beforeEach(() => {
     sendOpRepo = new MemorySendOperationRepository();
@@ -93,9 +99,13 @@ describe('SendOperationService', () => {
 
     proofService = {
       selectProofsToSend: mock(
-        async (selectedMintUrl: string, amount: Amount, includeFees: boolean = true) => {
-          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl);
-          return wallet.selectProofsToSend(proofs, amount, includeFees).send;
+        async (
+          selectedMintUrl: string,
+          intent: { amount: Amount; unit: string },
+          includeFees: boolean = true,
+        ) => {
+          const proofs = await proofRepo.getAvailableProofs(selectedMintUrl, { unit: intent.unit });
+          return wallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
       reserveProofs: mock((selectedMintUrl: string, secrets: string[], operationId: string) =>
@@ -143,8 +153,8 @@ describe('SendOperationService', () => {
   it('serializes prepare calls for the same mint', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 10), makeProof('proof-2', 10)]);
 
-    const firstInit = await service.init(mintUrl, 10);
-    const secondInit = await service.init(mintUrl, 10);
+    const firstInit = await service.init(mintUrl, unitAmount(10));
+    const secondInit = await service.init(mintUrl, unitAmount(10));
 
     let releaseFirstReservation: () => void;
     const firstReservationBlocked = new Promise<void>((resolve) => {
@@ -184,7 +194,7 @@ describe('SendOperationService', () => {
   it('emits send:prepared after the prepared state is persisted', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
 
-    const initOp = await service.init(mintUrl, 100);
+    const initOp = await service.init(mintUrl, unitAmount(100));
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
 
@@ -203,7 +213,7 @@ describe('SendOperationService', () => {
   it('emits send:pending after the pending state is persisted', async () => {
     await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
 
-    const initOp = await service.init(mintUrl, 100);
+    const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
@@ -220,12 +230,35 @@ describe('SendOperationService', () => {
     expect(lockedDuringEvent).toBe(true);
   });
 
+  it('prepares and executes a custom-unit send without selecting sat proofs', async () => {
+    await proofRepo.saveProofs(mintUrl, [
+      makeProof('sat-proof', 100, 'sat'),
+      makeProof('usd-proof', 100, 'usd'),
+    ]);
+
+    const initOp = await service.init(mintUrl, unitAmount(100, 'USD'));
+    const preparedOp = await service.prepare(initOp);
+    const result = await service.execute(preparedOp);
+
+    expect(preparedOp.unit).toBe('usd');
+    expect(preparedOp.inputProofSecrets).toEqual(['usd-proof']);
+    expect(walletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+    expect(result.token.unit).toBe('usd');
+    expect(result.operation.unit).toBe('usd');
+    expect(result.token.proofs.map((proof) => proof.secret)).toEqual(['usd-proof']);
+
+    const satProof = await proofRepo.getProofBySecret(mintUrl, 'sat-proof');
+    expect(satProof?.state).toBe('ready');
+    expect(satProof?.usedByOperationId).toBeUndefined();
+  });
+
   it('persists explicit handler failures without running executing recovery', async () => {
     const preparedOp: PreparedSendOperation = {
       id: 'send-op-failed',
       state: 'prepared',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,
@@ -301,6 +334,7 @@ describe('SendOperationService', () => {
       state: 'pending',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: true,
@@ -358,6 +392,7 @@ describe('SendOperationService', () => {
       state: 'pending',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       needsSwap: false,

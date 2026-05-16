@@ -1,4 +1,4 @@
-import type { AmountLike, Token } from '@cashu/cashu-ts';
+import type { Token } from '@cashu/cashu-ts';
 import type {
   CreateSendOperationOptions,
   PendingSendOperation,
@@ -7,6 +7,7 @@ import type {
 } from '../operations/send/SendOperation';
 import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHandler';
 import type { SendOperationService } from '../operations/send/SendOperationService';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 type NonDefaultSendMethod = Exclude<SendMethod, 'default'>;
 
@@ -17,8 +18,10 @@ export type SendTarget = {
 export interface PrepareSendInput {
   /** Mint to send from. */
   mintUrl: string;
-  /** Amount to send. */
-  amount: AmountLike;
+  /** Amount to send. Bare amounts use `sat` unless `unit` is set. */
+  amount: UnitAmountLike;
+  /** Unit to send. */
+  unit?: string;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
 }
@@ -65,9 +68,10 @@ export class SendOpsApi {
    * before producing the outgoing token.
    */
   async prepare(input: PrepareSendInput): Promise<PreparedSendOperation> {
+    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     const initOp = await this.sendOperationService.init(
       input.mintUrl,
-      input.amount,
+      parsed,
       this.getCreateOptions(input.target),
     );
     return this.sendOperationService.prepare(initOp);

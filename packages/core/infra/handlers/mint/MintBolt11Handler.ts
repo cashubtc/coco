@@ -11,8 +11,9 @@ import type {
   PendingMintCheckResult,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
+import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async prepare(
@@ -31,18 +32,15 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       );
     }
 
-    if (quote.unit !== ctx.operation.unit) {
-      throw new Error(
-        `Mint quote ${quote.quote} unit ${quote.unit} does not match requested unit ${ctx.operation.unit}`,
-      );
-    }
+    assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
 
     const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
       ctx.operation.mintUrl,
       {
-        keep: quote.amount,
-        send: 0,
+        keep: { amount: quote.amount, unit: ctx.operation.unit },
+        send: { amount: Amount.zero(), unit: ctx.operation.unit },
       },
+      {},
     );
 
     if (outputData.keep.length === 0) {
@@ -53,7 +51,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       ...ctx.operation,
       quoteId: quote.quote,
       amount: quote.amount,
-      unit: quote.unit,
+      unit: ctx.operation.unit,
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
@@ -120,6 +118,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         await ctx.proofService.saveProofs(
           ctx.operation.mintUrl,
           mapProofToCoreProof(ctx.operation.mintUrl, 'ready', proofs, {
+            unit: ctx.operation.unit,
             createdByOperationId: ctx.operation.id,
           }),
         );
@@ -164,6 +163,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         ctx.operation.mintUrl,
         ctx.operation.outputData,
         {
+          unit: ctx.operation.unit,
           createdByOperationId: ctx.operation.id,
         },
       );

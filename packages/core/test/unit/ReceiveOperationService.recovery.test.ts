@@ -190,6 +190,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
         secret,
         C: `C_${secret}`,
         mintUrl,
+        unit: 'sat',
         state: 'ready',
         createdByOperationId: op.id,
       }));

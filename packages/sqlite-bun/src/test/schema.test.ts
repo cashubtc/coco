@@ -172,6 +172,52 @@ describe('sqlite-bun schema migrations', () => {
     );
   });
 
+  it('backfills legacy proof units from keyset metadata', async () => {
+    await ensureSchemaUpTo(db, '025_proof_unit');
+    await db.run(
+      `INSERT INTO coco_cashu_keysets
+        (mintUrl, id, keypairs, active, feePpk, updatedAt, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ['https://mint.test', 'usd-keyset', '{}', 1, 0, 1, 'USD'],
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_proofs
+        (mintUrl, id, unit, amount, secret, C, state, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['https://mint.test', 'usd-keyset', 'sat', '10', 'secret-usd', 'C-usd', 'ready', 1],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    const proof = await db.get<{ unit: string }>(
+      'SELECT unit FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?',
+      ['https://mint.test', 'secret-usd'],
+    );
+    const indexes = await db.all<{ name: string }>('PRAGMA index_list(coco_cashu_proofs)');
+
+    expect(proof?.unit).toBe('usd');
+    expect(indexes.map((row) => row.name)).toContain('idx_coco_cashu_proofs_mint_unit_id_state');
+  });
+
+  it('keeps legacy proof units as sat when keyset metadata is missing', async () => {
+    await ensureSchemaUpTo(db, '025_proof_unit');
+    await db.run(
+      `INSERT INTO coco_cashu_proofs
+        (mintUrl, id, unit, amount, secret, C, state, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['https://mint.test', 'missing-keyset', 'sat', '10', 'secret-legacy', 'C-legacy', 'ready', 1],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    const proof = await db.get<{ unit: string }>(
+      'SELECT unit FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?',
+      ['https://mint.test', 'secret-legacy'],
+    );
+
+    expect(proof?.unit).toBe('sat');
+  });
+
   it('backfills legacy aliases for canonical databases', async () => {
     await ensureSchemaUpTo(db);
 

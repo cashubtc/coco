@@ -4,6 +4,7 @@ import {
   type Proof,
   type ProofState as CashuProofState,
   type Token,
+  Amount,
 } from '@cashu/cashu-ts';
 
 import {
@@ -40,6 +41,7 @@ import type { WalletService } from '../../services/WalletService';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
+import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   // 11003 is special for receive recovery: the mint may already have accepted and
@@ -116,14 +118,6 @@ export class ReceiveOperationService {
     return this.recoveryLock !== null;
   }
 
-  private assertSupportedUnit(unit: string): void {
-    if (unit !== 'sat') {
-      throw new ProofValidationError(
-        `Unsupported mint unit '${unit}'. Only 'sat' is currently supported.`,
-      );
-    }
-  }
-
   /**
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
@@ -136,7 +130,7 @@ export class ReceiveOperationService {
     }
 
     const decodedToken = await this.tokenService.decodeToken(token, mintUrl);
-    this.assertSupportedUnit(decodedToken.unit || 'sat');
+    const unit = normalizeUnit(decodedToken.unit, { defaultUnit: DEFAULT_UNIT });
     const proofs = decodedToken.proofs;
 
     const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
@@ -152,13 +146,7 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(
-      id,
-      mintUrl,
-      amount,
-      preparedProofs,
-      decodedToken.unit || 'sat',
-    );
+    const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs);
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {
@@ -208,7 +196,10 @@ export class ReceiveOperationService {
     }
 
     const { mintUrl } = operation;
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      mintUrl,
+      operation.unit,
+    );
     const fee = wallet.getFeesForProofs(operation.inputProofs);
 
     if (operation.amount.lessThanOrEqual(fee)) {
@@ -217,10 +208,14 @@ export class ReceiveOperationService {
 
     const keepAmount = operation.amount.subtract(fee);
 
-    const outputResult = await this.proofService.createOutputsAndIncrementCounters(mintUrl, {
-      keep: keepAmount,
-      send: 0,
-    });
+    const outputResult = await this.proofService.createOutputsAndIncrementCounters(
+      mintUrl,
+      {
+        keep: { amount: keepAmount, unit: operation.unit },
+        send: { amount: Amount.zero(), unit: operation.unit },
+      },
+      {},
+    );
 
     if (!outputResult.keep || outputResult.keep.length === 0) {
       throw new Error('Failed to create deterministic outputs for receive');
@@ -303,7 +298,10 @@ export class ReceiveOperationService {
       throw new Error('Missing output data for receive operation');
     }
 
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(executing.mintUrl);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      executing.mintUrl,
+      executing.unit,
+    );
     const outputData = deserializeOutputData(executing.outputData);
 
     this.logger?.info('Receiving token', {
@@ -314,7 +312,7 @@ export class ReceiveOperationService {
     });
 
     const newProofs = await wallet.receive(
-      { mint: executing.mintUrl, proofs: executing.inputProofs, unit: wallet.unit },
+      { mint: executing.mintUrl, proofs: executing.inputProofs, unit: executing.unit },
       undefined,
       { type: 'custom', data: outputData.keep },
     );
@@ -322,6 +320,7 @@ export class ReceiveOperationService {
     await this.proofService.saveProofs(
       executing.mintUrl,
       mapProofToCoreProof(executing.mintUrl, 'ready', newProofs, {
+        unit: executing.unit,
         createdByOperationId: executing.id,
       }),
     );
@@ -585,6 +584,7 @@ export class ReceiveOperationService {
           executing.mintUrl,
           executing.outputData,
           {
+            unit: executing.unit,
             createdByOperationId: executing.id,
           },
         );

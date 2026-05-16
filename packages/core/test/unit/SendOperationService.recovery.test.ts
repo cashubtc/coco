@@ -50,6 +50,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       id: keysetId,
       secret,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       ...overrides,
     }) as CoreProof;
@@ -59,6 +60,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     state: 'init',
     mintUrl,
     amount: Amount.from(100),
+    unit: 'sat',
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     method: 'default',
@@ -83,6 +85,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     method: 'default',
     methodData: {},
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeExecutingOp = (
@@ -92,6 +95,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     ...makePreparedOp(id),
     state: 'executing',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePendingOp = (
@@ -101,6 +105,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     ...makePreparedOp(id),
     state: 'pending',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   /**

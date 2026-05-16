@@ -62,6 +62,57 @@ async function addSendOperationMethodColumns(db: ExpoSqliteDb): Promise<void> {
   }
 }
 
+async function addProofUnitColumn(db: ExpoSqliteDb): Promise<void> {
+  const columns = await getTableColumns(db, 'coco_cashu_proofs');
+
+  if (!columns.has('unit')) {
+    await db.run(`ALTER TABLE coco_cashu_proofs ADD COLUMN unit TEXT NOT NULL DEFAULT 'sat'`);
+  }
+
+  await db.run(`
+    UPDATE coco_cashu_proofs
+    SET unit = COALESCE(
+      (
+        SELECT LOWER(TRIM(coco_cashu_keysets.unit))
+        FROM coco_cashu_keysets
+        WHERE coco_cashu_keysets.mintUrl = coco_cashu_proofs.mintUrl
+          AND coco_cashu_keysets.id = coco_cashu_proofs.id
+          AND coco_cashu_keysets.unit IS NOT NULL
+          AND TRIM(coco_cashu_keysets.unit) <> ''
+        LIMIT 1
+      ),
+      CASE
+        WHEN unit IS NULL OR TRIM(unit) = '' THEN 'sat'
+        ELSE LOWER(TRIM(unit))
+      END
+    )
+  `);
+  await db.run(
+    'CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_state ON coco_cashu_proofs(mintUrl, unit, state)',
+  );
+  await db.run(
+    'CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_id_state ON coco_cashu_proofs(mintUrl, unit, id, state)',
+  );
+  await db.run(
+    'CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_unit_state ON coco_cashu_proofs(unit, state)',
+  );
+}
+
+async function addSendOperationUnitColumn(db: ExpoSqliteDb): Promise<void> {
+  const columns = await getTableColumns(db, 'coco_cashu_send_operations');
+
+  if (!columns.has('unit')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_send_operations ADD COLUMN unit TEXT NOT NULL DEFAULT 'sat'`,
+    );
+  }
+
+  await db.run(
+    "UPDATE coco_cashu_send_operations SET unit = 'sat' WHERE unit IS NULL OR TRIM(unit) = ''",
+  );
+  await db.run('UPDATE coco_cashu_send_operations SET unit = LOWER(TRIM(unit))');
+}
+
 async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
   if (await tableExists(db, 'coco_cashu_proofs')) {
     await db.exec(`
@@ -70,6 +121,7 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
       CREATE TABLE coco_cashu_proofs (
         mintUrl   TEXT NOT NULL,
         id        TEXT NOT NULL,
+        unit      TEXT NOT NULL DEFAULT 'sat',
         amount    TEXT NOT NULL,
         secret    TEXT NOT NULL,
         C         TEXT NOT NULL,
@@ -83,11 +135,25 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
       );
 
       INSERT INTO coco_cashu_proofs (
-        mintUrl, id, amount, secret, C, dleqJson, witnessJson, state, createdAt,
+        mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt,
         usedByOperationId, createdByOperationId
       )
       SELECT
-        mintUrl, id, CAST(amount AS TEXT), secret, C, dleqJson, witnessJson, state, createdAt,
+        mintUrl,
+        id,
+        COALESCE(
+          (
+            SELECT LOWER(TRIM(coco_cashu_keysets.unit))
+            FROM coco_cashu_keysets
+            WHERE coco_cashu_keysets.mintUrl = coco_cashu_proofs_legacy_amounts.mintUrl
+              AND coco_cashu_keysets.id = coco_cashu_proofs_legacy_amounts.id
+              AND coco_cashu_keysets.unit IS NOT NULL
+              AND TRIM(coco_cashu_keysets.unit) <> ''
+            LIMIT 1
+          ),
+          'sat'
+        ),
+        CAST(amount AS TEXT), secret, C, dleqJson, witnessJson, state, createdAt,
         usedByOperationId, createdByOperationId
       FROM coco_cashu_proofs_legacy_amounts;
 
@@ -96,6 +162,9 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_state ON coco_cashu_proofs(state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_state ON coco_cashu_proofs(mintUrl, state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_id_state ON coco_cashu_proofs(mintUrl, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_state ON coco_cashu_proofs(mintUrl, unit, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_id_state ON coco_cashu_proofs(mintUrl, unit, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_unit_state ON coco_cashu_proofs(unit, state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_usedByOp ON coco_cashu_proofs(usedByOperationId) WHERE usedByOperationId IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByOp ON coco_cashu_proofs(createdByOperationId) WHERE createdByOperationId IS NOT NULL;
     `);
@@ -218,6 +287,7 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
         id         TEXT PRIMARY KEY,
         mintUrl    TEXT NOT NULL,
         amount     TEXT NOT NULL,
+        unit       TEXT NOT NULL DEFAULT 'sat',
         state      TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'pending', 'finalized', 'rolling_back', 'rolled_back')),
         createdAt  INTEGER NOT NULL,
         updatedAt  INTEGER NOT NULL,
@@ -233,11 +303,11 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
       );
 
       INSERT INTO coco_cashu_send_operations (
-        id, mintUrl, amount, state, createdAt, updatedAt, error, needsSwap, fee,
+        id, mintUrl, amount, unit, state, createdAt, updatedAt, error, needsSwap, fee,
         inputAmount, inputProofSecretsJson, outputDataJson, method, methodDataJson, tokenJson
       )
       SELECT
-        id, mintUrl, CAST(amount AS TEXT), state, createdAt, updatedAt, error, needsSwap,
+        id, mintUrl, CAST(amount AS TEXT), 'sat', state, createdAt, updatedAt, error, needsSwap,
         CASE WHEN fee IS NULL THEN NULL ELSE CAST(fee AS TEXT) END,
         CASE WHEN inputAmount IS NULL THEN NULL ELSE CAST(inputAmount AS TEXT) END,
         inputProofSecretsJson, outputDataJson, method, methodDataJson, tokenJson
@@ -440,6 +510,7 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE TABLE IF NOT EXISTS coco_cashu_proofs (
         mintUrl   TEXT NOT NULL,
         id        TEXT NOT NULL,
+        unit      TEXT NOT NULL DEFAULT 'sat',
         amount    INTEGER NOT NULL,
         secret    TEXT NOT NULL,
         C         TEXT NOT NULL,
@@ -453,6 +524,9 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_state ON coco_cashu_proofs(state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_state ON coco_cashu_proofs(mintUrl, state);
       CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_id_state ON coco_cashu_proofs(mintUrl, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_state ON coco_cashu_proofs(mintUrl, unit, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_mint_unit_id_state ON coco_cashu_proofs(mintUrl, unit, id, state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_unit_state ON coco_cashu_proofs(unit, state);
 
       CREATE TABLE IF NOT EXISTS coco_cashu_mint_quotes (
         mintUrl TEXT NOT NULL,
@@ -947,6 +1021,14 @@ const MIGRATIONS: readonly Migration[] = [
   {
     id: '024_amount_columns_text',
     run: migrateAmountColumnsToText,
+  },
+  {
+    id: '025_proof_unit',
+    run: addProofUnitColumn,
+  },
+  {
+    id: '026_send_operation_unit',
+    run: addSendOperationUnitColumn,
   },
 ];
 

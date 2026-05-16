@@ -13,12 +13,9 @@
  */
 export type ReceiveOperationState = 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
 
-import type { Amount, AmountLike, Proof } from '@cashu/cashu-ts';
-import {
-  getSecretsFromSerializedOutputData,
-  toAmount,
-  type SerializedOutputData,
-} from '../../utils';
+import type { Amount, Proof } from '@cashu/cashu-ts';
+import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -186,17 +183,17 @@ export function getOutputProofSecrets(op: PreparedOrLaterOperation): string[] {
 export function createReceiveOperation(
   id: string,
   mintUrl: string,
-  amount: AmountLike,
+  intent: UnitAmount,
   inputProofs: Proof[],
-  unit: string,
 ): InitReceiveOperation {
   const now = Date.now();
+  const amount = normalizeUnitAmount(intent);
   return {
     id,
     state: 'init',
     mintUrl,
-    unit,
-    amount: toAmount(amount),
+    unit: amount.unit,
+    amount: amount.amount,
     inputProofs,
     createdAt: now,
     updatedAt: now,

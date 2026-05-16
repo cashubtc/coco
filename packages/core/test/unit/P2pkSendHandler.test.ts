@@ -59,6 +59,7 @@ describe('P2pkSendHandler', () => {
       id: keysetId,
       secret,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       ...overrides,
     }) as CoreProof;
@@ -89,6 +90,7 @@ describe('P2pkSendHandler', () => {
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePreparedOp = (
@@ -109,6 +111,7 @@ describe('P2pkSendHandler', () => {
     inputProofSecrets: ['input-1', 'input-2'],
     outputData: createMockOutputData(['keep-1'], ['send-1']),
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeExecutingOp = (
@@ -118,6 +121,7 @@ describe('P2pkSendHandler', () => {
     ...makePreparedOp(id),
     state: 'executing',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePendingOp = (
@@ -127,6 +131,7 @@ describe('P2pkSendHandler', () => {
     ...makePreparedOp(id),
     state: 'pending',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   // ============================================================================
@@ -165,16 +170,22 @@ describe('P2pkSendHandler', () => {
 
     // Mock ProofService
     proofService = {
-      selectProofsToSend: mock(async (_mintUrl: string, amount: Amount, includeFees = true) => {
-        const proofs = await proofRepository.getAvailableProofs(mintUrl);
-        const totalAvailable = Amount.sum(proofs.map((proof) => proof.amount));
-        if (totalAvailable.lessThan(amount)) {
-          throw new ProofValidationError(
-            `Insufficient balance: need ${amount}, have ${totalAvailable}`,
-          );
-        }
-        return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
-      }),
+      selectProofsToSend: mock(
+        async (
+          _mintUrl: string,
+          intent: { amount: Amount; unit: string },
+          includeFees: boolean = true,
+        ) => {
+          const proofs = await proofRepository.getAvailableProofs(mintUrl);
+          const totalAvailable = Amount.sum(proofs.map((proof) => proof.amount));
+          if (totalAvailable.lessThan(intent.amount)) {
+            throw new ProofValidationError(
+              `Insufficient balance: need ${intent.amount}, have ${totalAvailable}`,
+            );
+          }
+          return mockWallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
+        },
+      ),
       reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(110) })),
       createOutputsAndIncrementCounters: mock(() =>
         Promise.resolve({
@@ -342,6 +353,7 @@ describe('P2pkSendHandler', () => {
         mintUrl,
         ['input-1', 'input-2'],
         'op-1',
+        { unit: 'sat' },
       );
     });
 
@@ -352,10 +364,41 @@ describe('P2pkSendHandler', () => {
       await handler.prepare(ctx);
 
       // Selected amount (110) - amount (100) - fee (1) = 9 keep
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: Amount.from(9),
-        send: 0,
-      });
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(9), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        },
+        {},
+      );
+    });
+
+    it('prepares custom-unit P2PK sends with unit-scoped proof selection and outputs', async () => {
+      const operation = makeInitOp('op-usd', { unit: 'usd' });
+
+      const result = await handler.prepare(buildPrepareContext(operation));
+
+      expect(result.unit).toBe('usd');
+      expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+        mintUrl,
+        { amount: Amount.from(100), unit: 'usd' },
+        true,
+      );
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(9), unit: 'usd' },
+          send: { amount: Amount.zero(), unit: 'usd' },
+        },
+        {},
+      );
+      expect(proofService.reserveProofs).toHaveBeenCalledWith(
+        mintUrl,
+        ['input-1', 'input-2'],
+        'op-usd',
+        { unit: 'usd' },
+      );
     });
 
     it('should throw ProofValidationError when selected proofs do not cover fees', async () => {
@@ -686,7 +729,7 @@ describe('P2pkSendHandler', () => {
         (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(
           (_mintUrl: string, serializedOutputData: any, options?: any) => {
             if (serializedOutputData.send.length > 0) {
-              expect(options).toEqual({ persistRecoveredProofs: false });
+              expect(options).toEqual({ persistRecoveredProofs: false, unit: 'sat' });
               return Promise.resolve([makeProof('send-1', 100)]);
             }
             return Promise.resolve([]);
@@ -705,6 +748,7 @@ describe('P2pkSendHandler', () => {
           },
           {
             createdByOperationId: 'op-1',
+            unit: 'sat',
           },
         );
         expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
@@ -715,6 +759,7 @@ describe('P2pkSendHandler', () => {
           },
           {
             persistRecoveredProofs: false,
+            unit: 'sat',
           },
         );
         if (result.status === 'PENDING') {

@@ -9,6 +9,7 @@ import {
 import type { CoreProof, ProofState } from './types';
 import type { Logger } from './logging/Logger.ts';
 import { TokenValidationError } from './models/Error.ts';
+import { normalizeUnit } from './amounts.ts';
 
 // ============================================================================
 // OutputData Serialization Types
@@ -146,11 +147,13 @@ export function mapProofToCoreProof(
   mintUrl: string,
   state: ProofState,
   proofs: Proof[],
-  options?: { createdByOperationId?: string },
+  options: { unit: string; createdByOperationId?: string },
 ): CoreProof[] {
+  const unit = normalizeUnit(options.unit);
   return proofs.map((p) => ({
     ...p,
     mintUrl,
+    unit,
     state,
     createdByOperationId: options?.createdByOperationId,
   }));

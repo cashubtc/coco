@@ -1,5 +1,5 @@
 import type { Repositories, Manager, Logger } from '@cashu/coco-core';
-import { initializeCoco, getEncodedToken, ConsoleLogger } from '@cashu/coco-core';
+import { initializeCoco, getEncodedToken, ConsoleLogger, normalizeUnit } from '@cashu/coco-core';
 import {
   HttpResponseError,
   JSONInt,
@@ -57,6 +57,7 @@ export type IntegrationTestOptions<TRepositories extends Repositories = Reposito
     dispose(): Promise<void>;
   }>;
   mintUrl: string;
+  customUnit?: string;
   logger?: Logger;
   suiteName?: string;
 };
@@ -254,13 +255,21 @@ function waitForMeltHistoryState(
   });
 }
 
-async function getMintTotalBalance(manager: Manager, mintUrl: string): Promise<number> {
-  const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
+async function getMintTotalBalance(
+  manager: Manager,
+  mintUrl: string,
+  unit = 'sat',
+): Promise<number> {
+  const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl], units: [unit] });
   return balances[mintUrl]?.total.toNumber() ?? 0;
 }
 
-async function getMintSpendableBalance(manager: Manager, mintUrl: string): Promise<number> {
-  const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl] });
+async function getMintSpendableBalance(
+  manager: Manager,
+  mintUrl: string,
+  unit = 'sat',
+): Promise<number> {
+  const balances = await manager.wallet.balances.byMint({ mintUrls: [mintUrl], units: [unit] });
   return balances[mintUrl]?.spendable.toNumber() ?? 0;
 }
 
@@ -268,7 +277,7 @@ async function prepareMintOperation(
   manager: Manager,
   mintUrl: string,
   amount: number,
-  unit: 'sat' = 'sat',
+  unit = 'sat',
 ) {
   return manager.ops.mint.prepare({
     mintUrl,
@@ -359,7 +368,7 @@ async function awaitMintQuotePaidWithSubscription(
   return (await getLatestPendingMintOperation(manager, pendingMint.id)) ?? pendingMint;
 }
 
-async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit: 'sat' = 'sat') {
+async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
   const pendingMint = await prepareMintOperation(manager, mintUrl, amount, unit);
   await awaitMintQuotePaidWithSubscription(manager, mintUrl, pendingMint);
   await executeMintOperation(manager, pendingMint.id);
@@ -372,6 +381,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 ): Promise<void> {
   const { describe, it, beforeEach, afterEach, expect } = runner;
   const { createRepositories, mintUrl, logger, suiteName = 'Integration Tests' } = options;
+  const customUnit = options.customUnit ? normalizeUnit(options.customUnit) : undefined;
 
   describe(suiteName, () => {
     let mgr: Manager | undefined;
@@ -583,6 +593,119 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
     });
+
+    if (customUnit) {
+      describe('Custom Unit Wallet Operations', () => {
+        let repositoriesDispose: (() => Promise<void>) | undefined;
+        let repositories: Repositories | undefined;
+
+        beforeEach(async () => {
+          const created = await createRepositories();
+          repositories = created.repositories;
+          repositoriesDispose = created.dispose;
+          mgr = await initializeCoco({
+            repo: created.repositories,
+            seedGetter,
+            logger,
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+        });
+
+        afterEach(async () => {
+          if (repositoriesDispose) {
+            await repositoriesDispose();
+            repositoriesDispose = undefined;
+          }
+          repositories = undefined;
+        });
+
+        it('should mint, send, and receive custom-unit tokens without falling back to sat', async () => {
+          await mintAmount(mgr!, mintUrl, 200, customUnit);
+
+          const customBalance = await getMintSpendableBalance(mgr!, mintUrl, customUnit);
+          expect(customBalance).toBeGreaterThanOrEqual(200);
+
+          const satBalance = await getMintSpendableBalance(mgr!, mintUrl, 'sat');
+          expect(satBalance).toBe(0);
+
+          const preparedSend = await mgr!.ops.send.prepare({
+            mintUrl,
+            amount: { amount: 50, unit: customUnit },
+          });
+          expect(preparedSend.unit).toBe(customUnit);
+
+          const { operation, token } = await mgr!.ops.send.execute(preparedSend.id);
+          expect(operation.unit).toBe(customUnit);
+          expect(token.unit).toBe(customUnit);
+
+          const spendableAfterSend = await getMintSpendableBalance(mgr!, mintUrl, customUnit);
+          expect(spendableAfterSend).toBeLessThan(customBalance);
+
+          const preparedReceive = await mgr!.ops.receive.prepare({ token });
+          expect(preparedReceive.unit).toBe(customUnit);
+
+          const finalizedReceive = await mgr!.ops.receive.execute(preparedReceive.id);
+          expect(finalizedReceive.unit).toBe(customUnit);
+
+          const spendableAfterReceive = await getMintSpendableBalance(mgr!, mintUrl, customUnit);
+          expect(spendableAfterReceive).toBeGreaterThan(spendableAfterSend);
+        });
+
+        it('should not cross-fund custom-unit sends with sat proofs', async () => {
+          await mintAmount(mgr!, mintUrl, 100, 'sat');
+          await mintAmount(mgr!, mintUrl, 10, customUnit);
+
+          await expect(
+            mgr!.ops.send.prepare({
+              mintUrl,
+              amount: { amount: 50, unit: customUnit },
+            }),
+          ).rejects.toThrow();
+        });
+
+        it('should prepare custom-unit melt operations and persist the unit', async () => {
+          await mintAmount(mgr!, mintUrl, 200, customUnit);
+
+          const invoice = createFakeInvoice(20);
+          const prepared = await mgr!.ops.melt.prepare({
+            mintUrl,
+            method: 'bolt11',
+            methodData: { invoice },
+            unit: customUnit,
+          });
+
+          expect(prepared.unit).toBe(customUnit);
+          expect(prepared.quoteId).toBeDefined();
+
+          const stored = await repositories!.meltOperationRepository.getById(prepared.id);
+          expect(stored?.unit).toBe(customUnit);
+        });
+
+        it('should preserve custom-unit proofs and operations across manager restart', async () => {
+          await mintAmount(mgr!, mintUrl, 200, customUnit);
+
+          const preparedSend = await mgr!.ops.send.prepare({
+            mintUrl,
+            amount: { amount: 25, unit: customUnit },
+          });
+          await mgr!.pauseSubscriptions();
+          await mgr!.dispose();
+
+          mgr = await initializeCoco({
+            repo: repositories!,
+            seedGetter,
+            logger,
+          });
+
+          const restoredSend = await mgr.ops.send.get(preparedSend.id);
+          expect(restoredSend?.unit).toBe(customUnit);
+
+          const balanceAfterRestart = await getMintSpendableBalance(mgr, mintUrl, customUnit);
+          expect(balanceAfterRestart).toBeGreaterThan(0);
+        });
+      });
+    }
 
     describe('Wallet Operations', () => {
       let repositoriesDispose: (() => Promise<void>) | undefined;

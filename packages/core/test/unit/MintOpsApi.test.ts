@@ -108,8 +108,7 @@ describe('MintOpsApi', () => {
 
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
-      Amount.from(10),
-      'sat',
+      { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
       {},
     );
@@ -125,26 +124,28 @@ describe('MintOpsApi', () => {
 
     expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
       mintUrl,
-      Amount.from(10),
-      'sat',
+      { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
       {},
     );
     expect(result).toBe(pendingOperation);
   });
 
-  it('prepare rejects non-sat units before delegating to the service', async () => {
-    await expect(
-      api.prepare({
-        mintUrl,
-        amount: Amount.from(10),
-        unit: 'usd' as 'sat',
-        method: 'bolt11',
-        methodData: {},
-      }),
-    ).rejects.toThrow("Unsupported mint unit 'usd'. Only 'sat' is currently supported.");
+  it('prepare passes non-sat units to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(10),
+      unit: 'usd',
+      method: 'bolt11',
+      methodData: {},
+    });
 
-    expect(mintOperationService.prepareNewQuote).not.toHaveBeenCalled();
+    expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
+      mintUrl,
+      { amount: Amount.from(10), unit: 'usd' },
+      'bolt11',
+      {},
+    );
   });
 
   it('importQuote delegates to the mint operation service', async () => {
@@ -170,20 +171,20 @@ describe('MintOpsApi', () => {
     expect(result).toBe(pendingOperation);
   });
 
-  it('importQuote rejects non-sat quote units before delegating to the service', async () => {
-    await expect(
-      api.importQuote({
-        mintUrl,
-        quote: {
-          ...quote,
-          unit: 'usd',
-        } as MintQuoteBolt11Response,
-        method: 'bolt11',
-        methodData: {},
-      }),
-    ).rejects.toThrow("Unsupported mint unit 'usd'. Only 'sat' is currently supported.");
+  it('importQuote passes non-sat quote units to the service', async () => {
+    const usdQuote = {
+      ...quote,
+      unit: 'usd',
+    } as MintQuoteBolt11Response;
 
-    expect(mintOperationService.importQuote).not.toHaveBeenCalled();
+    await api.importQuote({
+      mintUrl,
+      quote: usdQuote,
+      method: 'bolt11',
+      methodData: {},
+    });
+
+    expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, usdQuote, 'bolt11', {});
   });
 
   it('execute only allows pending operations', async () => {

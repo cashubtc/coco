@@ -4,6 +4,7 @@ import { IndexedDbRepositories } from '../index.ts';
 import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = import.meta.env.VITE_MINT_URL || 'http://localhost:3338';
+const customUnit = import.meta.env.VITE_CUSTOM_UNIT;
 
 if (!mintUrl) {
   throw new Error('VITE_MINT_URL is not set');
@@ -38,6 +39,7 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
+    customUnit,
     logger: getTestLogger(),
     suiteName: 'IndexedDB Integration Tests',
   },

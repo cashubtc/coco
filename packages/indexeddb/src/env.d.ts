@@ -1,5 +1,6 @@
 interface ImportMetaEnv {
   readonly VITE_MINT_URL?: string;
+  readonly VITE_CUSTOM_UNIT?: string;
   readonly VITE_TEST_LOG_LEVEL?: string;
 }
 

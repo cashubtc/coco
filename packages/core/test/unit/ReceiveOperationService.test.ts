@@ -45,7 +45,9 @@ describe('ReceiveOperationService', () => {
   let mockWalletReceive: Mock<(...args: any[]) => Promise<Proof[]>>;
   let mockIsTrustedMint: Mock<(mintUrl: string) => Promise<boolean>>;
   let mockEnsureUpdatedMint: Mock<
-    (mintUrl: string) => Promise<{ mint: { url: string }; keysets: { id: string }[] }>
+    (
+      mintUrl: string,
+    ) => Promise<{ mint: { url: string }; keysets: { id: string; unit?: string }[] }>
   >;
 
   const makeProof = (secret: string): Proof =>
@@ -298,13 +300,24 @@ describe('ReceiveOperationService', () => {
     expect(service.init(token)).rejects.toThrow(ProofValidationError);
   });
 
-  it('init rejects tokens with unsupported units', async () => {
+  it('init rejects token units that conflict with proof keyset units', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs, unit: 'usd' } as Token;
 
-    expect(service.init(token)).rejects.toThrow(
-      "Unsupported mint unit 'usd'. Only 'sat' is currently supported.",
-    );
+    expect(service.init(token)).rejects.toThrow('Unit mismatch: expected usd, received sat');
+  });
+
+  it('init accepts non-sat tokens when proof keysets match the token unit', async () => {
+    mockEnsureUpdatedMint.mockImplementationOnce(async () => ({
+      mint: { url: mintUrl },
+      keysets: [{ id: keysetId, unit: 'usd' }],
+    }));
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs, unit: 'USD' } as Token;
+
+    const operation = await service.init(token);
+
+    expect(operation.unit).toBe('usd');
   });
 
   it('prepare throws when operation has no input proofs', async () => {
@@ -549,6 +562,7 @@ describe('ReceiveOperationService', () => {
       secret,
       C: `C_${secret}`,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       createdByOperationId: executing.id,
     }));
@@ -579,6 +593,7 @@ describe('ReceiveOperationService', () => {
       secret,
       C: `C_${secret}`,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       createdByOperationId: executing.id,
     }));

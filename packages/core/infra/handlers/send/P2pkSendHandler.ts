@@ -34,7 +34,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
     const { operation, wallet, proofService, logger } = ctx;
-    const { mintUrl, amount } = operation;
+    const { mintUrl, amount, unit } = operation;
 
     // Validate that we have a pubkey in methodData
     const pubkey = (operation.methodData as { pubkey: string })?.pubkey;
@@ -44,7 +44,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
-    const selected = await proofService.selectProofsToSend(mintUrl, amount, true);
+    const selected = await proofService.selectProofsToSend(mintUrl, { amount, unit }, true);
     const selectedAmount = sumProofs(selected);
     const fee = wallet.getFeesForProofs(selected);
     const requiredAmount = amount.add(fee);
@@ -54,10 +54,14 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const keepAmount = selectedAmount.subtract(requiredAmount);
 
     // Use ProofService to create outputs and increment counters
-    const outputResult = await proofService.createOutputsAndIncrementCounters(mintUrl, {
-      keep: keepAmount,
-      send: 0,
-    });
+    const outputResult = await proofService.createOutputsAndIncrementCounters(
+      mintUrl,
+      {
+        keep: { amount: keepAmount, unit },
+        send: { amount: keepAmount.subtract(keepAmount), unit },
+      },
+      {},
+    );
 
     const keyset = wallet.getKeyset();
 
@@ -83,7 +87,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     // Reserve the selected proofs
     const inputSecrets = selected.map((p: Proof) => p.secret);
-    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id);
+    await proofService.reserveProofs(mintUrl, inputSecrets, operation.id, { unit });
 
     // Build prepared operation
     const prepared: PreparedSendOperation = {
@@ -91,6 +95,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       state: 'prepared',
       mintUrl: operation.mintUrl,
       amount: operation.amount,
+      unit: operation.unit,
       createdAt: operation.createdAt,
       updatedAt: Date.now(),
       error: operation.error,
@@ -160,9 +165,11 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     // Persist keep proofs as ready and P2PK send proofs as inflight so the
     // existing proof watcher/finalization flow can track them uniformly.
     const keepCoreProofs = mapProofToCoreProof(mintUrl, 'ready', keepProofs, {
+      unit: operation.unit,
       createdByOperationId: operation.id,
     });
     const sendCoreProofs = mapProofToCoreProof(mintUrl, 'inflight', sendProofs, {
+      unit: operation.unit,
       createdByOperationId: operation.id,
     });
     if (keepCoreProofs.length > 0 || sendCoreProofs.length > 0) {
@@ -175,7 +182,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const token: Token = {
       mint: mintUrl,
       proofs: sendProofs,
-      unit: wallet.unit,
+      unit: operation.unit,
     };
 
     // Build pending operation
@@ -286,6 +293,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     );
     if (existingKeepProofs.length === 0 && keepOutputData.keep.length > 0) {
       await proofService.recoverProofsFromOutputData(operation.mintUrl, keepOutputData, {
+        unit: operation.unit,
         createdByOperationId: operation.id,
       });
     }
@@ -301,6 +309,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
           send: operation.outputData.send,
         },
         {
+          unit: operation.unit,
           persistRecoveredProofs: false,
         },
       );
@@ -309,6 +318,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
         await proofService.saveProofs(
           operation.mintUrl,
           mapProofToCoreProof(operation.mintUrl, 'inflight', recoveredSendProofs, {
+            unit: operation.unit,
             createdByOperationId: operation.id,
           }),
         );
@@ -324,7 +334,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       token = {
         mint: operation.mintUrl,
         proofs: sendProofs,
-        unit: wallet.unit,
+        unit: operation.unit,
       };
     } else if (outputSecrets.sendSecrets.length > 0) {
       const sendStates = await wallet.checkProofsStates(

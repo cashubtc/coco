@@ -67,6 +67,7 @@ describe('MeltBolt11Handler', () => {
       id: keysetId,
       secret,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       ...overrides,
     }) as CoreProof;
@@ -116,6 +117,7 @@ describe('MeltBolt11Handler', () => {
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePreparedOp = (
@@ -130,7 +132,6 @@ describe('MeltBolt11Handler', () => {
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     quoteId: 'quote-123',
-    unit: 'sat',
     amount: Amount.from(100),
     fee_reserve: Amount.from(10),
     swap_fee: Amount.from(0),
@@ -139,6 +140,7 @@ describe('MeltBolt11Handler', () => {
     inputProofSecrets: ['input-1', 'input-2'],
     changeOutputData: createMockOutputData(['change-1'], []),
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeExecutingOp = (
@@ -148,6 +150,7 @@ describe('MeltBolt11Handler', () => {
     ...makePreparedOp(id),
     state: 'executing',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePendingOp = (
@@ -157,6 +160,7 @@ describe('MeltBolt11Handler', () => {
     ...makePreparedOp(id),
     state: 'pending',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   // ============================================================================
@@ -378,10 +382,11 @@ describe('MeltBolt11Handler', () => {
           mintUrl,
           ['input-1', 'input-2'],
           'op-1',
+          { unit: 'sat' },
         );
         expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
           mintUrl,
-          Amount.from(110),
+          { amount: Amount.from(110), unit: 'sat' },
           true,
         );
       });
@@ -391,12 +396,13 @@ describe('MeltBolt11Handler', () => {
         const ctx = buildPrepareContext(operation);
 
         (proofService.selectProofsToSend as Mock<any>).mockImplementation(
-          (_mintUrl: string, _amount: number, includeFees: boolean) =>
-            Promise.resolve(
+          (_mintUrl: string, _amount: number, includeFees: boolean) => {
+            return Promise.resolve(
               includeFees
                 ? [makeProof('input-1', 60), makeProof('input-2', 50), makeProof('input-3', 1)]
                 : [makeProof('input-1', 60), makeProof('input-2', 50)],
-            ),
+            );
+          },
         );
 
         const result = await handler.prepare(ctx);
@@ -406,7 +412,7 @@ describe('MeltBolt11Handler', () => {
         expect(result.inputProofSecrets).toEqual(['input-1', 'input-2', 'input-3']);
         expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
           mintUrl,
-          Amount.from(110),
+          { amount: Amount.from(110), unit: 'sat' },
           true,
         );
       });
@@ -438,7 +444,59 @@ describe('MeltBolt11Handler', () => {
         await handler.prepare(ctx);
 
         // Change = 120 - 100 = 20
-        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(Amount.from(20), mintUrl);
+        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(mintUrl, {
+          amount: Amount.from(20),
+          unit: 'sat',
+        });
+      });
+
+      it('prepares custom-unit direct melts with unit-scoped selection and change outputs', async () => {
+        const operation = makeInitOp('op-usd', { unit: 'usd' });
+        const ctx = buildPrepareContext(operation);
+        (mockWallet.createMeltQuoteBolt11 as Mock<any>).mockResolvedValueOnce({
+          quote: 'quote-usd',
+          amount: Amount.from(100),
+          fee_reserve: Amount.from(10),
+          unit: 'USD',
+        });
+        (proofService.selectProofsToSend as Mock<any>).mockResolvedValueOnce([
+          makeProof('usd-input-1', 60),
+          makeProof('usd-input-2', 60),
+        ]);
+
+        const result = await handler.prepare(ctx);
+
+        expect(result.unit).toBe('usd');
+        expect(result.quoteId).toBe('quote-usd');
+        expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+          mintUrl,
+          { amount: Amount.from(110), unit: 'usd' },
+          true,
+        );
+        expect(proofService.reserveProofs).toHaveBeenCalledWith(
+          mintUrl,
+          ['usd-input-1', 'usd-input-2'],
+          'op-usd',
+          { unit: 'usd' },
+        );
+        expect(proofService.createBlankOutputs).toHaveBeenCalledWith(mintUrl, {
+          amount: Amount.from(20),
+          unit: 'usd',
+        });
+      });
+
+      it('rejects melt quote unit mismatches before selecting proofs', async () => {
+        const operation = makeInitOp('op-usd', { unit: 'usd' });
+        const ctx = buildPrepareContext(operation);
+        (mockWallet.createMeltQuoteBolt11 as Mock<any>).mockResolvedValueOnce({
+          quote: 'quote-sat',
+          amount: Amount.from(100),
+          fee_reserve: Amount.from(10),
+          unit: 'sat',
+        });
+
+        await expect(handler.prepare(ctx)).rejects.toThrow('Unit mismatch');
+        expect(proofService.selectProofsToSend).not.toHaveBeenCalled();
       });
 
       it('should pass amountless invoice amount to cashu-ts in millisatoshis', async () => {
@@ -479,12 +537,12 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalled();
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[0]).toEqual([
           mintUrl,
-          Amount.from(110),
+          { amount: Amount.from(110), unit: 'sat' },
           true,
         ]);
         expect((proofService.selectProofsToSend as Mock<any>).mock.calls[1]).toEqual([
           mintUrl,
-          Amount.from(110),
+          { amount: Amount.from(110), unit: 'sat' },
           true,
         ]);
       });
@@ -503,6 +561,7 @@ describe('MeltBolt11Handler', () => {
           mintUrl,
           ['input-1', 'input-2'],
           'op-1',
+          { unit: 'sat' },
         );
       });
 
@@ -1146,6 +1205,10 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
           mintUrl,
           swapOutputData,
+          {
+            unit: 'sat',
+            createdByOperationId: 'op-1',
+          },
         );
         expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       });

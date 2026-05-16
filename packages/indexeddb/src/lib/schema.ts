@@ -6,6 +6,11 @@ function normalizeStoredAmount(value: unknown): string | null | undefined {
   return String(value);
 }
 
+function normalizeStoredUnit(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) return 'sat';
+  return value.trim().toLowerCase();
+}
+
 export async function ensureSchema(db: IdbDb): Promise<void> {
   // Dexie schema with final versioned stores (flattened for first release)
   db.version(1).stores({
@@ -553,4 +558,95 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
           row.amount = normalizeStoredAmount(row.amount);
         });
     });
+
+  // Version 19: Persist proof units and add unit-aware proof indexes.
+  db.version(19)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    })
+    .upgrade(async (tx) => {
+      const keysets = (await tx.table('coco_cashu_keysets').toArray()) as Array<{
+        mintUrl?: unknown;
+        id?: unknown;
+        unit?: unknown;
+      }>;
+      const unitByKeyset = new Map<string, string>();
+      for (const keyset of keysets) {
+        if (typeof keyset.mintUrl !== 'string' || typeof keyset.id !== 'string') continue;
+        unitByKeyset.set(`${keyset.mintUrl}\0${keyset.id}`, normalizeStoredUnit(keyset.unit));
+      }
+
+      await tx
+        .table('coco_cashu_proofs')
+        .toCollection()
+        .modify((row: { mintUrl?: unknown; id?: unknown; unit?: unknown }) => {
+          const keysetKey =
+            typeof row.mintUrl === 'string' && typeof row.id === 'string'
+              ? `${row.mintUrl}\0${row.id}`
+              : undefined;
+          const keysetUnit = keysetKey ? unitByKeyset.get(keysetKey) : undefined;
+          row.unit = normalizeStoredUnit(keysetUnit ?? row.unit);
+        });
+    });
+
+  // Version 20: Persist send operation units for recovery-safe multi-unit sends.
+  db.version(20)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_send_operations')
+        .toCollection()
+        .modify((row: { unit?: unknown }) => {
+          row.unit = normalizeStoredUnit(row.unit);
+        });
+    });
+
+  // Version 21: Add mint/unit/keyset proof index for unit-aware keyset scans.
+  db.version(21).stores({
+    coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+    coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+    coco_cashu_counters: '&[mintUrl+keysetId]',
+    coco_cashu_proofs:
+      '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+    coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_history:
+      '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+    coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+    coco_cashu_send_operations: '&id, state, mintUrl',
+    coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    coco_cashu_receive_operations: '&id, state, mintUrl',
+    coco_cashu_auth_sessions: '&mintUrl',
+    coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+  });
 }

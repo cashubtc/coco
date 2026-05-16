@@ -112,7 +112,7 @@ export class HistoryService {
     const entry: Omit<SendHistoryEntry, 'id'> = {
       type: 'send',
       createdAt: Date.now(),
-      unit: 'sat', // TODO: get unit from operation/mint
+      unit: operation.unit,
       amount: operation.amount,
       mintUrl,
       operationId,

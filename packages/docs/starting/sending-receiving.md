@@ -28,7 +28,7 @@ You can listen for receive events:
 
 ```ts
 coco.on('receive-op:finalized', ({ mintUrl, operation }) => {
-  console.log(`Received ${operation.amount} sats from ${mintUrl}`);
+  console.log(`Received ${operation.amount} ${operation.unit} from ${mintUrl}`);
 });
 ```
 
@@ -56,15 +56,27 @@ if (userConfirmed) {
 }
 ```
 
+Bare amounts are sats. For custom units, pass the amount and unit together:
+
+```ts
+const customUnitSend = await coco.ops.send.prepare({
+  mintUrl: 'https://mint.url',
+  amount: { amount: 5, unit: 'usd' },
+});
+
+console.log('Prepared unit:', customUnitSend.unit);
+```
+
 `coco.ops.send` and `coco.ops.receive` are the canonical workflow APIs.
-For send state details, see [Send Operations](../pages/send-operations.md).
+For send state details, see [Send Operations](../pages/send-operations.md). For
+custom unit behavior, see [Multi-Unit Support](../pages/multi-unit-support.md).
 
 ### Understanding Fees
 
 - **Exact match** (`needsSwap: false`): No fee is charged when your proofs exactly match the send amount
 - **Swap required** (`needsSwap: true`): A fee is charged when proofs need to be split
 
-The `fee` field shows the exact fee in sats that will be deducted.
+The `fee` field uses the same unit as the send amount.
 
 ## Token Lifecycle
 
@@ -75,7 +87,7 @@ After sending, the token enters a "pending" state until the recipient claims it:
 const pending = await coco.ops.send.listInFlight();
 
 for (const op of pending) {
-  console.log(`Operation ${op.id}: ${op.amount} sats, state: ${op.state}`);
+  console.log(`Operation ${op.id}: ${op.amount} ${op.unit}, state: ${op.state}`);
 }
 ```
 
@@ -117,7 +129,7 @@ Listen for send lifecycle events:
 ```ts
 // Proofs reserved, ready to execute
 coco.on('send:prepared', ({ operationId, operation }) => {
-  console.log(`Send prepared: ${operation.amount} sats`);
+  console.log(`Send prepared: ${operation.amount} ${operation.unit}`);
 });
 
 // Token created, waiting for recipient
@@ -144,7 +156,7 @@ async function sendWithConfirmation(mintUrl: string, amount: number) {
   const prepared = await coco.ops.send.prepare({ mintUrl, amount });
 
   if (prepared.needsSwap) {
-    console.log(`This send requires a swap. Fee: ${prepared.fee} sats`);
+    console.log(`This send requires a swap. Fee: ${prepared.fee} ${prepared.unit}`);
     const proceed = await askUserConfirmation();
 
     if (!proceed) {

@@ -214,10 +214,13 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 ### WalletApi
 
 - `receive(token: Token | string): Promise<void>`
-- `balances.byMint(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalancesByMint>`
-- `balances.total(scope?: { mintUrls?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
-- `restore(mintUrl: string): Promise<void>`
-- `sweep(mintUrl: string, bip39seed: Uint8Array): Promise<void>`
+- `balances.byMint(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByMint>`
+- `balances.byMintAndUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByMintAndUnit>`
+- `balances.byUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
+- `balances.total(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalanceSnapshot>`
+- `balances.totalByUnit(scope?: { mintUrls?: string[]; units?: string[]; trustedOnly?: boolean }): Promise<BalancesByUnit>`
+- `restore(mintUrl: string, options?: { units?: string[] }): Promise<void>`
+- `sweep(mintUrl: string, bip39seed: Uint8Array, options?: { units?: string[] }): Promise<void>`
 - `decodeToken(tokenString: string, mintUrl?: string): Promise<Token>`
 - `encodeToken(token: Token, opts?: { removeDleq?: boolean }): string`
 - `encodePaymentRequest(paymentRequest: PaymentRequest, version?: 'creqA' | 'creqB'): string`

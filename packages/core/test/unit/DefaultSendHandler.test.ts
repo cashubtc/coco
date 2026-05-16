@@ -54,6 +54,7 @@ describe('DefaultSendHandler', () => {
       id: keysetId,
       secret,
       mintUrl,
+      unit: 'sat',
       state: 'ready',
       ...overrides,
     }) as CoreProof;
@@ -81,6 +82,7 @@ describe('DefaultSendHandler', () => {
     createdAt: Date.now() - 10000,
     updatedAt: Date.now() - 10000,
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePreparedOp = (
@@ -101,6 +103,7 @@ describe('DefaultSendHandler', () => {
     inputProofSecrets: ['input-1', 'input-2'],
     outputData: createMockOutputData(['keep-1'], ['send-1']),
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makeExecutingOp = (
@@ -110,6 +113,7 @@ describe('DefaultSendHandler', () => {
     ...makePreparedOp(id),
     state: 'executing',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   const makePendingOp = (
@@ -119,6 +123,7 @@ describe('DefaultSendHandler', () => {
     ...makePreparedOp(id),
     state: 'pending',
     ...overrides,
+    unit: overrides?.unit ?? 'sat',
   });
 
   beforeEach(() => {
@@ -170,9 +175,13 @@ describe('DefaultSendHandler', () => {
 
     proofService = {
       selectProofsToSend: mock(
-        async (selectedMintUrl: string, amount: Amount, includeFees = true) => {
+        async (
+          selectedMintUrl: string,
+          intent: { amount: Amount; unit: string },
+          includeFees: boolean = true,
+        ) => {
           const proofs = await proofRepository.getAvailableProofs(selectedMintUrl);
-          return mockWallet.selectProofsToSend(proofs, amount, includeFees).send;
+          return mockWallet.selectProofsToSend(proofs, intent.amount, includeFees).send;
         },
       ),
       reserveProofs: mock(() => Promise.resolve({ amount: Amount.from(100) })),
@@ -286,7 +295,9 @@ describe('DefaultSendHandler', () => {
       expect(result.outputData).toBe(undefined);
       expect(result.inputProofSecrets).toEqual(['proof-100']);
       expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
-      expect(proofService.reserveProofs).toHaveBeenCalledWith(mintUrl, ['proof-100'], 'op-exact');
+      expect(proofService.reserveProofs).toHaveBeenCalledWith(mintUrl, ['proof-100'], 'op-exact', {
+        unit: 'sat',
+      });
     });
 
     it('prepares a swap send when no exact match exists', async () => {
@@ -299,16 +310,27 @@ describe('DefaultSendHandler', () => {
       expect(result.needsSwap).toBe(true);
       expect(result.fee).toEqual(Amount.from(1));
       expect(result.outputData).toBeDefined();
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: Amount.from(9),
-        send: Amount.from(100),
-      });
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(9), unit: 'sat' },
+          send: { amount: Amount.from(100), unit: 'sat' },
+        },
+        {},
+      );
     });
 
     it('throws ProofValidationError when selected proofs do not cover fees', async () => {
       (proofService.selectProofsToSend as Mock<any>).mockImplementation(
-        (_mintUrl: string, _amount: Amount, includeFees = true) =>
-          Promise.resolve(includeFees ? [makeProof('input-1', 60), makeProof('input-2', 40)] : []),
+        (
+          _mintUrl: string,
+          _intent: { amount: Amount; unit: string },
+          includeFees: boolean = true,
+        ) => {
+          return Promise.resolve(
+            includeFees ? [makeProof('input-1', 60), makeProof('input-2', 40)] : [],
+          );
+        },
       );
 
       await expect(
@@ -383,6 +405,26 @@ describe('DefaultSendHandler', () => {
         'spent',
       );
     });
+
+    it('encodes custom-unit swap sends and replacement proofs with the operation unit', async () => {
+      const operation = makeExecutingOp('op-usd', { unit: 'usd' });
+      const inputProofs = [makeProof('input-1', 60), makeProof('input-2', 50)];
+
+      const result = await handler.execute(buildExecuteContext(operation, inputProofs));
+
+      expect(result.status).toBe('PENDING');
+      if (result.status === 'PENDING') {
+        expect(result.token?.unit).toBe('usd');
+        expect(result.pending.unit).toBe('usd');
+      }
+      expect(proofService.saveProofs).toHaveBeenCalledWith(
+        mintUrl,
+        expect.arrayContaining([
+          expect.objectContaining({ secret: 'keep-1', unit: 'usd', state: 'ready' }),
+          expect.objectContaining({ secret: 'send-1', unit: 'usd', state: 'inflight' }),
+        ]),
+      );
+    });
   });
 
   describe('finalize', () => {
@@ -423,10 +465,14 @@ describe('DefaultSendHandler', () => {
 
       const receiveArgs = (mockWallet.receive as Mock<any>).mock.calls[0];
 
-      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(mintUrl, {
-        keep: Amount.from(99),
-        send: 0,
-      });
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(99), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        },
+        {},
+      );
       expect(receiveArgs).toBeDefined();
       expect(
         receiveArgs?.some(
@@ -486,6 +532,10 @@ describe('DefaultSendHandler', () => {
       expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
         mintUrl,
         operation.outputData,
+        {
+          createdByOperationId: 'op-recover-swap',
+          unit: 'sat',
+        },
       );
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
       if (result.status === 'FAILED') {

@@ -8,12 +8,22 @@ export interface BalanceSnapshot {
   spendable: Amount;
   reserved: Amount;
   total: Amount;
+  unit: string;
 }
 
 export type BalancesByMint = { [mintUrl: string]: BalanceSnapshot };
 
+export type BalancesByMintAndUnit = {
+  [mintUrl: string]: {
+    [unit: string]: BalanceSnapshot;
+  };
+};
+
+export type BalancesByUnit = { [unit: string]: BalanceSnapshot };
+
 export interface BalanceQuery {
   mintUrls?: string[];
+  units?: string[];
   trustedOnly?: boolean;
 }
 
@@ -33,6 +43,7 @@ export type BalancesBreakdownByMint = { [mintUrl: string]: BalanceBreakdown };
 
 export interface CoreProof extends Proof {
   mintUrl: string;
+  unit: string;
   state: ProofState;
 
   /**

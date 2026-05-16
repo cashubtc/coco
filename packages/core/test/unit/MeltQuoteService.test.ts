@@ -42,6 +42,7 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     mockMintService = {
       isTrustedMint: mock(() => Promise.resolve(true)),
+      assertMethodUnitSupported: mock(() => Promise.resolve()),
     } as any;
 
     mockMeltQuoteRepo = {
@@ -93,6 +94,39 @@ describe('MeltQuoteService.payMeltQuote', () => {
     );
   });
 
+  it('creates custom-unit melt quotes with a unit-scoped wallet and persisted unit', async () => {
+    const quote = {
+      quote: quoteId,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
+      request: 'lnbc110...',
+      unit: 'USD',
+      state: 'PENDING' as const,
+      expiry: new Date(Date.now() + 1000 * 60 * 60 * 24).getTime(),
+    };
+    const createMeltQuoteBolt11 = mock(async () => quote);
+    const addMeltQuote = mock(async () => {});
+    mockMeltQuoteRepo.addMeltQuote = addMeltQuote;
+    mockWalletService.getWalletWithActiveKeysetId = mock(async () => ({
+      wallet: { createMeltQuoteBolt11 },
+      keysetId: 'keyset-1',
+      keyset: { id: 'keyset-1', unit: 'usd', active: true },
+      keys: { id: 'keyset-1', unit: 'usd', keys: { '1': 'pubkey' } as any },
+    })) as any;
+
+    const result = await service.createMeltQuote(mintUrl, 'lnbc110...', { unit: 'USD' });
+
+    expect(mockMintService.assertMethodUnitSupported).toHaveBeenCalledWith(
+      mintUrl,
+      5,
+      'bolt11',
+      'usd',
+    );
+    expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+    expect(result.unit).toBe('usd');
+    expect(addMeltQuote).toHaveBeenCalledWith(expect.objectContaining({ mintUrl, unit: 'usd' }));
+  });
+
   it('should skip send/swap when selected proofs sum to exact amount', async () => {
     const quote: MeltQuote = {
       quote: quoteId,
@@ -133,7 +167,10 @@ describe('MeltQuoteService.payMeltQuote', () => {
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called with correct amount (before fees)
-    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, exactAmount);
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: exactAmount,
+      unit: 'sat',
+    });
 
     // Verify getFeesForProofs was called to calculate input fees
     expect(getFeesForProofsSpy).toHaveBeenCalledWith(selectedProofs);
@@ -219,13 +256,16 @@ describe('MeltQuoteService.payMeltQuote', () => {
     await service.payMeltQuote(mintUrl, quoteId);
 
     // Verify selectProofsToSend was called
-    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, amountWithFee);
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: amountWithFee,
+      unit: 'sat',
+    });
 
     // Verify createBlankOutputs was called with the correct amount
     // sendAmount ( quote.amount = 100 + quote.fee_reserve = 10) - quote.amount = 100
     expect(createBlanksSpy).toHaveBeenCalledWith(
-      Amount.from(10), // 100 + 10 - 100
       mintUrl,
+      { amount: Amount.from(10), unit: 'sat' }, // 100 + 10 - 100
     );
     // Verify createOutputsAndIncrementCounters was called with includeFees option
     // selectedAmount = 150, quote.amount = 100, quote.fee_reserve = 10, swapFees = 0
@@ -234,8 +274,8 @@ describe('MeltQuoteService.payMeltQuote', () => {
     expect(createOutputsSpy).toHaveBeenCalledWith(
       mintUrl,
       {
-        keep: Amount.from(40), // selectedAmount - quote.amount - quote.fee_reserve - swapFees
-        send: Amount.from(110), // quote.amount + quote.fee_reserve
+        keep: { amount: Amount.from(40), unit: 'sat' }, // selectedAmount - quote.amount - quote.fee_reserve - swapFees
+        send: { amount: Amount.from(110), unit: 'sat' }, // quote.amount + quote.fee_reserve
       },
       { includeFees: true },
     );
@@ -371,5 +411,63 @@ describe('MeltQuoteService.payMeltQuote', () => {
 
     // Verify no swap was performed
     expect(mockProofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+  });
+
+  it('pays custom-unit melt quotes without falling back to sat', async () => {
+    const quote: MeltQuote = {
+      quote: quoteId,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(10),
+      request: 'lnbc110...',
+      unit: 'USD',
+      mintUrl,
+      state: 'PENDING',
+      expiry: new Date(Date.now() + 1000 * 60 * 60 * 24).getTime(),
+      payment_preimage: 'payment_preimage',
+    };
+    const exactAmount = quote.amount.add(quote.fee_reserve);
+    const selectedProofs = [makeProof(110, 'secret-usd')];
+
+    mockMeltQuoteRepo.getMeltQuote = mock(async () => quote);
+    mockProofService.selectProofsToSend = mock(async () => selectedProofs);
+    const setProofStateSpy = mock(async () => {});
+    mockProofService.setProofState = setProofStateSpy;
+    const saveProofsSpy = mock(async () => {});
+    mockProofService.saveProofs = saveProofsSpy;
+    const meltProofsBolt11Spy = mock(async () => ({ change: [makeProof(1, 'change-usd')] }));
+    const wallet = {
+      meltProofsBolt11: meltProofsBolt11Spy,
+      getFeesForProofs: mock(() => Amount.zero()),
+    };
+    mockWalletService.getWalletWithActiveKeysetId = mock(async () => ({
+      wallet,
+      keysetId: 'keyset-1',
+      keyset: { id: 'keyset-1', unit: 'usd', active: true },
+      keys: { id: 'keyset-1', unit: 'usd', keys: { '1': 'pubkey' } as any },
+    })) as any;
+
+    await service.payMeltQuote(mintUrl, quoteId, { unit: 'usd' });
+
+    expect(mockMintService.assertMethodUnitSupported).toHaveBeenCalledWith(
+      mintUrl,
+      5,
+      'bolt11',
+      'usd',
+    );
+    expect(mockWalletService.getWalletWithActiveKeysetId).toHaveBeenCalledWith(mintUrl, 'usd');
+    expect(mockProofService.selectProofsToSend).toHaveBeenCalledWith(mintUrl, {
+      amount: exactAmount,
+      unit: 'usd',
+    });
+    expect(meltProofsBolt11Spy).toHaveBeenCalledWith(
+      expect.objectContaining({ unit: 'usd' }),
+      selectedProofs,
+    );
+    expect(saveProofsSpy).toHaveBeenCalledWith(
+      mintUrl,
+      expect.arrayContaining([expect.objectContaining({ unit: 'usd', secret: 'change-usd' })]),
+    );
+    expect(setProofStateSpy).toHaveBeenNthCalledWith(1, mintUrl, ['secret-usd'], 'inflight');
+    expect(setProofStateSpy).toHaveBeenNthCalledWith(2, mintUrl, ['secret-usd'], 'spent');
   });
 });

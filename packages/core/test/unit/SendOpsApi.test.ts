@@ -16,6 +16,7 @@ const makePreparedOperation = (): PreparedSendOperation => ({
   state: 'prepared',
   mintUrl,
   amount: Amount.from(20),
+  unit: 'sat',
   method: 'default',
   methodData: {},
   createdAt: Date.now(),
@@ -61,10 +62,17 @@ describe('SendOpsApi', () => {
   it('prepare calls init and prepare with default target', async () => {
     const result = await api.prepare({ mintUrl, amount: Amount.from(20) });
 
-    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, Amount.from(20), {
-      method: 'default',
-      methodData: {},
-    });
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'default',
+        methodData: {},
+      },
+    );
     expect(sendOperationService.prepare).toHaveBeenCalled();
     expect(result).toBe(preparedOperation);
   });
@@ -76,10 +84,17 @@ describe('SendOpsApi', () => {
       target: { type: 'p2pk', pubkey: 'pubkey-1' },
     });
 
-    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, Amount.from(20), {
-      method: 'p2pk',
-      methodData: { pubkey: 'pubkey-1' },
-    });
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'p2pk',
+        methodData: { pubkey: 'pubkey-1' },
+      },
+    );
   });
 
   it('execute re-reads operation objects before executing', async () => {

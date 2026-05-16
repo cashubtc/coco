@@ -6,6 +6,7 @@ import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
 import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = process.env.MINT_URL;
+const customUnit = process.env.CUSTOM_UNIT;
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');
@@ -88,6 +89,7 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
+    customUnit,
     logger: getTestLogger(),
     suiteName: 'Expo SQLite Integration Tests',
   },

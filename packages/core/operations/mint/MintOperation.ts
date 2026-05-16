@@ -13,10 +13,11 @@
  */
 export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' | 'failed';
 
-import type { Amount, AmountLike } from '@cashu/cashu-ts';
+import type { Amount } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
-import { getSecretsFromSerializedOutputData, toAmount } from '../../utils';
+import { getSecretsFromSerializedOutputData } from '../../utils';
 import type { MintMethod, MintMethodMeta, MintMethodRemoteState } from './MintMethodHandler';
+import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;
@@ -141,14 +142,15 @@ export function createMintOperation<M extends MintMethod>(
   id: string,
   mintUrl: string,
   meta: MintMethodMeta<M>,
-  intent: { amount: AmountLike; unit: string },
+  intent: UnitAmount,
   options?: { quoteId?: string },
 ): InitMintOperation<M> {
   const now = Date.now();
   return {
     ...meta,
     ...intent,
-    amount: toAmount(intent.amount),
+    amount: intent.amount,
+    unit: normalizeUnit(intent.unit),
     ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
     id,
     state: 'init',

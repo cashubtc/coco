@@ -7,6 +7,7 @@ import type {
 import {
   deserializeAmount,
   deserializeToken,
+  normalizeUnit,
   serializeAmount,
   stringifyJson,
 } from '@cashu/coco-core';
@@ -42,6 +43,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     id: row.id,
     mintUrl: row.mintUrl,
     amount: deserializeAmount(row.amount),
+    unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -109,6 +111,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
       id: op.id,
       mintUrl: op.mintUrl,
       amount: serializeAmount(op.amount),
+      unit: op.unit,
       state: op.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
@@ -129,6 +132,7 @@ function operationToRow(op: SendOperation): SendOperationRow {
     id: op.id,
     mintUrl: op.mintUrl,
     amount: serializeAmount(op.amount),
+    unit: op.unit,
     state: op.state,
     createdAt: createdAtSeconds,
     updatedAt: updatedAtSeconds,

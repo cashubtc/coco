@@ -7,6 +7,7 @@ import type {
 import {
   deserializeAmount,
   deserializeToken,
+  normalizeUnit,
   serializeAmount,
   stringifyJson,
 } from '@cashu/coco-core';
@@ -16,6 +17,7 @@ interface SendOperationRow {
   id: string;
   mintUrl: string;
   amount: string | number;
+  unit: string | null;
   state: SendOperationState;
   createdAt: number;
   updatedAt: number;
@@ -44,6 +46,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
     id: row.id,
     mintUrl: row.mintUrl,
     amount: deserializeAmount(row.amount),
+    unit: normalizeUnit(row.unit ?? 'sat'),
     createdAt: row.createdAt * 1000, // Convert seconds to milliseconds
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
@@ -111,6 +114,7 @@ function operationToParams(op: SendOperation): unknown[] {
       op.id,
       op.mintUrl,
       serializeAmount(op.amount),
+      op.unit,
       op.state,
       createdAtSeconds,
       updatedAtSeconds,
@@ -131,6 +135,7 @@ function operationToParams(op: SendOperation): unknown[] {
     op.id,
     op.mintUrl,
     serializeAmount(op.amount),
+    op.unit,
     op.state,
     createdAtSeconds,
     updatedAtSeconds,
@@ -165,8 +170,8 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_send_operations 
-        (id, mintUrl, amount, state, createdAt, updatedAt, error, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, method, methodDataJson, needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -185,19 +190,20 @@ export class SqliteSendOperationRepository implements SendOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?
          WHERE id = ?`,
-        [operation.state, updatedAtSeconds, operation.error ?? null, operation.id],
+        [operation.state, updatedAtSeconds, operation.error ?? null, operation.unit, operation.id],
       );
     } else {
       await this.db.run(
         `UPDATE coco_cashu_send_operations 
-         SET state = ?, updatedAt = ?, error = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, needsSwap = ?, fee = ?, inputAmount = ?, inputProofSecretsJson = ?, outputDataJson = ?, tokenJson = ?
          WHERE id = ?`,
         [
           operation.state,
           updatedAtSeconds,
           operation.error ?? null,
+          operation.unit,
           operation.needsSwap ? 1 : 0,
           serializeAmount(operation.fee),
           serializeAmount(operation.inputAmount),

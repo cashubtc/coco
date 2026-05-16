@@ -24,12 +24,9 @@ export type SendOperationState =
   | 'rolling_back'
   | 'rolled_back';
 
-import type { Amount, AmountLike, Token } from '@cashu/cashu-ts';
-import {
-  getSecretsFromSerializedOutputData,
-  toAmount,
-  type SerializedOutputData,
-} from '../../utils';
+import type { Amount, Token } from '@cashu/cashu-ts';
+import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
+import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 import type { SendMethod, SendMethodData } from './SendMethodHandler';
 
 // ============================================================================
@@ -48,6 +45,9 @@ interface SendOperationBase<M extends SendMethod = SendMethod> {
 
   /** The amount requested to send (before fees) */
   amount: Amount;
+
+  /** Unit for all amounts, proofs, outputs, and token data in this operation. */
+  unit: string;
 
   /** The send method (e.g., 'default', 'p2pk') */
   method: M;
@@ -292,7 +292,7 @@ export interface CreateSendOperationOptions<M extends SendMethod = SendMethod> {
 export function createSendOperation<M extends SendMethod = SendMethod>(
   id: string,
   mintUrl: string,
-  amount: AmountLike,
+  amount: UnitAmount,
   options: CreateSendOperationOptions<M>,
 ): InitSendOperation {
   const now = Date.now();
@@ -300,7 +300,8 @@ export function createSendOperation<M extends SendMethod = SendMethod>(
     id,
     state: 'init',
     mintUrl,
-    amount: toAmount(amount),
+    amount: amount.amount,
+    unit: normalizeUnit(amount.unit),
     method: options.method,
     methodData: options.methodData,
     createdAt: now,

@@ -17,6 +17,8 @@ export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMel
     method: M;
     /** Method-specific payload required for the selected melt method. */
     methodData: MeltMethodInputData<M>;
+    /** Unit to melt. Defaults to `sat`. */
+    unit?: string;
   };
 }[TSupported];
 
@@ -64,6 +66,7 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
       input.mintUrl,
       input.method,
       input.methodData,
+      input.unit,
     );
     return this.meltOperationService.prepare(initOperation.id);
   }

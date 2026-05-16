@@ -8,6 +8,7 @@ function makeRollingBackOperation(): RollingBackSendOperation {
     id: 'send-op-1',
     mintUrl: 'https://mint.test',
     amount: Amount.from(100),
+    unit: 'usd',
     state: 'rolling_back',
     method: 'default',
     methodData: {},
@@ -25,6 +26,7 @@ function makePendingP2pkOperation(): PendingSendOperation {
     id: 'send-op-p2pk',
     mintUrl: 'https://mint.test',
     amount: Amount.from(100),
+    unit: 'usd',
     state: 'pending',
     method: 'p2pk',
     methodData: { pubkey: '02' + '11'.repeat(32) },
@@ -41,9 +43,9 @@ function makePendingP2pkOperation(): PendingSendOperation {
     token: {
       mint: 'https://mint.test',
       proofs: [{ id: 'keyset-1', amount: Amount.from(100), secret: 'send-secret', C: 'C_send' }],
-      unit: 'sat',
+      unit: 'usd',
     },
-  } as PendingSendOperation;
+  };
 }
 
 describe('SqliteSendOperationRepository', () => {

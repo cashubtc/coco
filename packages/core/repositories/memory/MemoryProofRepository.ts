@@ -1,5 +1,20 @@
-import type { ProofRepository } from '..';
+import type { ProofRepository, ProofUnitFilter } from '..';
 import type { CoreProof, ProofState } from '../../types';
+import { normalizeUnit } from '../../amounts.ts';
+
+function normalizeProofUnit(proof: CoreProof): string {
+  return normalizeUnit((proof as { unit?: string }).unit);
+}
+
+function getUnitFilter(filter?: ProofUnitFilter): Set<string> | undefined {
+  const units = [...(filter?.units ?? []), ...(filter?.unit ? [filter.unit] : [])];
+  if (units.length === 0) return undefined;
+  return new Set(units.map((unit) => normalizeUnit(unit)));
+}
+
+function matchesUnit(proof: CoreProof, unitFilter?: Set<string>): boolean {
+  return !unitFilter || unitFilter.has(normalizeProofUnit(proof));
+}
 
 export class MemoryProofRepository implements ProofRepository {
   private proofsByMint: Map<string, Map<string, CoreProof>> = new Map();
@@ -14,30 +29,36 @@ export class MemoryProofRepository implements ProofRepository {
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
     if (!proofs || proofs.length === 0) return;
     const map = this.getMintMap(mintUrl);
+    const normalizedProofs = proofs.map((proof) => ({
+      ...proof,
+      unit: normalizeProofUnit(proof),
+    }));
     // Pre-check for any collisions and fail atomically
-    for (const p of proofs) {
+    for (const p of normalizedProofs) {
       if (map.has(p.secret)) {
         throw new Error(`Proof with secret already exists: ${p.secret}`);
       }
     }
-    for (const p of proofs) {
+    for (const p of normalizedProofs) {
       map.set(p.secret, { ...p, mintUrl });
     }
   }
 
-  async getReadyProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
+    const unitFilter = getUnitFilter(filter);
     return Array.from(map.values())
-      .filter((p) => p.state === 'ready')
+      .filter((p) => p.state === 'ready' && matchesUnit(p, unitFilter))
       .map((p) => ({ ...p }));
   }
 
-  async getInflightProofs(mintUrls?: string[]): Promise<CoreProof[]> {
+  async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     if (!mintUrls || mintUrls.length === 0) {
       const all: CoreProof[] = [];
       for (const map of this.proofsByMint.values()) {
         for (const p of map.values()) {
-          if (p.state === 'inflight') {
+          if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
             all.push({ ...p });
           }
         }
@@ -52,7 +73,7 @@ export class MemoryProofRepository implements ProofRepository {
       const map = this.proofsByMint.get(mintUrl);
       if (!map) continue;
       for (const p of map.values()) {
-        if (p.state === 'inflight') {
+        if (p.state === 'inflight' && matchesUnit(p, unitFilter)) {
           results.push({ ...p });
         }
       }
@@ -60,11 +81,12 @@ export class MemoryProofRepository implements ProofRepository {
     return results;
   }
 
-  async getAllReadyProofs(): Promise<CoreProof[]> {
+  async getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]> {
+    const unitFilter = getUnitFilter(filter);
     const all: CoreProof[] = [];
     for (const map of this.proofsByMint.values()) {
       for (const p of map.values()) {
-        if (p.state === 'ready') {
+        if (p.state === 'ready' && matchesUnit(p, unitFilter)) {
           all.push({ ...p });
         }
       }
@@ -72,11 +94,16 @@ export class MemoryProofRepository implements ProofRepository {
     return all;
   }
 
-  async getProofsByKeysetId(mintUrl: string, keysetId: string): Promise<CoreProof[]> {
+  async getProofsByKeysetId(
+    mintUrl: string,
+    keysetId: string,
+    filter?: ProofUnitFilter,
+  ): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
+    const unitFilter = getUnitFilter(filter);
     const results: CoreProof[] = [];
     for (const p of map.values()) {
-      if (p.state === 'ready' && p.id === keysetId) {
+      if (p.state === 'ready' && p.id === keysetId && matchesUnit(p, unitFilter)) {
         results.push({ ...p });
       }
     }
@@ -188,10 +215,11 @@ export class MemoryProofRepository implements ProofRepository {
     return results;
   }
 
-  async getAvailableProofs(mintUrl: string): Promise<CoreProof[]> {
+  async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
+    const unitFilter = getUnitFilter(filter);
     return Array.from(map.values())
-      .filter((p) => p.state === 'ready' && !p.usedByOperationId)
+      .filter((p) => p.state === 'ready' && !p.usedByOperationId && matchesUnit(p, unitFilter))
       .map((p) => ({ ...p }));
   }
 

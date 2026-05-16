@@ -13,6 +13,7 @@ const prepared = await coco.paymentRequests.parse(paymentRequest);
 
 console.log('Transport:', prepared.transport.type);
 console.log('Amount:', prepared.amount);
+console.log('Unit:', prepared.unit);
 console.log('Allowed mints:', prepared.allowedMints);
 console.log('Matching mints:', prepared.payableMints);
 ```
@@ -21,6 +22,7 @@ The returned `ResolvedPaymentRequest` contains:
 
 - **transport** - How to deliver the tokens (`inband` or `http`)
 - **amount** - The requested amount (optional, but required for payment)
+- **unit** - The requested unit, normalized to lowercase
 - **allowedMints** - List of allowed mints from the request
 - **payableMints** - Trusted mints with sufficient balance
 
@@ -84,7 +86,17 @@ const customTx = await coco.paymentRequests.prepare(prepared, { mintUrl, amount:
 const customResult = await coco.paymentRequests.execute(customTx);
 ```
 
-> **Note:** If the payment request specifies an amount, providing a different amount will throw an error. The requested amount is always exact.
+For custom-unit requests without an embedded amount, provide the amount and unit
+together:
+
+```ts
+const customUnitTx = await coco.paymentRequests.prepare(prepared, {
+  mintUrl,
+  amount: { amount: 5, unit: prepared.unit },
+});
+```
+
+> **Note:** If the payment request specifies an amount or unit, providing a different amount or unit will throw an error. The requested amount is always exact.
 
 ## Choosing a Mint
 

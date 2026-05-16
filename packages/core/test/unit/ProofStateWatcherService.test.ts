@@ -24,6 +24,7 @@ describe('ProofStateWatcherService', () => {
       secret: 'secret',
       C: 'C' as unknown as CoreProof['C'],
       mintUrl: mintUrlA,
+      unit: 'sat',
       state: 'inflight',
       ...overrides,
     }) as CoreProof;

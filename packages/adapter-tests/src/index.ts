@@ -7,6 +7,7 @@ import {
   type MeltOperation,
   type MintOperation,
   type ReceiveOperation,
+  type SendOperation,
   type AuthSession,
 } from '@cashu/coco-core';
 
@@ -192,21 +193,79 @@ export function createDummyProof(overrides?: Partial<CoreProof>): CoreProof {
     secret: 'secret',
     C: 'C',
     mintUrl: 'https://mint.test',
+    unit: 'sat',
     state: 'ready',
     ...overrides,
   } satisfies CoreProof;
 }
 
-export function createDummyMeltOperation(): MeltOperation {
+type InitMeltOperation = Extract<MeltOperation, { state: 'init' }>;
+
+export function createDummyMeltOperation(
+  overrides?: Partial<InitMeltOperation>,
+): InitMeltOperation {
   return {
     id: 'melt-op',
     state: 'init',
     mintUrl: 'https://mint.test',
+    unit: 'sat',
     method: 'bolt11',
     methodData: { invoice: 'lnbc1test', amountSats: Amount.from(1) },
     createdAt: 0,
     updatedAt: 0,
+    ...overrides,
   } satisfies MeltOperation;
+}
+
+type PreparedSendOperation = Extract<SendOperation, { state: 'prepared' }>;
+
+function createDummyPreparedSendOperation(
+  overrides?: Partial<PreparedSendOperation>,
+): PreparedSendOperation {
+  return {
+    id: 'send-op',
+    state: 'prepared',
+    mintUrl: 'https://mint.test',
+    amount: Amount.from(3),
+    unit: 'sat',
+    method: 'default',
+    methodData: {},
+    createdAt: 0,
+    updatedAt: 0,
+    needsSwap: false,
+    fee: Amount.zero(),
+    inputAmount: Amount.from(3),
+    inputProofSecrets: ['send-secret-1'],
+    ...overrides,
+  } satisfies PreparedSendOperation;
+}
+
+function createDummySendOperationsByState(unit: string): SendOperation[] {
+  const prepared = createDummyPreparedSendOperation({ id: 'send-prepared', unit });
+  const token = {
+    mint: prepared.mintUrl,
+    unit,
+    proofs: [{ id: 'keyset-id', amount: Amount.from(3), secret: 'token-secret', C: 'C-token' }],
+  };
+  return [
+    {
+      id: 'send-init',
+      state: 'init',
+      mintUrl: prepared.mintUrl,
+      amount: prepared.amount,
+      unit,
+      method: 'default',
+      methodData: {},
+      createdAt: 0,
+      updatedAt: 0,
+    },
+    prepared,
+    { ...prepared, id: 'send-executing', state: 'executing' },
+    { ...prepared, id: 'send-pending', state: 'pending', token },
+    { ...prepared, id: 'send-finalized', state: 'finalized', token },
+    { ...prepared, id: 'send-rolling-back', state: 'rolling_back', token },
+    { ...prepared, id: 'send-rolled-back', state: 'rolled_back', token },
+  ] satisfies SendOperation[];
 }
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
@@ -330,6 +389,68 @@ export async function runReceiveOperationRepositoryContract(
         if (stored!.state === 'prepared') {
           expect(stored!.fee.equals(Amount.from(1))).toBe(true);
         }
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runSendOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('SendOperationRepository contract', () => {
+    it('round-trips custom-unit send operations in every state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operations = createDummySendOperationsByState('usd');
+        for (const operation of operations) {
+          await repositories.sendOperationRepository.create(operation);
+        }
+
+        for (const operation of operations) {
+          const stored = await repositories.sendOperationRepository.getById(operation.id);
+          expect(stored).toBeDefined();
+          expect(stored!.unit).toBe('usd');
+        }
+
+        const pending = await repositories.sendOperationRepository.getByState('pending');
+        expect(pending).toHaveLength(1);
+        expect(pending[0]!.unit).toBe('usd');
+
+        const inFlight = await repositories.sendOperationRepository.getPending();
+        expect(inFlight).toHaveLength(3);
+        for (const operation of inFlight) {
+          expect(operation.unit).toBe('usd');
+        }
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runMeltOperationRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MeltOperationRepository contract', () => {
+    it('round-trips custom-unit init melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ unit: 'usd' });
+        await repositories.meltOperationRepository.create(operation);
+
+        const stored = await repositories.meltOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.state).toBe('init');
+        expect(stored!.unit).toBe('usd');
       } finally {
         await dispose();
       }
@@ -554,6 +675,50 @@ export async function runProofRepositoryContract(
 
         expect(proofs).toHaveLength(secrets.length);
         expect(new Set(proofs.map((proof) => proof.secret)).size).toBe(secrets.length);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips proof units and filters ready proofs by unit', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({ secret: 'sat-secret', C: 'C-sat', unit: 'sat' }),
+          createDummyProof({ secret: 'usd-secret', C: 'C-usd', unit: 'USD' }),
+        ]);
+
+        const satProofs = await repositories.proofRepository.getReadyProofs('https://mint.test', {
+          unit: 'sat',
+        });
+        const usdProofs = await repositories.proofRepository.getAvailableProofs(
+          'https://mint.test',
+          { unit: 'usd' },
+        );
+        const allUsd = await repositories.proofRepository.getAllReadyProofs({ units: ['usd'] });
+
+        expect(satProofs).toHaveLength(1);
+        expect(usdProofs).toHaveLength(1);
+        expect(allUsd).toHaveLength(1);
+        expect(usdProofs[0]?.unit).toBe('usd');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects proofs without a unit', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const proof = createDummyProof({ secret: 'missing-unit' }) as unknown as Omit<
+          CoreProof,
+          'unit'
+        >;
+        delete (proof as { unit?: string }).unit;
+
+        await expectThrows(
+          () => repositories.proofRepository.saveProofs('https://mint.test', [proof as CoreProof]),
+          expect,
+        );
       } finally {
         await dispose();
       }
