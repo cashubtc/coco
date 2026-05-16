@@ -123,6 +123,11 @@ describe('SendOperationService', () => {
         keepAmount: Amount.zero(),
       })),
       setProofState: mock(async () => {}),
+      restoreProofsToReady: mock((selectedMintUrl: string, secrets: string[]) =>
+        proofRepo
+          .setProofState(selectedMintUrl, secrets, 'ready')
+          .then(() => proofRepo.releaseProofs(selectedMintUrl, secrets)),
+      ),
       saveProofs: mock(async () => {}),
     } as unknown as ProofService;
 
@@ -446,5 +451,56 @@ describe('SendOperationService', () => {
     expect(customHandler.finalize).toHaveBeenCalledTimes(1);
     expect(persistedStateDuringFinalize).toBe('pending');
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
+
+  it('restores a pending operation when reclaim rollback fails before completion', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-reclaim-offline',
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: true,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['proof-1'],
+      outputData: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: 100, id: keysetId, B_: 'B_send_1' },
+            blindingFactor: 'abc123',
+            secret: Buffer.from('send-secret-1').toString('hex'),
+          },
+        ],
+      },
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      rollback: mock(async () => {
+        throw new Error('Network request failed');
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+    handlerProvider.register('default', customHandler);
+
+    await expect(service.rollback(pendingOp.id)).rejects.toThrow('Network request failed');
+
+    expect(customHandler.rollback).toHaveBeenCalledTimes(1);
+    const persisted = await sendOpRepo.getById(pendingOp.id);
+    expect(persisted?.state).toBe('pending');
   });
 });

@@ -452,7 +452,6 @@ export class SendOperationService {
       if (
         operation.state === 'finalized' ||
         operation.state === 'rolled_back' ||
-        operation.state === 'rolling_back' ||
         operation.state === 'init' ||
         operation.state === 'executing'
       ) {
@@ -469,7 +468,10 @@ export class SendOperationService {
         throw new Error(`Send operations of method ${operation.method} can not be rolled back`);
       }
 
-      if (operation.state === 'pending' && operation.method === 'p2pk') {
+      if (
+        (operation.state === 'pending' || operation.state === 'rolling_back') &&
+        operation.method === 'p2pk'
+      ) {
         throw new Error('Cannot rollback pending P2PK send operation');
       }
 
@@ -489,11 +491,18 @@ export class SendOperationService {
         opForRollback = rollingBack;
       }
 
-      await handler.rollback({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
+      try {
+        await handler.rollback({
+          ...this.buildDeps(),
+          operation: opForRollback,
+          wallet,
+        });
+      } catch (error) {
+        if (operation.state === 'pending') {
+          await this.sendOperationRepository.update(operation);
+        }
+        throw error;
+      }
 
       await this.markAsRolledBack(opForRollback, reason);
     } finally {

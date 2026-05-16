@@ -195,6 +195,7 @@ describe('DefaultSendHandler', () => {
         }),
       ),
       setProofState: mock(() => Promise.resolve()),
+      restoreProofsToReady: mock(() => Promise.resolve()),
       saveProofs: mock(() => Promise.resolve()),
       recoverProofsFromOutputData: mock(() => Promise.resolve([])),
     } as unknown as ProofService;
@@ -490,6 +491,22 @@ describe('DefaultSendHandler', () => {
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['send-1'], 'spent');
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1']);
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
+    });
+
+    it('rolls back exact-match pending proofs locally without mint access', async () => {
+      const operation = makePendingOp('op-exact-pending', {
+        needsSwap: false,
+        fee: Amount.zero(),
+        inputAmount: Amount.from(100),
+        inputProofSecrets: ['proof-100'],
+        outputData: undefined,
+      });
+
+      await handler.rollback(buildRollbackContext(operation));
+
+      expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['proof-100']);
+      expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+      expect(mockWallet.receive).not.toHaveBeenCalled();
     });
   });
 

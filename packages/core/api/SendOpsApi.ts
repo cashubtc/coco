@@ -145,13 +145,14 @@ export class SendOpsApi {
    * Attempts to reclaim a pending send operation.
    *
    * This is intended for sends that are already in flight but still support
-   * rollback according to the underlying send method.
+   * rollback according to the underlying send method. A previous interrupted
+   * reclaim may leave the operation in `rolling_back`; treat that as retryable.
    */
   async reclaim(operationId: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'pending') {
+    if (operation.state !== 'pending' && operation.state !== 'rolling_back') {
       throw new Error(
-        `Cannot reclaim operation in state '${operation.state}'. Expected 'pending'.`,
+        `Cannot reclaim operation in state '${operation.state}'. Expected 'pending' or 'rolling_back'.`,
       );
     }
 
