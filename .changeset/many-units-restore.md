@@ -1,11 +1,11 @@
 ---
-'@cashu/coco-core': minor
-'@cashu/coco-react': minor
-'@cashu/coco-indexeddb': minor
-'@cashu/coco-expo-sqlite': minor
-'@cashu/coco-sqlite': minor
-'@cashu/coco-sqlite-bun': minor
-'@cashu/coco-adapter-tests': minor
+'@cashu/coco-core': major
+'@cashu/coco-react': major
+'@cashu/coco-indexeddb': major
+'@cashu/coco-expo-sqlite': major
+'@cashu/coco-sqlite': major
+'@cashu/coco-sqlite-bun': major
+'@cashu/coco-adapter-tests': major
 ---
 
 Add first-class custom Cashu unit support across core APIs, React balance hooks,
