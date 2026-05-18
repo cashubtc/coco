@@ -164,6 +164,7 @@ describe('MemoryHistoryRepository', () => {
       state: 'prepared',
       mintUrl: 'https://mint.test',
       amount: Amount.from(10),
+      unit: 'sat',
       method: 'default',
       methodData: {},
       needsSwap: false,

@@ -250,6 +250,7 @@ describe('HistoryService', () => {
       state: 'prepared',
       mintUrl,
       amount: Amount.from(100),
+      unit: 'sat',
       method: 'default',
       methodData: {},
       needsSwap: false,
