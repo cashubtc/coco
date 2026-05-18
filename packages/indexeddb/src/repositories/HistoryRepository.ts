@@ -75,6 +75,35 @@ function parseReceiveProofs(
   }));
 }
 
+function parseReceiveSourceMetadata(
+  sourceJson: string | null | undefined,
+): Record<string, string> | undefined {
+  if (!sourceJson) return undefined;
+
+  const source = JSON.parse(sourceJson) as Record<string, unknown>;
+  if (
+    source.type !== 'payment-request' ||
+    typeof source.requestOperationId !== 'string' ||
+    typeof source.attemptId !== 'string' ||
+    typeof source.transport !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return {
+    source: 'payment-request',
+    requestOperationId: source.requestOperationId,
+    attemptId: source.attemptId,
+    ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
+    transport: source.transport,
+    ...(typeof source.transportMessageId === 'string'
+      ? { transportMessageId: source.transportMessageId }
+      : {}),
+    ...(typeof source.senderPubkey === 'string' ? { senderPubkey: source.senderPubkey } : {}),
+    ...(typeof source.memo === 'string' ? { memo: source.memo } : {}),
+  };
+}
+
 export class IdbHistoryRepository implements HistoryRepository {
   private readonly db: IdbDb;
 
@@ -228,7 +257,7 @@ export class IdbHistoryRepository implements HistoryRepository {
       createdAt: row.createdAt * 1000,
       updatedAt: row.updatedAt * 1000,
       mintUrl: row.mintUrl,
-      unit: token?.unit ?? 'sat',
+      unit: row.unit ?? token?.unit ?? 'sat',
       operationId: row.id,
       amount: deserializeAmount(row.amount),
       state: row.state,
@@ -277,6 +306,7 @@ export class IdbHistoryRepository implements HistoryRepository {
 
   private receiveRowToEntry(row: ReceiveOperationRow): HistoryEntry | null {
     if (row.state !== 'finalized' && row.state !== 'rolled_back') return null;
+    const metadata = parseReceiveSourceMetadata(row.sourceJson);
     return {
       id: operationHistoryId('receive', row.id),
       source: 'operation',
@@ -288,6 +318,7 @@ export class IdbHistoryRepository implements HistoryRepository {
       operationId: row.id,
       amount: deserializeAmount(row.amount),
       state: row.state,
+      ...(metadata ? { metadata } : {}),
       ...(row.error ? { error: row.error } : {}),
       ...(row.state === 'finalized'
         ? {

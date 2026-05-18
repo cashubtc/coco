@@ -46,6 +46,7 @@ describe('MemoryHistoryRepository', () => {
       type: 'send',
       state: 'prepared',
       operationId: 'send-op-1',
+      unit: 'usd',
     });
   });
 
@@ -164,7 +165,7 @@ describe('MemoryHistoryRepository', () => {
       state: 'prepared',
       mintUrl: 'https://mint.test',
       amount: Amount.from(10),
-      unit: 'sat',
+      unit: 'usd',
       method: 'default',
       methodData: {},
       needsSwap: false,

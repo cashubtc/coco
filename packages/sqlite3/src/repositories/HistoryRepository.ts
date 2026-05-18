@@ -44,7 +44,7 @@ const projectionSelect = `
       NULL AS legacyHistoryId,
       'send' AS type,
       mintUrl,
-      'sat' AS unit,
+      COALESCE(unit, 'sat') AS unit,
       amount,
       createdAt * 1000 AS createdAt,
       updatedAt * 1000 AS updatedAt,
@@ -125,7 +125,7 @@ const projectionSelect = `
       NULL AS paymentRequest,
       NULL AS tokenJson,
       inputProofsJson,
-      NULL AS metadata,
+      sourceJson AS metadata,
       id AS operationId,
       NULL AS remoteState,
       error
@@ -219,6 +219,33 @@ function parseMetadata(metadata: string | null): Record<string, string> | undefi
   return metadata ? JSON.parse(metadata) : undefined;
 }
 
+function parseReceiveSourceMetadata(sourceJson: string | null): Record<string, string> | undefined {
+  if (!sourceJson) return undefined;
+
+  const source = JSON.parse(sourceJson) as Record<string, unknown>;
+  if (
+    source.type !== 'payment-request' ||
+    typeof source.requestOperationId !== 'string' ||
+    typeof source.attemptId !== 'string' ||
+    typeof source.transport !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return {
+    source: 'payment-request',
+    requestOperationId: source.requestOperationId,
+    attemptId: source.attemptId,
+    ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
+    transport: source.transport,
+    ...(typeof source.transportMessageId === 'string'
+      ? { transportMessageId: source.transportMessageId }
+      : {}),
+    ...(typeof source.senderPubkey === 'string' ? { senderPubkey: source.senderPubkey } : {}),
+    ...(typeof source.memo === 'string' ? { memo: source.memo } : {}),
+  };
+}
+
 export class SqliteHistoryRepository implements HistoryRepository {
   private readonly db: SqliteDb;
 
@@ -303,16 +330,17 @@ function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
       return {
         ...base,
         type: 'send',
-        unit: token?.unit ?? base.unit,
         state: row.state as HistoryEntry['state'],
         ...(token ? { token } : {}),
       } as HistoryEntry;
     }
-    case 'receive':
+    case 'receive': {
+      const metadata = parseReceiveSourceMetadata(row.metadata);
       return {
         ...base,
         type: 'receive',
         state: row.state as HistoryEntry['state'],
+        ...(metadata ? { metadata } : {}),
         ...(row.state === 'finalized'
           ? {
               token: {
@@ -323,6 +351,7 @@ function rowToEntry(row: HistoryProjectionRow): HistoryEntry {
             }
           : {}),
       } as HistoryEntry;
+    }
   }
 }
 

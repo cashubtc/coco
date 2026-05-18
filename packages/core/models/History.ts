@@ -197,8 +197,7 @@ export function projectSendOperation(operation: SendOperation): SendHistoryEntry
     createdAt: prepared.createdAt,
     updatedAt: prepared.updatedAt,
     mintUrl: prepared.mintUrl,
-    // TODO(custom-unit): use operation.unit once send operation persistence includes units.
-    unit: token?.unit || 'sat',
+    unit: prepared.unit,
     operationId: prepared.id,
     amount: prepared.amount,
     state: prepared.state,

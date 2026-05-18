@@ -72,7 +72,7 @@ describe('HistoryService', () => {
       type: 'send',
       operationId: prepared.id,
       state: 'prepared',
-      unit: 'sat',
+      unit: 'usd',
     });
     expect(historyUpdateEvents[1]?.entry).toMatchObject({
       id: `send:${pending.id}`,
@@ -195,6 +195,16 @@ describe('HistoryService', () => {
         proofs: receiveProofs,
         unit: 'sat',
       },
+      metadata: {
+        source: 'payment-request',
+        requestOperationId: 'request-op-1',
+        requestId: 'request-1',
+        attemptId: 'attempt-1',
+        transport: 'nostr',
+        transportMessageId: 'message-1',
+        senderPubkey: 'sender-1',
+        memo: 'memo-1',
+      },
     });
     expect(historyUpdateEvents[1]?.entry).toMatchObject({
       id: `receive:${rolledBack.id}`,
@@ -250,7 +260,7 @@ describe('HistoryService', () => {
       state: 'prepared',
       mintUrl,
       amount: Amount.from(100),
-      unit: 'sat',
+      unit: 'usd',
       method: 'default',
       methodData: {},
       needsSwap: false,
@@ -314,6 +324,16 @@ describe('HistoryService', () => {
       fee: Amount.from(1),
       outputData: { keep: [], send: [] },
       inputProofs: receiveProofs,
+      source: {
+        type: 'payment-request',
+        requestOperationId: 'request-op-1',
+        requestId: 'request-1',
+        attemptId: 'attempt-1',
+        transport: 'nostr',
+        transportMessageId: 'message-1',
+        senderPubkey: 'sender-1',
+        memo: 'memo-1',
+      },
       createdAt: 1_000,
       updatedAt: 2_000,
     };

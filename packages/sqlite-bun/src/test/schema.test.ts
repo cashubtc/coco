@@ -49,13 +49,14 @@ const LEGACY_SEND_TOKEN = {
 async function seedSendOperationWithLegacyToken(db: SqliteDb): Promise<void> {
   await db.run(
     `INSERT INTO coco_cashu_send_operations
-      (id, mintUrl, amount, state, createdAt, updatedAt, error, method, methodDataJson,
+      (id, mintUrl, amount, unit, state, createdAt, updatedAt, error, method, methodDataJson,
        needsSwap, fee, inputAmount, inputProofSecretsJson, outputDataJson, tokenJson)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       'send-op-token-backfill',
       'https://mint.test',
       '100',
+      'usd',
       'pending',
       2,
       3,
@@ -313,6 +314,7 @@ describe('sqlite-bun schema migrations', () => {
       source: 'operation',
       type: 'send',
       operationId: 'send-op-token-backfill',
+      unit: 'usd',
       token: {
         mint: 'https://mint.test',
         unit: 'sat',

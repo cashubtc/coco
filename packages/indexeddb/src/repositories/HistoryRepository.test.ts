@@ -106,7 +106,7 @@ describe('IdbHistoryRepository', () => {
   it('over-scans legacy rows until it fills the visible page window', async () => {
     const repository = new IdbHistoryRepository(
       makeDb({
-        coco_cashu_send_operations: [makeSendRow('send-dedup', 1)],
+        coco_cashu_send_operations: [makeSendRow('send-dedup', 1, 'usd')],
         coco_cashu_melt_operations: [],
         coco_cashu_mint_operations: [],
         coco_cashu_receive_operations: [],
@@ -176,6 +176,54 @@ describe('IdbHistoryRepository', () => {
       },
     ]);
   });
+
+  it('projects operation unit and payment-request receive metadata', async () => {
+    const repository = new IdbHistoryRepository(
+      makeDb({
+        coco_cashu_send_operations: [makeSendRow('send-custom-unit', 5, 'usd')],
+        coco_cashu_melt_operations: [],
+        coco_cashu_mint_operations: [],
+        coco_cashu_receive_operations: [
+          {
+            ...makeReceiveRow('receive-payment-request', 'finalized', 4),
+            sourceJson: JSON.stringify({
+              type: 'payment-request',
+              requestOperationId: 'request-op-1',
+              requestId: 'request-1',
+              attemptId: 'attempt-1',
+              transport: 'nostr',
+              transportMessageId: 'message-1',
+              senderPubkey: 'sender-1',
+              memo: 'memo-1',
+            }),
+          },
+        ],
+        coco_cashu_history: [],
+      }) as never,
+    );
+
+    await expect(repository.getPaginatedHistoryEntries(10, 0)).resolves.toMatchObject([
+      {
+        id: 'send:send-custom-unit',
+        type: 'send',
+        unit: 'usd',
+      },
+      {
+        id: 'receive:receive-payment-request',
+        type: 'receive',
+        metadata: {
+          source: 'payment-request',
+          requestOperationId: 'request-op-1',
+          requestId: 'request-1',
+          attemptId: 'attempt-1',
+          transport: 'nostr',
+          transportMessageId: 'message-1',
+          senderPubkey: 'sender-1',
+          memo: 'memo-1',
+        },
+      },
+    ]);
+  });
 });
 
 function makeReceiveRow(
@@ -198,11 +246,12 @@ function makeReceiveRow(
   };
 }
 
-function makeSendRow(id: string, createdAt: number): SendOperationRow {
+function makeSendRow(id: string, createdAt: number, unit = 'sat'): SendOperationRow {
   return {
     id,
     mintUrl: 'https://mint.test',
     amount: '1',
+    unit,
     state: 'prepared',
     createdAt,
     updatedAt: createdAt,
