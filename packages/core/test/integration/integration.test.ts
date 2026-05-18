@@ -5,6 +5,7 @@ import { ConsoleLogger } from '../../logging';
 import type { Logger, LogLevel } from '../../logging';
 
 const mintUrl = process.env.MINT_URL;
+const customUnit = process.env.CUSTOM_UNIT;
 
 if (!mintUrl) {
   throw new Error('MINT_URL is not set');
@@ -33,6 +34,7 @@ runIntegrationTests(
   {
     createRepositories,
     mintUrl,
+    customUnit,
     logger: getTestLogger(),
     suiteName: 'Testnut Integration Tests',
   },

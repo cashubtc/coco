@@ -41,3 +41,6 @@ jobs:
 
       - name: Run sqlite3 integration tests
         run: ./scripts/test-integration.sh sqlite3
+
+      - name: Run sqlite3 custom-unit integration tests
+        run: ./scripts/test-integration.sh sqlite3 --custom-unit usd

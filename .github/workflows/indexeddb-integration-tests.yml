@@ -31,3 +31,8 @@ jobs:
         run: ./scripts/test-integration.sh indexeddb
         env:
           CI: true
+
+      - name: Run indexeddb custom-unit integration tests
+        run: ./scripts/test-integration.sh indexeddb --custom-unit usd
+        env:
+          CI: true
