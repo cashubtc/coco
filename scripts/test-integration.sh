@@ -5,6 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE_PORT=3338
+MINT_CONFIG_FILES=()
 
 # Platform flag (arm64 hosts need linux/amd64 for mintd image)
 case "$(uname -m)" in
@@ -33,6 +34,51 @@ log_error() {
 
 log_test() {
     echo -e "${BLUE}[TEST]${NC} $1"
+}
+
+normalize_custom_unit() {
+    local unit=$1
+    unit=$(printf '%s' "$unit" | tr '[:upper:]' '[:lower:]')
+
+    if [[ ! "$unit" =~ ^[a-z0-9._-]+$ ]]; then
+        log_error "Invalid custom unit: $1" >&2
+        log_error "Custom units may only contain letters, numbers, dots, underscores, and hyphens" >&2
+        return 1
+    fi
+
+    if [ "$unit" = "sat" ]; then
+        log_error "Custom unit must be a non-sat unit" >&2
+        return 1
+    fi
+
+    printf '%s' "$unit"
+}
+
+write_custom_unit_mint_config() {
+    local port=$1
+    local custom_unit=$2
+    local config_file=$3
+
+    cat > "$config_file" <<EOF
+[info]
+url = "http://localhost:${port}/"
+listen_host = "0.0.0.0"
+listen_port = 3338
+mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+[database]
+engine = "sqlite"
+
+[ln]
+ln_backend = "fakewallet"
+
+[fake_wallet]
+supported_units = ["sat", "${custom_unit}"]
+fee_percent = 0.0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 0
+EOF
 }
 
 coverage_enabled_for_package() {
@@ -94,28 +140,45 @@ list_tests() {
 start_mint_container() {
     local package_name=$1
     local port=$2
+    local custom_unit="${3:-}"
     local container_name="cdk-mint-${package_name}"
     local mint_url="http://localhost:${port}"
 
     log_info "Starting mint container for $package_name on port $port..."
+    if [ -n "$custom_unit" ]; then
+        log_info "Mint will support custom unit: $custom_unit"
+    fi
 
     # Stop and remove existing container if it exists
     docker stop "$container_name" 2>/dev/null || true
     docker rm "$container_name" 2>/dev/null || true
 
-    # Start new container
-    docker run -d "${PLATFORM_FLAG[@]}" \
-        -p "${port}:3338" \
-        --name "$container_name" \
-        -e CDK_MINTD_DATABASE=sqlite \
-        -e CDK_MINTD_LN_BACKEND=fakewallet \
-        -e CDK_MINTD_INPUT_FEE_PPK=100 \
-        -e CDK_MINTD_LISTEN_HOST=0.0.0.0 \
-        -e CDK_MINTD_LISTEN_PORT=3338 \
-        -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
-        -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
-        -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
-        cashubtc/mintd:0.15.1
+    if [ -n "$custom_unit" ]; then
+        local config_file="${TMPDIR:-/tmp}/coco-integration-mint-${package_name}-${port}.toml"
+        write_custom_unit_mint_config "$port" "$custom_unit" "$config_file"
+        MINT_CONFIG_FILES+=("$config_file")
+
+        docker run -d "${PLATFORM_FLAG[@]}" \
+            -p "${port}:3338" \
+            --name "$container_name" \
+            -v "${config_file}:/config/config.toml:ro" \
+            cashubtc/mintd:0.15.1 \
+            sh -c "cdk-mintd -c /config/config.toml"
+    else
+        # Start new container
+        docker run -d "${PLATFORM_FLAG[@]}" \
+            -p "${port}:3338" \
+            --name "$container_name" \
+            -e CDK_MINTD_DATABASE=sqlite \
+            -e CDK_MINTD_LN_BACKEND=fakewallet \
+            -e CDK_MINTD_INPUT_FEE_PPK=100 \
+            -e CDK_MINTD_LISTEN_HOST=0.0.0.0 \
+            -e CDK_MINTD_LISTEN_PORT=3338 \
+            -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
+            -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
+            -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
+            cashubtc/mintd:0.15.1
+    fi
 
     # Wait for mint to be ready
     log_info "Waiting for mint to be ready..."
@@ -156,6 +219,7 @@ run_test() {
     local port=$2
     local test_pattern="${3:-}"
     local log_level="${4:-}"
+    local custom_unit="${5:-}"
     local test_file
     local mint_url="http://localhost:${port}"
 
@@ -175,7 +239,7 @@ run_test() {
     fi
 
     # Start mint container for this test
-    if ! start_mint_container "$package_name" "$port"; then
+    if ! start_mint_container "$package_name" "$port" "$custom_unit"; then
         return 1
     fi
 
@@ -198,6 +262,9 @@ run_test() {
     if [ -n "$log_level" ]; then
         log_test "Log level: $log_level"
     fi
+    if [ -n "$custom_unit" ]; then
+        log_test "Custom unit: $custom_unit"
+    fi
     if [ "$package_coverage_enabled" = "true" ]; then
         rm -rf "$coverage_dir"
         log_test "Coverage output: $coverage_dir/lcov.info"
@@ -218,6 +285,11 @@ run_test() {
         else
             unset VITE_TEST_LOG_LEVEL
         fi
+        if [ -n "$custom_unit" ]; then
+            export VITE_CUSTOM_UNIT="$custom_unit"
+        else
+            unset VITE_CUSTOM_UNIT
+        fi
 
         if [ -n "$test_pattern" ]; then
             bun run test:browser -- --testNamePattern="$test_pattern" || test_result=$?
@@ -227,6 +299,7 @@ run_test() {
 
         unset VITE_MINT_URL
         unset VITE_TEST_LOG_LEVEL
+        unset VITE_CUSTOM_UNIT
     else
         # Standard test command for non-browser packages (uses vitest or bun:test)
         export MINT_URL="$mint_url"
@@ -234,6 +307,11 @@ run_test() {
             export TEST_LOG_LEVEL="$log_level"
         else
             unset TEST_LOG_LEVEL
+        fi
+        if [ -n "$custom_unit" ]; then
+            export CUSTOM_UNIT="$custom_unit"
+        else
+            unset CUSTOM_UNIT
         fi
 
         local bun_args=()
@@ -253,6 +331,7 @@ run_test() {
 
         unset MINT_URL
         unset TEST_LOG_LEVEL
+        unset CUSTOM_UNIT
     fi
 
     if [ "$package_coverage_enabled" = "true" ] && [ -f "$coverage_dir/lcov.info" ]; then
@@ -269,6 +348,7 @@ run_test() {
 run_all_tests() {
     local test_pattern="${1:-}"
     local log_level="${2:-}"
+    local custom_unit="${3:-}"
     local tests
     tests=$(discover_integration_tests)
 
@@ -296,7 +376,7 @@ run_all_tests() {
         if [ -n "$log_level" ]; then
             log_test "Log level: $log_level"
         fi
-        if run_test "$package" "$port" "$test_pattern" "$log_level"; then
+        if run_test "$package" "$port" "$test_pattern" "$log_level" "$custom_unit"; then
             log_info "✓ $package tests passed"
         else
             log_error "✗ $package tests failed"
@@ -333,6 +413,9 @@ cleanup() {
     # Also clean up old compose-based container if it exists
     docker stop cdk-mint 2>/dev/null || true
     docker rm cdk-mint 2>/dev/null || true
+    for config_file in "${MINT_CONFIG_FILES[@]}"; do
+        rm -f "$config_file"
+    done
 }
 
 # Set trap to cleanup on exit
@@ -354,6 +437,7 @@ COMMAND="all"
 TEST_PATTERN=""
 LOG_LEVEL=""
 ENABLE_COVERAGE="false"
+CUSTOM_UNIT_VALUE="${CUSTOM_UNIT:-}"
 
 # Parse flags and positional arguments
 while [[ $# -gt 0 ]]; do
@@ -378,12 +462,20 @@ while [[ $# -gt 0 ]]; do
             ENABLE_COVERAGE="true"
             shift
             ;;
+        --custom-unit)
+            CUSTOM_UNIT_VALUE="$2"
+            shift 2
+            ;;
+        --custom-unit=*)
+            CUSTOM_UNIT_VALUE="${1#*=}"
+            shift
+            ;;
         list|--list)
             list_tests
             exit 0
             ;;
         help|--help|-h)
-            echo "Usage: $0 [package-name|all|list] [-t PATTERN] [-l LEVEL] [--coverage]"
+            echo "Usage: $0 [package-name|all|list] [-t PATTERN] [-l LEVEL] [--coverage] [--custom-unit UNIT]"
             echo ""
             echo "Options:"
             echo "  package-name              Run integration tests for a specific package (e.g., expo-sqlite, sqlite3)"
@@ -392,6 +484,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --test-name-pattern   Filter tests by name pattern (e.g., 'should create a melt quote')"
             echo "  -l, --log-level           Set log level: error, warn, info, debug (default: no logging)"
             echo "  --coverage                Generate lcov.info under packages/core/coverage/integration"
+            echo "  --custom-unit UNIT        Start mintd with sat plus UNIT and run the suite using UNIT"
             echo "  help                      Show this help message"
             echo ""
             echo "Examples:"
@@ -399,6 +492,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 expo-sqlite                        # Run all expo-sqlite tests"
             echo "  $0 expo-sqlite -t 'melt quote'        # Run expo-sqlite tests matching 'melt quote'"
             echo "  $0 core --coverage                    # Run core tests and emit coverage"
+            echo "  $0 core --custom-unit usd"
             echo "  $0 all -t 'should create'            # Run all tests matching 'should create'"
             echo "  $0 expo-sqlite -l debug               # Run expo-sqlite tests with debug logging"
             echo "  $0 all -l info -t 'melt'             # Run all 'melt' tests with info logging"
@@ -428,6 +522,12 @@ if [ -n "$LOG_LEVEL" ]; then
             exit 1
             ;;
     esac
+fi
+
+if [ -n "$CUSTOM_UNIT_VALUE" ]; then
+    if ! CUSTOM_UNIT_VALUE=$(normalize_custom_unit "$CUSTOM_UNIT_VALUE"); then
+        exit 1
+    fi
 fi
 
 log_info "Building packages..."
@@ -477,11 +577,11 @@ fi
 
 # Run tests based on command
 if [ "$COMMAND" = "all" ]; then
-    if ! run_all_tests "$TEST_PATTERN" "$LOG_LEVEL"; then
+    if ! run_all_tests "$TEST_PATTERN" "$LOG_LEVEL" "$CUSTOM_UNIT_VALUE"; then
         exit 1
     fi
 else
-    if ! run_test "$COMMAND" "$BASE_PORT" "$TEST_PATTERN" "$LOG_LEVEL"; then
+    if ! run_test "$COMMAND" "$BASE_PORT" "$TEST_PATTERN" "$LOG_LEVEL" "$CUSTOM_UNIT_VALUE"; then
         exit 1
     fi
 fi

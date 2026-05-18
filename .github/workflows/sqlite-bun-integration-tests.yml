@@ -41,3 +41,6 @@ jobs:
 
       - name: Run sqlite-bun integration tests
         run: ./scripts/test-integration.sh sqlite-bun
+
+      - name: Run sqlite-bun custom-unit integration tests
+        run: ./scripts/test-integration.sh sqlite-bun --custom-unit usd

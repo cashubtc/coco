@@ -38,6 +38,9 @@ jobs:
       - name: Run core integration tests
         run: ./scripts/test-integration.sh core --coverage
 
+      - name: Run core custom-unit integration tests
+        run: ./scripts/test-integration.sh core --custom-unit usd
+
       - name: Upload core integration coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         uses: codecov/codecov-action@v5

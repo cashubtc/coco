@@ -41,3 +41,6 @@ jobs:
 
       - name: Run expo-sqlite integration tests
         run: ./scripts/test-integration.sh expo-sqlite
+
+      - name: Run expo-sqlite custom-unit integration tests
+        run: ./scripts/test-integration.sh expo-sqlite --custom-unit usd
