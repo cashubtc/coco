@@ -41,6 +41,16 @@ import type {
 } from '../repositories';
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
+import type {
+  PaymentRequestReceiveTransportCreateInput,
+  PaymentRequestReceiveTransportHandler,
+  PaymentRequestReceiveTransportHandlerProvider,
+} from '../infra/handlers/paymentRequestReceive';
+
+export type {
+  PaymentRequestReceiveTransportCreateInput,
+  PaymentRequestReceiveTransportHandler,
+} from '../infra/handlers/paymentRequestReceive';
 
 type CashuPaymentRequestTransportInput =
   | PaymentRequestTransport
@@ -54,24 +64,6 @@ export type PaymentRequestReceiveTransportInput =
   | PaymentRequestReceiveTransport
   | { type: 'inband' }
   | CashuPaymentRequestTransportInput;
-
-export interface PaymentRequestReceiveTransportCreateInput {
-  requestId: string;
-  amount: Amount;
-  unit: string;
-  mints: string[];
-  description?: string;
-  singleUse: boolean;
-}
-
-export interface PaymentRequestReceiveTransportHandler {
-  readonly type: Exclude<PaymentRequestReceiveTransport, 'inband'>;
-  createRequestTransport?(
-    input: PaymentRequestReceiveTransportCreateInput,
-  ): Promise<PaymentRequestTransport> | PaymentRequestTransport;
-  activate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
-  deactivate(operation: PaymentRequestReceiveOperation): Promise<void> | void;
-}
 
 export interface CreatePaymentRequestReceiveInput {
   amount: UnitAmountLike;
@@ -93,16 +85,13 @@ export interface PaymentRequestReceiveClaimResult {
 
 export class PaymentRequestReceiveService {
   private readonly lock = new OperationIdLock();
-  private readonly transportHandlers = new Map<
-    Exclude<PaymentRequestReceiveTransport, 'inband'>,
-    PaymentRequestReceiveTransportHandler
-  >();
 
   constructor(
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
     private readonly attemptRepository: PaymentRequestReceiveAttemptRepository,
     private readonly receiveOperationService: ReceiveOperationService,
     private readonly mintService: MintService,
+    private readonly transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider,
     private readonly logger?: Logger,
   ) {}
 
@@ -111,17 +100,7 @@ export class PaymentRequestReceiveService {
   }
 
   registerTransportHandler(handler: PaymentRequestReceiveTransportHandler): () => void {
-    if (this.transportHandlers.has(handler.type)) {
-      throw new PaymentRequestError(
-        `Payment request receive transport handler '${handler.type}' is already registered`,
-      );
-    }
-    this.transportHandlers.set(handler.type, handler);
-    return () => {
-      if (this.transportHandlers.get(handler.type) === handler) {
-        this.transportHandlers.delete(handler.type);
-      }
-    };
+    return this.transportHandlerProvider.register(handler);
   }
 
   private async acquireLockWhenAvailable(lockId: string): Promise<() => void> {
@@ -430,12 +409,7 @@ export class PaymentRequestReceiveService {
 
   private async activateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
     if (operation.transport === 'inband') return;
-    const handler = this.transportHandlers.get(operation.transport);
-    if (!handler) {
-      throw new PaymentRequestError(
-        `No payment request receive transport handler registered for '${operation.transport}'`,
-      );
-    }
+    const handler = this.transportHandlerProvider.get(operation.transport);
     await handler.activate(operation);
   }
 
@@ -444,7 +418,7 @@ export class PaymentRequestReceiveService {
     options?: { ignoreMissingHandler?: boolean },
   ): Promise<void> {
     if (operation.transport === 'inband') return;
-    const handler = this.transportHandlers.get(operation.transport);
+    const handler = this.transportHandlerProvider.getOptional(operation.transport);
     if (!handler) {
       if (options?.ignoreMissingHandler) {
         this.logger?.warn('Payment request receive transport deactivation skipped', {
@@ -863,7 +837,7 @@ export class PaymentRequestReceiveService {
     }
 
     if (typeof input === 'string') {
-      const handler = this.transportHandlers.get(input);
+      const handler = this.transportHandlerProvider.getOptional(input);
       if (!handler?.createRequestTransport) {
         throw new PaymentRequestError(`Transport '${input}' is not supported yet`);
       }

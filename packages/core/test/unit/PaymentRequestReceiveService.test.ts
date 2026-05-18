@@ -26,6 +26,7 @@ import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
 } from '../../repositories/memory';
+import { PaymentRequestReceiveTransportHandlerProvider } from '../../infra/handlers/paymentRequestReceive';
 
 describe('PaymentRequestReceiveService', () => {
   const mintUrl = 'https://mint.test';
@@ -37,6 +38,7 @@ describe('PaymentRequestReceiveService', () => {
   let attemptRepository: MemoryPaymentRequestReceiveAttemptRepository;
   let mintService: MintService;
   let receiveOperationService: ReceiveOperationService;
+  let transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider;
   let service: PaymentRequestReceiveService;
 
   function createPayload(overrides: Partial<PaymentRequestPayload> = {}): PaymentRequestPayload {
@@ -125,12 +127,14 @@ describe('PaymentRequestReceiveService', () => {
       getOperationByPaymentRequestAttemptId: mock(async () => null),
       recoverPendingOperations: mock(async () => undefined),
     } as unknown as ReceiveOperationService;
+    transportHandlerProvider = new PaymentRequestReceiveTransportHandlerProvider();
 
     service = new PaymentRequestReceiveService(
       operationRepository,
       attemptRepository,
       receiveOperationService,
       mintService,
+      transportHandlerProvider,
     );
   });
 
@@ -240,6 +244,45 @@ describe('PaymentRequestReceiveService', () => {
     expect(activate).toHaveBeenCalledTimes(1);
 
     unregister();
+  });
+
+  it('keeps delegated transport handler registration scoped to the registered handler', async () => {
+    const handler = {
+      type: 'nostr' as const,
+      createRequestTransport: mock(async () => ({
+        type: PaymentRequestTransportType.NOSTR,
+        target: nostrTarget,
+      })),
+      activate: mock(async () => undefined),
+      deactivate: mock(async () => undefined),
+    };
+    const unregister = service.registerTransportHandler(handler);
+
+    expect(() =>
+      service.registerTransportHandler({
+        type: 'nostr',
+        createRequestTransport: mock(async () => ({
+          type: PaymentRequestTransportType.NOSTR,
+          target: nostrTarget,
+        })),
+        activate: mock(async () => undefined),
+        deactivate: mock(async () => undefined),
+      }),
+    ).toThrow("Payment request receive transport handler 'nostr' is already registered");
+
+    unregister();
+    unregister();
+
+    const replacementUnregister = service.registerTransportHandler({
+      type: 'nostr',
+      createRequestTransport: mock(async () => ({
+        type: PaymentRequestTransportType.NOSTR,
+        target: nostrTarget,
+      })),
+      activate: mock(async () => undefined),
+      deactivate: mock(async () => undefined),
+    });
+    replacementUnregister();
   });
 
   it('passes custom units to registered transport handlers', async () => {

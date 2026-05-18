@@ -45,6 +45,7 @@ import {
   P2pkSendHandler,
   MintBolt11Handler,
   MintHandlerProvider,
+  PaymentRequestReceiveTransportHandlerProvider,
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
 import { type Logger, NullLogger } from './logging';
@@ -830,11 +831,14 @@ export class Manager {
       paymentRequestLogger,
     );
     const paymentRequestReceiveLogger = this.getChildLogger('PaymentRequestReceiveService');
+    const paymentRequestReceiveTransportHandlerProvider =
+      new PaymentRequestReceiveTransportHandlerProvider();
     const paymentRequestReceiveService = new PaymentRequestReceiveService(
       paymentRequestReceiveOperationRepository,
       paymentRequestReceiveAttemptRepository,
       receiveOperationService,
       mintService,
+      paymentRequestReceiveTransportHandlerProvider,
       paymentRequestReceiveLogger,
     );
 
