@@ -186,6 +186,24 @@ describe('PaymentRequestReceiveService', () => {
     ).rejects.toThrow('An active payment request already exists for request id request-id');
   });
 
+  it('rejects blank caller-provided request ids', async () => {
+    await expect(
+      service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: '',
+      }),
+    ).rejects.toThrow('Payment request id must not be blank');
+
+    await expect(
+      service.create({
+        amount: Amount.from(100),
+        mints: [mintUrl],
+        requestId: '   ',
+      }),
+    ).rejects.toThrow('Payment request id must not be blank');
+  });
+
   it('serializes concurrent creates for the same request id', async () => {
     const results = await Promise.allSettled([
       service.create({
@@ -858,6 +876,32 @@ describe('PaymentRequestReceiveService', () => {
         },
       ),
     ).rejects.toThrow('belongs to another payment request receive operation');
+  });
+
+  it('rejects direct claims for persisted empty request ids when payload ids differ', async () => {
+    const now = Date.now();
+    await operationRepository.create({
+      id: 'empty-request-id-operation',
+      requestId: '',
+      encodedRequest: 'CREQBempty',
+      state: 'active',
+      transport: 'inband',
+      amount: Amount.from(100),
+      unit: 'sat',
+      mints: [mintUrl],
+      singleUse: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await service.claimPayload(
+      'empty-request-id-operation',
+      createPayload({ id: 'other-request-id' }),
+    );
+
+    expect(result.attempt.state).toBe('rejected');
+    expect(result.attempt.error).toContain('Payment request payload id does not match request id');
+    expect(receiveOperationService.init).not.toHaveBeenCalled();
   });
 
   it('rejects a reused transport message id with a different payload during direct claim', async () => {

@@ -130,6 +130,10 @@ export class PaymentRequestReceiveService {
       }
     }
 
+    if (input.requestId !== undefined && input.requestId.trim() === '') {
+      throw new PaymentRequestError('Payment request id must not be blank');
+    }
+
     const requestId = input.requestId ?? generateSubId();
     const releaseCreateLock = await this.acquireLockWhenAvailable(
       `payment-request-receive:create:${requestId}`,
@@ -927,7 +931,7 @@ export class PaymentRequestReceiveService {
     payload: ParsedPaymentRequestPayload,
     grossAmount: Amount,
   ): Promise<void> {
-    if (operation.requestId && payload.id !== operation.requestId) {
+    if (operation.requestId !== undefined && payload.id !== operation.requestId) {
       throw new PaymentRequestError('Payment request payload id does not match request id');
     }
     if (!operation.requestId && !payload.id) {
