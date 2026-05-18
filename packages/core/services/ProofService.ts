@@ -1051,7 +1051,9 @@ export class ProofService {
           this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
           continue;
         }
-        restoredProofs.push(output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }));
+        restoredProofs.push(
+          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
+        );
       }
     }
 

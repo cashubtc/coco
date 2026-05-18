@@ -1379,11 +1379,10 @@ describe('ProofService', () => {
         bus,
       );
 
-      const recovered = await service.recoverProofsFromOutputData(
-        mintUrl,
-        serializedOutputData,
-        { unit: 'sat', persistRecoveredProofs: false },
-      );
+      const recovered = await service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
+        unit: 'sat',
+        persistRecoveredProofs: false,
+      });
 
       expect(recovered).toHaveLength(1);
       // C must be the unblinded value produced by toProof(), not the raw blinded signature C_
