@@ -161,6 +161,19 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
     return rows.map(rowToOperation);
   }
 
+  async getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
+    const rows = (await (this.db as any)
+      .table('coco_cashu_receive_operations')
+      .toArray()) as ReceiveOperationRow[];
+    const operation = rows
+      .map(rowToOperation)
+      .find(
+        (candidate) =>
+          candidate.source?.type === 'payment-request' && candidate.source.attemptId === attemptId,
+      );
+    return operation ?? null;
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.runTransaction('rw', ['coco_cashu_receive_operations'], async (tx) => {
       const table = tx.table('coco_cashu_receive_operations');

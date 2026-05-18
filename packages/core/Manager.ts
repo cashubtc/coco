@@ -837,6 +837,7 @@ export class Manager {
       paymentRequestReceiveOperationRepository,
       paymentRequestReceiveAttemptRepository,
       receiveOperationService,
+      receiveOperationRepository,
       mintService,
       paymentRequestReceiveTransportHandlerProvider,
       paymentRequestReceiveLogger,

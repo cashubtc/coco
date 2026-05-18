@@ -56,6 +56,15 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     return results;
   }
 
+  async getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
+    for (const op of this.operations.values()) {
+      if (op.source?.type === 'payment-request' && op.source.attemptId === attemptId) {
+        return { ...op };
+      }
+    }
+    return null;
+  }
+
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
   }

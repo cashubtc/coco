@@ -38,6 +38,7 @@ import type {
 import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  ReceiveOperationRepository,
 } from '../repositories';
 import { computeYHexForSecrets, generateSubId, normalizeMintUrl } from '../utils';
 import { OperationIdLock } from '../operations/OperationIdLock';
@@ -90,6 +91,7 @@ export class PaymentRequestReceiveService {
     private readonly operationRepository: PaymentRequestReceiveOperationRepository,
     private readonly attemptRepository: PaymentRequestReceiveAttemptRepository,
     private readonly receiveOperationService: ReceiveOperationService,
+    private readonly receiveOperationRepository: ReceiveOperationRepository,
     private readonly mintService: MintService,
     private readonly transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider,
     private readonly logger?: Logger,
@@ -364,9 +366,7 @@ export class PaymentRequestReceiveService {
 
         const childReceive =
           currentAttempt.state === 'validating'
-            ? await this.receiveOperationService.getOperationByPaymentRequestAttemptId(
-                currentAttempt.id,
-              )
+            ? await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id)
             : null;
         if (childReceive) {
           const linkedAttempt = await this.updateAttempt({
@@ -606,9 +606,7 @@ export class PaymentRequestReceiveService {
     } catch (error) {
       const receiveOperation = currentAttempt.receiveOperationId
         ? await this.receiveOperationService.getOperation(currentAttempt.receiveOperationId)
-        : await this.receiveOperationService.getOperationByPaymentRequestAttemptId(
-            currentAttempt.id,
-          );
+        : await this.receiveOperationRepository.getByPaymentRequestAttemptId(currentAttempt.id);
 
       if (receiveOperation?.state === 'finalized') {
         await this.finalizeAttemptFromReceive(currentAttempt, receiveOperation, {

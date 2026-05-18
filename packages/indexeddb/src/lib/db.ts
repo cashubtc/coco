@@ -214,7 +214,7 @@ export interface PaymentRequestReceiveOperationRow {
   id: string;
   requestId?: string | null;
   encodedRequest: string;
-  state: 'active' | 'completed' | 'cancelled' | 'expired';
+  state: 'active' | 'completed' | 'cancelled';
   transport: 'inband' | 'nostr' | 'post';
   amount: string | number;
   unit: string;
@@ -242,7 +242,7 @@ export interface PaymentRequestReceiveAttemptRow {
   fee?: string | number | null;
   netAmount?: string | number | null;
   receiveOperationId?: string | null;
-  state: 'received' | 'validating' | 'receiving' | 'finalized' | 'rejected' | 'duplicate';
+  state: 'received' | 'validating' | 'receiving' | 'finalized' | 'rejected';
   error?: string | null;
   payloadJson?: string | null;
   createdAt: number;

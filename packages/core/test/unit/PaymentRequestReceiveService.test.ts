@@ -25,6 +25,7 @@ import type { ParsedPaymentRequestPayload } from '../../operations/paymentReques
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
+  MemoryReceiveOperationRepository,
 } from '../../repositories/memory';
 import { PaymentRequestReceiveTransportHandlerProvider } from '../../infra/handlers/paymentRequestReceive';
 
@@ -36,6 +37,7 @@ describe('PaymentRequestReceiveService', () => {
   ].join('');
   let operationRepository: MemoryPaymentRequestReceiveOperationRepository;
   let attemptRepository: MemoryPaymentRequestReceiveAttemptRepository;
+  let receiveOperationRepository: MemoryReceiveOperationRepository;
   let mintService: MintService;
   let receiveOperationService: ReceiveOperationService;
   let transportHandlerProvider: PaymentRequestReceiveTransportHandlerProvider;
@@ -90,6 +92,7 @@ describe('PaymentRequestReceiveService', () => {
   beforeEach(() => {
     operationRepository = new MemoryPaymentRequestReceiveOperationRepository();
     attemptRepository = new MemoryPaymentRequestReceiveAttemptRepository();
+    receiveOperationRepository = new MemoryReceiveOperationRepository();
     mintService = {
       isTrustedMint: mock(async () => true),
     } as unknown as MintService;
@@ -124,7 +127,6 @@ describe('PaymentRequestReceiveService', () => {
         },
       ),
       getOperation: mock(async () => null),
-      getOperationByPaymentRequestAttemptId: mock(async () => null),
       recoverPendingOperations: mock(async () => undefined),
     } as unknown as ReceiveOperationService;
     transportHandlerProvider = new PaymentRequestReceiveTransportHandlerProvider();
@@ -133,6 +135,7 @@ describe('PaymentRequestReceiveService', () => {
       operationRepository,
       attemptRepository,
       receiveOperationService,
+      receiveOperationRepository,
       mintService,
       transportHandlerProvider,
     );
@@ -1299,11 +1302,7 @@ describe('PaymentRequestReceiveService', () => {
       }),
       state: 'finalized',
     };
-    (
-      receiveOperationService.getOperationByPaymentRequestAttemptId as unknown as ReturnType<
-        typeof mock
-      >
-    ).mockResolvedValue(finalizedReceive);
+    await receiveOperationRepository.create(finalizedReceive);
     (receiveOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValue(
       finalizedReceive,
     );

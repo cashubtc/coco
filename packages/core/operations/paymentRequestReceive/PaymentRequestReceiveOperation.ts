@@ -1,14 +1,13 @@
 import type { Amount, PaymentRequestPayload, Proof } from '@cashu/cashu-ts';
 
-export type PaymentRequestReceiveState = 'active' | 'completed' | 'cancelled' | 'expired';
+export type PaymentRequestReceiveState = 'active' | 'completed' | 'cancelled';
 
 export type PaymentRequestReceiveAttemptState =
   | 'received'
   | 'validating'
   | 'receiving'
   | 'finalized'
-  | 'rejected'
-  | 'duplicate';
+  | 'rejected';
 
 export type PaymentRequestReceiveTransport = 'inband' | 'nostr' | 'post';
 

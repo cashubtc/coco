@@ -268,6 +268,9 @@ export interface ReceiveOperationRepository {
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<ReceiveOperation[]>;
 
+  /** Get a receive operation created for a payment request receive attempt. */
+  getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null>;
+
   /** Delete a receive operation */
   delete(id: string): Promise<void>;
 }

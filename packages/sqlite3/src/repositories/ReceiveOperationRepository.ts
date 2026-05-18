@@ -210,6 +210,19 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
     return rows.map(rowToOperation);
   }
 
+  async getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
+    const rows = await this.db.all<ReceiveOperationRow>(
+      'SELECT * FROM coco_cashu_receive_operations WHERE sourceJson IS NOT NULL',
+    );
+    const operation = rows
+      .map(rowToOperation)
+      .find(
+        (candidate) =>
+          candidate.source?.type === 'payment-request' && candidate.source.attemptId === attemptId,
+      );
+    return operation ?? null;
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.run('DELETE FROM coco_cashu_receive_operations WHERE id = ?', [id]);
   }

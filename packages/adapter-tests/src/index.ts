@@ -448,8 +448,11 @@ export async function runReceiveOperationRepositoryContract(
         await repositories.receiveOperationRepository.create(operation);
 
         const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        const byAttempt =
+          await repositories.receiveOperationRepository.getByPaymentRequestAttemptId('attempt-id');
 
         expect(stored).toBeDefined();
+        expect(byAttempt?.id).toBe(operation.id);
         expect(stored!.source?.type).toBe('payment-request');
         if (stored!.source?.type === 'payment-request') {
           expect(stored!.source.requestOperationId).toBe('request-op');
