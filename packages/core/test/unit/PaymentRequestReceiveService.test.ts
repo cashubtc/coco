@@ -1511,6 +1511,57 @@ describe('PaymentRequestReceiveService', () => {
     expect(await attemptRepository.getByPayloadHash(operation.id, payloadHash)).toBeDefined();
   });
 
+  it('does not pin corrected proof metadata behind a rejected attempt', async () => {
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
+    const missingWitnessPayload = createPayload();
+    const correctedPayload = createPayload({
+      proofs: [
+        {
+          ...missingWitnessPayload.proofs[0]!,
+          witness: JSON.stringify({ signatures: ['valid-signature'] }),
+        },
+      ],
+    });
+    const hashPayload = (
+      service as unknown as {
+        hashPayload(payload: ParsedPaymentRequestPayload): string;
+      }
+    ).hashPayload.bind(service);
+    const missingWitnessHash = hashPayload(missingWitnessPayload);
+    const correctedHash = hashPayload(correctedPayload);
+    (receiveOperationService.init as unknown as ReturnType<typeof mock>).mockImplementation(
+      async (token: PaymentRequestPayload, source?: ReceiveOperationSource) => {
+        if (!token.proofs[0]?.witness) {
+          throw new ProofValidationError('Locked proof witness is required');
+        }
+        return {
+          id: 'receive-op-1',
+          state: 'init',
+          mintUrl: token.mint,
+          unit: token.unit ?? 'sat',
+          amount: Amount.from(100),
+          inputProofs: token.proofs,
+          source,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+      },
+    );
+
+    const rejected = await service.claimPayload(operation.id, missingWitnessPayload);
+    const accepted = await service.claimPayload(operation.id, correctedPayload);
+
+    expect(missingWitnessHash).not.toBe(correctedHash);
+    expect(rejected.attempt.state).toBe('rejected');
+    expect(accepted.attempt.state).toBe('finalized');
+    expect(accepted.attempt.id).not.toBe(rejected.attempt.id);
+    expect(receiveOperationService.init).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects recovering attempts when prepared child receive execution rolls back', async () => {
     const operation = await service.create({
       amount: Amount.from(100),

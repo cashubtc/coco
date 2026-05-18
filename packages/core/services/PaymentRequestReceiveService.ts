@@ -1014,12 +1014,22 @@ export class PaymentRequestReceiveService {
   private hashPayload(payload: ParsedPaymentRequestPayload): string {
     const proofYHexes = computeYHexForSecrets(payload.proofs.map((proof) => proof.secret));
     const proofSummaries = payload.proofs
-      .map((proof, index) => ({
-        y: proofYHexes[index] ?? '',
-        id: proof.id,
-        amount: Amount.from(proof.amount).toString(),
-        C: proof.C,
-      }))
+      .map((proof, index) => {
+        const {
+          id,
+          amount,
+          C,
+          secret: _secret,
+          ...proofMetadata
+        } = proof as typeof proof & Record<string, unknown>;
+        return {
+          y: proofYHexes[index] ?? '',
+          id,
+          amount: Amount.from(amount).toString(),
+          C,
+          metadata: this.canonicalizePayloadHashValue(proofMetadata),
+        };
+      })
       .sort((a, b) => a.y.localeCompare(b.y));
     const canonical = JSON.stringify({
       id: payload.id,
@@ -1029,6 +1039,27 @@ export class PaymentRequestReceiveService {
       proofs: proofSummaries,
     });
     return bytesToHex(sha256(new TextEncoder().encode(canonical)));
+  }
+
+  private canonicalizePayloadHashValue(value: unknown): unknown {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => this.canonicalizePayloadHashValue(item));
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, entryValue]) => entryValue !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entryValue]) => [key, this.canonicalizePayloadHashValue(entryValue)]),
+      );
+    }
+    return value;
   }
 
   private async updateAttempt(
