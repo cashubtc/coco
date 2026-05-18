@@ -11,6 +11,18 @@ function normalizeStoredUnit(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
+function removeNullOptionalPaymentRequestAttemptIndexValues(row: {
+  transportMessageId?: unknown;
+  receiveOperationId?: unknown;
+}): void {
+  if (row.transportMessageId == null) {
+    delete row.transportMessageId;
+  }
+  if (row.receiveOperationId == null) {
+    delete row.receiveOperationId;
+  }
+}
+
 export async function ensureSchema(db: IdbDb): Promise<void> {
   // Dexie schema with final versioned stores (flattened for first release)
   db.version(1).stores({
@@ -648,5 +660,78 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_receive_operations: '&id, state, mintUrl',
     coco_cashu_auth_sessions: '&mintUrl',
     coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+  });
+
+  // Version 22: Incoming payment-request receive saga tables.
+  db.version(22).stores({
+    coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+    coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+    coco_cashu_counters: '&[mintUrl+keysetId]',
+    coco_cashu_proofs:
+      '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+    coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_history:
+      '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+    coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+    coco_cashu_send_operations: '&id, state, mintUrl',
+    coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    coco_cashu_receive_operations: '&id, state, mintUrl',
+    coco_cashu_auth_sessions: '&mintUrl',
+    coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+    coco_cashu_payment_request_receive_attempts:
+      '&id, requestOperationId, state, payloadHash, transportMessageId, receiveOperationId',
+  });
+
+  // Version 23: Add request-id payload lookup and request-operation payload uniqueness.
+  db.version(23)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl',
+      coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], transportMessageId, receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_payment_request_receive_attempts')
+        .toCollection()
+        .modify(removeNullOptionalPaymentRequestAttemptIndexValues);
+    });
+
+  // Version 24: Make optional attempt linkage indexes unique after null cleanup.
+  db.version(24).stores({
+    coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+    coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+    coco_cashu_counters: '&[mintUrl+keysetId]',
+    coco_cashu_proofs:
+      '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+    coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_history:
+      '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+    coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+    coco_cashu_send_operations: '&id, state, mintUrl',
+    coco_cashu_melt_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    coco_cashu_receive_operations: '&id, state, mintUrl',
+    coco_cashu_auth_sessions: '&mintUrl',
+    coco_cashu_mint_operations: '&id, state, mintUrl, [mintUrl+quoteId]',
+    coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+    coco_cashu_payment_request_receive_attempts:
+      '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
   });
 }

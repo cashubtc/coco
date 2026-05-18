@@ -1,8 +1,11 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
+
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
+import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
 
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
@@ -119,6 +122,78 @@ describe('initializeCoco', () => {
 
       expect(counters).toEqual({ init: 1, ready: 1 });
       expect((manager.ext as Record<string, unknown>).pluginInit).toBe(extension);
+    });
+
+    it('should recover payment-request receive attempts during startup', async () => {
+      const now = Date.now();
+      await repositories.paymentRequestReceiveOperationRepository.create({
+        id: 'payment-request-receive-1',
+        requestId: 'request-id',
+        encodedRequest: 'CREQB-test',
+        state: 'active',
+        transport: 'inband',
+        amount: Amount.from(100),
+        unit: 'sat',
+        mints: ['https://mint.test'],
+        singleUse: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await repositories.paymentRequestReceiveAttemptRepository.create({
+        id: 'attempt-1',
+        requestOperationId: 'payment-request-receive-1',
+        requestId: 'request-id',
+        transport: 'inband',
+        payloadHash: 'payload-hash-1',
+        mintUrl: 'https://mint.test',
+        unit: 'sat',
+        grossAmount: Amount.from(100),
+        receiveOperationId: 'receive-op-1',
+        state: 'receiving',
+        createdAt: now,
+        updatedAt: now,
+      });
+      await repositories.receiveOperationRepository.create({
+        id: 'receive-op-1',
+        state: 'finalized',
+        mintUrl: 'https://mint.test',
+        unit: 'sat',
+        amount: Amount.from(100),
+        fee: Amount.from(1),
+        inputProofs: [],
+        outputData: { keep: [], send: [] },
+        source: {
+          type: 'payment-request',
+          requestOperationId: 'payment-request-receive-1',
+          requestId: 'request-id',
+          attemptId: 'attempt-1',
+          transport: 'inband',
+        },
+        createdAt: now,
+        updatedAt: now,
+      } satisfies FinalizedReceiveOperation);
+
+      await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      const attempt =
+        await repositories.paymentRequestReceiveAttemptRepository.getById('attempt-1');
+      const operation = await repositories.paymentRequestReceiveOperationRepository.getById(
+        'payment-request-receive-1',
+      );
+
+      expect(attempt?.state).toBe('finalized');
+      expect(attempt?.fee?.equals(Amount.from(1))).toBe(true);
+      expect(attempt?.netAmount?.equals(Amount.from(99))).toBe(true);
+      expect(operation?.state).toBe('completed');
     });
   });
 

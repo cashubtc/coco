@@ -1,19 +1,87 @@
 import type {
   PaymentRequestExecutionResult,
+  PaymentRequestReceiveClaimResult,
+  PaymentRequestReceiveService,
   PaymentRequestService,
   PreparedPaymentRequest,
   ResolvedPaymentRequest,
+  CreatePaymentRequestReceiveInput as ServiceCreatePaymentRequestReceiveInput,
 } from '@core/services';
+import type {
+  PaymentRequestReceiveOperation,
+  PaymentRequestReceiveSource,
+  PaymentRequestReceiveState,
+} from '@core/operations/paymentRequestReceive';
+import type { PaymentRequestPayload } from '@cashu/cashu-ts';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+
+export type CreateIncomingPaymentRequestInput = Omit<
+  ServiceCreatePaymentRequestReceiveInput,
+  'amount' | 'unit'
+> & {
+  /** Amount to request. Bare amounts use `sat` unless `unit` is set. */
+  amount: UnitAmountLike;
+  /** Unit to request. */
+  unit?: string;
+};
+
+export interface IncomingPaymentRequestsApi {
+  create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>;
+  cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation>;
+  get(operationId: string): Promise<PaymentRequestReceiveOperation | null>;
+  list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
+  claimPayload(
+    operationOrId: PaymentRequestReceiveOperation | string,
+    payload: PaymentRequestPayload | string,
+    source?: PaymentRequestReceiveSource,
+  ): Promise<PaymentRequestReceiveClaimResult>;
+  ingestPayload(
+    payload: PaymentRequestPayload | string,
+    source?: PaymentRequestReceiveSource,
+  ): Promise<PaymentRequestReceiveClaimResult>;
+  readonly recovery: {
+    run(): Promise<void>;
+  };
+  readonly diagnostics: {
+    isLocked(operationId: string): boolean;
+  };
+}
 
 /**
  * API for parsing, preparing, and executing payment requests.
  */
 export class PaymentRequestsApi {
   private readonly paymentRequestService: PaymentRequestService;
+  readonly incoming: IncomingPaymentRequestsApi;
 
-  constructor(paymentRequestService: PaymentRequestService) {
+  constructor(
+    paymentRequestService: PaymentRequestService,
+    paymentRequestReceiveService: PaymentRequestReceiveService,
+  ) {
     this.paymentRequestService = paymentRequestService;
+    this.incoming = {
+      create: (input) => {
+        const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+        return paymentRequestReceiveService.create({
+          ...input,
+          amount: parsed.amount,
+          unit: parsed.unit,
+        });
+      },
+      cancel: (operationId, reason) => paymentRequestReceiveService.cancel(operationId, reason),
+      get: (operationId) => paymentRequestReceiveService.get(operationId),
+      list: (filter) => paymentRequestReceiveService.list(filter),
+      claimPayload: (operationOrId, payload, source) =>
+        paymentRequestReceiveService.claimPayload(operationOrId, payload, source),
+      ingestPayload: (payload, source) =>
+        paymentRequestReceiveService.ingestPayload(payload, source),
+      recovery: {
+        run: () => paymentRequestReceiveService.recoverPendingAttempts(),
+      },
+      diagnostics: {
+        isLocked: (operationId) => paymentRequestReceiveService.isOperationLocked(operationId),
+      },
+    };
   }
 
   /**

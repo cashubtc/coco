@@ -33,6 +33,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
   };
 
   if (row.state === 'init') {
@@ -75,6 +76,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
       fee: null,
       inputProofsJson: JSON.stringify(op.inputProofs),
       outputDataJson: null,
+      sourceJson: op.source ? JSON.stringify(op.source) : null,
     };
   }
 
@@ -90,6 +92,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     fee: serializeAmount(op.fee),
     inputProofsJson: JSON.stringify(op.inputProofs),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
+    sourceJson: op.source ? JSON.stringify(op.source) : null,
   };
 }
 
@@ -156,6 +159,19 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
       .equals(mintUrl)
       .toArray()) as ReceiveOperationRow[];
     return rows.map(rowToOperation);
+  }
+
+  async getByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
+    const rows = (await (this.db as any)
+      .table('coco_cashu_receive_operations')
+      .toArray()) as ReceiveOperationRow[];
+    const operation = rows
+      .map(rowToOperation)
+      .find(
+        (candidate) =>
+          candidate.source?.type === 'payment-request' && candidate.source.attemptId === attemptId,
+      );
+    return operation ?? null;
   }
 
   async delete(id: string): Promise<void> {

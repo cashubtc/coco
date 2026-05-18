@@ -20,7 +20,7 @@ console.log('Matching mints:', prepared.payableMints);
 
 The returned `ResolvedPaymentRequest` contains:
 
-- **transport** - How to deliver the tokens (`inband` or `http`)
+- **transport** - How to deliver the tokens (`inband`, `http`, or `nostr`)
 - **amount** - The requested amount (optional, but required for payment)
 - **unit** - The requested unit, normalized to lowercase
 - **allowedMints** - List of allowed mints from the request
@@ -71,6 +71,76 @@ if (prepared.transport.type === 'http') {
   }
 }
 ```
+
+### Nostr Transport
+
+Core can parse Nostr payment-request transports, but relay delivery is owned by an
+optional transport plugin. Calling `paymentRequests.execute()` for a Nostr request
+throws unless the app routes the prepared send through a plugin.
+
+```ts
+const prepared = await coco.paymentRequests.parse(paymentRequest);
+
+if (prepared.transport.type === 'nostr') {
+  // Hand this request to the Nostr payment-request plugin.
+  console.log(prepared.transport.target);
+}
+```
+
+## Creating a Payment Request to Receive
+
+Incoming payment requests live under `paymentRequests.incoming`. Created requests are
+active immediately. Use `cancel()` to stop accepting future payloads; completed and
+cancelled requests remain queryable.
+
+```ts
+const request = await coco.paymentRequests.incoming.create({
+  amount: 100,
+  unit: 'sat',
+  mints: ['https://mint.url'],
+  description: 'Coffee',
+  singleUse: true,
+});
+
+console.log(request.encodedRequest);
+```
+
+Bare incoming request amounts default to sats. For custom units, pass the
+amount and unit together or provide an explicit `unit`:
+
+```ts
+const usdRequest = await coco.paymentRequests.incoming.create({
+  amount: { amount: 5, unit: 'usd' },
+  mints: ['https://mint.url'],
+});
+```
+
+For in-band delivery, receive a `PaymentRequestPayload` from your own transport and
+claim it against the request:
+
+```ts
+const result = await coco.paymentRequests.incoming.claimPayload(request.id, payload, {
+  transport: 'inband',
+  transportMessageId: messageId,
+});
+
+console.log(result.operation.state);
+```
+
+For Nostr delivery, install a Nostr payment-request plugin. The plugin registers the
+transport handler that creates the Nostr descriptor, subscribes to relays, decrypts
+incoming events, and calls `ingestPayload()`:
+
+```ts
+await coco.paymentRequests.incoming.create({
+  amount: 100,
+  mints: ['https://mint.url'],
+  transport: 'nostr',
+});
+```
+
+Core then validates the payload, deduplicates redeliveries, runs the normal receive
+operation, and completes the request if it is single-use.
 
 ## Specifying the Amount
 

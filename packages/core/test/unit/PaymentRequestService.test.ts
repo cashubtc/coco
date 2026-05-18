@@ -123,6 +123,7 @@ describe('PaymentRequestService', () => {
         operation: mockPendingOperation,
         token: mockToken,
       })),
+      rollback: mock(async () => undefined),
     } as unknown as SendOperationService;
 
     mockProofService = {
@@ -197,7 +198,7 @@ describe('PaymentRequestService', () => {
       expect(result.amount).toBeUndefined();
     });
 
-    it('should throw for unsupported transport', async () => {
+    it('should decode a Nostr payment request for plugin delivery', async () => {
       const pr = new PaymentRequest(
         [{ type: PaymentRequestTransportType.NOSTR, target: 'npub123...' }],
         'request-id-4',
@@ -206,8 +207,39 @@ describe('PaymentRequestService', () => {
       );
       const encoded = pr.toEncodedRequest();
 
-      await expect(service.parse(encoded)).rejects.toThrow(PaymentRequestError);
-      await expect(service.parse(encoded)).rejects.toThrow('Unsupported transport type');
+      const result = await service.parse(encoded);
+
+      expect(result.transport.type).toBe('nostr');
+      if (result.transport.type === 'nostr') {
+        expect(result.transport.target).toBe('npub123...');
+      }
+    });
+
+    it('should require a plugin to execute Nostr payment requests', async () => {
+      const request = createResolvedRequest({
+        transport: { type: 'nostr', target: 'npub123...' },
+      });
+      const prepared = await service.prepare(request, {
+        mintUrl: testMintUrl,
+        amount: { amount: Amount.from(100), unit: 'sat' },
+      });
+
+      let thrown: unknown;
+      try {
+        await service.execute(prepared);
+      } catch (e) {
+        thrown = e;
+      }
+
+      expect(thrown).toBeInstanceOf(PaymentRequestError);
+      expect((thrown as Error).message).toBe(
+        'Nostr payment request execution requires a transport plugin',
+      );
+      expect(mockSendOperationService.rollback).toHaveBeenCalledWith(
+        prepared.sendOperation.id,
+        'Nostr payment request execution requires a transport plugin',
+      );
+      expect(mockSendOperationService.execute).not.toHaveBeenCalled();
     });
 
     it('should return an empty payable mint list if no matching mints are found', async () => {

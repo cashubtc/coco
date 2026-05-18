@@ -6,6 +6,8 @@ import {
   type Repositories,
   type MeltOperation,
   type MintOperation,
+  type PaymentRequestReceiveAttempt,
+  type PaymentRequestReceiveOperation,
   type ReceiveOperation,
   type SendOperation,
   type AuthSession,
@@ -307,6 +309,45 @@ export function createDummyReceiveOperation(): ReceiveOperation {
   } satisfies ReceiveOperation;
 }
 
+export function createDummyPaymentRequestReceiveOperation(
+  overrides?: Partial<PaymentRequestReceiveOperation>,
+): PaymentRequestReceiveOperation {
+  return {
+    id: 'payment-request-receive-op',
+    requestId: 'request-id',
+    encodedRequest: 'CREQB1TEST',
+    state: 'active',
+    transport: 'inband',
+    amount: Amount.from(100),
+    unit: 'sat',
+    mints: ['https://mint.test'],
+    singleUse: true,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
+export function createDummyPaymentRequestReceiveAttempt(
+  overrides?: Partial<PaymentRequestReceiveAttempt>,
+): PaymentRequestReceiveAttempt {
+  return {
+    id: 'payment-request-receive-attempt',
+    requestOperationId: 'payment-request-receive-op',
+    requestId: 'request-id',
+    transport: 'inband',
+    transportMessageId: 'message-id',
+    payloadHash: 'payload-hash',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    grossAmount: Amount.from(100),
+    state: 'received',
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
 export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSession {
   return {
     mintUrl: 'https://mint.test',
@@ -389,6 +430,182 @@ export async function runReceiveOperationRepositoryContract(
         if (stored!.state === 'prepared') {
           expect(stored!.fee.equals(Amount.from(1))).toBe(true);
         }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips optional receive operation source metadata', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyReceiveOperation();
+        operation.source = {
+          type: 'payment-request',
+          requestOperationId: 'request-op',
+          attemptId: 'attempt-id',
+          transport: 'inband',
+        };
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+        const byAttempt =
+          await repositories.receiveOperationRepository.getByPaymentRequestAttemptId('attempt-id');
+
+        expect(stored).toBeDefined();
+        expect(byAttempt?.id).toBe(operation.id);
+        expect(stored!.source?.type).toBe('payment-request');
+        if (stored!.source?.type === 'payment-request') {
+          expect(stored!.source.requestOperationId).toBe('request-op');
+          expect(stored!.source.attemptId).toBe('attempt-id');
+        }
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runPaymentRequestReceiveRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('PaymentRequestReceiveRepository contract', () => {
+    it('round-trips active operations and attempts', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyPaymentRequestReceiveOperation();
+        const attempt = createDummyPaymentRequestReceiveAttempt();
+
+        await repositories.paymentRequestReceiveOperationRepository.create(operation);
+        await repositories.paymentRequestReceiveAttemptRepository.create(attempt);
+
+        const active =
+          await repositories.paymentRequestReceiveOperationRepository.getActiveByRequestId(
+            'request-id',
+          );
+        const attempts =
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestOperationId(
+            operation.id,
+          );
+        const byPayload =
+          await repositories.paymentRequestReceiveAttemptRepository.getByPayloadHash(
+            operation.id,
+            attempt.payloadHash,
+          );
+
+        expect(active).toHaveLength(1);
+        expect(attempts).toHaveLength(1);
+        expect(byPayload).toBeDefined();
+        expect(active[0]!.amount.equals(Amount.from(100))).toBe(true);
+        expect(attempts[0]!.grossAmount.equals(Amount.from(100))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('enforces idempotency by request operation and payload hash', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt(),
+        );
+
+        let duplicateRejected = false;
+        try {
+          await repositories.paymentRequestReceiveAttemptRepository.create(
+            createDummyPaymentRequestReceiveAttempt({ id: 'duplicate-attempt' }),
+          );
+        } catch {
+          duplicateRejected = true;
+        }
+
+        expect(duplicateRejected).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('enforces idempotency by transport message id', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt(),
+        );
+
+        let duplicateRejected = false;
+        try {
+          await repositories.paymentRequestReceiveAttemptRepository.create(
+            createDummyPaymentRequestReceiveAttempt({
+              id: 'duplicate-message-attempt',
+              payloadHash: 'different-payload-hash',
+            }),
+          );
+        } catch {
+          duplicateRejected = true;
+        }
+
+        expect(duplicateRejected).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('looks up attempts by transport message id and child receive id', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyPaymentRequestReceiveAttempt({
+          receiveOperationId: 'receive-op-id',
+        });
+        await repositories.paymentRequestReceiveAttemptRepository.create(attempt);
+
+        const byMessage =
+          await repositories.paymentRequestReceiveAttemptRepository.getByTransportMessageId(
+            'message-id',
+          );
+        const byReceive =
+          await repositories.paymentRequestReceiveAttemptRepository.getByReceiveOperationId(
+            'receive-op-id',
+          );
+
+        expect(byMessage).toBeDefined();
+        expect(byReceive).toBeDefined();
+        expect(byMessage!.id).toBe(attempt.id);
+        expect(byReceive!.id).toBe(attempt.id);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('prefers finalized attempts for request id and payload hash lookups', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt({
+            id: 'rejected-attempt',
+            requestOperationId: 'old-operation',
+            transportMessageId: undefined,
+            state: 'rejected',
+            error: 'below requested amount',
+          }),
+        );
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt({
+            id: 'finalized-attempt',
+            requestOperationId: 'new-operation',
+            transportMessageId: undefined,
+            state: 'finalized',
+          }),
+        );
+
+        const byRequestPayload =
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestIdAndPayloadHash(
+            'request-id',
+            'payload-hash',
+          );
+
+        expect(byRequestPayload?.id).toBe('finalized-attempt');
       } finally {
         await dispose();
       }

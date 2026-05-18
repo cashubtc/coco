@@ -5,6 +5,7 @@ import {
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
+  runPaymentRequestReceiveRepositoryContract,
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
@@ -129,6 +130,8 @@ runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, ex
 runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('expo-sqlite adapter transactions', () => {
   it('commits across repositories', async () => {

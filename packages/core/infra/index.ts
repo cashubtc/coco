@@ -11,3 +11,4 @@ export * from './SubscriptionProtocol';
 export * from './handlers/melt';
 export * from './handlers/send';
 export * from './handlers/mint';
+export * from './handlers/paymentRequestReceive';

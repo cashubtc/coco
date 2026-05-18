@@ -11,6 +11,8 @@ import type {
   MeltOperationRepository,
   AuthSessionRepository,
   MintOperationRepository,
+  PaymentRequestReceiveAttemptRepository,
+  PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
@@ -29,6 +31,10 @@ import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepos
 import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { SqliteMintOperationRepository } from './repositories/MintOperationRepository.ts';
 import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
+import {
+  SqlitePaymentRequestReceiveAttemptRepository,
+  SqlitePaymentRequestReceiveOperationRepository,
+} from './repositories/PaymentRequestReceiveRepository.ts';
 
 export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
 
@@ -46,6 +52,8 @@ export class SqliteRepositories implements Repositories {
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
+  readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
+  readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
   readonly db: SqliteDb;
 
   constructor(options: SqliteRepositoriesOptions) {
@@ -63,6 +71,11 @@ export class SqliteRepositories implements Repositories {
     this.authSessionRepository = new SqliteAuthSessionRepository(this.db);
     this.mintOperationRepository = new SqliteMintOperationRepository(this.db);
     this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveOperationRepository =
+      new SqlitePaymentRequestReceiveOperationRepository(this.db);
+    this.paymentRequestReceiveAttemptRepository = new SqlitePaymentRequestReceiveAttemptRepository(
+      this.db,
+    );
   }
 
   async init(): Promise<void> {
@@ -85,6 +98,11 @@ export class SqliteRepositories implements Repositories {
         authSessionRepository: new SqliteAuthSessionRepository(txDb),
         mintOperationRepository: new SqliteMintOperationRepository(txDb),
         receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
+        paymentRequestReceiveOperationRepository:
+          new SqlitePaymentRequestReceiveOperationRepository(txDb),
+        paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
+          txDb,
+        ),
       };
 
       return fn(scopedRepositories);
@@ -110,6 +128,8 @@ export {
   SqliteAuthSessionRepository,
   SqliteMintOperationRepository,
   SqliteReceiveOperationRepository,
+  SqlitePaymentRequestReceiveOperationRepository,
+  SqlitePaymentRequestReceiveAttemptRepository,
 };
 
 export type { Migration };

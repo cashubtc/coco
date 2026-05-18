@@ -27,6 +27,7 @@ export {
 export { SubscriptionManager } from './infra/SubscriptionManager.ts';
 export { WsConnectionManager } from './infra/WsConnectionManager.ts';
 export type { WebSocketLike, WebSocketFactory } from './infra/WsConnectionManager.ts';
+export { PaymentRequestReceiveTransportHandlerProvider } from './infra/handlers/paymentRequestReceive';
 export * from './plugins/index.ts';
 export {
   normalizeMintUrl,

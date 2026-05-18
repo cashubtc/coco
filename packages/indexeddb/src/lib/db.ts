@@ -207,6 +207,46 @@ export interface ReceiveOperationRow {
   fee?: string | number | null;
   inputProofsJson?: string | null;
   outputDataJson?: string | null;
+  sourceJson?: string | null;
+}
+
+export interface PaymentRequestReceiveOperationRow {
+  id: string;
+  requestId?: string | null;
+  encodedRequest: string;
+  state: 'active' | 'completed' | 'cancelled';
+  transport: 'inband' | 'nostr' | 'post';
+  amount: string | number;
+  unit: string;
+  mintsJson: string;
+  singleUse: number;
+  description?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error?: string | null;
+  completedAt?: number | null;
+}
+
+export interface PaymentRequestReceiveAttemptRow {
+  id: string;
+  requestOperationId: string;
+  requestId?: string | null;
+  transport: 'inband' | 'nostr' | 'post';
+  transportMessageId?: string | null;
+  payloadHash: string;
+  senderPubkey?: string | null;
+  memo?: string | null;
+  mintUrl: string;
+  unit: string;
+  grossAmount: string | number;
+  fee?: string | number | null;
+  netAmount?: string | number | null;
+  receiveOperationId?: string | null;
+  state: 'received' | 'validating' | 'receiving' | 'finalized' | 'rejected';
+  error?: string | null;
+  payloadJson?: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MeltOperationRow {
