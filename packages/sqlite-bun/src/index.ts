@@ -73,8 +73,9 @@ export class SqliteRepositories implements Repositories {
     this.receiveOperationRepository = new SqliteReceiveOperationRepository(this.db);
     this.paymentRequestReceiveOperationRepository =
       new SqlitePaymentRequestReceiveOperationRepository(this.db);
-    this.paymentRequestReceiveAttemptRepository =
-      new SqlitePaymentRequestReceiveAttemptRepository(this.db);
+    this.paymentRequestReceiveAttemptRepository = new SqlitePaymentRequestReceiveAttemptRepository(
+      this.db,
+    );
   }
 
   async init(): Promise<void> {
@@ -99,8 +100,9 @@ export class SqliteRepositories implements Repositories {
         receiveOperationRepository: new SqliteReceiveOperationRepository(txDb),
         paymentRequestReceiveOperationRepository:
           new SqlitePaymentRequestReceiveOperationRepository(txDb),
-        paymentRequestReceiveAttemptRepository:
-          new SqlitePaymentRequestReceiveAttemptRepository(txDb),
+        paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
+          txDb,
+        ),
       };
 
       return fn(scopedRepositories);

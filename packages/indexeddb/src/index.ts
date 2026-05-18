@@ -72,10 +72,12 @@ export class IndexedDbRepositories implements Repositories {
     this.authSessionRepository = new IdbAuthSessionRepository(this.db);
     this.mintOperationRepository = new IdbMintOperationRepository(this.db);
     this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
-    this.paymentRequestReceiveOperationRepository =
-      new IdbPaymentRequestReceiveOperationRepository(this.db);
-    this.paymentRequestReceiveAttemptRepository =
-      new IdbPaymentRequestReceiveAttemptRepository(this.db);
+    this.paymentRequestReceiveOperationRepository = new IdbPaymentRequestReceiveOperationRepository(
+      this.db,
+    );
+    this.paymentRequestReceiveAttemptRepository = new IdbPaymentRequestReceiveAttemptRepository(
+      this.db,
+    );
   }
 
   async init(): Promise<void> {
@@ -106,10 +108,12 @@ export class IndexedDbRepositories implements Repositories {
         authSessionRepository: new IdbAuthSessionRepository(scopedDb),
         mintOperationRepository: new IdbMintOperationRepository(scopedDb),
         receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
-        paymentRequestReceiveOperationRepository:
-          new IdbPaymentRequestReceiveOperationRepository(scopedDb),
-        paymentRequestReceiveAttemptRepository:
-          new IdbPaymentRequestReceiveAttemptRepository(scopedDb),
+        paymentRequestReceiveOperationRepository: new IdbPaymentRequestReceiveOperationRepository(
+          scopedDb,
+        ),
+        paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
+          scopedDb,
+        ),
       };
       return fn(scopedRepositories);
     });

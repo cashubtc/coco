@@ -782,7 +782,8 @@ export class Manager {
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;
-    const paymentRequestReceiveAttemptRepository = repositories.paymentRequestReceiveAttemptRepository;
+    const paymentRequestReceiveAttemptRepository =
+      repositories.paymentRequestReceiveAttemptRepository;
 
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({

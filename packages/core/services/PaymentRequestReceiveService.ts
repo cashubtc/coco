@@ -324,8 +324,10 @@ export class PaymentRequestReceiveService {
       }
     }
 
-    const existingByRequestPayload =
-      await this.attemptRepository.getByRequestIdAndPayloadHash(payload.id, payloadHash);
+    const existingByRequestPayload = await this.attemptRepository.getByRequestIdAndPayloadHash(
+      payload.id,
+      payloadHash,
+    );
     if (existingByRequestPayload?.state === 'finalized') {
       return this.resultForStoredAttempt(existingByRequestPayload);
     }
@@ -567,9 +569,7 @@ export class PaymentRequestReceiveService {
     }
   }
 
-  private async recoverPreChildAttemptLocked(
-    attempt: PaymentRequestReceiveAttempt,
-  ): Promise<void> {
+  private async recoverPreChildAttemptLocked(attempt: PaymentRequestReceiveAttempt): Promise<void> {
     const operation = await this.operationRepository.getById(attempt.requestOperationId);
     if (!operation) {
       await this.rejectAttempt(attempt, 'Payment request receive operation was not found');

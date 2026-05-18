@@ -887,9 +887,7 @@ describe('PaymentRequestReceiveService', () => {
         },
       );
     });
-    let ingestPromise:
-      | ReturnType<PaymentRequestReceiveService['ingestPayload']>
-      | undefined;
+    let ingestPromise: ReturnType<PaymentRequestReceiveService['ingestPayload']> | undefined;
     (
       receiveOperationService.recoverPendingOperations as unknown as ReturnType<typeof mock>
     ).mockImplementationOnce(async () => {
@@ -916,7 +914,7 @@ describe('PaymentRequestReceiveService', () => {
     await service.recoverPendingAttempts();
 
     expect(order).toEqual(['generic', 'activate']);
-    expect((await attemptRepository.getByState('validating'))).toHaveLength(1);
+    expect(await attemptRepository.getByState('validating')).toHaveLength(1);
 
     resolveInit!({
       id: 'receive-op-1',

@@ -184,9 +184,8 @@ describe('initializeCoco', () => {
         },
       });
 
-      const attempt = await repositories.paymentRequestReceiveAttemptRepository.getById(
-        'attempt-1',
-      );
+      const attempt =
+        await repositories.paymentRequestReceiveAttemptRepository.getById('attempt-1');
       const operation = await repositories.paymentRequestReceiveOperationRepository.getById(
         'payment-request-receive-1',
       );

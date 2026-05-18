@@ -124,7 +124,10 @@ export class ReceiveOperationService {
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
    */
-  async init(token: Token | string, source?: ReceiveOperationSource): Promise<InitReceiveOperation> {
+  async init(
+    token: Token | string,
+    source?: ReceiveOperationSource,
+  ): Promise<InitReceiveOperation> {
     const mintUrl = this.extractMintUrl(token);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -148,13 +151,7 @@ export class ReceiveOperationService {
     }
 
     const id = generateSubId();
-    const operation = createReceiveOperation(
-      id,
-      mintUrl,
-      { amount, unit },
-      preparedProofs,
-      source,
-    );
+    const operation = createReceiveOperation(id, mintUrl, { amount, unit }, preparedProofs, source);
 
     await this.receiveOperationRepository.create(operation);
     this.logger?.debug('Receive operation created', {
@@ -768,9 +765,7 @@ export class ReceiveOperationService {
     return this.receiveOperationRepository.getById(operationId);
   }
 
-  async getOperationByPaymentRequestAttemptId(
-    attemptId: string,
-  ): Promise<ReceiveOperation | null> {
+  async getOperationByPaymentRequestAttemptId(attemptId: string): Promise<ReceiveOperation | null> {
     const states: ReceiveOperationState[] = [
       'init',
       'prepared',

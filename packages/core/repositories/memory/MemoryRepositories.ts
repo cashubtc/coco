@@ -68,7 +68,8 @@ export class MemoryRepositories implements Repositories {
     this.receiveOperationRepository = new MemoryReceiveOperationRepository();
     this.paymentRequestReceiveOperationRepository =
       new MemoryPaymentRequestReceiveOperationRepository();
-    this.paymentRequestReceiveAttemptRepository = new MemoryPaymentRequestReceiveAttemptRepository();
+    this.paymentRequestReceiveAttemptRepository =
+      new MemoryPaymentRequestReceiveAttemptRepository();
   }
 
   async init(): Promise<void> {

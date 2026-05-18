@@ -73,8 +73,9 @@ export class ExpoSqliteRepositories implements Repositories {
     this.receiveOperationRepository = new ExpoReceiveOperationRepository(this.db);
     this.paymentRequestReceiveOperationRepository =
       new ExpoPaymentRequestReceiveOperationRepository(this.db);
-    this.paymentRequestReceiveAttemptRepository =
-      new ExpoPaymentRequestReceiveAttemptRepository(this.db);
+    this.paymentRequestReceiveAttemptRepository = new ExpoPaymentRequestReceiveAttemptRepository(
+      this.db,
+    );
   }
 
   async init(): Promise<void> {
@@ -97,10 +98,12 @@ export class ExpoSqliteRepositories implements Repositories {
         authSessionRepository: new ExpoAuthSessionRepository(txDb),
         mintOperationRepository: new ExpoMintOperationRepository(txDb),
         receiveOperationRepository: new ExpoReceiveOperationRepository(txDb),
-        paymentRequestReceiveOperationRepository:
-          new ExpoPaymentRequestReceiveOperationRepository(txDb),
-        paymentRequestReceiveAttemptRepository:
-          new ExpoPaymentRequestReceiveAttemptRepository(txDb),
+        paymentRequestReceiveOperationRepository: new ExpoPaymentRequestReceiveOperationRepository(
+          txDb,
+        ),
+        paymentRequestReceiveAttemptRepository: new ExpoPaymentRequestReceiveAttemptRepository(
+          txDb,
+        ),
       };
 
       return fn(scopedRepositories);
