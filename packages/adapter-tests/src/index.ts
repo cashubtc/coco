@@ -574,6 +574,39 @@ export async function runPaymentRequestReceiveRepositoryContract(
         await dispose();
       }
     });
+
+    it('prefers finalized attempts for request id and payload hash lookups', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt({
+            id: 'rejected-attempt',
+            requestOperationId: 'old-operation',
+            transportMessageId: undefined,
+            state: 'rejected',
+            error: 'below requested amount',
+          }),
+        );
+        await repositories.paymentRequestReceiveAttemptRepository.create(
+          createDummyPaymentRequestReceiveAttempt({
+            id: 'finalized-attempt',
+            requestOperationId: 'new-operation',
+            transportMessageId: undefined,
+            state: 'finalized',
+          }),
+        );
+
+        const byRequestPayload =
+          await repositories.paymentRequestReceiveAttemptRepository.getByRequestIdAndPayloadHash(
+            'request-id',
+            'payload-hash',
+          );
+
+        expect(byRequestPayload?.id).toBe('finalized-attempt');
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 

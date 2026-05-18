@@ -124,6 +124,13 @@ export class PaymentRequestReceiveService {
     };
   }
 
+  private async acquireLockWhenAvailable(lockId: string): Promise<() => void> {
+    while (this.lock.isLocked(lockId)) {
+      await this.lock.waitForUnlock(lockId);
+    }
+    return this.lock.acquire(lockId);
+  }
+
   async create(input: CreatePaymentRequestReceiveInput): Promise<PaymentRequestReceiveOperation> {
     const unit = input.unit ?? 'sat';
     if (unit !== 'sat') {
@@ -147,80 +154,126 @@ export class PaymentRequestReceiveService {
     }
 
     const requestId = input.requestId ?? generateSubId();
-    const singleUse = input.singleUse ?? true;
-    const { transport, paymentRequestTransports } = await this.resolveTransportInput(
-      input.transport,
-      {
+    const releaseCreateLock = await this.acquireLockWhenAvailable(
+      `payment-request-receive:create:${requestId}`,
+    );
+    try {
+      const existingActive = await this.operationRepository.getActiveByRequestId(requestId);
+      if (existingActive.length > 0) {
+        throw new PaymentRequestError(
+          `An active payment request already exists for request id ${requestId}`,
+        );
+      }
+
+      const singleUse = input.singleUse ?? true;
+      const { transport, paymentRequestTransports } = await this.resolveTransportInput(
+        input.transport,
+        {
+          requestId,
+          amount,
+          unit,
+          mints,
+          description: input.description,
+          singleUse,
+        },
+      );
+      const paymentRequest = new PaymentRequest(
+        paymentRequestTransports,
         requestId,
         amount,
         unit,
-        mints,
-        description: input.description,
+        mints.length > 0 ? mints : undefined,
+        input.description,
         singleUse,
-      },
-    );
-    const paymentRequest = new PaymentRequest(
-      paymentRequestTransports,
-      requestId,
-      amount,
-      unit,
-      mints.length > 0 ? mints : undefined,
-      input.description,
-      singleUse,
-    );
-    const encodedRequest =
-      input.encoding === 'creqA'
-        ? paymentRequest.toEncodedCreqA()
-        : paymentRequest.toEncodedCreqB();
-    const now = Date.now();
-    const operation: PaymentRequestReceiveOperation = {
-      id: generateSubId(),
-      requestId,
-      encodedRequest,
-      state: 'active',
-      transport,
-      amount,
-      unit,
-      mints,
-      singleUse,
-      description: input.description,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    await this.operationRepository.create(operation);
-    try {
-      await this.activateTransport(operation);
-      return operation;
-    } catch (error) {
-      const cancelled: PaymentRequestReceiveOperation = {
-        ...operation,
-        state: 'cancelled',
-        error: error instanceof Error ? error.message : String(error),
-        updatedAt: Date.now(),
+      );
+      const encodedRequest =
+        input.encoding === 'creqA'
+          ? paymentRequest.toEncodedCreqA()
+          : paymentRequest.toEncodedCreqB();
+      const now = Date.now();
+      const operation: PaymentRequestReceiveOperation = {
+        id: generateSubId(),
+        requestId,
+        encodedRequest,
+        state: 'active',
+        transport,
+        amount,
+        unit,
+        mints,
+        singleUse,
+        description: input.description,
+        createdAt: now,
+        updatedAt: now,
       };
-      await this.operationRepository.update(cancelled);
-      throw error;
+
+      await this.operationRepository.create(operation);
+      try {
+        await this.activateTransport(operation);
+        return (await this.operationRepository.getById(operation.id)) ?? operation;
+      } catch (error) {
+        const current = await this.operationRepository.getById(operation.id);
+        const attempts = await this.attemptRepository.getByRequestOperationId(operation.id);
+        const hasClaimToPreserve = attempts.some(
+          (attempt) => this.isInFlightAttempt(attempt) || attempt.state === 'finalized',
+        );
+        if (!current || current.state !== 'active' || hasClaimToPreserve) {
+          throw error;
+        }
+        const cancelled: PaymentRequestReceiveOperation = {
+          ...current,
+          state: 'cancelled',
+          error: error instanceof Error ? error.message : String(error),
+          updatedAt: Date.now(),
+        };
+        await this.operationRepository.update(cancelled);
+        try {
+          await this.deactivateTransport(cancelled, { ignoreMissingHandler: true });
+        } catch (deactivationError) {
+          this.logger?.warn('Payment request receive transport cleanup failed after activation', {
+            operationId: cancelled.id,
+            requestId: cancelled.requestId,
+            transport: cancelled.transport,
+            error: deactivationError,
+          });
+        }
+        throw error;
+      }
+    } finally {
+      releaseCreateLock();
     }
   }
 
   async cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation> {
-    const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'active') {
-      throw new PaymentRequestError(
-        `Cannot cancel payment request receive operation in state '${operation.state}'`,
-      );
-    }
+    const releaseLock = await this.lock.acquire(operationId);
+    try {
+      const operation = await this.requireOperation(operationId);
+      if (operation.state !== 'active') {
+        throw new PaymentRequestError(
+          `Cannot cancel payment request receive operation in state '${operation.state}'`,
+        );
+      }
 
-    await this.deactivateTransport(operation);
-    const cancelled: PaymentRequestReceiveOperation = {
-      ...operation,
-      state: 'cancelled',
-      error: reason,
-      updatedAt: Date.now(),
-    };
-    await this.operationRepository.update(cancelled);
-    return cancelled;
+      const cancelled: PaymentRequestReceiveOperation = {
+        ...operation,
+        state: 'cancelled',
+        error: reason,
+        updatedAt: Date.now(),
+      };
+      await this.operationRepository.update(cancelled);
+      try {
+        await this.deactivateTransport(cancelled, { ignoreMissingHandler: true });
+      } catch (error) {
+        this.logger?.warn('Payment request receive transport deactivation failed after cancel', {
+          operationId: cancelled.id,
+          requestId: cancelled.requestId,
+          transport: cancelled.transport,
+          error,
+        });
+      }
+      return cancelled;
+    } finally {
+      releaseLock();
+    }
   }
 
   async get(operationId: string): Promise<PaymentRequestReceiveOperation | null> {
@@ -262,50 +315,118 @@ export class PaymentRequestReceiveService {
         source.transportMessageId,
       );
       if (existingByMessage) {
+        if (existingByMessage.payloadHash !== payloadHash) {
+          throw new PaymentRequestError(
+            `Transport message ${source.transportMessageId} belongs to a different payload`,
+          );
+        }
         return this.resultForStoredAttempt(existingByMessage);
       }
     }
 
-    const existingByPayload = await this.attemptRepository.getByRequestIdAndPayloadHash(
-      payload.id,
-      payloadHash,
-    );
-    if (existingByPayload) {
-      return this.resultForStoredAttempt(existingByPayload);
+    const existingByRequestPayload =
+      await this.attemptRepository.getByRequestIdAndPayloadHash(payload.id, payloadHash);
+    if (existingByRequestPayload?.state === 'finalized') {
+      return this.resultForStoredAttempt(existingByRequestPayload);
     }
 
     const candidates = await this.operationRepository.getActiveByRequestId(payload.id);
     if (candidates.length === 0) {
+      if (existingByRequestPayload) {
+        return this.resultForStoredAttempt(existingByRequestPayload);
+      }
       throw new PaymentRequestError(`No active payment request found for id ${payload.id}`);
     }
     if (candidates.length > 1) {
       throw new PaymentRequestError(`Multiple active payment requests found for id ${payload.id}`);
     }
 
-    return this.claimPayload(candidates[0]!, payload, source);
+    const operation = candidates[0]!;
+    const existingByPayload = await this.attemptRepository.getByPayloadHash(
+      operation.id,
+      payloadHash,
+    );
+    if (existingByPayload) {
+      return this.resultForAttempt(operation, existingByPayload);
+    }
+
+    return this.claimPayload(operation, payload, source);
   }
 
   async recoverPendingAttempts(): Promise<void> {
-    await this.recoverActiveTransports();
-
     const interruptedBeforeReceive = [
       ...(await this.attemptRepository.getByState('received')),
       ...(await this.attemptRepository.getByState('validating')),
     ];
     for (const attempt of interruptedBeforeReceive) {
-      await this.attemptRepository.delete(attempt.id);
+      let releaseLock: (() => void) | undefined;
+      try {
+        releaseLock = await this.lock.acquire(attempt.requestOperationId);
+      } catch (error) {
+        if (error instanceof OperationInProgressError) {
+          this.logger?.debug(
+            'Payment request receive operation is in progress, skipping pre-child recovery',
+            {
+              operationId: attempt.requestOperationId,
+              attemptId: attempt.id,
+            },
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      try {
+        const currentAttempt = await this.attemptRepository.getById(attempt.id);
+        if (
+          !currentAttempt ||
+          (currentAttempt.state !== 'received' && currentAttempt.state !== 'validating')
+        ) {
+          continue;
+        }
+
+        const childReceive =
+          currentAttempt.state === 'validating'
+            ? await this.receiveOperationService.getOperationByPaymentRequestAttemptId(
+                currentAttempt.id,
+              )
+            : null;
+        if (childReceive) {
+          const linkedAttempt = await this.updateAttempt({
+            ...currentAttempt,
+            state: 'receiving',
+            receiveOperationId: childReceive.id,
+          });
+          await this.recoverReceivingAttemptLocked(linkedAttempt);
+          continue;
+        }
+
+        await this.recoverPreChildAttemptLocked(currentAttempt);
+      } finally {
+        releaseLock();
+      }
     }
 
     await this.recoverReceivingAttempts();
     await this.receiveOperationService.recoverPendingOperations();
     await this.recoverReceivingAttempts();
     await this.recoverFinalizedAttempts();
+    await this.recoverActiveTransports();
   }
 
   private async recoverActiveTransports(): Promise<void> {
     const activeOperations = await this.operationRepository.getByState('active');
     for (const operation of activeOperations) {
-      await this.activateTransport(operation);
+      try {
+        await this.activateTransport(operation);
+      } catch (error) {
+        this.logger?.warn('Payment request receive transport recovery failed', {
+          operationId: operation.id,
+          requestId: operation.requestId,
+          transport: operation.transport,
+          error,
+        });
+      }
     }
   }
 
@@ -320,10 +441,21 @@ export class PaymentRequestReceiveService {
     await handler.activate(operation);
   }
 
-  private async deactivateTransport(operation: PaymentRequestReceiveOperation): Promise<void> {
+  private async deactivateTransport(
+    operation: PaymentRequestReceiveOperation,
+    options?: { ignoreMissingHandler?: boolean },
+  ): Promise<void> {
     if (operation.transport === 'inband') return;
     const handler = this.transportHandlers.get(operation.transport);
     if (!handler) {
+      if (options?.ignoreMissingHandler) {
+        this.logger?.warn('Payment request receive transport deactivation skipped', {
+          operationId: operation.id,
+          requestId: operation.requestId,
+          transport: operation.transport,
+        });
+        return;
+      }
       throw new PaymentRequestError(
         `No payment request receive transport handler registered for '${operation.transport}'`,
       );
@@ -359,7 +491,7 @@ export class PaymentRequestReceiveService {
       try {
         const currentOperation = await this.operationRepository.getById(operation.id);
         if (currentOperation?.singleUse && currentOperation.state === 'active') {
-          await this.completeIfSingleUse(currentOperation);
+          await this.completeIfSingleUse(currentOperation, { ignoreMissingTransportHandler: true });
         }
       } finally {
         releaseLock();
@@ -416,16 +548,140 @@ export class PaymentRequestReceiveService {
     }
 
     if (receiveOperation.state === 'finalized') {
-      await this.finalizeAttemptFromReceive(attempt, receiveOperation);
+      await this.finalizeAttemptFromReceive(attempt, receiveOperation, {
+        ignoreMissingTransportHandler: true,
+      });
     } else if (receiveOperation.state === 'rolled_back') {
       await this.rejectAttempt(
         attempt,
         receiveOperation.error ?? 'Child receive operation rolled back',
       );
     } else if (receiveOperation.state === 'prepared') {
-      await this.resumePreparedChildReceive(attempt, receiveOperation);
+      await this.resumePreparedChildReceive(attempt, receiveOperation, {
+        ignoreMissingTransportHandler: true,
+      });
     } else if (receiveOperation.state === 'init') {
-      await this.resumeInitChildReceive(attempt, receiveOperation);
+      await this.resumeInitChildReceive(attempt, receiveOperation, {
+        ignoreMissingTransportHandler: true,
+      });
+    }
+  }
+
+  private async recoverPreChildAttemptLocked(
+    attempt: PaymentRequestReceiveAttempt,
+  ): Promise<void> {
+    const operation = await this.operationRepository.getById(attempt.requestOperationId);
+    if (!operation) {
+      await this.rejectAttempt(attempt, 'Payment request receive operation was not found');
+      return;
+    }
+
+    if (operation.state !== 'active') {
+      await this.rejectAttempt(
+        attempt,
+        `Cannot recover payload for payment request receive operation in state '${operation.state}'`,
+      );
+      return;
+    }
+
+    if (!attempt.payload) {
+      await this.attemptRepository.delete(attempt.id);
+      this.logger?.warn('Incomplete payment request receive attempt removed for redelivery retry', {
+        operationId: attempt.requestOperationId,
+        attemptId: attempt.id,
+      });
+      return;
+    }
+    const storedPayload = attempt.payload;
+
+    let currentAttempt =
+      attempt.state === 'received'
+        ? await this.updateAttempt({ ...attempt, state: 'validating' })
+        : attempt;
+
+    try {
+      const payload = this.parsePayload(storedPayload);
+      const payloadHash = this.hashPayload(payload);
+      if (payloadHash !== currentAttempt.payloadHash) {
+        await this.rejectAttempt(currentAttempt, 'Stored payment request payload hash mismatch');
+        return;
+      }
+
+      const grossAmount = sumProofs(payload.proofs);
+      await this.validatePayload(operation, payload, grossAmount);
+      await this.assertSingleUseAvailable(operation, currentAttempt.id);
+
+      const sourceMetadata = {
+        type: 'payment-request' as const,
+        requestOperationId: operation.id,
+        requestId: operation.requestId,
+        attemptId: currentAttempt.id,
+        transport: currentAttempt.transport,
+        transportMessageId: currentAttempt.transportMessageId,
+        senderPubkey: currentAttempt.senderPubkey,
+        memo: currentAttempt.memo,
+      };
+      const initReceive = await this.receiveOperationService.init(
+        { mint: payload.mint, unit: payload.unit, proofs: payload.proofs },
+        sourceMetadata,
+      );
+      currentAttempt = await this.updateAttempt({
+        ...currentAttempt,
+        state: 'receiving',
+        receiveOperationId: initReceive.id,
+      });
+      await this.resumeInitChildReceive(currentAttempt, initReceive, {
+        ignoreMissingTransportHandler: true,
+      });
+    } catch (error) {
+      const receiveOperation = currentAttempt.receiveOperationId
+        ? await this.receiveOperationService.getOperation(currentAttempt.receiveOperationId)
+        : await this.receiveOperationService.getOperationByPaymentRequestAttemptId(
+            currentAttempt.id,
+          );
+
+      if (receiveOperation?.state === 'finalized') {
+        await this.finalizeAttemptFromReceive(currentAttempt, receiveOperation, {
+          ignoreMissingTransportHandler: true,
+        });
+        return;
+      }
+
+      if (receiveOperation?.state === 'rolled_back') {
+        await this.rejectAttempt(
+          currentAttempt,
+          receiveOperation.error ?? 'Child receive operation rolled back',
+        );
+        return;
+      }
+
+      if (receiveOperation?.state === 'prepared') {
+        await this.resumePreparedChildReceive(currentAttempt, receiveOperation, {
+          ignoreMissingTransportHandler: true,
+        });
+        return;
+      }
+
+      if (receiveOperation?.state === 'init') {
+        await this.resumeInitChildReceive(currentAttempt, receiveOperation, {
+          ignoreMissingTransportHandler: true,
+        });
+        return;
+      }
+
+      if (error instanceof PaymentRequestError || error instanceof ProofValidationError) {
+        await this.rejectAttempt(
+          currentAttempt,
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
+      }
+
+      this.logger?.warn('Payment request pre-child attempt left for recovery retry', {
+        attemptId: currentAttempt.id,
+        operationId: currentAttempt.requestOperationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -446,6 +702,11 @@ export class PaymentRequestReceiveService {
           throw new PaymentRequestError(
             `Transport message ${source.transportMessageId} belongs to another ` +
               'payment request receive operation',
+          );
+        }
+        if (existingByMessage.payloadHash !== payloadHash) {
+          throw new PaymentRequestError(
+            `Transport message ${source.transportMessageId} belongs to a different payload`,
           );
         }
         return this.resultForAttempt(operation, existingByMessage);
@@ -551,6 +812,10 @@ export class PaymentRequestReceiveService {
         throw error;
       }
 
+      if (attempt.state === 'finalized') {
+        throw error;
+      }
+
       if (
         validationCompleted &&
         (!receiveOperation || receiveOperation.state === 'init') &&
@@ -571,6 +836,15 @@ export class PaymentRequestReceiveService {
           error instanceof Error ? error.message : String(error),
         );
         return { operation, attempt, receiveOperation: receiveOperation ?? undefined };
+      }
+
+      if (!validationCompleted && attempt.payload && this.shouldDropAttemptForRetry(error)) {
+        await this.attemptRepository.delete(attempt.id);
+        this.logger?.warn('Payment request receive attempt removed for retry', {
+          attemptId: attempt.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
 
       attempt = await this.rejectAttempt(
@@ -796,6 +1070,7 @@ export class PaymentRequestReceiveService {
   private async finalizeAttemptFromReceive(
     attempt: PaymentRequestReceiveAttempt,
     receiveOperation: FinalizedReceiveOperation,
+    options?: { ignoreMissingTransportHandler?: boolean },
   ): Promise<PaymentRequestReceiveAttempt> {
     const finalized = await this.updateAttempt({
       ...attempt,
@@ -806,7 +1081,9 @@ export class PaymentRequestReceiveService {
     });
     const operation = await this.operationRepository.getById(finalized.requestOperationId);
     if (operation) {
-      await this.completeIfSingleUse(operation);
+      await this.completeIfSingleUse(operation, {
+        ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+      });
     }
     return finalized;
   }
@@ -814,10 +1091,13 @@ export class PaymentRequestReceiveService {
   private async resumePreparedChildReceive(
     attempt: PaymentRequestReceiveAttempt,
     receiveOperation: PreparedReceiveOperation,
+    options?: { ignoreMissingTransportHandler?: boolean },
   ): Promise<void> {
     try {
       const finalizedReceive = await this.receiveOperationService.execute(receiveOperation);
-      await this.finalizeAttemptFromReceive(attempt, finalizedReceive);
+      await this.finalizeAttemptFromReceive(attempt, finalizedReceive, {
+        ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+      });
     } catch (error) {
       const latestReceive = await this.receiveOperationService.getOperation(receiveOperation.id);
       if (!latestReceive) {
@@ -826,7 +1106,9 @@ export class PaymentRequestReceiveService {
       }
 
       if (latestReceive.state === 'finalized') {
-        await this.finalizeAttemptFromReceive(attempt, latestReceive);
+        await this.finalizeAttemptFromReceive(attempt, latestReceive, {
+          ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+        });
         return;
       }
 
@@ -850,6 +1132,7 @@ export class PaymentRequestReceiveService {
   private async resumeInitChildReceive(
     attempt: PaymentRequestReceiveAttempt,
     receiveOperation: InitReceiveOperation,
+    options?: { ignoreMissingTransportHandler?: boolean },
   ): Promise<void> {
     try {
       const preparedReceive = await this.receiveOperationService.prepare(receiveOperation);
@@ -859,7 +1142,9 @@ export class PaymentRequestReceiveService {
         fee: preparedReceive.fee,
         netAmount,
       });
-      await this.resumePreparedChildReceive(updatedAttempt, preparedReceive);
+      await this.resumePreparedChildReceive(updatedAttempt, preparedReceive, {
+        ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+      });
     } catch (error) {
       const latestReceive = await this.receiveOperationService.getOperation(receiveOperation.id);
       if (!latestReceive || latestReceive.state === 'init') {
@@ -873,7 +1158,9 @@ export class PaymentRequestReceiveService {
       }
 
       if (latestReceive.state === 'finalized') {
-        await this.finalizeAttemptFromReceive(attempt, latestReceive);
+        await this.finalizeAttemptFromReceive(attempt, latestReceive, {
+          ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+        });
         return;
       }
 
@@ -886,7 +1173,9 @@ export class PaymentRequestReceiveService {
       }
 
       if (latestReceive.state === 'prepared') {
-        await this.resumePreparedChildReceive(attempt, latestReceive);
+        await this.resumePreparedChildReceive(attempt, latestReceive, {
+          ignoreMissingTransportHandler: options?.ignoreMissingTransportHandler,
+        });
         return;
       }
 
@@ -901,6 +1190,7 @@ export class PaymentRequestReceiveService {
 
   private async completeIfSingleUse(
     operation: PaymentRequestReceiveOperation,
+    options?: { ignoreMissingTransportHandler?: boolean },
   ): Promise<PaymentRequestReceiveOperation> {
     if (!operation.singleUse) {
       return operation;
@@ -912,6 +1202,18 @@ export class PaymentRequestReceiveService {
       updatedAt: Date.now(),
     };
     await this.operationRepository.update(completed);
+    try {
+      await this.deactivateTransport(completed, {
+        ignoreMissingHandler: options?.ignoreMissingTransportHandler,
+      });
+    } catch (error) {
+      this.logger?.warn('Payment request receive transport deactivation failed after completion', {
+        operationId: completed.id,
+        requestId: completed.requestId,
+        transport: completed.transport,
+        error,
+      });
+    }
     return completed;
   }
 
@@ -919,6 +1221,10 @@ export class PaymentRequestReceiveService {
     operation: PaymentRequestReceiveOperation,
     attempt: PaymentRequestReceiveAttempt,
   ): Promise<PaymentRequestReceiveClaimResult> {
+    if (this.isInFlightAttempt(attempt)) {
+      throw new OperationInProgressError(operation.id);
+    }
+
     const receiveOperation = attempt.receiveOperationId
       ? await this.receiveOperationService.getOperation(attempt.receiveOperationId)
       : undefined;
@@ -940,6 +1246,14 @@ export class PaymentRequestReceiveService {
       );
     }
     return this.resultForAttempt(operation, attempt);
+  }
+
+  private isInFlightAttempt(attempt: PaymentRequestReceiveAttempt): boolean {
+    return (
+      attempt.state === 'received' ||
+      attempt.state === 'validating' ||
+      attempt.state === 'receiving'
+    );
   }
 
   private async requireOperation(

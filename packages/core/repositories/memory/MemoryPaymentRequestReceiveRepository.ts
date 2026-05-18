@@ -142,9 +142,10 @@ export class MemoryPaymentRequestReceiveAttemptRepository implements PaymentRequ
     requestId: string,
     payloadHash: string,
   ): Promise<PaymentRequestReceiveAttempt | null> {
-    const attempt = Array.from(this.attempts.values()).find(
+    const attempts = Array.from(this.attempts.values()).filter(
       (candidate) => candidate.requestId === requestId && candidate.payloadHash === payloadHash,
     );
+    const attempt = attempts.find((candidate) => candidate.state === 'finalized') ?? attempts[0];
     return attempt ? cloneAttempt(attempt) : null;
   }
 

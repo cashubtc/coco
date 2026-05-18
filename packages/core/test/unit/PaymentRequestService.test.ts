@@ -123,6 +123,7 @@ describe('PaymentRequestService', () => {
         operation: mockPendingOperation,
         token: mockToken,
       })),
+      rollback: mock(async () => undefined),
     } as unknown as SendOperationService;
 
     mockProofService = {
@@ -220,13 +221,25 @@ describe('PaymentRequestService', () => {
       });
       const prepared = await service.prepare(request, {
         mintUrl: testMintUrl,
-        amount: Amount.from(100),
+        amount: { amount: Amount.from(100), unit: 'sat' },
       });
 
-      await expect(service.execute(prepared)).rejects.toThrow(PaymentRequestError);
-      await expect(service.execute(prepared)).rejects.toThrow(
+      let thrown: unknown;
+      try {
+        await service.execute(prepared);
+      } catch (e) {
+        thrown = e;
+      }
+
+      expect(thrown).toBeInstanceOf(PaymentRequestError);
+      expect((thrown as Error).message).toBe(
         'Nostr payment request execution requires a transport plugin',
       );
+      expect(mockSendOperationService.rollback).toHaveBeenCalledWith(
+        prepared.sendOperation.id,
+        'Nostr payment request execution requires a transport plugin',
+      );
+      expect(mockSendOperationService.execute).not.toHaveBeenCalled();
     });
 
     it('should return an empty payable mint list if no matching mints are found', async () => {

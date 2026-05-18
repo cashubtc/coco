@@ -314,7 +314,10 @@ export class SqlitePaymentRequestReceiveAttemptRepository implements PaymentRequ
     payloadHash: string,
   ): Promise<PaymentRequestReceiveAttempt | null> {
     const row = await this.db.get<AttemptRow>(
-      'SELECT * FROM coco_cashu_payment_request_receive_attempts WHERE requestId = ? AND payloadHash = ?',
+      `SELECT * FROM coco_cashu_payment_request_receive_attempts
+       WHERE requestId = ? AND payloadHash = ?
+       ORDER BY CASE WHEN state = 'finalized' THEN 0 ELSE 1 END, createdAt ASC
+       LIMIT 1`,
       [requestId, payloadHash],
     );
     return row ? rowToAttempt(row) : null;

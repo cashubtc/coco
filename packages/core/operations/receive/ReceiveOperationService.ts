@@ -24,6 +24,7 @@ import {
 import type {
   ReceiveOperation,
   ReceiveOperationSource,
+  ReceiveOperationState,
   InitReceiveOperation,
   PreparedReceiveOperation,
   PreparedOrLaterOperation,
@@ -765,6 +766,29 @@ export class ReceiveOperationService {
    */
   async getOperation(operationId: string): Promise<ReceiveOperation | null> {
     return this.receiveOperationRepository.getById(operationId);
+  }
+
+  async getOperationByPaymentRequestAttemptId(
+    attemptId: string,
+  ): Promise<ReceiveOperation | null> {
+    const states: ReceiveOperationState[] = [
+      'init',
+      'prepared',
+      'executing',
+      'finalized',
+      'rolled_back',
+    ];
+    for (const state of states) {
+      const operations = await this.receiveOperationRepository.getByState(state);
+      const operation = operations.find(
+        (candidate) =>
+          candidate.source?.type === 'payment-request' && candidate.source.attemptId === attemptId,
+      );
+      if (operation) {
+        return operation;
+      }
+    }
+    return null;
   }
 
   /**

@@ -1,10 +1,10 @@
 ---
-'@cashu/coco-core': minor
-'@cashu/coco-indexeddb': minor
-'@cashu/coco-expo-sqlite': minor
-'@cashu/coco-sqlite': minor
-'@cashu/coco-sqlite-bun': minor
-'@cashu/coco-adapter-tests': minor
+'@cashu/coco-core': major
+'@cashu/coco-indexeddb': major
+'@cashu/coco-expo-sqlite': major
+'@cashu/coco-sqlite': major
+'@cashu/coco-sqlite-bun': major
+'@cashu/coco-adapter-tests': major
 ---
 
 Add incoming payment-request receive operations.
@@ -18,8 +18,8 @@ as Nostr, and outgoing payment-request parsing exposes Nostr transport
 descriptors for plugin delivery.
 Incoming request creation stores active requests immediately; callers can
 cancel requests to stop accepting future payloads while keeping request history.
-Pre-child crash attempts are discarded during recovery so redelivered payloads
-can retry instead of being pinned to synthetic rejections.
+Stored pre-child crash attempts are resumed during recovery; incomplete attempts
+without a durable payload are rejected so they do not pin future deliveries.
 
 Adapters now persist payment-request receive operations and attempts, and receive
 operations store optional source metadata for request-linked receives.

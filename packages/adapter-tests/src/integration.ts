@@ -3042,7 +3042,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should throw for unsupported transport (nostr)', async () => {
+      it('should decode Nostr payment requests for plugin delivery', async () => {
         const pr = new PaymentRequest(
           [{ type: PaymentRequestTransportType.NOSTR, target: 'npub1...' }],
           'nostr-request',
@@ -3052,7 +3052,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
         const encoded = pr.toEncodedRequest();
 
-        await expect(mgr!.paymentRequests.parse(encoded)).rejects.toThrow();
+        const parsed = await mgr!.paymentRequests.parse(encoded);
+
+        expect(parsed.transport.type).toBe('nostr');
+        if (parsed.transport.type === 'nostr') {
+          expect(parsed.transport.target).toBe('npub1...');
+        }
+        expect(parsed.amount?.equals(Amount.from(50))).toBe(true);
       });
 
       it('should complete full payment request flow with token reuse', async () => {

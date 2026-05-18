@@ -177,10 +177,27 @@ export class PaymentRequestService {
           request: transaction.request,
         };
       }
-      case 'nostr':
-        throw new PaymentRequestError(
+      case 'nostr': {
+        const error = new PaymentRequestError(
           'Nostr payment request execution requires a transport plugin',
         );
+        try {
+          await this.sendOperationService.rollback(
+            transaction.sendOperation.id,
+            'Nostr payment request execution requires a transport plugin',
+          );
+        } catch (cause) {
+          this.logger?.error('Failed to roll back Nostr payment request send operation', {
+            operationId: transaction.sendOperation.id,
+            cause,
+          });
+          throw new PaymentRequestError(
+            'Nostr payment request execution requires a transport plugin; rollback failed',
+            cause,
+          );
+        }
+        throw error;
+      }
     }
   }
 
