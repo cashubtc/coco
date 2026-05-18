@@ -241,6 +241,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 - `parse(paymentRequest: string): Promise<ResolvedPaymentRequest>`
 - `prepare(request: ResolvedPaymentRequest, options: { mintUrl: string; amount?: AmountLike }): Promise<PreparedPaymentRequest>`
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
+- `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
 ### SubscriptionApi
 

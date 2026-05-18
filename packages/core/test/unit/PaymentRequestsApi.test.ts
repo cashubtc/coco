@@ -105,6 +105,19 @@ describe('PaymentRequestsApi', () => {
     });
   });
 
+  it('normalizes incoming create amounts at the API boundary', async () => {
+    await api.incoming.create({
+      amount: { amount: Amount.from(5), unit: 'USD' },
+      requestId: 'request-id',
+    });
+
+    expect(incomingService.create).toHaveBeenCalledWith({
+      amount: Amount.from(5),
+      unit: 'usd',
+      requestId: 'request-id',
+    });
+  });
+
   it('should execute a prepared payment request', async () => {
     const result = await api.execute(preparedRequest);
 

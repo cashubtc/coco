@@ -98,6 +98,17 @@ const transaction = await coco.paymentRequests.prepare(request, {
 await coco.paymentRequests.execute(transaction);
 ```
 
+Incoming payment requests use the same amount input shape. Bare amounts create
+sat requests unless `unit` is provided; custom-unit requests should keep amount
+and unit coupled:
+
+```ts
+await coco.paymentRequests.incoming.create({
+  amount: { amount: 5, unit: 'usd' },
+  mints: ['https://mint.url'],
+});
+```
+
 ## Restore And Sweep
 
 `wallet.restore()` and `wallet.sweep()` process every keyset unit advertised by

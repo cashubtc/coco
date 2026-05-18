@@ -105,6 +105,16 @@ const request = await coco.paymentRequests.incoming.create({
 console.log(request.encodedRequest);
 ```
 
+Bare incoming request amounts default to sats. For custom units, pass the
+amount and unit together or provide an explicit `unit`:
+
+```ts
+const usdRequest = await coco.paymentRequests.incoming.create({
+  amount: { amount: 5, unit: 'usd' },
+  mints: ['https://mint.url'],
+});
+```
+
 For in-band delivery, receive a `PaymentRequestPayload` from your own transport and
 claim it against the request:
 

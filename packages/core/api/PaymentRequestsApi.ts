@@ -5,7 +5,7 @@ import type {
   PaymentRequestService,
   PreparedPaymentRequest,
   ResolvedPaymentRequest,
-  CreatePaymentRequestReceiveInput,
+  CreatePaymentRequestReceiveInput as ServiceCreatePaymentRequestReceiveInput,
 } from '@core/services';
 import type {
   PaymentRequestReceiveOperation,
@@ -15,8 +15,18 @@ import type {
 import type { PaymentRequestPayload } from '@cashu/cashu-ts';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
+export type CreateIncomingPaymentRequestInput = Omit<
+  ServiceCreatePaymentRequestReceiveInput,
+  'amount' | 'unit'
+> & {
+  /** Amount to request. Bare amounts use `sat` unless `unit` is set. */
+  amount: UnitAmountLike;
+  /** Unit to request. */
+  unit?: string;
+};
+
 export interface IncomingPaymentRequestsApi {
-  create(input: CreatePaymentRequestReceiveInput): Promise<PaymentRequestReceiveOperation>;
+  create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>;
   cancel(operationId: string, reason?: string): Promise<PaymentRequestReceiveOperation>;
   get(operationId: string): Promise<PaymentRequestReceiveOperation | null>;
   list(filter?: { state?: PaymentRequestReceiveState }): Promise<PaymentRequestReceiveOperation[]>;
@@ -50,7 +60,14 @@ export class PaymentRequestsApi {
   ) {
     this.paymentRequestService = paymentRequestService;
     this.incoming = {
-      create: (input) => paymentRequestReceiveService.create(input),
+      create: (input) => {
+        const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+        return paymentRequestReceiveService.create({
+          ...input,
+          amount: parsed.amount,
+          unit: parsed.unit,
+        });
+      },
       cancel: (operationId, reason) => paymentRequestReceiveService.cancel(operationId, reason),
       get: (operationId) => paymentRequestReceiveService.get(operationId),
       list: (filter) => paymentRequestReceiveService.list(filter),

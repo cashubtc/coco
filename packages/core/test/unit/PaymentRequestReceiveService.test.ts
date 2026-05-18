@@ -148,6 +148,21 @@ describe('PaymentRequestReceiveService', () => {
     expect(operation.requestId).toBe('request-id');
   });
 
+  it('creates custom-unit payment requests from coupled amount input', async () => {
+    const operation = await service.create({
+      amount: { amount: Amount.from(5), unit: 'USD' },
+      mints: [mintUrl],
+      requestId: 'request-id',
+      description: 'test request',
+    });
+
+    const decoded = PaymentRequest.fromEncodedRequest(operation.encodedRequest);
+    expect(operation.unit).toBe('usd');
+    expect(operation.amount).toEqual(Amount.from(5));
+    expect(decoded.unit).toBe('usd');
+    expect(decoded.amount).toEqual(Amount.from(5));
+  });
+
   it('rejects duplicate active request ids', async () => {
     await service.create({
       amount: Amount.from(100),
@@ -223,6 +238,36 @@ describe('PaymentRequestReceiveService', () => {
     expect(decoded.getTransport(PaymentRequestTransportType.NOSTR)?.tags).toEqual([['n', '17']]);
     expect(activate).toHaveBeenCalledWith(expect.objectContaining({ id: operation.id }));
     expect(activate).toHaveBeenCalledTimes(1);
+
+    unregister();
+  });
+
+  it('passes custom units to registered transport handlers', async () => {
+    const createRequestTransport = mock(async () => ({
+      type: PaymentRequestTransportType.NOSTR,
+      target: nostrTarget,
+    }));
+    const unregister = service.registerTransportHandler({
+      type: 'nostr',
+      createRequestTransport,
+      activate: mock(async () => undefined),
+      deactivate: mock(async () => undefined),
+    });
+
+    await service.create({
+      amount: Amount.from(5),
+      unit: 'USD',
+      mints: [mintUrl],
+      requestId: 'request-id',
+      transport: 'nostr',
+    });
+
+    expect(createRequestTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unit: 'usd',
+        amount: Amount.from(5),
+      }),
+    );
 
     unregister();
   });
@@ -448,6 +493,34 @@ describe('PaymentRequestReceiveService', () => {
     expect(result.attempt.netAmount?.equals(Amount.from(99))).toBe(true);
     expect(receiveOperationService.init).toHaveBeenCalledWith(
       expect.objectContaining({ mint: mintUrl }),
+      expect.objectContaining({
+        type: 'payment-request',
+        requestOperationId: operation.id,
+        attemptId: result.attempt.id,
+      }),
+    );
+  });
+
+  it('claims custom-unit payloads through the child receive operation', async () => {
+    const operation = await service.create({
+      amount: { amount: Amount.from(100), unit: 'USD' },
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
+    const payload = createPayload({ unit: 'USD' });
+
+    const result = await service.claimPayload(operation.id, payload);
+
+    expect(result.operation.state).toBe('completed');
+    expect(result.operation.unit).toBe('usd');
+    expect(result.attempt.state).toBe('finalized');
+    expect(result.attempt.unit).toBe('usd');
+    expect(receiveOperationService.init).toHaveBeenCalledWith(
+      {
+        mint: mintUrl,
+        unit: 'usd',
+        proofs: payload.proofs,
+      },
       expect.objectContaining({
         type: 'payment-request',
         requestOperationId: operation.id,

@@ -3,7 +3,6 @@ import {
   JSONInt,
   PaymentRequest,
   PaymentRequestTransportType,
-  type AmountLike,
   type NUT10Option,
   type PaymentRequestPayload,
   type PaymentRequestTransport,
@@ -14,6 +13,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 import type { Logger } from '@core/logging';
+import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import {
   OperationInProgressError,
   PaymentRequestError,
@@ -74,7 +74,7 @@ export interface PaymentRequestReceiveTransportHandler {
 }
 
 export interface CreatePaymentRequestReceiveInput {
-  amount: AmountLike;
+  amount: UnitAmountLike;
   unit?: string;
   mints?: string[];
   requestId?: string;
@@ -132,15 +132,11 @@ export class PaymentRequestReceiveService {
   }
 
   async create(input: CreatePaymentRequestReceiveInput): Promise<PaymentRequestReceiveOperation> {
-    const unit = input.unit ?? 'sat';
-    if (unit !== 'sat') {
-      throw new PaymentRequestError(`Unsupported payment request unit '${unit}'`);
-    }
+    const { amount, unit } = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     if (input.nut10) {
       throw new PaymentRequestError('NUT-10 receive requirements are not supported yet');
     }
 
-    const amount = Amount.from(input.amount);
     if (amount.isZero()) {
       throw new PaymentRequestError('Payment request amount must be positive');
     }
@@ -949,7 +945,7 @@ export class PaymentRequestReceiveService {
       id: raw.id,
       memo: raw.memo,
       mint: normalizeMintUrl(raw.mint),
-      unit: raw.unit,
+      unit: normalizeUnit(raw.unit, { defaultUnit: DEFAULT_UNIT }),
       proofs,
     };
   }
@@ -978,11 +974,6 @@ export class PaymentRequestReceiveService {
     if (payload.unit !== operation.unit) {
       throw new PaymentRequestError(
         `Payment request payload unit '${payload.unit}' does not match request unit '${operation.unit}'`,
-      );
-    }
-    if (payload.unit !== 'sat') {
-      throw new ProofValidationError(
-        `Unsupported mint unit '${payload.unit}'. Only 'sat' is currently supported.`,
       );
     }
     if (grossAmount.lessThan(operation.amount)) {
