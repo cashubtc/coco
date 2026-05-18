@@ -1,84 +1,78 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
-import type { HistoryRepository } from '../repositories';
+import type { HistoryProjectionRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
-import type {
-  HistoryEntry,
-  MeltHistoryEntry,
-  MintHistoryEntry,
-  ReceiveHistoryEntry,
-  ReceiveHistoryState,
-  SendHistoryEntry,
-  SendHistoryState,
+import type { HistoryEntry, OperationHistoryEntry } from '@core/models/History';
+import {
+  projectMeltOperation,
+  projectMintOperation,
+  projectReceiveOperation,
+  projectSendOperation,
 } from '@core/models/History';
-import type { PreparedOrLaterOperation } from '@core/operations/melt';
-import type { PendingMintOperation } from '@core/operations/mint';
-import type { MintQuoteState } from '@core/models/MintQuoteState';
 import type { Logger } from '@core/logging';
+import type { MeltOperation } from '@core/operations/melt';
+import type { MintOperation } from '@core/operations/mint';
 import type { ReceiveOperation } from '@core/operations/receive/ReceiveOperation';
 import type { SendOperation } from '@core/operations/send/SendOperation';
+import type { Token } from '@cashu/cashu-ts';
 
 export class HistoryService {
-  private readonly historyRepository: HistoryRepository;
+  private readonly historyRepository: HistoryProjectionRepository;
   private readonly logger?: Logger;
   private readonly eventBus: EventBus<CoreEvents>;
 
   constructor(
-    historyRepository: HistoryRepository,
+    historyRepository: HistoryProjectionRepository,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
   ) {
     this.historyRepository = historyRepository;
     this.logger = logger;
     this.eventBus = eventBus;
-    this.eventBus.on('mint-op:pending', ({ mintUrl, operation }) => {
-      if (operation.state !== 'pending') return;
-      return this.handleMintOperationPending(mintUrl, operation as PendingMintOperation);
+
+    this.eventBus.on('send:prepared', ({ mintUrl, operation }) => {
+      return this.emitProjectedSend(mintUrl, operation);
     });
-    this.eventBus.on('mint-op:quote-state-changed', ({ mintUrl, operationId, quoteId, state }) => {
-      return this.handleMintOperationQuoteStateChanged(mintUrl, operationId, quoteId, state);
+    this.eventBus.on('send:pending', ({ mintUrl, operation, token }) => {
+      return this.emitProjectedSend(mintUrl, this.withSendToken(operation, token));
     });
-    this.eventBus.on('melt-quote:created', ({ mintUrl, quoteId, quote }) => {
-      return this.handleMeltQuoteCreated(mintUrl, quoteId, quote);
+    this.eventBus.on('send:finalized', ({ mintUrl, operation }) => {
+      return this.emitProjectedSend(mintUrl, operation);
     });
-    this.eventBus.on('melt-quote:state-changed', ({ mintUrl, quoteId, state }) => {
-      return this.handleMeltQuoteStateChanged(mintUrl, quoteId, state);
+    this.eventBus.on('send:rolled-back', ({ mintUrl, operation }) => {
+      return this.emitProjectedSend(mintUrl, operation);
     });
+
     this.eventBus.on('melt-op:prepared', ({ mintUrl, operation }) => {
-      if (operation.state !== 'prepared') return;
-      return this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
+      return this.emitProjectedMelt(mintUrl, operation);
     });
     this.eventBus.on('melt-op:pending', ({ mintUrl, operation }) => {
-      if (operation.state !== 'pending') return;
-      return this.handleMeltOperationUpdated(mintUrl, operation, 'PENDING');
+      return this.emitProjectedMelt(mintUrl, operation);
     });
     this.eventBus.on('melt-op:finalized', ({ mintUrl, operation }) => {
-      if (operation.state !== 'finalized') return;
-      return this.handleMeltOperationUpdated(mintUrl, operation, 'PAID');
+      return this.emitProjectedMelt(mintUrl, operation);
     });
     this.eventBus.on('melt-op:rolled-back', ({ mintUrl, operation }) => {
-      if (operation.state !== 'rolled_back') return;
-      return this.handleMeltOperationRolledBack(mintUrl, operation);
+      return this.emitProjectedMelt(mintUrl, operation);
     });
-    this.eventBus.on('send:prepared', ({ mintUrl, operationId, operation }) => {
-      return this.handleSendPrepared(mintUrl, operationId, operation);
+
+    this.eventBus.on('mint-op:pending', ({ mintUrl, operation }) => {
+      return this.emitProjectedMint(mintUrl, operation);
     });
-    this.eventBus.on('send:pending', ({ mintUrl, operationId, token }) => {
-      return this.handleSendPending(mintUrl, operationId, token);
+    this.eventBus.on('mint-op:executing', ({ mintUrl, operation }) => {
+      return this.emitProjectedMint(mintUrl, operation);
     });
-    this.eventBus.on('send:finalized', ({ mintUrl, operationId }) => {
-      return this.handleSendStateChanged(mintUrl, operationId, 'finalized');
+    this.eventBus.on('mint-op:finalized', ({ mintUrl, operation }) => {
+      return this.emitProjectedMint(mintUrl, operation);
     });
-    this.eventBus.on('send:rolled-back', ({ mintUrl, operationId }) => {
-      return this.handleSendStateChanged(mintUrl, operationId, 'rolledBack');
+    this.eventBus.on('mint-op:quote-state-changed', ({ mintUrl, operation }) => {
+      return this.emitProjectedMint(mintUrl, operation);
     });
+
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
-      if (operation.state !== 'finalized') return;
-      return this.handleReceiveOperationUpdated(mintUrl, operation, 'finalized');
+      return this.emitProjectedReceive(mintUrl, operation);
     });
     this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
-      if (operation.state !== 'rolled_back') return;
-      return this.handleReceiveOperationUpdated(mintUrl, operation, 'rolledBack');
+      return this.emitProjectedReceive(mintUrl, operation);
     });
   }
 
@@ -92,7 +86,7 @@ export class HistoryService {
 
   /**
    * Get the operationId for a send history entry.
-   * @throws Error if entry not found or is not a send entry
+   * @throws Error if entry not found, is not a send entry, or has no operation id
    */
   async getOperationIdFromHistoryEntry(historyId: string): Promise<string> {
     const entry = await this.historyRepository.getHistoryEntryById(historyId);
@@ -105,311 +99,58 @@ export class HistoryService {
       throw new Error(`History entry ${historyId} is not a send entry`);
     }
 
+    if (!entry.operationId) {
+      throw new Error(`History entry ${historyId} is not backed by an operation`);
+    }
+
     return entry.operationId;
   }
 
-  async handleSendPrepared(mintUrl: string, operationId: string, operation: SendOperation) {
-    const entry: Omit<SendHistoryEntry, 'id'> = {
-      type: 'send',
-      createdAt: Date.now(),
-      unit: operation.unit,
-      amount: operation.amount,
+  private async emitProjectedSend(mintUrl: string, operation: SendOperation): Promise<void> {
+    await this.emitProjectedEntry(mintUrl, projectSendOperation(operation), 'send', operation.id);
+  }
+
+  private async emitProjectedMelt(mintUrl: string, operation: MeltOperation): Promise<void> {
+    await this.emitProjectedEntry(mintUrl, projectMeltOperation(operation), 'melt', operation.id);
+  }
+
+  private async emitProjectedMint(mintUrl: string, operation: MintOperation): Promise<void> {
+    await this.emitProjectedEntry(mintUrl, projectMintOperation(operation), 'mint', operation.id);
+  }
+
+  private async emitProjectedReceive(mintUrl: string, operation: ReceiveOperation): Promise<void> {
+    await this.emitProjectedEntry(
       mintUrl,
-      operationId,
-      state: 'prepared',
-    };
-    try {
-      const entryRes = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, entryRes);
-    } catch (err) {
-      this.logger?.error('Failed to add send prepared history entry', {
-        mintUrl,
-        operationId,
-        err,
-      });
-    }
+      projectReceiveOperation(operation),
+      'receive',
+      operation.id,
+    );
   }
 
-  async handleSendPending(mintUrl: string, operationId: string, token: Token) {
-    try {
-      const entry = await this.historyRepository.getSendHistoryEntry(mintUrl, operationId);
-      if (!entry) {
-        this.logger?.error('Send pending history entry not found', {
-          mintUrl,
-          operationId,
-        });
-        return;
-      }
-      entry.state = 'pending';
-      entry.token = token;
-      entry.unit = token.unit || 'sat';
-      await this.historyRepository.updateHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, entry);
-    } catch (err) {
-      this.logger?.error('Failed to update send pending history entry', {
-        mintUrl,
-        operationId,
-        err,
-      });
-    }
-  }
-
-  async handleSendStateChanged(mintUrl: string, operationId: string, state: SendHistoryState) {
-    try {
-      await this.historyRepository.updateSendHistoryState(mintUrl, operationId, state);
-      const entry = await this.historyRepository.getSendHistoryEntry(mintUrl, operationId);
-      if (entry) {
-        await this.handleHistoryUpdated(mintUrl, entry);
-      }
-    } catch (err) {
-      this.logger?.error('Failed to update send state history entry', {
-        mintUrl,
-        operationId,
-        state,
-        err,
-      });
-    }
-  }
-
-  async handleReceiveOperationUpdated(
+  private async emitProjectedEntry(
     mintUrl: string,
-    operation: ReceiveOperation,
-    state: ReceiveHistoryState,
-  ) {
-    try {
-      const token =
-        state === 'finalized'
-          ? {
-              mint: operation.mintUrl,
-              proofs: operation.inputProofs,
-              unit: operation.unit || 'sat',
-            }
-          : undefined;
-      const existing = await this.historyRepository.getReceiveHistoryEntry(mintUrl, operation.id);
-      if (existing) {
-        existing.amount = operation.amount;
-        existing.unit = operation.unit || existing.unit || 'sat';
-        existing.state = state;
-        existing.metadata = this.getReceiveMetadata(operation) ?? existing.metadata;
-        if (token) {
-          existing.token = token;
-        }
-        await this.historyRepository.updateHistoryEntry(existing);
-        await this.handleHistoryUpdated(mintUrl, existing);
-        return;
-      }
-
-      const entryPayload: Omit<ReceiveHistoryEntry, 'id'> = {
-        type: 'receive',
-        createdAt: Date.now(),
-        unit: operation.unit || 'sat',
-        amount: operation.amount,
-        mintUrl,
-        operationId: operation.id,
-        state,
-        token,
-        metadata: this.getReceiveMetadata(operation),
-      };
-      const entry = await this.historyRepository.addHistoryEntry(entryPayload);
-      await this.handleHistoryUpdated(mintUrl, entry);
-    } catch (err) {
-      this.logger?.error('Failed to update receive history entry', {
-        mintUrl,
-        operationId: operation.id,
-        state,
-        err,
-      });
-    }
-  }
-
-  private getReceiveMetadata(operation: ReceiveOperation): Record<string, string> | undefined {
-    if (operation.source?.type !== 'payment-request') {
-      return undefined;
-    }
-
-    return {
-      source: 'payment-request',
-      requestOperationId: operation.source.requestOperationId,
-      attemptId: operation.source.attemptId,
-      ...(operation.source.requestId ? { requestId: operation.source.requestId } : {}),
-      transport: operation.source.transport,
-      ...(operation.source.transportMessageId
-        ? { transportMessageId: operation.source.transportMessageId }
-        : {}),
-      ...(operation.source.senderPubkey ? { senderPubkey: operation.source.senderPubkey } : {}),
-      ...(operation.source.memo ? { memo: operation.source.memo } : {}),
-    };
-  }
-
-  async handleMintOperationQuoteStateChanged(
-    mintUrl: string,
+    entry: OperationHistoryEntry | null,
+    type: OperationHistoryEntry['type'],
     operationId: string,
-    quoteId: string,
-    state: MintQuoteState,
-  ) {
-    try {
-      const entry = await this.historyRepository.getMintHistoryEntry(mintUrl, quoteId);
-      if (!entry) {
-        this.logger?.error('Mint operation quote state changed history entry not found', {
-          mintUrl,
-          quoteId,
-          operationId,
-        });
-        return;
-      }
-      entry.operationId = operationId;
-      entry.state = state;
-      await this.historyRepository.updateHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, { ...entry, state });
-    } catch (err) {
-      this.logger?.error('Failed to update mint operation history state', {
-        mintUrl,
-        quoteId,
-        operationId,
-        err,
-      });
-    }
-  }
-
-  async handleMeltQuoteStateChanged(mintUrl: string, quoteId: string, state: MeltQuoteState) {
-    try {
-      const entry = await this.historyRepository.getMeltHistoryEntry(mintUrl, quoteId);
-      if (!entry) {
-        this.logger?.error('Melt quote state changed history entry not found', {
-          mintUrl,
-          quoteId,
-        });
-        return;
-      }
-      entry.state = state;
-      await this.historyRepository.updateHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, { ...entry, state });
-    } catch (err) {
-      this.logger?.error('Failed to add melt quote state changed history entry', {
-        mintUrl,
-        quoteId,
-        err,
-      });
-    }
-  }
-
-  async handleMeltQuoteCreated(mintUrl: string, quoteId: string, quote: MeltQuoteBolt11Response) {
-    const entry: Omit<MeltHistoryEntry, 'id'> = {
-      type: 'melt',
-      createdAt: Date.now(),
-      unit: quote.unit,
-      amount: quote.amount,
-      mintUrl,
-      quoteId,
-      state: quote.state,
-    };
-    try {
-      const newEntry = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, newEntry);
-    } catch (err) {
-      this.logger?.error('Failed to add melt quote created history entry', {
-        mintUrl,
-        quoteId,
-        err,
-      });
-    }
-  }
-
-  async handleMeltOperationUpdated(
-    mintUrl: string,
-    operation: PreparedOrLaterOperation,
-    state: MeltQuoteState,
-  ) {
-    const existing = await this.historyRepository.getMeltHistoryEntry(mintUrl, operation.quoteId);
-    const entry: Omit<MeltHistoryEntry, 'id'> = {
-      type: 'melt',
-      mintUrl,
-      operationId: operation.id,
-      quoteId: operation.quoteId,
-      amount: operation.amount,
-      state,
-      createdAt: operation.createdAt,
-      unit: operation.unit || existing?.unit || 'sat',
-    };
+  ): Promise<void> {
+    if (!entry) return;
 
     try {
-      if (existing) {
-        existing.amount = entry.amount;
-        existing.operationId = entry.operationId;
-        existing.state = entry.state;
-        existing.unit = entry.unit;
-        const updated = await this.historyRepository.updateHistoryEntry(existing);
-        await this.handleHistoryUpdated(mintUrl, updated);
-        return;
-      }
-
-      const created = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, created);
-    } catch (err) {
-      this.logger?.error('Failed to upsert melt operation history entry', {
-        mintUrl,
-        quoteId: operation.quoteId,
-        operationId: operation.id,
-        state,
-        err,
-      });
-    }
-  }
-
-  async handleMeltOperationRolledBack(mintUrl: string, operation: PreparedOrLaterOperation) {
-    await this.handleMeltOperationUpdated(mintUrl, operation, 'UNPAID');
-  }
-
-  async handleMintOperationPending(mintUrl: string, operation: PendingMintOperation) {
-    const entry: Omit<MintHistoryEntry, 'id'> = {
-      type: 'mint',
-      mintUrl,
-      operationId: operation.id,
-      unit: operation.unit,
-      paymentRequest: operation.request,
-      quoteId: operation.quoteId,
-      state: operation.lastObservedRemoteState ?? 'UNPAID',
-      createdAt: operation.createdAt,
-      amount: operation.amount,
-    };
-
-    try {
-      const existing = await this.historyRepository.getMintHistoryEntry(mintUrl, operation.quoteId);
-      if (existing) {
-        existing.operationId = entry.operationId;
-        existing.unit = entry.unit;
-        existing.paymentRequest = entry.paymentRequest;
-        existing.state = entry.state;
-        existing.amount = entry.amount;
-        const updated = await this.historyRepository.updateHistoryEntry(existing);
-        await this.handleHistoryUpdated(mintUrl, updated);
-        return;
-      }
-
-      const created = await this.historyRepository.addHistoryEntry(entry);
-      await this.handleHistoryUpdated(mintUrl, created);
-      this.logger?.debug('Added history entry for pending mint operation', {
-        mintUrl,
-        quoteId: operation.quoteId,
-        operationId: operation.id,
-        state: entry.state,
-      });
-    } catch (err) {
-      this.logger?.error('Failed to add pending mint operation history entry', {
-        mintUrl,
-        quoteId: operation.quoteId,
-        operationId: operation.id,
-        err,
-      });
-    }
-  }
-
-  async handleHistoryUpdated(mintUrl: string, entry: HistoryEntry) {
-    try {
-      // Emit a shallow copy to prevent mutation after emission
       await this.eventBus.emit('history:updated', { mintUrl, entry: { ...entry } });
     } catch (err) {
-      this.logger?.error('Failed to emit history entry', { mintUrl, entry, err });
+      this.logger?.error('Failed to emit history projection', {
+        mintUrl,
+        type,
+        operationId,
+        err,
+      });
     }
+  }
+
+  private withSendToken(operation: SendOperation, token: Token): SendOperation {
+    if (operation.state === 'pending' || operation.state === 'finalized') {
+      return { ...operation, token } as SendOperation;
+    }
+    return operation;
   }
 }

@@ -1,38 +1,110 @@
 import type { Table } from 'dexie';
 import type {
   HistoryEntry,
-  MintHistoryEntry,
-  MeltHistoryEntry,
-  ReceiveHistoryEntry,
-  ReceiveHistoryState,
-  SendHistoryEntry,
-  SendHistoryState,
+  HistoryRepository,
+  LegacyHistoryEntry,
+  LegacyHistoryRowInput,
 } from '@cashu/coco-core';
-import { deserializeAmount, deserializeToken, serializeAmount } from '@cashu/coco-core';
-import type { IdbDb } from '../lib/db.ts';
+import type { Token } from '@cashu/cashu-ts';
+import {
+  compareHistoryEntries,
+  deserializeAmount,
+  deserializeToken,
+  operationHistoryId,
+  parseHistoryEntryId,
+  projectLegacyHistoryRow,
+} from '@cashu/coco-core';
+import type {
+  IdbDb,
+  MeltOperationRow,
+  MintOperationRow,
+  ReceiveOperationRow,
+  SendOperationRow,
+} from '../lib/db.ts';
 
-type MintQuoteState = MintHistoryEntry['state'];
-type MeltQuoteState = MeltHistoryEntry['state'];
-type SendToken = NonNullable<SendHistoryEntry['token']>;
-type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
+type LegacyHistoryRow = {
+  id: number;
+  mintUrl: string;
+  type: 'mint' | 'melt' | 'send' | 'receive';
+  unit: string;
+  amount: string | number;
+  createdAt: number;
+  quoteId?: string | null;
+  state?: string | null;
+  paymentRequest?: string | null;
+  tokenJson?: string | null;
+  metadata?: Record<string, string> | null;
+  operationId?: string | null;
+};
 
-type NewHistoryEntry =
-  | Omit<MintHistoryEntry, 'id'>
-  | Omit<MeltHistoryEntry, 'id'>
-  | Omit<SendHistoryEntry, 'id'>
-  | Omit<ReceiveHistoryEntry, 'id'>;
+type OperationRow = SendOperationRow | MeltOperationRow | MintOperationRow | ReceiveOperationRow;
+type HistoryVisibleMeltState = Exclude<MeltOperationRow['state'], 'init'>;
 
-type UpdatableHistoryEntry =
-  | Omit<MintHistoryEntry, 'id' | 'createdAt'>
-  | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
-  | Omit<SendHistoryEntry, 'id' | 'createdAt'>
-  | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>;
+const stores = [
+  'coco_cashu_send_operations',
+  'coco_cashu_melt_operations',
+  'coco_cashu_mint_operations',
+  'coco_cashu_receive_operations',
+  'coco_cashu_history',
+] as const;
 
-function parseToken<TToken>(tokenJson: string | null | undefined): TToken | undefined {
-  return tokenJson ? (deserializeToken(JSON.parse(tokenJson)) as TToken | undefined) : undefined;
+const historyVisibleMeltStates = new Set<HistoryVisibleMeltState>([
+  'prepared',
+  'executing',
+  'pending',
+  'finalized',
+  'rolling_back',
+  'rolled_back',
+]);
+
+function isHistoryVisibleMeltState(state: string): state is HistoryVisibleMeltState {
+  return historyVisibleMeltStates.has(state as HistoryVisibleMeltState);
 }
 
-export class IdbHistoryRepository {
+function parseToken(tokenJson: string | null | undefined): Token | undefined {
+  return tokenJson ? deserializeToken(JSON.parse(tokenJson)) : undefined;
+}
+
+function parseReceiveProofs(
+  inputProofsJson: string | null | undefined,
+): NonNullable<Extract<HistoryEntry, { type: 'receive' }>['token']>['proofs'] {
+  const proofs = inputProofsJson ? JSON.parse(inputProofsJson) : [];
+  return proofs.map((proof: { amount: string | number }) => ({
+    ...proof,
+    amount: deserializeAmount(proof.amount),
+  }));
+}
+
+function parseReceiveSourceMetadata(
+  sourceJson: string | null | undefined,
+): Record<string, string> | undefined {
+  if (!sourceJson) return undefined;
+
+  const source = JSON.parse(sourceJson) as Record<string, unknown>;
+  if (
+    source.type !== 'payment-request' ||
+    typeof source.requestOperationId !== 'string' ||
+    typeof source.attemptId !== 'string' ||
+    typeof source.transport !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return {
+    source: 'payment-request',
+    requestOperationId: source.requestOperationId,
+    attemptId: source.attemptId,
+    ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
+    transport: source.transport,
+    ...(typeof source.transportMessageId === 'string'
+      ? { transportMessageId: source.transportMessageId }
+      : {}),
+    ...(typeof source.senderPubkey === 'string' ? { senderPubkey: source.senderPubkey } : {}),
+    ...(typeof source.memo === 'string' ? { memo: source.memo } : {}),
+  };
+}
+
+export class IdbHistoryRepository implements HistoryRepository {
   private readonly db: IdbDb;
 
   constructor(db: IdbDb) {
@@ -40,266 +112,316 @@ export class IdbHistoryRepository {
   }
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
-    const coll = this.db.table('coco_cashu_history') as Table<any, number>;
-    const rows = await coll.orderBy('createdAt').reverse().offset(offset).limit(limit).toArray();
-    return rows.map((r: any) => this.rowToEntry(r));
+    const pageWindow = offset + limit;
+    if (pageWindow <= 0) return [];
+
+    const entries = await this.db.runTransaction('r', [...stores], async (tx) => {
+      const [sendRows, meltRows, mintRows, receiveRows, legacyRows] = await Promise.all([
+        this.readRecentOperationRows<SendOperationRow>(
+          tx.table('coco_cashu_send_operations'),
+          pageWindow,
+          'send',
+        ),
+        this.readRecentOperationRows<MeltOperationRow>(
+          tx.table('coco_cashu_melt_operations'),
+          pageWindow,
+          'melt',
+        ),
+        this.readRecentOperationRows<MintOperationRow>(
+          tx.table('coco_cashu_mint_operations'),
+          pageWindow,
+          'mint',
+        ),
+        this.readRecentOperationRows<ReceiveOperationRow>(
+          tx.table('coco_cashu_receive_operations'),
+          pageWindow,
+          'receive',
+        ),
+        this.readVisibleLegacyRows(tx, tx.table('coco_cashu_history'), pageWindow),
+      ]);
+
+      const operationEntries = [
+        ...sendRows.map((row) => this.sendRowToEntry(row)).filter(Boolean),
+        ...meltRows.map((row) => this.meltRowToEntry(row)).filter(Boolean),
+        ...mintRows.map((row) => this.mintRowToEntry(row)).filter(Boolean),
+        ...receiveRows.map((row) => this.receiveRowToEntry(row)).filter(Boolean),
+      ] as HistoryEntry[];
+
+      return [...operationEntries, ...legacyRows].sort(compareHistoryEntries);
+    });
+
+    return entries.slice(offset, offset + limit);
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
-    const row = await (this.db as any).table('coco_cashu_history').get(Number(id));
-    if (!row) return null;
-    return this.rowToEntry(row);
+    const parsed = parseHistoryEntryId(id);
+    if (!parsed) return null;
+
+    return this.db.runTransaction('r', [...stores], async (tx) => {
+      if (parsed.source === 'legacy') {
+        const row = (await tx.table('coco_cashu_history').get(Number(parsed.legacyHistoryId))) as
+          | LegacyHistoryRow
+          | undefined;
+        if (!row || (await this.legacyIsDeduped(tx, row))) return null;
+        return this.legacyRowToEntry(row);
+      }
+
+      switch (parsed.type) {
+        case 'send': {
+          const row = (await tx.table('coco_cashu_send_operations').get(parsed.operationId)) as
+            | SendOperationRow
+            | undefined;
+          return row ? this.sendRowToEntry(row) : null;
+        }
+        case 'melt': {
+          const row = (await tx.table('coco_cashu_melt_operations').get(parsed.operationId)) as
+            | MeltOperationRow
+            | undefined;
+          return row ? this.meltRowToEntry(row) : null;
+        }
+        case 'mint': {
+          const row = (await tx.table('coco_cashu_mint_operations').get(parsed.operationId)) as
+            | MintOperationRow
+            | undefined;
+          return row ? this.mintRowToEntry(row) : null;
+        }
+        case 'receive': {
+          const row = (await tx.table('coco_cashu_receive_operations').get(parsed.operationId)) as
+            | ReceiveOperationRow
+            | undefined;
+          return row ? this.receiveRowToEntry(row) : null;
+        }
+      }
+    });
   }
 
-  async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
-    const row = this.entryToRow(history);
-    const id = (await (this.db as any).table('coco_cashu_history').add(row)) as number;
-    const stored = await (this.db as any).table('coco_cashu_history').get(id);
-    return this.rowToEntry(stored);
+  private async readRecentOperationRows<TRow extends OperationRow & { createdAt: number }>(
+    table: Table,
+    limit: number,
+    type: LegacyHistoryRow['type'],
+  ): Promise<TRow[]> {
+    return (await table
+      .orderBy('createdAt')
+      .reverse()
+      .filter((row) => this.operationIsHistoryEligible(type, row as OperationRow))
+      .limit(limit)
+      .toArray()) as TRow[];
   }
 
-  async getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
-      .where('[mintUrl+quoteId+type]')
-      .equals([mintUrl, quoteId, 'mint'])
-      .last();
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'mint' ? entry : null;
+  private async readRecentRows<TRow extends { createdAt: number }>(
+    table: Table,
+    offset: number,
+    limit: number,
+  ): Promise<TRow[]> {
+    return (await table
+      .orderBy('createdAt')
+      .reverse()
+      .offset(offset)
+      .limit(limit)
+      .toArray()) as TRow[];
   }
 
-  async getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
-      .where('[mintUrl+quoteId+type]')
-      .equals([mintUrl, quoteId, 'melt'])
-      .last();
-    if (!row) return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'melt' ? entry : null;
-  }
+  private async readVisibleLegacyRows(
+    tx: { table(name: string): Table },
+    table: Table,
+    limit: number,
+  ): Promise<LegacyHistoryEntry[]> {
+    const entries: LegacyHistoryEntry[] = [];
+    const batchSize = Math.max(limit, 50);
+    let offset = 0;
 
-  async getSendHistoryEntry(
-    mintUrl: string,
-    operationId: string,
-  ): Promise<SendHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
-      .where('[mintUrl+operationId]')
-      .equals([mintUrl, operationId])
-      .last();
-    if (!row || row.type !== 'send') return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'send' ? entry : null;
-  }
+    while (entries.length < limit) {
+      const rows = await this.readRecentRows<LegacyHistoryRow>(table, offset, batchSize);
+      if (rows.length === 0) break;
 
-  async getReceiveHistoryEntry(
-    mintUrl: string,
-    operationId: string,
-  ): Promise<ReceiveHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
-      .where('[mintUrl+operationId]')
-      .equals([mintUrl, operationId])
-      .last();
-    if (!row || row.type !== 'receive') return null;
-    const entry = this.rowToEntry(row);
-    return entry.type === 'receive' ? entry : null;
-  }
+      for (const row of rows) {
+        if (await this.legacyIsDeduped(tx, row)) continue;
+        entries.push(this.legacyRowToEntry(row));
+        if (entries.length >= limit) break;
+      }
 
-  async updateHistoryEntry(history: UpdatableHistoryEntry): Promise<HistoryEntry> {
-    const coll = (this.db as any).table('coco_cashu_history');
-
-    if (history.type === 'mint') {
-      const rows = await coll
-        .where('[mintUrl+quoteId+type]')
-        .equals([history.mintUrl, history.quoteId, 'mint'])
-        .toArray();
-      if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
-      const updated = {
-        ...row,
-        unit: history.unit,
-        amount: serializeAmount(history.amount),
-        metadata: history.metadata ?? null,
-        operationId: history.operationId ?? null,
-        state: history.state,
-        paymentRequest: history.paymentRequest,
-      };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
-      return this.rowToEntry(fresh);
-    } else if (history.type === 'melt') {
-      const rows = await coll
-        .where('[mintUrl+quoteId+type]')
-        .equals([history.mintUrl, history.quoteId, 'melt'])
-        .toArray();
-      if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
-      const updated = {
-        ...row,
-        unit: history.unit,
-        amount: serializeAmount(history.amount),
-        metadata: history.metadata ?? null,
-        operationId: history.operationId ?? null,
-        state: history.state,
-      };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
-      return this.rowToEntry(fresh);
-    } else if (history.type === 'send') {
-      const rows = await coll
-        .where('[mintUrl+operationId]')
-        .equals([history.mintUrl, history.operationId])
-        .toArray();
-      if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
-      const updated = {
-        ...row,
-        unit: history.unit,
-        amount: serializeAmount(history.amount),
-        metadata: history.metadata ?? null,
-        state: history.state,
-        tokenJson: history.token ? JSON.stringify(history.token) : row.tokenJson,
-      };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
-      return this.rowToEntry(fresh);
-    } else if (history.type === 'receive') {
-      const rows = await coll
-        .where('[mintUrl+operationId]')
-        .equals([history.mintUrl, history.operationId])
-        .toArray();
-      if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
-      const updated = {
-        ...row,
-        unit: history.unit,
-        amount: serializeAmount(history.amount),
-        metadata: history.metadata ?? null,
-        state: history.state,
-        tokenJson: history.token ? JSON.stringify(history.token as ReceiveToken) : row.tokenJson,
-      };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
-      return this.rowToEntry(fresh);
-    } else {
-      throw new Error(`Unsupported history entry type: ${String((history as HistoryEntry).type)}`);
+      if (rows.length < batchSize) break;
+      offset += rows.length;
     }
+
+    return entries;
   }
 
-  async updateSendHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: SendHistoryState,
-  ): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
-    const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
-    if (!rows.length) return;
-    const row = rows[rows.length - 1];
-    await coll.update(row.id, { state });
+  private sendRowToEntry(row: SendOperationRow): HistoryEntry | null {
+    if (row.state === 'init') return null;
+    const token = parseToken(row.tokenJson);
+    return {
+      id: operationHistoryId('send', row.id),
+      source: 'operation',
+      type: 'send',
+      createdAt: row.createdAt * 1000,
+      updatedAt: row.updatedAt * 1000,
+      mintUrl: row.mintUrl,
+      unit: row.unit ?? token?.unit ?? 'sat',
+      operationId: row.id,
+      amount: deserializeAmount(row.amount),
+      state: row.state,
+      ...(row.error ? { error: row.error } : {}),
+      ...(token ? { token } : {}),
+    };
   }
 
-  async updateReceiveHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: ReceiveHistoryState,
-  ): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
-    const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
-    if (!rows.length) return;
-    const row = rows[rows.length - 1];
-    await coll.update(row.id, { state });
+  private meltRowToEntry(row: MeltOperationRow): HistoryEntry | null {
+    if (!isHistoryVisibleMeltState(row.state)) return null;
+    return {
+      id: operationHistoryId('melt', row.id),
+      source: 'operation',
+      type: 'melt',
+      createdAt: row.createdAt * 1000,
+      updatedAt: row.updatedAt * 1000,
+      mintUrl: row.mintUrl,
+      unit: row.unit ?? 'sat',
+      operationId: row.id,
+      quoteId: row.quoteId ?? '',
+      amount: deserializeAmount(row.amount ?? 0),
+      state: row.state,
+      ...(row.error ? { error: row.error } : {}),
+    };
   }
 
-  async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
-    const rows = await coll
-      .where('[mintUrl+quoteId+type]')
-      .between([mintUrl, quoteId, ''], [mintUrl, quoteId, ''])
-      .toArray();
-    const ids = rows.map((r: any) => r.id);
-    await coll.bulkDelete(ids);
+  private mintRowToEntry(row: MintOperationRow): HistoryEntry | null {
+    if (row.state === 'init') return null;
+    return {
+      id: operationHistoryId('mint', row.id),
+      source: 'operation',
+      type: 'mint',
+      createdAt: row.createdAt * 1000,
+      updatedAt: row.updatedAt * 1000,
+      mintUrl: row.mintUrl,
+      unit: row.unit ?? 'sat',
+      operationId: row.id,
+      quoteId: row.quoteId ?? '',
+      paymentRequest: row.request ?? '',
+      amount: deserializeAmount(row.amount ?? 0),
+      state: row.state,
+      ...(row.lastObservedRemoteState ? { remoteState: row.lastObservedRemoteState } : {}),
+      ...(row.error ? { error: row.error } : {}),
+    };
   }
 
-  private entryToRow(history: NewHistoryEntry): any {
-    const base = {
-      mintUrl: history.mintUrl,
-      type: history.type,
-      unit: history.unit,
-      amount: serializeAmount(history.amount),
-      createdAt: history.createdAt,
-      metadata: history.metadata ?? null,
-    } as any;
-    if (history.type === 'mint') {
-      base.quoteId = history.quoteId;
-      base.operationId = history.operationId ?? null;
-      base.state = history.state as MintQuoteState;
-      base.paymentRequest = history.paymentRequest;
-    } else if (history.type === 'melt') {
-      base.quoteId = history.quoteId;
-      base.operationId = history.operationId ?? null;
-      base.state = history.state as MeltQuoteState;
-    } else if (history.type === 'send') {
-      base.tokenJson = history.token ? JSON.stringify(history.token as SendToken) : null;
-      base.operationId = history.operationId;
-      base.state = history.state;
-    } else if (history.type === 'receive') {
-      base.tokenJson = history.token ? JSON.stringify(history.token as ReceiveToken) : null;
-      base.operationId = history.operationId ?? null;
-      base.state = history.state;
-    }
-    return base;
+  private receiveRowToEntry(row: ReceiveOperationRow): HistoryEntry | null {
+    if (row.state !== 'finalized' && row.state !== 'rolled_back') return null;
+    const metadata = parseReceiveSourceMetadata(row.sourceJson);
+    return {
+      id: operationHistoryId('receive', row.id),
+      source: 'operation',
+      type: 'receive',
+      createdAt: row.createdAt * 1000,
+      updatedAt: row.updatedAt * 1000,
+      mintUrl: row.mintUrl,
+      unit: row.unit ?? 'sat',
+      operationId: row.id,
+      amount: deserializeAmount(row.amount),
+      state: row.state,
+      ...(metadata ? { metadata } : {}),
+      ...(row.error ? { error: row.error } : {}),
+      ...(row.state === 'finalized'
+        ? {
+            token: {
+              mint: row.mintUrl,
+              proofs: parseReceiveProofs(row.inputProofsJson),
+              unit: row.unit ?? 'sat',
+            },
+          }
+        : {}),
+    };
   }
 
-  private rowToEntry(row: any): HistoryEntry {
-    const base = {
-      id: String(row.id),
+  private legacyRowToEntry(row: LegacyHistoryRow): LegacyHistoryEntry {
+    return projectLegacyHistoryRow(this.legacyRowToInput(row));
+  }
+
+  private legacyRowToInput(row: LegacyHistoryRow): LegacyHistoryRowInput {
+    return {
+      legacyHistoryId: row.id,
+      type: row.type,
       createdAt: row.createdAt,
       mintUrl: row.mintUrl,
       unit: row.unit,
-      metadata: row.metadata ?? undefined,
-    } as const;
-    if (row.type === 'mint') {
-      return {
-        ...base,
-        type: 'mint',
-        paymentRequest: row.paymentRequest ?? '',
-        quoteId: row.quoteId ?? '',
-        operationId: row.operationId ?? undefined,
-        state: (row.state ?? 'UNPAID') as MintQuoteState,
-        amount: deserializeAmount(row.amount),
-      };
-    }
-    if (row.type === 'melt') {
-      return {
-        ...base,
-        type: 'melt',
-        quoteId: row.quoteId ?? '',
-        operationId: row.operationId ?? undefined,
-        state: (row.state ?? 'UNPAID') as MeltQuoteState,
-        amount: deserializeAmount(row.amount),
-      };
-    }
-    if (row.type === 'send') {
-      return {
-        ...base,
-        type: 'send',
-        amount: deserializeAmount(row.amount),
-        operationId: row.operationId ?? '',
-        state: (row.state ?? 'pending') as SendHistoryState,
-        token: parseToken<SendToken>(row.tokenJson),
-      };
-    }
-    const token = parseToken<ReceiveToken>(row.tokenJson);
-    return {
-      ...base,
-      type: 'receive',
       amount: deserializeAmount(row.amount),
-      operationId: row.operationId ?? undefined,
-      state: (row.state ?? 'finalized') as ReceiveHistoryState,
-      token,
-    } satisfies HistoryEntry;
+      quoteId: row.quoteId,
+      state: row.state,
+      paymentRequest: row.paymentRequest,
+      token: parseToken(row.tokenJson),
+      metadata: row.metadata ?? undefined,
+      operationId: row.operationId,
+    };
+  }
+
+  private async legacyIsDeduped(
+    tx: { table(name: string): Table },
+    row: LegacyHistoryRow,
+  ): Promise<boolean> {
+    if (row.operationId) {
+      const operation = await this.getOperationRow(tx, row.type, row.operationId);
+      if (operation && this.operationIsHistoryEligible(row.type, operation)) return true;
+    }
+
+    if (
+      (row.type === 'mint' || row.type === 'melt') &&
+      row.quoteId &&
+      (await this.hasOperationForQuote(tx, row.type, row.mintUrl, row.quoteId))
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private async getOperationRow(
+    tx: { table(name: string): Table },
+    type: LegacyHistoryRow['type'],
+    operationId: string,
+  ): Promise<OperationRow | undefined> {
+    switch (type) {
+      case 'send':
+        return (await tx.table('coco_cashu_send_operations').get(operationId)) as
+          | SendOperationRow
+          | undefined;
+      case 'melt':
+        return (await tx.table('coco_cashu_melt_operations').get(operationId)) as
+          | MeltOperationRow
+          | undefined;
+      case 'mint':
+        return (await tx.table('coco_cashu_mint_operations').get(operationId)) as
+          | MintOperationRow
+          | undefined;
+      case 'receive':
+        return (await tx.table('coco_cashu_receive_operations').get(operationId)) as
+          | ReceiveOperationRow
+          | undefined;
+    }
+  }
+
+  private operationIsHistoryEligible(type: LegacyHistoryRow['type'], row: OperationRow): boolean {
+    switch (type) {
+      case 'send':
+      case 'mint':
+        return row.state !== 'init';
+      case 'melt':
+        return isHistoryVisibleMeltState(row.state);
+      case 'receive':
+        return row.state === 'finalized' || row.state === 'rolled_back';
+    }
+  }
+
+  private async hasOperationForQuote(
+    tx: { table(name: string): Table },
+    type: 'mint' | 'melt',
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<boolean> {
+    const store = type === 'mint' ? 'coco_cashu_mint_operations' : 'coco_cashu_melt_operations';
+    const row = (await tx
+      .table(store)
+      .where('[mintUrl+quoteId]')
+      .equals([mintUrl, quoteId])
+      .first()) as OperationRow | undefined;
+    return row ? this.operationIsHistoryEligible(type, row) : false;
   }
 }

@@ -65,6 +65,10 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
     return null;
   }
 
+  async getAll(): Promise<ReceiveOperation[]> {
+    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+  }
+
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
   }

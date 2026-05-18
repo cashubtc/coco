@@ -1,13 +1,5 @@
 import type { AuthSession } from '@core/models/AuthSession';
-import type {
-  HistoryEntry,
-  MeltHistoryEntry,
-  MintHistoryEntry,
-  ReceiveHistoryEntry,
-  ReceiveHistoryState,
-  SendHistoryEntry,
-  SendHistoryState,
-} from '@core/models/History';
+import type { HistoryEntry } from '@core/models/History';
 import type { Keypair } from '@core/models/Keypair';
 import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
@@ -143,27 +135,12 @@ export interface MeltQuoteRepository {
   getPendingMeltQuotes(): Promise<MeltQuote[]>;
 }
 
-export interface HistoryRepository {
+export interface HistoryProjectionRepository {
   getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]>;
   getHistoryEntryById(id: string): Promise<HistoryEntry | null>;
-  addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry>;
-  getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
-  getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;
-  getSendHistoryEntry(mintUrl: string, operationId: string): Promise<SendHistoryEntry | null>;
-  getReceiveHistoryEntry(mintUrl: string, operationId: string): Promise<ReceiveHistoryEntry | null>;
-  updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry>;
-  updateSendHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: SendHistoryState,
-  ): Promise<void>;
-  updateReceiveHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: ReceiveHistoryState,
-  ): Promise<void>;
-  deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void>;
 }
+
+export type HistoryRepository = HistoryProjectionRepository;
 
 export interface SendOperationRepository {
   /** Create a new send operation */
@@ -311,7 +288,7 @@ interface RepositoriesBase {
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
-  historyRepository: HistoryRepository;
+  historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;

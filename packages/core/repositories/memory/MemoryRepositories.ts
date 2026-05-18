@@ -1,7 +1,7 @@
 import type {
   AuthSessionRepository,
   CounterRepository,
-  HistoryRepository,
+  HistoryProjectionRepository,
   KeyRingRepository,
   KeysetRepository,
   MeltOperationRepository,
@@ -43,7 +43,7 @@ export class MemoryRepositories implements Repositories {
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
-  historyRepository: HistoryRepository;
+  historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
@@ -58,14 +58,24 @@ export class MemoryRepositories implements Repositories {
     this.counterRepository = new MemoryCounterRepository();
     this.keysetRepository = new MemoryKeysetRepository();
     this.proofRepository = new MemoryProofRepository();
+    const sendOperationRepository = new MemorySendOperationRepository();
+    const meltOperationRepository = new MemoryMeltOperationRepository();
+    const mintOperationRepository = new MemoryMintOperationRepository();
+    const receiveOperationRepository = new MemoryReceiveOperationRepository();
+
+    this.sendOperationRepository = sendOperationRepository;
+    this.meltOperationRepository = meltOperationRepository;
+    this.mintOperationRepository = mintOperationRepository;
+    this.receiveOperationRepository = receiveOperationRepository;
     this.mintQuoteRepository = new MemoryMintQuoteRepository();
     this.meltQuoteRepository = new MemoryMeltQuoteRepository();
-    this.historyRepository = new MemoryHistoryRepository();
-    this.sendOperationRepository = new MemorySendOperationRepository();
-    this.meltOperationRepository = new MemoryMeltOperationRepository();
+    this.historyRepository = new MemoryHistoryRepository({
+      sendOperationRepository,
+      meltOperationRepository,
+      mintOperationRepository,
+      receiveOperationRepository,
+    });
     this.authSessionRepository = new MemoryAuthSessionRepository();
-    this.mintOperationRepository = new MemoryMintOperationRepository();
-    this.receiveOperationRepository = new MemoryReceiveOperationRepository();
     this.paymentRequestReceiveOperationRepository =
       new MemoryPaymentRequestReceiveOperationRepository();
     this.paymentRequestReceiveAttemptRepository =

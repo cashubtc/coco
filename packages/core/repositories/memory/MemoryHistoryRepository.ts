@@ -1,150 +1,183 @@
-import type { HistoryRepository } from '..';
+import type { HistoryProjectionRepository } from '..';
 import type {
   HistoryEntry,
-  MintHistoryEntry,
-  MeltHistoryEntry,
+  HistoryType,
+  LegacyHistoryEntry,
+  LegacyHistoryRowInput,
   ReceiveHistoryEntry,
-  ReceiveHistoryState,
   SendHistoryEntry,
-  SendHistoryState,
 } from '@core/models/History';
+import {
+  compareHistoryEntries,
+  parseHistoryEntryId,
+  projectLegacyHistoryRow,
+  projectMeltOperation,
+  projectMintOperation,
+  projectReceiveOperation,
+  projectSendOperation,
+} from '@core/models/History';
+import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
+import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
+import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
+import type { MemorySendOperationRepository } from './MemorySendOperationRepository';
 
-type NewHistoryEntry =
-  | Omit<MintHistoryEntry, 'id'>
-  | Omit<MeltHistoryEntry, 'id'>
-  | Omit<SendHistoryEntry, 'id'>
-  | Omit<ReceiveHistoryEntry, 'id'>;
+type OperationRepositories = {
+  sendOperationRepository?: MemorySendOperationRepository;
+  meltOperationRepository?: MemoryMeltOperationRepository;
+  mintOperationRepository?: MemoryMintOperationRepository;
+  receiveOperationRepository?: MemoryReceiveOperationRepository;
+};
 
-export class MemoryHistoryRepository implements HistoryRepository {
-  private readonly entries: HistoryEntry[] = [];
-  private nextId = 1;
+export class MemoryHistoryRepository implements HistoryProjectionRepository {
+  private readonly legacyEntries: LegacyHistoryEntry[] = [];
+
+  constructor(private readonly operationRepositories: OperationRepositories = {}) {}
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
-    const sorted = [...this.entries].sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-      return Number(b.id) - Number(a.id);
-    });
-    return sorted.slice(offset, offset + limit);
+    const entries = await this.getProjectedEntries();
+    return entries.slice(offset, offset + limit);
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
-    return this.entries.find((e) => e.id === id) ?? null;
+    const parsed = parseHistoryEntryId(id);
+    if (!parsed) return null;
+
+    if (parsed.source === 'legacy') {
+      const entries = await this.getProjectedEntries();
+      return entries.find((entry) => entry.id === id && entry.source === 'legacy') ?? null;
+    }
+
+    return this.projectOperationById(parsed.type, parsed.operationId);
   }
 
-  async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
-    const entry: HistoryEntry = { id: String(this.nextId++), ...history } as HistoryEntry;
-    this.entries.push(entry);
+  async addLegacyHistoryEntry(history: LegacyHistoryRowInput): Promise<LegacyHistoryEntry> {
+    const entry = projectLegacyHistoryRow(history);
+    this.legacyEntries.push(entry);
     return entry;
-  }
-
-  async getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null> {
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (!e) continue;
-      if (e.type === 'mint' && e.mintUrl === mintUrl && e.quoteId === quoteId) return e;
-    }
-    return null;
-  }
-
-  async getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null> {
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (!e) continue;
-      if (e.type === 'melt' && e.mintUrl === mintUrl && e.quoteId === quoteId) return e;
-    }
-    return null;
   }
 
   async getSendHistoryEntry(
     mintUrl: string,
     operationId: string,
   ): Promise<SendHistoryEntry | null> {
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (!e) continue;
-      if (e.type === 'send' && e.mintUrl === mintUrl && e.operationId === operationId) return e;
-    }
-    return null;
+    const operation =
+      await this.operationRepositories.sendOperationRepository?.getById(operationId);
+    if (!operation || operation.mintUrl !== mintUrl) return null;
+    return projectSendOperation(operation);
   }
 
   async getReceiveHistoryEntry(
     mintUrl: string,
     operationId: string,
   ): Promise<ReceiveHistoryEntry | null> {
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (!e) continue;
-      if (e.type === 'receive' && e.mintUrl === mintUrl && e.operationId === operationId) {
-        return e;
-      }
+    const operation =
+      await this.operationRepositories.receiveOperationRepository?.getById(operationId);
+    if (!operation || operation.mintUrl !== mintUrl) return null;
+    return projectReceiveOperation(operation);
+  }
+
+  private async getProjectedEntries(): Promise<HistoryEntry[]> {
+    const operationEntries = await this.getOperationEntries();
+    const dedupedLegacyEntries = this.dedupeLegacyEntries(operationEntries);
+
+    return [...operationEntries, ...dedupedLegacyEntries].sort(compareHistoryEntries);
+  }
+
+  private async getOperationEntries(): Promise<HistoryEntry[]> {
+    const entries: HistoryEntry[] = [];
+
+    const sendOperations = await this.operationRepositories.sendOperationRepository?.getAll();
+    for (const operation of sendOperations ?? []) {
+      const entry = projectSendOperation(operation);
+      if (entry) entries.push(entry);
     }
-    return null;
+
+    const meltOperations = await this.operationRepositories.meltOperationRepository?.getAll();
+    for (const operation of meltOperations ?? []) {
+      const entry = projectMeltOperation(operation);
+      if (entry) entries.push(entry);
+    }
+
+    const mintOperations = await this.operationRepositories.mintOperationRepository?.getAll();
+    for (const operation of mintOperations ?? []) {
+      const entry = projectMintOperation(operation);
+      if (entry) entries.push(entry);
+    }
+
+    const receiveOperations = await this.operationRepositories.receiveOperationRepository?.getAll();
+    for (const operation of receiveOperations ?? []) {
+      const entry = projectReceiveOperation(operation);
+      if (entry) entries.push(entry);
+    }
+
+    return entries;
   }
 
-  async updateHistoryEntry(
-    history:
-      | Omit<MintHistoryEntry, 'id' | 'createdAt'>
-      | Omit<MeltHistoryEntry, 'id' | 'createdAt'>
-      | Omit<SendHistoryEntry, 'id' | 'createdAt'>
-      | Omit<ReceiveHistoryEntry, 'id' | 'createdAt'>,
-  ): Promise<HistoryEntry> {
-    const idx = this.entries.findIndex((e) => {
-      if (e.type === 'mint' && history.type === 'mint') {
-        return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
-      }
-      if (e.type === 'melt' && history.type === 'melt') {
-        return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
-      }
-      if (e.type === 'send' && history.type === 'send') {
-        return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
-      }
-      if (e.type === 'receive' && history.type === 'receive') {
-        return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
-      }
-      return false;
-    });
-    if (idx === -1) throw new Error('History entry not found');
-    const existing = this.entries[idx];
-    const updated: HistoryEntry = { ...existing, ...history } as HistoryEntry;
-    this.entries[idx] = updated;
-    return updated;
-  }
-
-  async updateSendHistoryState(
-    mintUrl: string,
+  private async projectOperationById(
+    type: HistoryType,
     operationId: string,
-    state: SendHistoryState,
-  ): Promise<void> {
-    const entry = await this.getSendHistoryEntry(mintUrl, operationId);
-    if (!entry) {
-      throw new Error(`Send history entry not found for operationId: ${operationId}`);
+  ): Promise<HistoryEntry | null> {
+    switch (type) {
+      case 'send': {
+        const operation =
+          await this.operationRepositories.sendOperationRepository?.getById(operationId);
+        return operation ? projectSendOperation(operation) : null;
+      }
+      case 'melt': {
+        const operation =
+          await this.operationRepositories.meltOperationRepository?.getById(operationId);
+        return operation ? projectMeltOperation(operation) : null;
+      }
+      case 'mint': {
+        const operation =
+          await this.operationRepositories.mintOperationRepository?.getById(operationId);
+        return operation ? projectMintOperation(operation) : null;
+      }
+      case 'receive': {
+        const operation =
+          await this.operationRepositories.receiveOperationRepository?.getById(operationId);
+        return operation ? projectReceiveOperation(operation) : null;
+      }
     }
-    entry.state = state;
   }
 
-  async updateReceiveHistoryState(
-    mintUrl: string,
-    operationId: string,
-    state: ReceiveHistoryState,
-  ): Promise<void> {
-    const entry = await this.getReceiveHistoryEntry(mintUrl, operationId);
-    if (!entry) {
-      throw new Error(`Receive history entry not found for operationId: ${operationId}`);
-    }
-    entry.state = state;
-  }
+  private dedupeLegacyEntries(operationEntries: HistoryEntry[]): LegacyHistoryEntry[] {
+    const operationKeys = new Set<string>();
+    const quoteKeys = new Set<string>();
 
-  async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
-    for (let i = this.entries.length - 1; i >= 0; i--) {
-      const e = this.entries[i];
-      if (!e) continue;
+    for (const entry of operationEntries) {
+      if (entry.source !== 'operation') continue;
+      operationKeys.add(this.operationKey(entry.type, entry.operationId));
+      if ((entry.type === 'mint' || entry.type === 'melt') && entry.quoteId) {
+        quoteKeys.add(this.quoteKey(entry.type, entry.mintUrl, entry.quoteId));
+      }
+    }
+
+    return this.legacyEntries.filter((entry) => {
       if (
-        (e.type === 'mint' || e.type === 'melt') &&
-        e.mintUrl === mintUrl &&
-        e.quoteId === quoteId
+        entry.operationId &&
+        operationKeys.has(this.operationKey(entry.type, entry.operationId))
       ) {
-        this.entries.splice(i, 1);
+        return false;
       }
-    }
+
+      if (
+        (entry.type === 'mint' || entry.type === 'melt') &&
+        entry.quoteId &&
+        quoteKeys.has(this.quoteKey(entry.type, entry.mintUrl, entry.quoteId))
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  private operationKey(type: HistoryType, operationId: string): string {
+    return `${type}:${operationId}`;
+  }
+
+  private quoteKey(type: 'mint' | 'melt', mintUrl: string, quoteId: string): string {
+    return `${type}:${mintUrl}:${quoteId}`;
   }
 }

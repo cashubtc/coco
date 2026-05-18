@@ -734,4 +734,80 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_payment_request_receive_attempts:
       '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
   });
+
+  // Version 25: Add createdAt indexes used by operation-backed history projection pagination.
+  db.version(25).stores({
+    coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+    coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+    coco_cashu_counters: '&[mintUrl+keysetId]',
+    coco_cashu_proofs:
+      '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+    coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+    coco_cashu_history:
+      '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+    coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+    coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+    coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+    coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+    coco_cashu_auth_sessions: '&mintUrl',
+    coco_cashu_mint_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+    coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+    coco_cashu_payment_request_receive_attempts:
+      '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+  });
+
+  // Version 26: Preserve legacy send tokens when history is projected from operations.
+  db.version(26)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      const legacyRows = (await tx
+        .table('coco_cashu_history')
+        .where('type')
+        .equals('send')
+        .toArray()) as Array<{
+        id: number;
+        mintUrl: string;
+        operationId?: string | null;
+        tokenJson?: string | null;
+        createdAt: number;
+      }>;
+
+      legacyRows.sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+
+      const legacyTokens = new Map<string, string>();
+      for (const row of legacyRows) {
+        if (!row.operationId || !row.tokenJson) continue;
+        const key = `${row.mintUrl}\0${row.operationId}`;
+        if (!legacyTokens.has(key)) legacyTokens.set(key, row.tokenJson);
+      }
+
+      await tx
+        .table('coco_cashu_send_operations')
+        .toCollection()
+        .modify((op: { id: string; mintUrl: string; tokenJson?: string | null }) => {
+          if (op.tokenJson != null) return;
+          const tokenJson = legacyTokens.get(`${op.mintUrl}\0${op.id}`);
+          if (tokenJson) op.tokenJson = tokenJson;
+        });
+    });
 }

@@ -3,6 +3,8 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
+import type { CoreEvents } from '../../events/types';
+import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
@@ -62,6 +64,50 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
+    });
+
+    it('persists mint quote observations before emitting projected history updates', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+      const operation = makePendingMintOperation('mint-op-1', 'quote-1');
+      await repositories.mintOperationRepository.create(operation);
+
+      const observedRepositoryEntries: Array<CoreEvents['history:updated']['entry'] | null> = [];
+      manager['eventBus'].on('history:updated', async ({ entry }) => {
+        observedRepositoryEntries.push(
+          await repositories.historyRepository.getHistoryEntryById(entry.id),
+        );
+      });
+
+      const observedAt = 3_000;
+      await manager['eventBus'].emit('mint-op:quote-state-changed', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: {
+          ...operation,
+          lastObservedRemoteState: 'PAID',
+          lastObservedRemoteStateAt: observedAt,
+          updatedAt: observedAt,
+        },
+        quoteId: operation.quoteId,
+        state: 'PAID',
+      });
+
+      expect(observedRepositoryEntries).toHaveLength(1);
+      expect(observedRepositoryEntries[0]).toMatchObject({
+        id: `mint:${operation.id}`,
+        type: 'mint',
+        operationId: operation.id,
+        remoteState: 'PAID',
+      });
     });
 
     it('should use NullLogger by default', async () => {
@@ -196,6 +242,24 @@ describe('initializeCoco', () => {
       expect(operation?.state).toBe('completed');
     });
   });
+
+  function makePendingMintOperation(id: string, quoteId: string): PendingMintOperation {
+    return {
+      id,
+      state: 'pending',
+      mintUrl: 'https://mint.test',
+      method: 'bolt11',
+      methodData: {},
+      amount: Amount.from(100),
+      unit: 'sat',
+      quoteId,
+      request: 'lnbc100',
+      expiry: null,
+      outputData: { keep: [], send: [] },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+  }
 
   describe('watchers configuration', () => {
     it('should disable mintOperationWatcher when explicitly disabled', async () => {

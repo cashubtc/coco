@@ -195,13 +195,14 @@ coco.on('send:rolled-back', ({ mintUrl, operationId, operation }) => {
 
 ## History Integration
 
-Send operations automatically create history entries. You can access them via the History API:
+Send operations are projected into history from the operation repository. You can access them via
+the History API:
 
 ```ts
-const history = await coco.history.getHistory();
+const history = await coco.history.getPaginatedHistory(0, 25);
 
 for (const entry of history) {
-  if (entry.type === 'send') {
+  if (entry.type === 'send' && entry.source === 'operation') {
     console.log(`Send: ${entry.amount} sats, state: ${entry.state}`);
     console.log(`Operation ID: ${entry.operationId}`);
 
