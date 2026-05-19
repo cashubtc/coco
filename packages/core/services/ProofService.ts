@@ -1051,6 +1051,11 @@ export class ProofService {
           this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
           continue;
         }
+        assertSameUnit(
+          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
+          unit,
+          'Restored proof keyset',
+        );
         restoredProofs.push(
           output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
         );
