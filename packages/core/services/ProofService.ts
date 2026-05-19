@@ -1030,23 +1030,35 @@ export class ProofService {
     // Build blinded messages for restore request
     const blindedMessages = allOutputs.map((o) => o.blindedMessage);
 
+    // Fetch keysets needed to unblind restored signatures
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    const keysetMap: { [id: string]: Keyset } = {};
+    keysets.forEach((ks) => {
+      keysetMap[ks.id] = ks;
+    });
+
     // Call mint restore endpoint
     const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
 
-    // Match signatures back to outputs and construct proofs
+    // Match signatures back to outputs and unblind to construct proofs
     const restoredProofs: Proof[] = [];
     for (let i = 0; i < restoreResult.outputs.length; i++) {
       const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
       const signature = restoreResult.signatures[i];
       if (output && signature) {
-        // Construct proof from output data and signature
-        const proof: Proof = {
-          id: signature.id,
-          amount: signature.amount,
-          secret: new TextDecoder().decode(output.secret),
-          C: signature.C_,
-        };
-        restoredProofs.push(proof);
+        const keyset = keysetMap[signature.id];
+        if (!keyset) {
+          this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
+          continue;
+        }
+        assertSameUnit(
+          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
+          unit,
+          'Restored proof keyset',
+        );
+        restoredProofs.push(
+          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
+        );
       }
     }
 
