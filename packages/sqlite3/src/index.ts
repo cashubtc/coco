@@ -6,7 +6,6 @@ import type {
   CounterRepository,
   ProofRepository,
   MintQuoteRepository,
-  MeltQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
   AuthSessionRepository,
@@ -24,7 +23,6 @@ import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
-import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
@@ -45,7 +43,6 @@ export class SqliteRepositories implements Repositories {
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
-  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly historyRepository: SqliteHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
@@ -64,7 +61,6 @@ export class SqliteRepositories implements Repositories {
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
-    this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
     this.historyRepository = new SqliteHistoryRepository(this.db);
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
@@ -91,7 +87,6 @@ export class SqliteRepositories implements Repositories {
         keysetRepository: new SqliteKeysetRepository(txDb),
         proofRepository: new SqliteProofRepository(txDb),
         mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
-        meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
         historyRepository: new SqliteHistoryRepository(txDb),
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
@@ -121,7 +116,6 @@ export {
   SqliteCounterRepository,
   SqliteProofRepository,
   SqliteMintQuoteRepository,
-  SqliteMeltQuoteRepository,
   SqliteHistoryRepository,
   SqliteSendOperationRepository,
   SqliteMeltOperationRepository,

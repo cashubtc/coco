@@ -147,7 +147,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 - `WalletService`: Caches and constructs `Wallet` from stored keysets.
 - `ProofService`: Manages proofs, selection, states, and counters.
 - Legacy mint quote orchestration has been replaced by `MintOperationService` and `manager.ops.mint`.
-- `MeltQuoteService`: Creates and pays melt quotes (spend via Lightning).
+- Legacy melt quote orchestration has been replaced by `MeltOperationService` and `manager.ops.melt`.
 - `CounterService`: Simple per-(mint,keyset) numeric counter with events.
 - `EventBus<CoreEvents>`: Lightweight typed pub/sub used internally (includes `subscriptions:paused` and `subscriptions:resumed`).
 
@@ -160,7 +160,6 @@ Interfaces in `packages/core/repositories/index.ts`:
 - `CounterRepository`
 - `ProofRepository`
 - `MintQuoteRepository`
-- `MeltQuoteRepository`
 - `HistoryRepository`
 - `KeyRingRepository`
 - `AuthSessionRepository`
@@ -288,9 +287,6 @@ include:
 - `mint-op:requeue` → `{ mintUrl, operationId, operation }`
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
 - `mint-op:finalized` → `{ mintUrl, operationId, operation }`
-- `melt-quote:created` → `{ mintUrl, quoteId, quote }`
-- `melt-quote:state-changed` → `{ mintUrl, quoteId, state }`
-- `melt-quote:paid` → `{ mintUrl, quoteId, quote }`
 - `send:prepared` → `{ mintUrl, operationId, operation }`
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`

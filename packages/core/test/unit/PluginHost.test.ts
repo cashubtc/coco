@@ -18,7 +18,6 @@ describe('PluginHost', () => {
       seedService: { s: 'seed' },
       walletRestoreService: { s: 'walletRestore' },
       counterService: { s: 'counter' },
-      meltQuoteService: { s: 'meltQuote' },
       historyService: { s: 'history' },
       subscriptions: { s: 'subs' },
       eventBus: { s: 'bus' },
