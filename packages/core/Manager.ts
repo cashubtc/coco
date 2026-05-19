@@ -18,7 +18,6 @@ import {
   SeedService,
   WalletRestoreService,
   ProofStateWatcherService,
-  MeltQuoteService,
   HistoryService,
   KeyRingService,
   PaymentRequestService,
@@ -214,7 +213,6 @@ export class Manager {
   private mintOperationProcessor?: MintOperationProcessor;
   private mintQuoteRepository: MintQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
-  private meltQuoteService: MeltQuoteService;
   private historyService: HistoryService;
   private seedService: SeedService;
   private counterService: CounterService;
@@ -277,7 +275,6 @@ export class Manager {
     this.seedService = core.seedService;
     this.counterService = core.counterService;
     this.mintQuoteRepository = core.mintQuoteRepository;
-    this.meltQuoteService = core.meltQuoteService;
     this.historyService = core.historyService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
@@ -355,7 +352,6 @@ export class Manager {
       walletRestoreService: this.walletRestoreService,
       paymentRequestService: this.paymentRequestService,
       counterService: this.counterService,
-      meltQuoteService: this.meltQuoteService,
       meltOperationService: this.meltOperationService,
       mintOperationService: this.mintOperationService,
       historyService: this.historyService,
@@ -662,7 +658,6 @@ export class Manager {
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
     mintQuoteRepository: MintQuoteRepository;
-    meltQuoteService: MeltQuoteService;
     historyService: HistoryService;
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
@@ -685,7 +680,6 @@ export class Manager {
     const proofLogger = this.getChildLogger('ProofService');
     const walletRestoreLogger = this.getChildLogger('WalletRestoreService');
     const keyRingLogger = this.getChildLogger('KeyRingService');
-    const meltQuoteLogger = this.getChildLogger('MeltQuoteService');
     const historyLogger = this.getChildLogger('HistoryService');
     const tokenLogger = this.getChildLogger('TokenService');
     const mintService = new MintService(
@@ -729,15 +723,6 @@ export class Manager {
       walletService,
       this.mintRequestProvider,
       walletRestoreLogger,
-    );
-
-    const meltQuoteService = new MeltQuoteService(
-      mintService,
-      proofService,
-      walletService,
-      repositories.meltQuoteRepository,
-      this.eventBus,
-      meltQuoteLogger,
     );
 
     const mintScopedLock = new MintScopedLock();
@@ -863,7 +848,6 @@ export class Manager {
       walletRestoreService,
       keyRingService,
       mintQuoteRepository,
-      meltQuoteService,
       historyService,
       paymentRequestService,
       sendOperationService,

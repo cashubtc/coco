@@ -3,7 +3,6 @@ export * from './AuthSessionService';
 export * from './CounterService';
 export * from './HistoryService';
 export * from './KeyRingService';
-export * from './MeltQuoteService';
 export * from './MintService';
 export * from './PaymentRequestService';
 export * from './PaymentRequestReceiveService';

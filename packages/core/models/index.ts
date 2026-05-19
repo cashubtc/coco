@@ -4,7 +4,6 @@ export * from './Error';
 export * from './History';
 export * from './Keypair';
 export * from './Keyset';
-export * from './MeltQuote';
 export * from './Mint';
 export * from './MintQuote';
 export * from './MintQuoteState';

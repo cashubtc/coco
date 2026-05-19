@@ -4,7 +4,6 @@ export * from './MemoryHistoryRepository';
 export * from './MemoryKeyRingRepository';
 export * from './MemoryKeysetRepository';
 export * from './MemoryMeltOperationRepository';
-export * from './MemoryMeltQuoteRepository';
 export * from './MemoryMintQuoteRepository';
 export * from './MemoryMintRepository';
 export * from './MemoryProofRepository';

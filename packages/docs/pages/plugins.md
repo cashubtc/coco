@@ -68,7 +68,6 @@ Plugins can request access to internal services by declaring them in the `requir
 | `walletRestoreService`    | Restore wallet from seed                  |
 | `counterService`          | Keyset counter management                 |
 | `tokenService`            | Token decoding and encoding helpers       |
-| `meltQuoteService`        | Melt quote operations                     |
 | `historyService`          | Transaction history                       |
 | `sendOperationService`    | Send operation lifecycle                  |
 | `receiveOperationService` | Receive operation lifecycle               |

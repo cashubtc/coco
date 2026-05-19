@@ -1,7 +1,6 @@
 import type { AuthSession } from '@core/models/AuthSession';
 import type { HistoryEntry } from '@core/models/History';
 import type { Keypair } from '@core/models/Keypair';
-import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
@@ -126,13 +125,6 @@ export interface KeyRingRepository {
   getAllPersistedKeyPairs(): Promise<Keypair[]>;
   getLatestKeyPair(): Promise<Keypair | null>;
   getLastDerivationIndex(): Promise<number>;
-}
-
-export interface MeltQuoteRepository {
-  getMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuote | null>;
-  addMeltQuote(quote: MeltQuote): Promise<void>;
-  setMeltQuoteState(mintUrl: string, quoteId: string, state: MeltQuote['state']): Promise<void>;
-  getPendingMeltQuotes(): Promise<MeltQuote[]>;
 }
 
 export interface HistoryProjectionRepository {
@@ -287,7 +279,6 @@ interface RepositoriesBase {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
-  meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;

@@ -66,9 +66,8 @@ await coco.ops.receive.execute(prepared.id);
 
 ## Melting
 
-Melt quote creation uses the invoice/request unit. Public `MeltQuoteService`
-methods also accept unit-aware amount inputs where applicable and continue to
-default bare amounts to sats.
+Melt operation preparation uses the invoice/request unit and continues to default
+bare amounts to sats.
 
 ```ts
 const prepared = await coco.ops.melt.prepare({

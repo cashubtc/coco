@@ -1,4 +1,4 @@
-import type { MeltQuoteBolt11Response, MeltQuoteState, Token } from '@cashu/cashu-ts';
+import type { Token } from '@cashu/cashu-ts';
 import type { MeltOperation } from '@core/operations/melt';
 import type { UnitAmount } from '../amounts.ts';
 import type { Counter } from '../models/Counter';
@@ -32,9 +32,6 @@ export interface CoreEvents {
     amount: UnitAmount;
   };
   'proofs:released': { mintUrl: string; secrets: string[] };
-  'melt-quote:created': { mintUrl: string; quoteId: string; quote: MeltQuoteBolt11Response };
-  'melt-quote:state-changed': { mintUrl: string; quoteId: string; state: MeltQuoteState };
-  'melt-quote:paid': { mintUrl: string; quoteId: string; quote: MeltQuoteBolt11Response };
   /** Emitted when send operation is prepared (proofs reserved) */
   'send:prepared': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is executed (token created) */

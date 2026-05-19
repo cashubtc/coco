@@ -5,7 +5,6 @@ import type {
   KeyRingRepository,
   KeysetRepository,
   MeltOperationRepository,
-  MeltQuoteRepository,
   MintQuoteRepository,
   MintRepository,
   ProofRepository,
@@ -23,7 +22,6 @@ import { MemoryHistoryRepository } from './MemoryHistoryRepository';
 import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
-import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
 import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
 import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
@@ -42,7 +40,6 @@ export class MemoryRepositories implements Repositories {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
-  meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;
@@ -68,7 +65,6 @@ export class MemoryRepositories implements Repositories {
     this.mintOperationRepository = mintOperationRepository;
     this.receiveOperationRepository = receiveOperationRepository;
     this.mintQuoteRepository = new MemoryMintQuoteRepository();
-    this.meltQuoteRepository = new MemoryMeltQuoteRepository();
     this.historyRepository = new MemoryHistoryRepository({
       sendOperationRepository,
       meltOperationRepository,
