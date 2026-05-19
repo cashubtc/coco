@@ -1,5 +1,12 @@
 # @cashu/coco-core
 
+## 1.0.1
+
+### Patch Changes
+
+- 28b7c8e: Fix P2PK proof witness encoding so signed proofs do not produce nested JSON strings.
+- 602c13c: Unblind restored signatures during proof recovery.
+
 ## 1.0.0
 
 ### Patch Changes
