@@ -9,6 +9,7 @@ import { SeedService } from '../../services/SeedService.ts';
 import { ProofOperationError, ProofValidationError } from '../../models/Error.ts';
 import type { CoreProof } from '../../types.ts';
 import { OutputData } from '@cashu/cashu-ts';
+import type { SerializedOutputData } from '../../utils.ts';
 
 describe('ProofService', () => {
   const mintUrl = 'https://mint.test';
@@ -52,6 +53,7 @@ describe('ProofService', () => {
   const makeSeed = () => new Uint8Array(64).fill(7);
 
   let originalCreateDeterministicData: typeof OutputData.createDeterministicData;
+  let originalToProof: typeof OutputData.prototype.toProof;
 
   beforeEach(() => {
     proofRepo = new MemoryProofRepository();
@@ -88,11 +90,13 @@ describe('ProofService', () => {
     };
 
     originalCreateDeterministicData = OutputData.createDeterministicData;
+    originalToProof = OutputData.prototype.toProof;
   });
 
   afterEach(() => {
     // Restore OutputData static
     OutputData.createDeterministicData = originalCreateDeterministicData;
+    OutputData.prototype.toProof = originalToProof;
   });
 
   describe('createOutputsAndIncrementCounters', () => {
@@ -853,6 +857,86 @@ describe('ProofService', () => {
       await expect(service.getTrustedBalancesBreakdown()).resolves.toEqual({
         [mintUrl]: { ready: 50, reserved: 100, total: 150 },
       });
+    });
+  });
+
+  describe('recoverProofsFromOutputData', () => {
+    it('unblinds signatures via toProof() rather than copying C_ directly', async () => {
+      const B_ = 'mock_blinded_point_B_';
+      const serializedOutputData: SerializedOutputData = {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: 1, id: keysetId, B_ },
+            blindingFactor: 'deadbeef',
+            secret: Buffer.from('test-secret').toString('hex'),
+          },
+        ],
+      };
+
+      const unblindedC = 'UNBLINDED_C';
+      const blindedC_ = 'BLINDED_C_';
+
+      (OutputData.prototype as any).toProof = mock(() => ({
+        id: keysetId,
+        amount: 1,
+        secret: 'test-secret',
+        C: unblindedC,
+      }));
+
+      const localMintService = {
+        async getAllTrustedMints() {
+          return [{ mintUrl }];
+        },
+        async ensureUpdatedMint(_url: string) {
+          return {
+            mint: {},
+            keysets: [{ id: keysetId, active: true, keypairs: { '1': 'pubkey-1' } }],
+          };
+        },
+      };
+
+      const localWalletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              mint: {
+                async restore(_req: any) {
+                  return {
+                    outputs: [{ B_, amount: 1, id: keysetId }],
+                    signatures: [{ B_, id: keysetId, amount: 1, C_: blindedC_ }],
+                  };
+                },
+              },
+              async checkProofsStates(_proofs: any[]) {
+                return [{ state: 'UNSPENT' }];
+              },
+            },
+          };
+        },
+        async getWallet() {
+          return { selectProofsToSend: (p: any[]) => ({ send: p }) };
+        },
+      };
+
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        localWalletService as any,
+        localMintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      const recovered = await service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
+        persistRecoveredProofs: false,
+      });
+
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]?.C).toBe(unblindedC);
+      expect(recovered[0]?.C).not.toBe(blindedC_);
     });
   });
 });
