@@ -58,6 +58,8 @@ export class SendOperationService {
   private recoveryLock: Promise<void> | null = null;
   /** In-memory lock to serialize proof selection/reservation per mint */
   private readonly mintScopedLock: MintScopedLock;
+  /** Operations that observed spent send proofs while another saga step held the lock. */
+  private readonly deferredSpentProofFinalizations = new Set<string>();
 
   constructor(
     sendOperationRepository: SendOperationRepository,
@@ -211,6 +213,7 @@ export class SendOperationService {
       return prepared;
     } finally {
       releaseLock();
+      this.drainDeferredSpentProofFinalization(operation.id);
     }
   }
 
@@ -316,6 +319,7 @@ export class SendOperationService {
       return { operation: pending, token };
     } finally {
       releaseLock();
+      this.drainDeferredSpentProofFinalization(operation.id);
     }
   }
 
@@ -433,7 +437,53 @@ export class SendOperationService {
       this.logger?.info('Send operation finalized', { operationId });
     } finally {
       releaseLock?.();
+      this.drainDeferredSpentProofFinalization(operationId);
     }
+  }
+
+  /**
+   * Finalize a send operation only when all token proofs are already locally marked spent.
+   *
+   * This is used by proof-state watchers. If the watcher observes a spent proof while the
+   * send saga still holds the operation lock, finalization is deferred until that lock
+   * releases instead of blocking the event listener.
+   */
+  async finalizeIfAllSendProofsSpent(operationId: string): Promise<void> {
+    const operation = await this.sendOperationRepository.getById(operationId);
+    if (!operation || isTerminalOperation(operation) || operation.state === 'rolling_back') {
+      return;
+    }
+
+    if (this.operationIdLock.isLocked(operationId)) {
+      this.deferredSpentProofFinalizations.add(operationId);
+      this.logger?.debug('Deferred send finalization while operation is locked', { operationId });
+      return;
+    }
+
+    if (operation.state !== 'pending' || !hasPreparedData(operation)) {
+      return;
+    }
+
+    const sendProofSecrets = getSendProofSecrets(operation);
+    if (sendProofSecrets.length === 0) {
+      return;
+    }
+
+    const sendProofs = await this.proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      sendProofSecrets,
+    );
+    const expectedProofCount = new Set(sendProofSecrets).size;
+    const allSpent =
+      sendProofs.length === expectedProofCount &&
+      sendProofs.every((proof) => proof.state === 'spent');
+
+    if (!allSpent) {
+      return;
+    }
+
+    this.logger?.info('All send proofs spent, finalizing operation', { operationId });
+    await this.finalize(operationId);
   }
 
   /**
@@ -498,6 +548,7 @@ export class SendOperationService {
       await this.markAsRolledBack(opForRollback, reason);
     } finally {
       releaseLock();
+      this.drainDeferredSpentProofFinalization(operationId);
     }
   }
 
@@ -738,6 +789,19 @@ export class SendOperationService {
     }
 
     return sendStates.every((s) => s.state === 'SPENT') ? 'finalize' : 'stay_pending';
+  }
+
+  private drainDeferredSpentProofFinalization(operationId: string): void {
+    if (!this.deferredSpentProofFinalizations.delete(operationId)) {
+      return;
+    }
+
+    void this.finalizeIfAllSendProofsSpent(operationId).catch((error) => {
+      this.logger?.warn('Deferred send finalization failed', {
+        operationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /**

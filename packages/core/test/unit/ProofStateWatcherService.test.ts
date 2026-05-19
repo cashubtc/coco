@@ -119,29 +119,11 @@ describe('ProofStateWatcherService', () => {
     await watcher.stop();
   });
 
-  it('finalizes a pending send operation when the batched send proofs are all spent', async () => {
+  it('delegates spent send proof finalization to the send operation service', async () => {
     const getProofBySecret = mock(async () =>
       makeProof({ secret: 'spent-1', state: 'spent', usedByOperationId: 'send-op-1' }),
     );
-    const getProofsBySecrets = mock(async () => [
-      makeProof({ secret: 'spent-1', state: 'spent' }),
-      makeProof({ secret: 'spent-2', state: 'spent' }),
-    ]);
-    const finalize = mock(async () => {});
-    const getOperation = mock(async () => ({
-      id: 'send-op-1',
-      state: 'pending',
-      mintUrl: mintUrlA,
-      amount: Amount.from(2),
-      method: 'default',
-      methodData: {},
-      needsSwap: false,
-      fee: Amount.from(0),
-      inputAmount: Amount.from(2),
-      inputProofSecrets: ['spent-1', 'spent-2'],
-      createdAt: 0,
-      updatedAt: 0,
-    }));
+    const finalizeIfAllSendProofsSpent = mock(async () => {});
 
     const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
@@ -149,13 +131,14 @@ describe('ProofStateWatcherService', () => {
       {} as ProofService,
       {
         getProofBySecret,
-        getProofsBySecrets,
       } as unknown as ProofRepository,
       bus,
       new NullLogger(),
       { watchExistingInflightOnStart: false },
     );
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    watcher.setSendOperationService({
+      finalizeIfAllSendProofsSpent,
+    } as unknown as SendOperationService);
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -166,34 +149,15 @@ describe('ProofStateWatcherService', () => {
 
     expect(getProofBySecret).toHaveBeenCalledTimes(1);
     expect(getProofBySecret).toHaveBeenCalledWith(mintUrlA, 'spent-1');
-    expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
-    expect(getProofsBySecrets).toHaveBeenCalledWith(mintUrlA, ['spent-1', 'spent-2']);
-    expect(finalize).toHaveBeenCalledTimes(1);
-    expect(finalize).toHaveBeenCalledWith('send-op-1');
+    expect(finalizeIfAllSendProofsSpent).toHaveBeenCalledTimes(1);
+    expect(finalizeIfAllSendProofsSpent).toHaveBeenCalledWith('send-op-1');
 
     await watcher.stop();
   });
 
-  it('does not finalize a pending send operation when the batched lookup is missing a proof', async () => {
-    const getProofBySecret = mock(async () =>
-      makeProof({ secret: 'spent-1', state: 'spent', usedByOperationId: 'send-op-1' }),
-    );
-    const getProofsBySecrets = mock(async () => [makeProof({ secret: 'spent-1', state: 'spent' })]);
-    const finalize = mock(async () => {});
-    const getOperation = mock(async () => ({
-      id: 'send-op-1',
-      state: 'pending',
-      mintUrl: mintUrlA,
-      amount: Amount.from(2),
-      method: 'default',
-      methodData: {},
-      needsSwap: false,
-      fee: Amount.from(0),
-      inputAmount: Amount.from(2),
-      inputProofSecrets: ['spent-1', 'spent-2'],
-      createdAt: 0,
-      updatedAt: 0,
-    }));
+  it('does not delegate spent proof finalization when the proof is not tied to a send operation', async () => {
+    const getProofBySecret = mock(async () => makeProof({ secret: 'spent-1', state: 'spent' }));
+    const finalizeIfAllSendProofsSpent = mock(async () => {});
 
     const watcher = new ProofStateWatcherService(
       {} as SubscriptionManager,
@@ -201,13 +165,14 @@ describe('ProofStateWatcherService', () => {
       {} as ProofService,
       {
         getProofBySecret,
-        getProofsBySecrets,
       } as unknown as ProofRepository,
       bus,
       new NullLogger(),
       { watchExistingInflightOnStart: false },
     );
-    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+    watcher.setSendOperationService({
+      finalizeIfAllSendProofsSpent,
+    } as unknown as SendOperationService);
 
     await watcher.start();
     await bus.emit('proofs:state-changed', {
@@ -216,8 +181,8 @@ describe('ProofStateWatcherService', () => {
       state: 'spent',
     });
 
-    expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
-    expect(finalize).not.toHaveBeenCalled();
+    expect(getProofBySecret).toHaveBeenCalledTimes(1);
+    expect(finalizeIfAllSendProofsSpent).not.toHaveBeenCalled();
 
     await watcher.stop();
   });

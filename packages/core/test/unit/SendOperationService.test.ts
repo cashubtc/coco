@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type Token } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -446,5 +446,247 @@ describe('SendOperationService', () => {
     expect(customHandler.finalize).toHaveBeenCalledTimes(1);
     expect(persistedStateDuringFinalize).toBe('pending');
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
+
+  it('drains spent-proof finalization deferred while finalize holds the operation lock', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-deferred-finalize-during-finalize',
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: false,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['send-secret-1'],
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+    await proofRepo.saveProofs(mintUrl, [
+      {
+        ...makeProof('send-secret-1', 100),
+        state: 'spent',
+        usedByOperationId: pendingOp.id,
+      },
+    ]);
+
+    const finalized = new Promise<void>((resolve) => {
+      eventBus.on('send:finalized', ({ operationId }) => {
+        if (operationId === pendingOp.id) {
+          resolve();
+        }
+      });
+    });
+
+    let finalizeAttempts = 0;
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      finalize: mock(async ({ operation }) => {
+        finalizeAttempts += 1;
+        if (finalizeAttempts === 1) {
+          await service.finalizeIfAllSendProofsSpent(operation.id);
+          throw new Error('transient finalization failure');
+        }
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    await expect(service.finalize(pendingOp.id)).rejects.toThrow('transient finalization failure');
+    await finalized;
+
+    expect(customHandler.finalize).toHaveBeenCalledTimes(2);
+    expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
+
+  it('logs deferred spent-proof finalization failures without rethrowing', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-deferred-finalize-failure',
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: false,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['send-secret-1'],
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+    await proofRepo.saveProofs(mintUrl, [
+      {
+        ...makeProof('send-secret-1', 100),
+        state: 'spent',
+        usedByOperationId: pendingOp.id,
+      },
+    ]);
+
+    let resolveDeferredWarning: () => void;
+    const deferredWarningLogged = new Promise<void>((resolve) => {
+      resolveDeferredWarning = resolve;
+    });
+    let deferredWarningArgs: unknown[] = [];
+    (logger.warn as Mock<any>).mockImplementation((message: string, ...meta: unknown[]) => {
+      if (message === 'Deferred send finalization failed') {
+        deferredWarningArgs = [message, ...meta];
+        resolveDeferredWarning();
+      }
+    });
+
+    let finalizeAttempts = 0;
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      finalize: mock(async ({ operation }) => {
+        finalizeAttempts += 1;
+        if (finalizeAttempts === 1) {
+          await service.finalizeIfAllSendProofsSpent(operation.id);
+          throw new Error('initial finalization failure');
+        }
+
+        throw new Error('deferred finalization failure');
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    await expect(service.finalize(pendingOp.id)).rejects.toThrow('initial finalization failure');
+    await deferredWarningLogged;
+
+    expect(customHandler.finalize).toHaveBeenCalledTimes(2);
+    expect(deferredWarningArgs).toEqual([
+      'Deferred send finalization failed',
+      {
+        operationId: pendingOp.id,
+        error: 'deferred finalization failure',
+      },
+    ]);
+    expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('pending');
+  });
+
+  it('defers spent-proof finalization while execute holds the operation lock', async () => {
+    const preparedOp: PreparedSendOperation = {
+      id: 'send-op-deferred-finalize',
+      state: 'prepared',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: false,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['send-secret-1'],
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(preparedOp);
+    await proofRepo.saveProofs(mintUrl, [
+      {
+        ...makeProof('send-secret-1', 100),
+        state: 'spent',
+        usedByOperationId: preparedOp.id,
+      },
+    ]);
+
+    const token: Token = {
+      mint: mintUrl,
+      unit: 'sat',
+      proofs: [{ id: keysetId, amount: Amount.from(100), secret: 'send-secret-1', C: 'C_1' }],
+    } as Token;
+    const pendingOp: PendingSendOperation = {
+      ...preparedOp,
+      state: 'pending',
+      token,
+    };
+    const finalized = new Promise<void>((resolve) => {
+      eventBus.on('send:finalized', ({ operationId }) => {
+        if (operationId === preparedOp.id) {
+          resolve();
+        }
+      });
+    });
+
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => preparedOp),
+      execute: mock(async () => {
+        await service.finalizeIfAllSendProofsSpent(preparedOp.id);
+        return { status: 'PENDING' as const, pending: pendingOp, token };
+      }),
+      finalize: mock(async () => {}),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+
+    handlerProvider = new SendHandlerProvider({
+      default: customHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    await expect(service.execute(preparedOp)).resolves.toMatchObject({
+      operation: { state: 'pending' },
+    });
+    await finalized;
+
+    expect(customHandler.finalize).toHaveBeenCalledTimes(1);
+    expect((await sendOpRepo.getById(preparedOp.id))?.state).toBe('finalized');
   });
 });

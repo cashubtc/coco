@@ -4,7 +4,6 @@ import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/Subscr
 import type { MintService } from '../MintService';
 import type { ProofService } from '../ProofService';
 import type { SendOperationService } from '../../operations/send/SendOperationService';
-import { getSendProofSecrets, hasPreparedData } from '../../operations/send/SendOperation';
 import type { ProofRepository } from '../../repositories';
 import { buildYHexMapsForSecrets } from '../../utils.ts';
 
@@ -372,27 +371,8 @@ export class ProofStateWatcherService {
       // Check both usedByOperationId (for exact match sends) and createdByOperationId (for swap sends)
       const operationId = spentProof?.usedByOperationId || spentProof?.createdByOperationId;
       if (!operationId) return;
-      const operation = await this.sendOperationService.getOperation(operationId);
 
-      if (!operation || operation.state !== 'pending') return;
-
-      // Operation must have prepared data to derive send secrets
-      if (!hasPreparedData(operation)) return;
-
-      // Derive send proof secrets from operation data
-      const sendProofSecrets = getSendProofSecrets(operation);
-      if (sendProofSecrets.length === 0) return;
-
-      const sendProofs = await this.proofRepository.getProofsBySecrets(mintUrl, sendProofSecrets);
-      const expectedProofCount = new Set(sendProofSecrets).size;
-      const allSpent =
-        sendProofs.length === expectedProofCount &&
-        sendProofs.every((proof) => proof.state === 'spent');
-
-      if (allSpent) {
-        this.logger?.info('All send proofs spent, finalizing operation', { operationId });
-        await this.sendOperationService.finalize(operationId);
-      }
+      await this.sendOperationService.finalizeIfAllSendProofsSpent(operationId);
     } catch (err) {
       this.logger?.error('Failed to check/finalize send operation', { mintUrl, secret, err });
     }
