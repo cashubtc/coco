@@ -33,6 +33,7 @@
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
     "docs:preview": "vitepress preview packages/docs",
+    "security:release-age": "bun scripts/check-release-age.ts",
     "format": "prettier . --write",
     "format:check": "prettier . --check"
   }

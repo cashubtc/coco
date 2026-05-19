@@ -7,12 +7,18 @@ on:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'scripts/check-release-age.ts'
+      - 'bun.lock'
+      - 'bunfig.toml'
       - 'package.json'
       - '.github/workflows/build-packages.yml'
   pull_request:
     paths:
       - 'packages/**'
       - 'scripts/build.ts'
+      - 'scripts/check-release-age.ts'
+      - 'bun.lock'
+      - 'bunfig.toml'
       - 'package.json'
       - '.github/workflows/build-packages.yml'
 
@@ -26,7 +32,10 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.18
+          bun-version: 1.3.11
+
+      - name: Check dependency release age
+        run: bun run security:release-age
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
