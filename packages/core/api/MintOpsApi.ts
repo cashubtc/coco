@@ -10,7 +10,7 @@ import type {
 } from '@core/operations/mint';
 
 /** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11';
+export type DefaultSupportedMintMethod = 'bolt11' | 'bolt12';
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -151,6 +151,11 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
       input.method,
       input.quoteId,
     );
+  }
+
+  /** Lists mint operations for a mint URL and quote ID. */
+  async listByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+    return this.mintOperationService.listOperationsByQuote(mintUrl, quoteId);
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */
