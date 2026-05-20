@@ -174,18 +174,6 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
         throw new Error(`MeltOperation with id ${operation.id} already exists`);
       }
 
-      if (operation.state !== 'init') {
-        const duplicate = await table
-          .where('[mintUrl+quoteId]')
-          .equals([operation.mintUrl, operation.quoteId])
-          .first();
-        if (duplicate) {
-          throw new Error(
-            `MeltOperation already exists for mint ${operation.mintUrl} and quote ${operation.quoteId}`,
-          );
-        }
-      }
-
       await table.add(operationToRow(operation));
     });
   }
@@ -196,18 +184,6 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
       const existing = await table.get(operation.id);
       if (!existing) {
         throw new Error(`MeltOperation with id ${operation.id} not found`);
-      }
-
-      if (operation.state !== 'init') {
-        const duplicate = await table
-          .where('[mintUrl+quoteId]')
-          .equals([operation.mintUrl, operation.quoteId])
-          .first();
-        if (duplicate && duplicate.id !== operation.id) {
-          throw new Error(
-            `MeltOperation already exists for mint ${operation.mintUrl} and quote ${operation.quoteId}`,
-          );
-        }
       }
 
       const row = operationToRow(operation);
