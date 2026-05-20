@@ -25,15 +25,10 @@ export class SubscriptionApi {
   }
 
   async awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<unknown> {
-    return this.awaitMatchingNotification(
-      mintUrl,
-      'bolt11_mint_quote',
-      [quoteId],
-      (payload) => {
-        const state = getQuoteState(payload);
-        return state === 'PAID' || state === 'ISSUED';
-      },
-    );
+    return this.awaitMatchingNotification(mintUrl, 'bolt11_mint_quote', [quoteId], (payload) => {
+      const state = getQuoteState(payload);
+      return state === 'PAID' || state === 'ISSUED';
+    });
   }
 
   async awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<unknown> {
