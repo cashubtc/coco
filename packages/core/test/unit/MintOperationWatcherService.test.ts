@@ -8,16 +8,24 @@ import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response, MintQuoteBolt12Response } from '@cashu/cashu-ts';
+
+type MintQuotePayload = MintQuoteBolt11Response | MintQuoteBolt12Response;
+type SubscribeFn = (
+  mintUrl: string,
+  kind: string,
+  filters: string[],
+  next: (payload: MintQuotePayload) => Promise<void>,
+) => Promise<{ subId: string; unsubscribe: () => Promise<void> }>;
 
 describe('MintOperationWatcherService', () => {
   const mintUrl = 'https://mint.test';
   const quoteId = 'quote-1';
 
   let bus: EventBus<CoreEvents>;
-  let subscribe: Mock<any>;
-  let unsubscribe: Mock<any>;
-  let callback: ((payload: MintQuoteBolt11Response) => Promise<void>) | undefined;
+  let subscribe: Mock<SubscribeFn>;
+  let unsubscribe: Mock<() => Promise<void>>;
+  let callbacks: Array<(payload: MintQuotePayload) => Promise<void>>;
 
   const makePendingOperation = (): PendingMintOperation => ({
     id: 'mint-op-1',
@@ -37,18 +45,32 @@ describe('MintOperationWatcherService', () => {
     updatedAt: Date.now(),
   });
 
+  const makeBolt12PendingOperation = (
+    id: string,
+    amount = Amount.from(10),
+  ): PendingMintOperation<'bolt12'> => ({
+    ...makePendingOperation(),
+    id,
+    method: 'bolt12',
+    methodData: { amountless: true },
+    amount,
+    request: 'lno1test',
+    pubkey: `pubkey-${id}`,
+    lastObservedRemoteState: 'UNPAID',
+  });
+
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
     unsubscribe = mock(async () => {});
-    callback = undefined;
+    callbacks = [];
     subscribe = mock(
       async (
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (payload: MintQuoteBolt11Response) => Promise<void>,
+        next: (payload: MintQuotePayload) => Promise<void>,
       ) => {
-        callback = next;
+        callbacks.push(next);
         return { subId: 'sub-1', unsubscribe };
       },
     );
@@ -98,6 +120,7 @@ describe('MintOperationWatcherService', () => {
     });
 
     expect(subscribe).toHaveBeenCalledTimes(1);
+    const callback = callbacks[0];
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -163,6 +186,7 @@ describe('MintOperationWatcherService', () => {
       operation,
     });
 
+    const callback = callbacks[0];
     if (!callback) {
       throw new Error('Expected watcher subscription callback');
     }
@@ -184,6 +208,71 @@ describe('MintOperationWatcherService', () => {
     }
     expect(issuedOperation.lastObservedRemoteState).toBe('ISSUED');
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
+  it('watches BOLT12 operations independently when they share a quote id', async () => {
+    const operationA = makeBolt12PendingOperation('mint-op-a');
+    const operationB = makeBolt12PendingOperation('mint-op-b');
+    const operations = new Map<string, PendingMintOperation>([
+      [operationA.id, operationA],
+      [operationB.id, operationB],
+    ]);
+    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
+    bus.on('mint-op:quote-state-changed', (event) => {
+      quoteStateEvents.push(event);
+    });
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        getOperation: mock(async (operationId: string) => operations.get(operationId) ?? null),
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operationA.id,
+      operation: operationA,
+    });
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operationB.id,
+      operation: operationB,
+    });
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(subscribe.mock.calls[0]?.[1]).toBe('bolt12_mint_quote');
+    expect(subscribe.mock.calls[1]?.[1]).toBe('bolt12_mint_quote');
+    expect(subscribe.mock.calls[0]?.[2]).toEqual([quoteId]);
+    expect(subscribe.mock.calls[1]?.[2]).toEqual([quoteId]);
+
+    const quote: MintQuoteBolt12Response = {
+      quote: quoteId,
+      request: 'lno1test',
+      unit: 'sat',
+      amount: undefined,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: 'pubkey',
+      amount_paid: Amount.from(20),
+      amount_issued: Amount.zero(),
+    };
+
+    await callbacks[0]!(quote);
+    await callbacks[1]!(quote);
+
+    expect(quoteStateEvents).toHaveLength(2);
+    expect(quoteStateEvents.map((event) => event.operationId).sort()).toEqual([
+      operationA.id,
+      operationB.id,
+    ]);
+    expect(quoteStateEvents.every((event) => event.state === 'PAID')).toBe(true);
 
     await watcher.stop();
   });

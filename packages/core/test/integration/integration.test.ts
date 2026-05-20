@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { runIntegrationTests } from '@cashu/coco-adapter-tests';
+import type { IntegrationTestRunner } from '@cashu/coco-adapter-tests';
 import { MemoryRepositories } from '../../repositories/memory';
 import { ConsoleLogger } from '../../logging';
 import type { Logger, LogLevel } from '../../logging';
@@ -38,6 +39,11 @@ runIntegrationTests(
     logger: getTestLogger(),
     suiteName: 'Testnut Integration Tests',
   },
-  //@ts-expect-error stupid type error that no one cares about
-  { describe, it, beforeEach, afterEach, expect },
+  {
+    describe,
+    it,
+    beforeEach,
+    afterEach,
+    expect: expect as unknown as IntegrationTestRunner['expect'],
+  },
 );

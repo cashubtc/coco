@@ -12,6 +12,7 @@ import type {
 import type {
   MintExecutionResult,
   MintMethodHandler,
+  PrepareContext,
   PendingMintCheckResult,
   RecoverExecutingResult,
 } from '../../operations/mint/MintMethodHandler';
@@ -91,7 +92,7 @@ describe('MintOperationService', () => {
     createdByOperationId: operationId,
   });
 
-  const makeInitOp = (id: string): InitMintOperation => ({
+  const makeInitOp = (id: string): InitMintOperation<'bolt11'> => ({
     id,
     state: 'init',
     mintUrl,
@@ -117,7 +118,7 @@ describe('MintOperationService', () => {
     );
   };
 
-  const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation => ({
+  const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation<'bolt11'> => ({
     ...makeInitOp(id),
     state: 'pending',
     quoteId,
@@ -129,7 +130,7 @@ describe('MintOperationService', () => {
     outputData: makeSerializedOutputData(secret),
   });
 
-  const makeExecutingOp = (id: string, secret = 'out-1'): ExecutingMintOperation => ({
+  const makeExecutingOp = (id: string, secret = 'out-1'): ExecutingMintOperation<'bolt11'> => ({
     ...makePendingOp(id, secret),
     state: 'executing',
   });
@@ -140,7 +141,7 @@ describe('MintOperationService', () => {
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
-    const mockPrepare = mock(async ({ operation }: { operation: InitMintOperation }) => {
+    const mockPrepare = mock(async ({ operation }: PrepareContext<'bolt11'>) => {
       return makePendingOp(operation.id);
     });
 

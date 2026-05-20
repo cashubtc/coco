@@ -15,7 +15,9 @@ const mintUrl = 'https://mint.test';
 type Assert<T extends true> = T;
 type PrepareMeltInput = Parameters<MeltOpsApi['prepare']>[0];
 type PrepareMeltMethod = PrepareMeltInput['method'];
-type _AssertOnlyBolt11 = Assert<Exclude<PrepareMeltMethod, 'bolt11'> extends never ? true : false>;
+type _AssertDefaultBoltMethods = Assert<
+  Exclude<PrepareMeltMethod, 'bolt11' | 'bolt12'> extends never ? true : false
+>;
 type CustomPrepareMeltInput = Parameters<MeltOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
 type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['method'] ? true : false>;
 
