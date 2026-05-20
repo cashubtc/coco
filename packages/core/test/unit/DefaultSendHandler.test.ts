@@ -72,6 +72,13 @@ describe('DefaultSendHandler', () => {
     })),
   });
 
+  const useOperationProofs = (proofs: CoreProof[]) => {
+    proofRepository = {
+      ...proofRepository,
+      getProofsByOperationId: mock(() => Promise.resolve(proofs)),
+    } as ProofRepository;
+  };
+
   const makeInitOp = (id: string, overrides?: Partial<InitSendOperation>): InitSendOperation => ({
     id,
     state: 'init',
@@ -455,9 +462,7 @@ describe('DefaultSendHandler', () => {
         createdByOperationId: 'op-pending',
       });
 
-      (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
-        Promise.resolve([sendProof]),
-      );
+      useOperationProofs([sendProof]);
       (mockWallet.receive as Mock<any>).mockImplementation(() =>
         Promise.resolve([makeProof('reclaim-1', 99)]),
       );
@@ -493,7 +498,7 @@ describe('DefaultSendHandler', () => {
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
     });
 
-    it('rolls back exact-match pending proofs locally without mint access', async () => {
+    it('reclaims exact-match pending proofs through the mint', async () => {
       const operation = makePendingOp('op-exact-pending', {
         needsSwap: false,
         fee: Amount.zero(),
@@ -501,12 +506,25 @@ describe('DefaultSendHandler', () => {
         inputProofSecrets: ['proof-100'],
         outputData: undefined,
       });
+      const sendProof = makeCoreProof('proof-100', 100, {
+        state: 'inflight',
+        createdByOperationId: 'op-exact-pending',
+      });
+
+      useOperationProofs([sendProof]);
 
       await handler.rollback(buildRollbackContext(operation));
 
-      expect(proofService.restoreProofsToReady).toHaveBeenCalledWith(mintUrl, ['proof-100']);
-      expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
-      expect(mockWallet.receive).not.toHaveBeenCalled();
+      expect(proofService.restoreProofsToReady).not.toHaveBeenCalled();
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(99), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        },
+        {},
+      );
+      expect(mockWallet.receive).toHaveBeenCalled();
     });
   });
 

@@ -13,6 +13,7 @@ import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
+import { PendingSendRollbackError } from '../../models/Error';
 import type {
   PreparedSendOperation,
   PendingSendOperation,
@@ -453,7 +454,7 @@ describe('SendOperationService', () => {
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
 
-  it('restores a pending operation when reclaim rollback fails before completion', async () => {
+  it('wraps failed pending reclaim with a safe rollback error', async () => {
     const pendingOp: PendingSendOperation = {
       id: 'send-op-reclaim-offline',
       state: 'pending',
@@ -480,6 +481,7 @@ describe('SendOperationService', () => {
       methodData: {},
     };
     await sendOpRepo.create(pendingOp);
+    const cause = new Error('Network request failed');
 
     const customHandler: SendMethodHandler<'default'> = {
       prepare: mock(async () => {
@@ -489,7 +491,7 @@ describe('SendOperationService', () => {
         throw new Error('not used');
       }),
       rollback: mock(async () => {
-        throw new Error('Network request failed');
+        throw cause;
       }),
       recoverExecuting: mock(async () => {
         throw new Error('not used');
@@ -497,10 +499,22 @@ describe('SendOperationService', () => {
     };
     handlerProvider.register('default', customHandler);
 
-    await expect(service.rollback(pendingOp.id)).rejects.toThrow('Network request failed');
+    let thrown: unknown;
+    try {
+      await service.rollback(pendingOp.id);
+    } catch (error) {
+      thrown = error;
+    }
 
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBeInstanceOf(PendingSendRollbackError);
+    expect((thrown as Error).message).toBe(
+      'Cannot roll back safely without mint connection. Token might have been spent.',
+    );
+    expect((thrown as PendingSendRollbackError).operationId).toBe(pendingOp.id);
+    expect((thrown as PendingSendRollbackError).cause).toBe(cause);
     expect(customHandler.rollback).toHaveBeenCalledTimes(1);
     const persisted = await sendOpRepo.getById(pendingOp.id);
-    expect(persisted?.state).toBe('pending');
+    expect(persisted?.state).toBe('rolling_back');
   });
 });

@@ -5,7 +5,6 @@ import type {
   FinalizedSendOperation,
   PendingSendOperation,
   PreparedSendOperation,
-  RollingBackSendOperation,
   SendOperation,
 } from '../../operations/send/SendOperation.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
@@ -148,7 +147,7 @@ describe('SendOpsApi', () => {
     await expect(api.cancel(pendingOperation.id)).rejects.toThrow("Expected 'prepared'");
   });
 
-  it('reclaim allows pending and rolling_back operations', async () => {
+  it('reclaim only allows pending operations', async () => {
     (sendOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
       pendingOperation as SendOperation,
     );
@@ -156,7 +155,7 @@ describe('SendOpsApi', () => {
     await api.reclaim(pendingOperation.id);
     expect(sendOperationService.rollback).toHaveBeenCalledWith(pendingOperation.id);
 
-    const rollingBackOperation: RollingBackSendOperation = {
+    const rollingBackOperation: SendOperation = {
       ...pendingOperation,
       state: 'rolling_back',
       updatedAt: Date.now(),
@@ -165,8 +164,8 @@ describe('SendOpsApi', () => {
       rollingBackOperation as SendOperation,
     );
 
-    await api.reclaim(rollingBackOperation.id);
-    expect(sendOperationService.rollback).toHaveBeenCalledWith(rollingBackOperation.id);
+    await expect(api.reclaim(rollingBackOperation.id)).rejects.toThrow("Expected 'pending'");
+    expect(sendOperationService.rollback).toHaveBeenCalledTimes(1);
   });
 
   it('finalize delegates directly to the service', async () => {

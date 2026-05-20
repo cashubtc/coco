@@ -248,14 +248,6 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         operationId: operation.id,
       });
     } else if (operation.state === 'pending' || operation.state === 'rolling_back') {
-      if (!operation.needsSwap) {
-        await proofService.restoreProofsToReady(mintUrl, inputProofSecrets);
-        logger?.info('Rolling back exact-match pending operation - restored original proofs', {
-          operationId: operation.id,
-        });
-        return;
-      }
-
       // Complex case: need to reclaim the send proofs by swapping them back
       const sendSecrets = getSendProofSecrets(operation);
 
