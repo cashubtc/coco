@@ -1030,6 +1030,14 @@ const MIGRATIONS: readonly Migration[] = [
     id: '026_send_operation_unit',
     run: addSendOperationUnitColumn,
   },
+  {
+    id: '027_duplicate_quote_ids',
+    sql: `
+      DROP INDEX IF EXISTS ux_coco_cashu_melt_operations_mint_quote;
+      DROP INDEX IF EXISTS ux_coco_cashu_history_mint_quote_mint;
+      DROP INDEX IF EXISTS ux_coco_cashu_history_mint_quote_melt;
+    `,
+  },
 ];
 
 // Export for testing

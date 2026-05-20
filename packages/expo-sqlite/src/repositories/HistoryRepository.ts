@@ -77,6 +77,36 @@ export class ExpoHistoryRepository {
     return entry.type === 'melt' ? entry : null;
   }
 
+  async getMintHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MintHistoryEntry | null> {
+    const row = await this.db.get<Row>(
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'mint'
+       ORDER BY createdAt DESC, id DESC LIMIT 1`,
+      [mintUrl, operationId],
+    );
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'mint' ? entry : null;
+  }
+
+  async getMeltHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MeltHistoryEntry | null> {
+    const row = await this.db.get<Row>(
+      `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
+       FROM coco_cashu_history WHERE mintUrl = ? AND operationId = ? AND type = 'melt'
+       ORDER BY createdAt DESC, id DESC LIMIT 1`,
+      [mintUrl, operationId],
+    );
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'melt' ? entry : null;
+  }
+
   async getSendHistoryEntry(
     mintUrl: string,
     operationId: string,
@@ -228,7 +258,9 @@ export class ExpoHistoryRepository {
 
       await this.db.run(
         `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, paymentRequest = ?, metadata = ?, operationId = ?
-         WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'`,
+         WHERE mintUrl = ?
+           AND type = 'mint'
+           AND ((operationId IS NOT NULL AND operationId = ?) OR (? IS NULL AND quoteId = ?))`,
         [
           history.unit,
           serializeAmount(history.amount),
@@ -237,15 +269,24 @@ export class ExpoHistoryRepository {
           history.metadata ? JSON.stringify(history.metadata) : null,
           history.operationId ?? null,
           history.mintUrl,
+          history.operationId ?? null,
+          history.operationId ?? null,
           history.quoteId,
         ],
       );
 
       const row = await this.db.get<Row>(
         `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'mint'
+         FROM coco_cashu_history WHERE mintUrl = ?
+           AND type = 'mint'
+           AND ((operationId IS NOT NULL AND operationId = ?) OR (? IS NULL AND quoteId = ?))
          ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, history.quoteId],
+        [
+          history.mintUrl,
+          history.operationId ?? null,
+          history.operationId ?? null,
+          history.quoteId,
+        ],
       );
       if (!row) throw new Error('Updated history entry not found');
       return this.rowToEntry(row);
@@ -255,7 +296,9 @@ export class ExpoHistoryRepository {
 
       await this.db.run(
         `UPDATE coco_cashu_history SET unit = ?, amount = ?, state = ?, metadata = ?, operationId = ?
-         WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'`,
+         WHERE mintUrl = ?
+           AND type = 'melt'
+           AND ((operationId IS NOT NULL AND operationId = ?) OR (? IS NULL AND quoteId = ?))`,
         [
           history.unit,
           serializeAmount(history.amount),
@@ -263,15 +306,24 @@ export class ExpoHistoryRepository {
           history.metadata ? JSON.stringify(history.metadata) : null,
           history.operationId ?? null,
           history.mintUrl,
+          history.operationId ?? null,
+          history.operationId ?? null,
           history.quoteId,
         ],
       );
 
       const row = await this.db.get<Row>(
         `SELECT id, mintUrl, type, unit, amount, createdAt, quoteId, state, paymentRequest, tokenJson, metadata, operationId
-         FROM coco_cashu_history WHERE mintUrl = ? AND quoteId = ? AND type = 'melt'
+         FROM coco_cashu_history WHERE mintUrl = ?
+           AND type = 'melt'
+           AND ((operationId IS NOT NULL AND operationId = ?) OR (? IS NULL AND quoteId = ?))
          ORDER BY createdAt DESC, id DESC LIMIT 1`,
-        [history.mintUrl, history.quoteId],
+        [
+          history.mintUrl,
+          history.operationId ?? null,
+          history.operationId ?? null,
+          history.quoteId,
+        ],
       );
       if (!row) throw new Error('Updated history entry not found');
       return this.rowToEntry(row);

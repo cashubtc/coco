@@ -8,6 +8,7 @@ import {
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
+  runHistoryRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -55,6 +56,8 @@ runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, ex
 runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runHistoryRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('sqlite3 adapter transactions', () => {
   it('commits across repositories', async () => {

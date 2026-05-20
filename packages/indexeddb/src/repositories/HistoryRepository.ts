@@ -16,6 +16,21 @@ type MeltQuoteState = MeltHistoryEntry['state'];
 type SendToken = NonNullable<SendHistoryEntry['token']>;
 type ReceiveToken = NonNullable<ReceiveHistoryEntry['token']>;
 
+type HistoryRow = {
+  id?: number;
+  mintUrl: string;
+  type: HistoryEntry['type'];
+  unit: string;
+  amount: string;
+  createdAt: number;
+  metadata?: Record<string, string> | null;
+  quoteId?: string | null;
+  operationId?: string | null;
+  state?: string;
+  paymentRequest?: string;
+  tokenJson?: string | null;
+};
+
 type NewHistoryEntry =
   | Omit<MintHistoryEntry, 'id'>
   | Omit<MeltHistoryEntry, 'id'>
@@ -40,27 +55,30 @@ export class IdbHistoryRepository {
   }
 
   async getPaginatedHistoryEntries(limit: number, offset: number): Promise<HistoryEntry[]> {
-    const coll = this.db.table('coco_cashu_history') as Table<any, number>;
+    const coll = this.historyTable();
     const rows = await coll.orderBy('createdAt').reverse().offset(offset).limit(limit).toArray();
-    return rows.map((r: any) => this.rowToEntry(r));
+    return rows.map((r) => this.rowToEntry(r));
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
-    const row = await (this.db as any).table('coco_cashu_history').get(Number(id));
+    const row = await this.historyTable().get(Number(id));
     if (!row) return null;
     return this.rowToEntry(row);
   }
 
   async addHistoryEntry(history: NewHistoryEntry): Promise<HistoryEntry> {
     const row = this.entryToRow(history);
-    const id = (await (this.db as any).table('coco_cashu_history').add(row)) as number;
-    const stored = await (this.db as any).table('coco_cashu_history').get(id);
+    const table = this.historyTable();
+    const id = (await table.add(row)) as number;
+    const stored = await table.get(id);
+    if (!stored) {
+      throw new Error('History entry not found after insert');
+    }
     return this.rowToEntry(stored);
   }
 
   async getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
+    const row = await this.historyTable()
       .where('[mintUrl+quoteId+type]')
       .equals([mintUrl, quoteId, 'mint'])
       .last();
@@ -70,10 +88,37 @@ export class IdbHistoryRepository {
   }
 
   async getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
+    const row = await this.historyTable()
       .where('[mintUrl+quoteId+type]')
       .equals([mintUrl, quoteId, 'melt'])
+      .last();
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'melt' ? entry : null;
+  }
+
+  async getMintHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MintHistoryEntry | null> {
+    const row = await this.historyTable()
+      .where('[mintUrl+operationId]')
+      .equals([mintUrl, operationId])
+      .filter((r) => r.type === 'mint')
+      .last();
+    if (!row) return null;
+    const entry = this.rowToEntry(row);
+    return entry.type === 'mint' ? entry : null;
+  }
+
+  async getMeltHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MeltHistoryEntry | null> {
+    const row = await this.historyTable()
+      .where('[mintUrl+operationId]')
+      .equals([mintUrl, operationId])
+      .filter((r) => r.type === 'melt')
       .last();
     if (!row) return null;
     const entry = this.rowToEntry(row);
@@ -84,8 +129,7 @@ export class IdbHistoryRepository {
     mintUrl: string,
     operationId: string,
   ): Promise<SendHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
+    const row = await this.historyTable()
       .where('[mintUrl+operationId]')
       .equals([mintUrl, operationId])
       .last();
@@ -98,8 +142,7 @@ export class IdbHistoryRepository {
     mintUrl: string,
     operationId: string,
   ): Promise<ReceiveHistoryEntry | null> {
-    const row = await (this.db as any)
-      .table('coco_cashu_history')
+    const row = await this.historyTable()
       .where('[mintUrl+operationId]')
       .equals([mintUrl, operationId])
       .last();
@@ -109,15 +152,21 @@ export class IdbHistoryRepository {
   }
 
   async updateHistoryEntry(history: UpdatableHistoryEntry): Promise<HistoryEntry> {
-    const coll = (this.db as any).table('coco_cashu_history');
+    const coll = this.historyTable();
 
     if (history.type === 'mint') {
-      const rows = await coll
-        .where('[mintUrl+quoteId+type]')
-        .equals([history.mintUrl, history.quoteId, 'mint'])
-        .toArray();
+      const rows = history.operationId
+        ? await coll
+            .where('[mintUrl+operationId]')
+            .equals([history.mintUrl, history.operationId])
+            .filter((r) => r.type === 'mint')
+            .toArray()
+        : await coll
+            .where('[mintUrl+quoteId+type]')
+            .equals([history.mintUrl, history.quoteId, 'mint'])
+            .toArray();
       if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
+      const row = rows[rows.length - 1]!;
       const updated = {
         ...row,
         unit: history.unit,
@@ -127,16 +176,24 @@ export class IdbHistoryRepository {
         state: history.state,
         paymentRequest: history.paymentRequest,
       };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
+      const id = this.rowId(row);
+      await coll.update(id, updated);
+      const fresh = await coll.get(id);
+      if (!fresh) throw new Error('History entry not found after update');
       return this.rowToEntry(fresh);
     } else if (history.type === 'melt') {
-      const rows = await coll
-        .where('[mintUrl+quoteId+type]')
-        .equals([history.mintUrl, history.quoteId, 'melt'])
-        .toArray();
+      const rows = history.operationId
+        ? await coll
+            .where('[mintUrl+operationId]')
+            .equals([history.mintUrl, history.operationId])
+            .filter((r) => r.type === 'melt')
+            .toArray()
+        : await coll
+            .where('[mintUrl+quoteId+type]')
+            .equals([history.mintUrl, history.quoteId, 'melt'])
+            .toArray();
       if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
+      const row = rows[rows.length - 1]!;
       const updated = {
         ...row,
         unit: history.unit,
@@ -145,8 +202,10 @@ export class IdbHistoryRepository {
         operationId: history.operationId ?? null,
         state: history.state,
       };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
+      const id = this.rowId(row);
+      await coll.update(id, updated);
+      const fresh = await coll.get(id);
+      if (!fresh) throw new Error('History entry not found after update');
       return this.rowToEntry(fresh);
     } else if (history.type === 'send') {
       const rows = await coll
@@ -154,7 +213,7 @@ export class IdbHistoryRepository {
         .equals([history.mintUrl, history.operationId])
         .toArray();
       if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
+      const row = rows[rows.length - 1]!;
       const updated = {
         ...row,
         unit: history.unit,
@@ -163,16 +222,21 @@ export class IdbHistoryRepository {
         state: history.state,
         tokenJson: history.token ? JSON.stringify(history.token) : row.tokenJson,
       };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
+      const id = this.rowId(row);
+      await coll.update(id, updated);
+      const fresh = await coll.get(id);
+      if (!fresh) throw new Error('History entry not found after update');
       return this.rowToEntry(fresh);
     } else if (history.type === 'receive') {
+      if (!history.operationId) {
+        throw new Error('History entry operation id is required');
+      }
       const rows = await coll
         .where('[mintUrl+operationId]')
         .equals([history.mintUrl, history.operationId])
         .toArray();
       if (!rows.length) throw new Error('History entry not found');
-      const row = rows[rows.length - 1];
+      const row = rows[rows.length - 1]!;
       const updated = {
         ...row,
         unit: history.unit,
@@ -181,8 +245,10 @@ export class IdbHistoryRepository {
         state: history.state,
         tokenJson: history.token ? JSON.stringify(history.token as ReceiveToken) : row.tokenJson,
       };
-      await coll.update(row.id, updated);
-      const fresh = await coll.get(row.id);
+      const id = this.rowId(row);
+      await coll.update(id, updated);
+      const fresh = await coll.get(id);
+      if (!fresh) throw new Error('History entry not found after update');
       return this.rowToEntry(fresh);
     } else {
       throw new Error(`Unsupported history entry type: ${String((history as HistoryEntry).type)}`);
@@ -194,11 +260,11 @@ export class IdbHistoryRepository {
     operationId: string,
     state: SendHistoryState,
   ): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
+    const coll = this.historyTable();
     const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
     if (!rows.length) return;
-    const row = rows[rows.length - 1];
-    await coll.update(row.id, { state });
+    const row = rows[rows.length - 1]!;
+    await coll.update(this.rowId(row), { state });
   }
 
   async updateReceiveHistoryState(
@@ -206,32 +272,43 @@ export class IdbHistoryRepository {
     operationId: string,
     state: ReceiveHistoryState,
   ): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
+    const coll = this.historyTable();
     const rows = await coll.where('[mintUrl+operationId]').equals([mintUrl, operationId]).toArray();
     if (!rows.length) return;
-    const row = rows[rows.length - 1];
-    await coll.update(row.id, { state });
+    const row = rows[rows.length - 1]!;
+    await coll.update(this.rowId(row), { state });
   }
 
   async deleteHistoryEntry(mintUrl: string, quoteId: string): Promise<void> {
-    const coll = (this.db as any).table('coco_cashu_history');
+    const coll = this.historyTable();
     const rows = await coll
       .where('[mintUrl+quoteId+type]')
       .between([mintUrl, quoteId, ''], [mintUrl, quoteId, ''])
       .toArray();
-    const ids = rows.map((r: any) => r.id);
+    const ids = rows.flatMap((r) => (r.id === undefined ? [] : [r.id]));
     await coll.bulkDelete(ids);
   }
 
-  private entryToRow(history: NewHistoryEntry): any {
-    const base = {
+  private historyTable(): Table<HistoryRow, number> {
+    return this.db.table('coco_cashu_history') as Table<HistoryRow, number>;
+  }
+
+  private rowId(row: HistoryRow): number {
+    if (row.id === undefined) {
+      throw new Error('History row is missing id');
+    }
+    return row.id;
+  }
+
+  private entryToRow(history: NewHistoryEntry): Omit<HistoryRow, 'id'> {
+    const base: Omit<HistoryRow, 'id'> = {
       mintUrl: history.mintUrl,
       type: history.type,
       unit: history.unit,
       amount: serializeAmount(history.amount),
       createdAt: history.createdAt,
       metadata: history.metadata ?? null,
-    } as any;
+    };
     if (history.type === 'mint') {
       base.quoteId = history.quoteId;
       base.operationId = history.operationId ?? null;
@@ -253,7 +330,7 @@ export class IdbHistoryRepository {
     return base;
   }
 
-  private rowToEntry(row: any): HistoryEntry {
+  private rowToEntry(row: HistoryRow): HistoryEntry {
     const base = {
       id: String(row.id),
       createdAt: row.createdAt,

@@ -8,6 +8,7 @@ import {
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
+  runHistoryRepositoryContract,
   createDummyMint,
   createDummyKeyset,
   createDummyProof,
@@ -129,6 +130,8 @@ runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, ex
 runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runHistoryRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('expo-sqlite adapter transactions', () => {
   it('commits across repositories', async () => {
