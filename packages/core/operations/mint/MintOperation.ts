@@ -6,7 +6,7 @@
  *          +---------+-> failed
  *
  * - init: Local mint intent persisted before prepare has attached a quote snapshot
- * - pending: Deterministic outputData persisted; quote may now settle remotely
+ * - pending: Quote metadata persisted; quote may now settle remotely
  * - executing: Mint or recovery call in progress
  * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
  * - failed: Operation reached a terminal non-issued state (for example, quote expiry)
@@ -53,7 +53,15 @@ interface MintRemoteObservation<M extends MintMethod = MintMethod> {
 }
 
 interface PendingData {
+  outputData?: SerializedOutputData;
+  batchEligible?: boolean;
+  redeemedByBatchId?: string;
+}
+
+interface PreparedData {
   outputData: SerializedOutputData;
+  batchEligible?: boolean;
+  redeemedByBatchId?: string;
 }
 
 export interface InitMintOperation<M extends MintMethod = MintMethod>
@@ -78,7 +86,7 @@ export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
     MintIntentData,
     MintQuoteSnapshot,
     MintRemoteObservation<M>,
-    PendingData {
+    PreparedData {
   state: 'executing';
 }
 
@@ -134,6 +142,9 @@ export function isTerminalOperation<M extends MintMethod>(
 export function getOutputProofSecrets<M extends MintMethod>(
   op: PendingOrLaterOperation<M>,
 ): string[] {
+  if (!op.outputData) {
+    return [];
+  }
   const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(op.outputData);
   return [...keepSecrets, ...sendSecrets];
 }

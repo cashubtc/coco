@@ -17,6 +17,7 @@ import type {
 } from '../../operations/mint/MintMethodHandler';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
+import { MemoryMintBatchAttemptRepository } from '../../repositories/memory/MemoryMintBatchAttemptRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -31,6 +32,7 @@ describe('MintOperationService', () => {
   const keysetId = 'keyset-1';
 
   let operationRepo: MemoryMintOperationRepository;
+  let batchAttemptRepo: MemoryMintBatchAttemptRepository;
   let proofRepo: MemoryProofRepository;
   let proofService: ProofService;
   let mintService: MintService;
@@ -103,11 +105,13 @@ describe('MintOperationService', () => {
 
   const makeExecutingOp = (id: string, secret = 'out-1'): ExecutingMintOperation => ({
     ...makePendingOp(id, secret),
+    outputData: makeSerializedOutputData(secret),
     state: 'executing',
   });
 
   beforeEach(async () => {
     operationRepo = new MemoryMintOperationRepository();
+    batchAttemptRepo = new MemoryMintBatchAttemptRepository();
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
@@ -169,6 +173,7 @@ describe('MintOperationService', () => {
     service = new MintOperationService(
       handlerProvider,
       operationRepo,
+      batchAttemptRepo,
       proofRepo,
       proofService,
       mintService,

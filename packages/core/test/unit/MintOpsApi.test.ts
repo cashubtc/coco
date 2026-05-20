@@ -68,6 +68,7 @@ describe('MintOpsApi', () => {
     };
     const executingOperation: ExecutingMintOperation = {
       ...pendingOperation,
+      outputData: pendingOperation.outputData!,
       state: 'executing',
     };
     const finalizedOperation: TerminalMintOperation = {
@@ -231,6 +232,7 @@ describe('MintOpsApi', () => {
 
     const executingOperation: ExecutingMintOperation = {
       ...pendingOperation,
+      outputData: pendingOperation.outputData!,
       state: 'executing',
     };
 

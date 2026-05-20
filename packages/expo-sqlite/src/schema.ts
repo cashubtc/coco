@@ -1140,6 +1140,59 @@ const MIGRATIONS: readonly Migration[] = [
     id: '029_backfill_send_operation_tokens',
     run: backfillSendOperationTokensFromHistory,
   },
+  {
+    id: '030_mint_batch_attempts',
+    run: async (db) => {
+      const proofColumns = await getTableColumns(db, 'coco_cashu_proofs');
+      if (!proofColumns.has('createdByBatchId')) {
+        await db.run('ALTER TABLE coco_cashu_proofs ADD COLUMN createdByBatchId TEXT');
+      }
+
+      const mintOperationColumns = await getTableColumns(db, 'coco_cashu_mint_operations');
+      if (!mintOperationColumns.has('batchEligible')) {
+        await db.run('ALTER TABLE coco_cashu_mint_operations ADD COLUMN batchEligible INTEGER');
+      }
+      if (!mintOperationColumns.has('redeemedByBatchId')) {
+        await db.run('ALTER TABLE coco_cashu_mint_operations ADD COLUMN redeemedByBatchId TEXT');
+      }
+
+      await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_proofs_createdByBatch
+          ON coco_cashu_proofs(createdByBatchId)
+          WHERE createdByBatchId IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_redeemedByBatch
+          ON coco_cashu_mint_operations(redeemedByBatchId)
+          WHERE redeemedByBatchId IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS coco_cashu_mint_batch_attempts (
+          id TEXT PRIMARY KEY,
+          mintUrl TEXT NOT NULL,
+          method TEXT NOT NULL,
+          unit TEXT NOT NULL,
+          operationIdsJson TEXT NOT NULL,
+          quoteIdsJson TEXT NOT NULL,
+          quoteAmountsJson TEXT NOT NULL,
+          totalAmount TEXT NOT NULL,
+          outputDataJson TEXT NOT NULL,
+          keysetId TEXT NOT NULL,
+          counterStart INTEGER,
+          counterEnd INTEGER,
+          state TEXT NOT NULL CHECK (state IN ('prepared', 'requesting', 'finalized', 'recovering', 'failed')),
+          error TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          requestedAt INTEGER,
+          finalizedAt INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_batch_attempts_state
+          ON coco_cashu_mint_batch_attempts(state);
+        CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_batch_attempts_mint
+          ON coco_cashu_mint_batch_attempts(mintUrl);
+      `);
+    },
+  },
 ];
 
 // Export for testing

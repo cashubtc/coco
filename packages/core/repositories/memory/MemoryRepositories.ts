@@ -14,6 +14,7 @@ import type {
   MintOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  MintBatchAttemptRepository,
   ReceiveOperationRepository,
 } from '..';
 import { MemoryAuthSessionRepository } from './MemoryAuthSessionRepository';
@@ -27,6 +28,7 @@ import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
 import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
+import { MemoryMintBatchAttemptRepository } from './MemoryMintBatchAttemptRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
@@ -45,6 +47,7 @@ export class MemoryRepositories implements Repositories {
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
+  mintBatchAttemptRepository: MintBatchAttemptRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
@@ -76,6 +79,7 @@ export class MemoryRepositories implements Repositories {
       new MemoryPaymentRequestReceiveOperationRepository();
     this.paymentRequestReceiveAttemptRepository =
       new MemoryPaymentRequestReceiveAttemptRepository();
+    this.mintBatchAttemptRepository = new MemoryMintBatchAttemptRepository();
   }
 
   async init(): Promise<void> {

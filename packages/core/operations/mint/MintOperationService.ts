@@ -1,5 +1,9 @@
 import type { Proof } from '@cashu/cashu-ts';
-import type { MintOperationRepository, ProofRepository } from '../../repositories';
+import type {
+  MintBatchAttemptRepository,
+  MintOperationRepository,
+  ProofRepository,
+} from '../../repositories';
 import type {
   ExecutingMintOperation,
   FailedMintOperation,
@@ -10,6 +14,7 @@ import type {
   PendingOrLaterOperation,
   TerminalMintOperation,
 } from './MintOperation';
+import type { MintBatchAttempt } from './MintBatchAttempt';
 import {
   createMintOperation,
   getOutputProofSecrets,
@@ -30,7 +35,12 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import {
+  generateSubId,
+  getSecretsFromSerializedOutputData,
+  mapProofToCoreProof,
+  sumAmounts,
+} from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
@@ -49,6 +59,7 @@ import { OperationIdLock } from '../OperationIdLock';
 export class MintOperationService {
   private readonly handlerProvider: MintHandlerProvider;
   private readonly mintOperationRepository: MintOperationRepository;
+  private readonly mintBatchAttemptRepository: MintBatchAttemptRepository;
   private readonly proofRepository: ProofRepository;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
@@ -64,6 +75,7 @@ export class MintOperationService {
   constructor(
     handlerProvider: MintHandlerProvider,
     mintOperationRepository: MintOperationRepository,
+    mintBatchAttemptRepository: MintBatchAttemptRepository,
     proofRepository: ProofRepository,
     proofService: ProofService,
     mintService: MintService,
@@ -75,6 +87,7 @@ export class MintOperationService {
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
+    this.mintBatchAttemptRepository = mintBatchAttemptRepository;
     this.proofRepository = proofRepository;
     this.proofService = proofService;
     this.mintService = mintService;
@@ -256,9 +269,17 @@ export class MintOperationService {
           importedQuote: options?.importedQuote as any,
         });
 
+        const batchSupport = handler.assessBatchSupport
+          ? await handler.assessBatchSupport({
+              ...this.buildDeps(),
+              operation: pending as any,
+              wallet,
+            })
+          : { supported: false };
         const pendingOp: PendingMintOperation = {
           ...pending,
           state: 'pending',
+          batchEligible: batchSupport.supported,
           updatedAt: Date.now(),
         };
 
@@ -306,9 +327,38 @@ export class MintOperationService {
         );
       }
 
-      const pendingOp = operation as PendingMintOperation;
+      let pendingOp = operation as PendingMintOperation;
+      const handler = this.handlerProvider.get(pendingOp.method);
+      const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        pendingOp.mintUrl,
+        pendingOp.unit,
+      );
+
+      if (!pendingOp.outputData) {
+        if (!handler.prepareSingleOutput) {
+          throw new Error(
+            `Mint method ${pendingOp.method} cannot prepare output data for operation ${pendingOp.id}`,
+          );
+        }
+
+        pendingOp = {
+          ...(await handler.prepareSingleOutput({
+            ...this.buildDeps(),
+            operation: pendingOp as any,
+            wallet,
+          })),
+          updatedAt: Date.now(),
+        } as PendingMintOperation;
+        await this.mintOperationRepository.update(pendingOp);
+      }
+
+      if (!pendingOp.outputData) {
+        throw new Error(`Mint operation ${pendingOp.id} has no output data after preparation`);
+      }
+
       const executing: ExecutingMintOperation = {
         ...pendingOp,
+        outputData: pendingOp.outputData,
         state: 'executing',
         updatedAt: Date.now(),
         error: undefined,
@@ -322,11 +372,6 @@ export class MintOperationService {
       });
 
       try {
-        const handler = this.handlerProvider.get(executing.method);
-        const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-          executing.mintUrl,
-          executing.unit,
-        );
         const result = await handler.execute({
           ...this.buildDeps(),
           operation: executing as any,
@@ -407,6 +452,150 @@ export class MintOperationService {
     );
   }
 
+  async finalizeBatch(operationIds: string[]): Promise<TerminalMintOperation[]> {
+    const uniqueOperationIds = Array.from(new Set(operationIds)).sort();
+    if (uniqueOperationIds.length === 0) {
+      return [];
+    }
+
+    const releaseLocks: Array<() => void> = [];
+    let releaseMintLock: (() => void) | null = null;
+    try {
+      for (const operationId of uniqueOperationIds) {
+        releaseLocks.push(await this.acquireOperationLock(operationId));
+      }
+
+      const loaded = await Promise.all(
+        uniqueOperationIds.map((operationId) => this.mintOperationRepository.getById(operationId)),
+      );
+      if (loaded.some((operation) => !operation || operation.state !== 'pending')) {
+        throw new Error('Cannot batch finalize: every operation must be pending');
+      }
+
+      const operations = loaded as PendingMintOperation[];
+      const [first] = operations;
+      if (!first) {
+        return [];
+      }
+
+      releaseMintLock = await this.mintScopedLock.acquire(first.mintUrl);
+
+      for (const operation of operations) {
+        if (operation.mintUrl !== first.mintUrl) {
+          throw new Error('Cannot batch finalize operations from different mints');
+        }
+        if (operation.method !== first.method) {
+          throw new Error('Cannot batch finalize operations with different methods');
+        }
+        if (operation.unit !== first.unit) {
+          throw new Error('Cannot batch finalize operations with different units');
+        }
+        if (!operation.batchEligible || operation.outputData || operation.redeemedByBatchId) {
+          throw new Error(`Operation ${operation.id} is not eligible for optimized batch minting`);
+        }
+        if (operation.lastObservedRemoteState !== 'PAID') {
+          throw new Error(`Operation ${operation.id} is not paid`);
+        }
+      }
+
+      if (!(await this.mintService.isTrustedMint(first.mintUrl))) {
+        throw new UnknownMintError(`Mint ${first.mintUrl} is not trusted`);
+      }
+
+      const capability = await this.mintService.getMintBatchCapability(first.mintUrl, first.method);
+      if (!capability.supported) {
+        throw new Error(`Mint ${first.mintUrl} does not support batch minting for ${first.method}`);
+      }
+      if (operations.length > capability.maxBatchSize) {
+        throw new Error(`Batch size ${operations.length} exceeds max ${capability.maxBatchSize}`);
+      }
+
+      const quoteSnapshots = await Promise.all(
+        operations.map((operation) =>
+          this.mintAdapter.checkMintQuoteState(first.mintUrl, operation.quoteId),
+        ),
+      );
+      const quoteAmounts = operations.map((operation, index) => {
+        const quote = quoteSnapshots[index];
+        if (!quote || quote.quote !== operation.quoteId) {
+          throw new Error(`Mint returned unexpected quote snapshot for ${operation.quoteId}`);
+        }
+        if (quote.state !== 'PAID') {
+          throw new Error(`Quote ${operation.quoteId} is not PAID`);
+        }
+        if (!quote.amount || quote.amount.isZero()) {
+          throw new Error(`Quote ${operation.quoteId} has invalid amount`);
+        }
+        return quote.amount;
+      });
+
+      const handler = this.handlerProvider.get(first.method);
+      if (!handler.prepareBatch || !handler.executeBatch) {
+        throw new Error(`Mint method ${first.method} does not implement batch minting`);
+      }
+
+      const { wallet, keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+        first.mintUrl,
+        first.unit,
+      );
+      const totalAmount = sumAmounts(quoteAmounts);
+      let attempt = await handler.prepareBatch({
+        ...this.buildDeps(),
+        operations: operations as any,
+        totalAmount,
+        quoteAmounts,
+        wallet,
+        keysetId,
+      });
+
+      await this.mintBatchAttemptRepository.create(attempt);
+      for (const operation of operations) {
+        await this.mintOperationRepository.update({
+          ...operation,
+          redeemedByBatchId: attempt.id,
+          updatedAt: Date.now(),
+        });
+      }
+
+      attempt = {
+        ...attempt,
+        state: 'requesting',
+        requestedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await this.mintBatchAttemptRepository.update(attempt);
+
+      const result = await handler.executeBatch({
+        ...this.buildDeps(),
+        attempt: attempt as any,
+        operations: operations as any,
+        wallet,
+      });
+
+      switch (result.status) {
+        case 'ISSUED':
+          await this.proofService.saveProofs(
+            attempt.mintUrl,
+            mapProofToCoreProof(attempt.mintUrl, 'ready', result.proofs, {
+              unit: attempt.unit,
+              createdByBatchId: attempt.id,
+            }),
+          );
+          return this.finalizeIssuedBatchAttempt(attempt);
+        case 'ALREADY_ISSUED':
+          return this.recoverRequestingBatchAttempt(attempt);
+        case 'FAILED':
+          throw new Error(result.error ?? 'Batch mint execution failed');
+      }
+      throw new Error('Unexpected batch mint execution result');
+    } finally {
+      releaseMintLock?.();
+      for (const release of releaseLocks.reverse()) {
+        release();
+      }
+    }
+  }
+
   async recoverPendingOperations(): Promise<void> {
     if (this.recoveryLock) {
       throw new Error('Recovery is already in progress');
@@ -421,6 +610,7 @@ export class MintOperationService {
       let initCount = 0;
       let pendingCount = 0;
       let executingCount = 0;
+      let batchAttemptCount = 0;
 
       const initOps = await this.mintOperationRepository.getByState('init');
       for (const op of initOps) {
@@ -481,10 +671,39 @@ export class MintOperationService {
         }
       }
 
+      const batchAttempts = await this.mintBatchAttemptRepository.getPending();
+      for (const attempt of batchAttempts) {
+        try {
+          if (attempt.state === 'requesting' || attempt.state === 'recovering') {
+            await this.recoverRequestingBatchAttempt(attempt);
+            batchAttemptCount++;
+          } else if (attempt.state === 'prepared') {
+            await this.mintBatchAttemptRepository.delete(attempt.id);
+            for (const operationId of attempt.operationIds) {
+              const operation = await this.mintOperationRepository.getById(operationId);
+              if (operation?.state === 'pending' && operation.redeemedByBatchId === attempt.id) {
+                await this.mintOperationRepository.update({
+                  ...operation,
+                  redeemedByBatchId: undefined,
+                  updatedAt: Date.now(),
+                });
+              }
+            }
+            batchAttemptCount++;
+          }
+        } catch (e) {
+          this.logger?.error('Error recovering mint batch attempt', {
+            batchAttemptId: attempt.id,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
       this.logger?.info('Mint operation recovery completed', {
         initOperations: initCount,
         pendingOperations: pendingCount,
         executingOperations: executingCount,
+        batchAttempts: batchAttemptCount,
       });
     } finally {
       this.recoveryLock = null;
@@ -791,6 +1010,96 @@ export class MintOperationService {
     return failed;
   }
 
+  private async finalizeIssuedBatchAttempt(
+    attempt: MintBatchAttempt,
+    error?: string,
+  ): Promise<FinalizedMintOperation[]> {
+    const currentAttempt = await this.mintBatchAttemptRepository.getById(attempt.id);
+    if (!currentAttempt) {
+      throw new Error(`Batch attempt ${attempt.id} not found`);
+    }
+
+    const finalizedAt = Date.now();
+    const finalizedAttempt: MintBatchAttempt = {
+      ...currentAttempt,
+      state: 'finalized',
+      finalizedAt,
+      updatedAt: finalizedAt,
+      error,
+    };
+    await this.mintBatchAttemptRepository.update(finalizedAttempt);
+
+    const finalizedOperations: FinalizedMintOperation[] = [];
+    for (const operationId of finalizedAttempt.operationIds) {
+      const current = await this.mintOperationRepository.getById(operationId);
+      if (!current) {
+        throw new Error(`Operation ${operationId} not found`);
+      }
+      if (current.state === 'finalized') {
+        finalizedOperations.push(current as FinalizedMintOperation);
+        continue;
+      }
+      if (current.state !== 'pending' || current.redeemedByBatchId !== finalizedAttempt.id) {
+        throw new Error(`Cannot finalize batch operation ${operationId} in state ${current.state}`);
+      }
+
+      await this.eventBus.emit('mint-op:quote-state-changed', {
+        mintUrl: current.mintUrl,
+        operationId: current.id,
+        operation: current,
+        quoteId: current.quoteId,
+        state: 'ISSUED',
+      });
+
+      const finalized: FinalizedMintOperation = {
+        ...(current as PendingMintOperation),
+        state: 'finalized',
+        lastObservedRemoteState: 'ISSUED',
+        lastObservedRemoteStateAt: finalizedAt,
+        updatedAt: Date.now(),
+        error,
+      };
+      await this.mintOperationRepository.update(finalized);
+      await this.eventBus.emit('mint-op:finalized', {
+        mintUrl: finalized.mintUrl,
+        operationId: finalized.id,
+        operation: finalized,
+      });
+      finalizedOperations.push(finalized);
+    }
+
+    return finalizedOperations;
+  }
+
+  private async recoverRequestingBatchAttempt(
+    attempt: MintBatchAttempt,
+  ): Promise<FinalizedMintOperation[]> {
+    if (await this.hasSavedBatchOutputs(attempt)) {
+      return this.finalizeIssuedBatchAttempt(attempt);
+    }
+
+    const recovered = await this.proofService.recoverProofsFromOutputData(
+      attempt.mintUrl,
+      attempt.outputData,
+      {
+        unit: attempt.unit,
+        createdByBatchId: attempt.id,
+      },
+    );
+    if (recovered.length > 0 && (await this.hasSavedBatchOutputs(attempt))) {
+      return this.finalizeIssuedBatchAttempt(attempt);
+    }
+
+    const failed: MintBatchAttempt = {
+      ...attempt,
+      state: 'failed',
+      error: `Batch attempt ${attempt.id} could not recover issued proofs`,
+      updatedAt: Date.now(),
+    };
+    await this.mintBatchAttemptRepository.update(failed);
+    throw new Error(failed.error);
+  }
+
   private async transitionToPending(
     op: ExecutingMintOperation,
     error?: string,
@@ -957,6 +1266,23 @@ export class MintOperationService {
 
     for (const secret of outputSecrets) {
       const proof = await this.proofRepository.getProofBySecret(op.mintUrl, secret);
+      if (!proof) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private async hasSavedBatchOutputs(attempt: MintBatchAttempt): Promise<boolean> {
+    const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(attempt.outputData);
+    const outputSecrets = [...keepSecrets, ...sendSecrets];
+    if (outputSecrets.length === 0) {
+      return false;
+    }
+
+    for (const secret of outputSecrets) {
+      const proof = await this.proofRepository.getProofBySecret(attempt.mintUrl, secret);
       if (!proof) {
         return false;
       }

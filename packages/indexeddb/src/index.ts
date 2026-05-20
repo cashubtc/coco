@@ -12,6 +12,7 @@ import type {
   MintOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  MintBatchAttemptRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
@@ -28,6 +29,7 @@ import { IdbSendOperationRepository } from './repositories/SendOperationReposito
 import { IdbMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { IdbAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { IdbMintOperationRepository } from './repositories/MintOperationRepository.ts';
+import { IdbMintBatchAttemptRepository } from './repositories/MintBatchAttemptRepository.ts';
 import { IdbReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 import {
   IdbPaymentRequestReceiveAttemptRepository,
@@ -48,6 +50,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
+  readonly mintBatchAttemptRepository: MintBatchAttemptRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
@@ -67,6 +70,7 @@ export class IndexedDbRepositories implements Repositories {
     this.meltOperationRepository = new IdbMeltOperationRepository(this.db);
     this.authSessionRepository = new IdbAuthSessionRepository(this.db);
     this.mintOperationRepository = new IdbMintOperationRepository(this.db);
+    this.mintBatchAttemptRepository = new IdbMintBatchAttemptRepository(this.db);
     this.receiveOperationRepository = new IdbReceiveOperationRepository(this.db);
     this.paymentRequestReceiveOperationRepository = new IdbPaymentRequestReceiveOperationRepository(
       this.db,
@@ -102,6 +106,7 @@ export class IndexedDbRepositories implements Repositories {
         meltOperationRepository: new IdbMeltOperationRepository(scopedDb),
         authSessionRepository: new IdbAuthSessionRepository(scopedDb),
         mintOperationRepository: new IdbMintOperationRepository(scopedDb),
+        mintBatchAttemptRepository: new IdbMintBatchAttemptRepository(scopedDb),
         receiveOperationRepository: new IdbReceiveOperationRepository(scopedDb),
         paymentRequestReceiveOperationRepository: new IdbPaymentRequestReceiveOperationRepository(
           scopedDb,
@@ -129,6 +134,7 @@ export {
   IdbMeltOperationRepository,
   IdbAuthSessionRepository,
   IdbMintOperationRepository,
+  IdbMintBatchAttemptRepository,
   IdbReceiveOperationRepository,
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,

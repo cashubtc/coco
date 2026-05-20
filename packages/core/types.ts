@@ -57,4 +57,10 @@ export interface CoreProof extends Proof {
    * Used for auditing and rollback purposes.
    */
   createdByOperationId?: string;
+
+  /**
+   * ID of the batch attempt that created this proof as output.
+   * Batch-created proofs are not attributable to a single mint operation.
+   */
+  createdByBatchId?: string;
 }

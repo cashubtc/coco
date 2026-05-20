@@ -35,6 +35,7 @@ function rowToProof(r: ProofRow): CoreProof {
     state: r.state,
     ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
     ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
+    ...(r.createdByBatchId ? { createdByBatchId: r.createdByBatchId } : {}),
   };
 }
 
@@ -74,6 +75,7 @@ export class IdbProofRepository implements ProofRepository {
           createdAt: now,
           usedByOperationId: p.usedByOperationId ?? null,
           createdByOperationId: p.createdByOperationId ?? null,
+          createdByBatchId: p.createdByBatchId ?? null,
         };
         await table.put(row);
       }

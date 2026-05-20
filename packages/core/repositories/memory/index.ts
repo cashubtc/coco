@@ -11,5 +11,6 @@ export * from './MemoryRepositories';
 export * from './MemorySendOperationRepository';
 export * from './MemoryMeltOperationRepository';
 export * from './MemoryMintOperationRepository';
+export * from './MemoryMintBatchAttemptRepository';
 export * from './MemoryReceiveOperationRepository';
 export * from './MemoryPaymentRequestReceiveRepository';

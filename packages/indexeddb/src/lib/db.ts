@@ -144,6 +144,7 @@ export interface ProofRow {
   createdAt: number;
   usedByOperationId?: string | null;
   createdByOperationId?: string | null;
+  createdByBatchId?: string | null;
 }
 
 export interface MintQuoteRow {
@@ -308,4 +309,27 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+  batchEligible?: number | null;
+  redeemedByBatchId?: string | null;
+}
+
+export interface MintBatchAttemptRow {
+  id: string;
+  mintUrl: string;
+  method: string;
+  unit: string;
+  operationIdsJson: string;
+  quoteIdsJson: string;
+  quoteAmountsJson: string;
+  totalAmount: string | number;
+  outputDataJson: string;
+  keysetId: string;
+  counterStart?: number | null;
+  counterEnd?: number | null;
+  state: 'prepared' | 'requesting' | 'finalized' | 'recovering' | 'failed';
+  error?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  requestedAt?: number | null;
+  finalizedAt?: number | null;
 }
