@@ -89,6 +89,66 @@ describe('PollingTransport per-mint intervals', () => {
   });
 });
 
+describe('PollingTransport proof state batching', () => {
+  const mintUrl = 'https://mint.example.com';
+
+  it('does not duplicate a single watched proof in the checkstate request', async () => {
+    const checkProofStates = mock((_: string, ys: string[]) =>
+      Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
+    );
+    const adapter = {
+      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkProofStates,
+    } as unknown as MintAdapter;
+    const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'proof_state', subId: 'proof-sub-1', filters: ['y-single'] },
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(checkProofStates).toHaveBeenCalledTimes(1);
+    expect(checkProofStates.mock.calls[0]?.[1]).toEqual(['y-single']);
+
+    transport.closeAll();
+  });
+
+  it('caps proof state batches at 100 unique Ys', async () => {
+    const checkProofStates = mock((_: string, ys: string[]) =>
+      Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
+    );
+    const adapter = {
+      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkProofStates,
+    } as unknown as MintAdapter;
+    const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
+    const filters = Array.from({ length: 150 }, (_, index) => `y-${index}`);
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'proof_state', subId: 'proof-sub-2', filters },
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const ys = checkProofStates.mock.calls[0]?.[1] ?? [];
+    expect(ys).toHaveLength(100);
+    expect(new Set(ys).size).toBe(100);
+
+    transport.closeAll();
+  });
+});
+
 describe('PollingTransport unsubscribe during processing', () => {
   const mintUrl = 'https://mint.example.com';
 
