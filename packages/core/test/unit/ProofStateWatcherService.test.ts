@@ -10,6 +10,7 @@ import type { ProofRepository } from '../../repositories/index.ts';
 import type { CoreProof } from '../../types.ts';
 import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
+import { buildYHexMapsForSecrets } from '../../utils.ts';
 
 describe('ProofStateWatcherService', () => {
   const mintUrlA = 'https://mint-a.test';
@@ -218,6 +219,79 @@ describe('ProofStateWatcherService', () => {
 
     expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
     expect(finalize).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('finalizes once for a spent subscription notification emitted through proof state events', async () => {
+    const secret = 'spent-1';
+    const { yHexBySecret } = buildYHexMapsForSecrets([secret]);
+    let subscriptionCallback:
+      | ((payload: { Y: string; state: 'SPENT'; witness?: unknown }) => Promise<void> | void)
+      | undefined;
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(async (_mintUrl, _kind, _filters, callback) => {
+      subscriptionCallback = callback;
+      return { subId: 'sub-1', unsubscribe };
+    });
+    const setProofState = mock(
+      async (mintUrl: string, secrets: string[], state: 'inflight' | 'ready' | 'spent') => {
+        await bus.emit('proofs:state-changed', { mintUrl, secrets, state });
+      },
+    );
+    const getProofBySecret = mock(async () =>
+      makeProof({ secret, state: 'spent', usedByOperationId: 'send-op-1' }),
+    );
+    const getProofsBySecrets = mock(async () => [makeProof({ secret, state: 'spent' })]);
+    const finalize = mock(async () => {});
+    const getOperation = mock(async () => ({
+      id: 'send-op-1',
+      state: 'pending',
+      mintUrl: mintUrlA,
+      amount: Amount.from(1),
+      unit: 'sat',
+      method: 'default',
+      methodData: {},
+      needsSwap: false,
+      fee: Amount.from(0),
+      inputAmount: Amount.from(1),
+      inputProofSecrets: [secret],
+      createdAt: 0,
+      updatedAt: 0,
+    }));
+
+    const watcher = new ProofStateWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      {
+        isTrustedMint: mock(async () => true),
+      } as unknown as MintService,
+      {
+        setProofState,
+      } as unknown as ProofService,
+      {
+        getProofBySecret,
+        getProofsBySecrets,
+      } as unknown as ProofRepository,
+      bus,
+      new NullLogger(),
+      { watchExistingInflightOnStart: false },
+    );
+    watcher.setSendOperationService({ getOperation, finalize } as unknown as SendOperationService);
+
+    await watcher.start();
+    await watcher.watchProof(mintUrlA, [secret]);
+    expect(subscriptionCallback).toBeDefined();
+
+    await subscriptionCallback!({ Y: yHexBySecret.get(secret)!, state: 'SPENT' });
+
+    expect(setProofState).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(getProofBySecret).toHaveBeenCalledTimes(1);
+    expect(getProofBySecret).toHaveBeenCalledWith(mintUrlA, secret);
+    expect(getProofsBySecrets).toHaveBeenCalledTimes(1);
+    expect(getProofsBySecrets).toHaveBeenCalledWith(mintUrlA, [secret]);
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalledWith('send-op-1');
 
     await watcher.stop();
   });

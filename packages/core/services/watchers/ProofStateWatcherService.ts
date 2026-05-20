@@ -248,9 +248,6 @@ export class ProofStateWatcherService {
             subId,
           });
           await this.stopWatching(key);
-
-          // Check if this proof is part of a send operation and finalize it
-          await this.tryFinalizeSendOperation(mintUrl, secret);
         } catch (err) {
           this.logger?.error('Failed to mark inflight proof as spent', { mintUrl, subId, err });
         } finally {
