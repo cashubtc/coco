@@ -187,6 +187,7 @@ function createMintManagerMock() {
     execute: vi.fn(),
     get: vi.fn(),
     getByQuote: vi.fn(),
+    listByQuote: vi.fn(),
     listPending: vi.fn(),
     listInFlight: vi.fn(),
     checkPayment: vi.fn(),
@@ -208,6 +209,7 @@ function createMeltManagerMock() {
     execute: vi.fn(),
     get: vi.fn(),
     getByQuote: vi.fn(),
+    listByQuote: vi.fn(),
     listPrepared: vi.fn(),
     listInFlight: vi.fn(),
     refresh: vi.fn(),
@@ -1049,6 +1051,51 @@ describe('useMintOperation', () => {
     expect(result.current.currentOperation).toEqual(pending);
   });
 
+  it('passes BOLT12 mint inputs and quote lookup helpers through without rebinding', async () => {
+    const { manager, mint } = createMintManagerMock();
+    const prepared = createPendingMintOperation({
+      method: 'bolt12',
+      methodData: { description: 'Membership', amountless: true },
+      quoteId: 'shared-mint-quote',
+      request: 'lno1mintoffer',
+    });
+    const latest = createPendingMintOperation({
+      id: 'mint-op-latest',
+      method: 'bolt12',
+      quoteId: prepared.quoteId,
+      updatedAt: prepared.updatedAt + 1,
+    });
+
+    const input: MintOperationPrepareInput = {
+      mintUrl: MINT_URL,
+      amount: 100,
+      method: 'bolt12',
+      methodData: { description: 'Membership', amountless: true },
+    };
+
+    mint.prepare.mockResolvedValue(prepared);
+    mint.getByQuote.mockResolvedValue(latest);
+    mint.listByQuote.mockResolvedValue([prepared, latest]);
+
+    const { result } = renderHook(() => useMintOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(input);
+    });
+
+    const byQuote = await result.current.getByQuote(MINT_URL, prepared.quoteId);
+    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
+
+    expect(mint.prepare).toHaveBeenCalledWith(input);
+    expect(mint.getByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(mint.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(byQuote).toEqual(latest);
+    expect(listByQuote).toEqual([prepared, latest]);
+    expect(result.current.currentOperation).toEqual(prepared);
+  });
+
   it('binds newly prepared and imported quotes when starting unbound', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation();
@@ -1323,6 +1370,50 @@ describe('useMeltOperation', () => {
     });
 
     expect(melt.prepare).toHaveBeenCalledWith(input);
+    expect(result.current.currentOperation).toEqual(prepared);
+  });
+
+  it('passes BOLT12 melt inputs and quote lookup helpers through without rebinding', async () => {
+    const { manager, melt } = createMeltManagerMock();
+    const prepared = createPreparedMeltOperation({
+      method: 'bolt12',
+      methodData: { offer: 'lno1amountlessoffer' },
+      quoteId: 'shared-melt-quote',
+    });
+    const latest = createPreparedMeltOperation({
+      id: 'melt-op-latest',
+      method: 'bolt12',
+      methodData: { offer: 'lno1amountlessoffer' },
+      quoteId: prepared.quoteId,
+      updatedAt: prepared.updatedAt + 1,
+    });
+
+    const input: MeltOperationPrepareInput = {
+      mintUrl: MINT_URL,
+      method: 'bolt12',
+      methodData: { offer: 'lno1amountlessoffer', amountSats: 100 },
+    };
+
+    melt.prepare.mockResolvedValue(prepared);
+    melt.getByQuote.mockResolvedValue(latest);
+    melt.listByQuote.mockResolvedValue([prepared, latest]);
+
+    const { result } = renderHook(() => useMeltOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(input);
+    });
+
+    const byQuote = await result.current.getByQuote(MINT_URL, prepared.quoteId);
+    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
+
+    expect(melt.prepare).toHaveBeenCalledWith(input);
+    expect(melt.getByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(melt.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(byQuote).toEqual(latest);
+    expect(listByQuote).toEqual([prepared, latest]);
     expect(result.current.currentOperation).toEqual(prepared);
   });
 

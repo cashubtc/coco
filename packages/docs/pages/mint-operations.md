@@ -25,6 +25,10 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 - `get(operationId)`, `getByQuote({ mintUrl, method, quoteId })`, `listPending()`, and
   `listInFlight()` load persisted operation state
 
+Built-in mint methods are `bolt11` and `bolt12`. Quote lookups use the full
+`{ mintUrl, method, quoteId }` identity so reused quote IDs remain scoped by
+method.
+
 ## Quote Resurfacing (`coco.quotes.mint`)
 
 Use `coco.quotes.mint` when an app needs to show a quote payment request again
@@ -99,6 +103,26 @@ if (check.category === 'ready' || check.category === 'completed') {
   console.log('Mint operation state:', terminal.state);
 }
 ```
+
+### BOLT12 Mint Offers
+
+```ts
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  amount: 100,
+  method: 'bolt12',
+  methodData: {
+    description: 'Coffee refill',
+    amountless: true,
+  },
+});
+
+showOffer(pending.request);
+```
+
+BOLT12 mint quotes are locked to a fresh Coco keyring key. For `amountless:
+true`, Coco omits the quote amount sent to the mint but still records
+`amount` as the ecash amount the operation should issue.
 
 ## Recovery
 

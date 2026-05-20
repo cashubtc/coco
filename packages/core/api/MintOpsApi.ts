@@ -153,11 +153,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     );
   }
 
-  /** Lists mint operations for a mint URL and quote ID. */
-  async listByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
-    return this.mintOperationService.listOperationsByQuote(mintUrl, quoteId);
-  }
-
   /** Lists mint operations that are pending redemption or remote settlement. */
   async listPending(): Promise<PendingMintOperation[]> {
     return this.mintOperationService.getPendingOperations();

@@ -18,6 +18,8 @@ type MeltOps = Manager['ops']['melt'];
 export type MeltOperationPrepareInput = Parameters<MeltOps['prepare']>[0];
 export type MeltOperationPrepareResult = Awaited<ReturnType<MeltOps['prepare']>>;
 export type MeltOperationExecuteResult = Awaited<ReturnType<MeltOps['execute']>>;
+export type MeltOperationByQuoteResult = Awaited<ReturnType<MeltOps['getByQuote']>>;
+export type MeltOperationListByQuoteResult = Awaited<ReturnType<MeltOps['listByQuote']>>;
 
 export interface UseMeltOperationResult extends OperationHookResult<
   MeltOperation,
@@ -28,6 +30,8 @@ export interface UseMeltOperationResult extends OperationHookResult<
   cancel(): Promise<void>;
   reclaim(): Promise<void>;
   finalize(): Promise<void>;
+  getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperationByQuoteResult>;
+  listByQuote(mintUrl: string, quoteId: string): Promise<MeltOperationListByQuoteResult>;
   listPrepared(): Promise<MeltOperationPrepareResult[]>;
   listInFlight(): Promise<MeltOperation[]>;
 }
@@ -214,6 +218,20 @@ export function useMeltOperation(
     );
   }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
 
+  const getByQuote = useCallback(
+    async (mintUrl: string, quoteId: string): Promise<MeltOperationByQuoteResult> => {
+      return manager.ops.melt.getByQuote(mintUrl, quoteId);
+    },
+    [manager],
+  );
+
+  const listByQuote = useCallback(
+    async (mintUrl: string, quoteId: string): Promise<MeltOperationListByQuoteResult> => {
+      return manager.ops.melt.listByQuote(mintUrl, quoteId);
+    },
+    [manager],
+  );
+
   const listPrepared = useCallback(async (): Promise<MeltOperationPrepareResult[]> => {
     return manager.ops.melt.listPrepared();
   }, [manager]);
@@ -240,6 +258,8 @@ export function useMeltOperation(
     cancel,
     reclaim,
     finalize,
+    getByQuote,
+    listByQuote,
     listPrepared,
     listInFlight,
     reset: resetBoundOperation,

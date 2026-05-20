@@ -114,11 +114,6 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
     );
   }
 
-  /** Lists melt operations for a mint URL and quote ID. */
-  async listByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
-    return this.meltOperationService.listOperationsByQuote(mintUrl, quoteId);
-  }
-
   /** Lists melt operations that are prepared and ready to execute or cancel. */
   async listPrepared(): Promise<PreparedMeltOperation[]> {
     return this.meltOperationService.getPreparedOperations();

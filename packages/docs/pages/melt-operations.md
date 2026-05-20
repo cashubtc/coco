@@ -16,6 +16,7 @@ The melt operation saga provides:
 The canonical API is exposed through `coco.ops.melt`:
 
 - `prepare({ mintUrl, method: 'bolt11', quoteId })` prepares an operation from a canonical melt quote
+- `prepare({ mintUrl, method: 'bolt12', quoteId })` prepares a BOLT12 offer melt from a canonical melt quote
 - `execute(operationOrId)` executes the prepared operation
 - `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
@@ -78,6 +79,16 @@ console.log('Amount:', prepared.amount);
 console.log('Fee reserve:', prepared.fee_reserve);
 console.log('Swap fee:', prepared.swap_fee);
 console.log('Needs swap:', prepared.needsSwap);
+```
+
+For BOLT12 offers:
+
+```ts
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt12',
+  methodData: { offer, amountSats: 1000 },
+});
 ```
 
 Internally, the service:
@@ -180,5 +191,5 @@ coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
 
 ## Implementation Notes
 
-- Built-in `manager.ops.melt` support currently covers `bolt11`; additional methods require wiring another `MeltMethodHandler`
+- Built-in `manager.ops.melt` support covers `bolt11` and `bolt12`
 - Operations are locked per id; concurrent calls throw `OperationInProgressError`
