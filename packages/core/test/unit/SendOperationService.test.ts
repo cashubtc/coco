@@ -13,6 +13,7 @@ import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
+import { PendingSendRollbackError } from '../../models/Error';
 import type {
   PreparedSendOperation,
   PendingSendOperation,
@@ -123,6 +124,11 @@ describe('SendOperationService', () => {
         keepAmount: Amount.zero(),
       })),
       setProofState: mock(async () => {}),
+      restoreProofsToReady: mock((selectedMintUrl: string, secrets: string[]) =>
+        proofRepo
+          .setProofState(selectedMintUrl, secrets, 'ready')
+          .then(() => proofRepo.releaseProofs(selectedMintUrl, secrets)),
+      ),
       saveProofs: mock(async () => {}),
     } as unknown as ProofService;
 
@@ -446,5 +452,69 @@ describe('SendOperationService', () => {
     expect(customHandler.finalize).toHaveBeenCalledTimes(1);
     expect(persistedStateDuringFinalize).toBe('pending');
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
+  });
+
+  it('wraps failed pending reclaim with a safe rollback error', async () => {
+    const pendingOp: PendingSendOperation = {
+      id: 'send-op-reclaim-offline',
+      state: 'pending',
+      mintUrl,
+      amount: Amount.from(100),
+      unit: 'sat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      needsSwap: true,
+      fee: Amount.zero(),
+      inputAmount: Amount.from(100),
+      inputProofSecrets: ['proof-1'],
+      outputData: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: 100, id: keysetId, B_: 'B_send_1' },
+            blindingFactor: 'abc123',
+            secret: Buffer.from('send-secret-1').toString('hex'),
+          },
+        ],
+      },
+      method: 'default',
+      methodData: {},
+    };
+    await sendOpRepo.create(pendingOp);
+    const cause = new Error('Network request failed');
+
+    const customHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      rollback: mock(async () => {
+        throw cause;
+      }),
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+    handlerProvider.register('default', customHandler);
+
+    let thrown: unknown;
+    try {
+      await service.rollback(pendingOp.id);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBeInstanceOf(PendingSendRollbackError);
+    expect((thrown as Error).message).toBe(
+      'Cannot roll back safely without mint connection. Token might have been spent.',
+    );
+    expect((thrown as PendingSendRollbackError).operationId).toBe(pendingOp.id);
+    expect((thrown as PendingSendRollbackError).cause).toBe(cause);
+    expect(customHandler.rollback).toHaveBeenCalledTimes(1);
+    const persisted = await sendOpRepo.getById(pendingOp.id);
+    expect(persisted?.state).toBe('rolling_back');
   });
 });

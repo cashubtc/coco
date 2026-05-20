@@ -72,6 +72,13 @@ describe('DefaultSendHandler', () => {
     })),
   });
 
+  const useOperationProofs = (proofs: CoreProof[]) => {
+    proofRepository = {
+      ...proofRepository,
+      getProofsByOperationId: mock(() => Promise.resolve(proofs)),
+    } as ProofRepository;
+  };
+
   const makeInitOp = (id: string, overrides?: Partial<InitSendOperation>): InitSendOperation => ({
     id,
     state: 'init',
@@ -195,6 +202,7 @@ describe('DefaultSendHandler', () => {
         }),
       ),
       setProofState: mock(() => Promise.resolve()),
+      restoreProofsToReady: mock(() => Promise.resolve()),
       saveProofs: mock(() => Promise.resolve()),
       recoverProofsFromOutputData: mock(() => Promise.resolve([])),
     } as unknown as ProofService;
@@ -454,9 +462,7 @@ describe('DefaultSendHandler', () => {
         createdByOperationId: 'op-pending',
       });
 
-      (proofRepository.getProofsByOperationId as Mock<any>).mockImplementation(() =>
-        Promise.resolve([sendProof]),
-      );
+      useOperationProofs([sendProof]);
       (mockWallet.receive as Mock<any>).mockImplementation(() =>
         Promise.resolve([makeProof('reclaim-1', 99)]),
       );
@@ -490,6 +496,35 @@ describe('DefaultSendHandler', () => {
       expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['send-1'], 'spent');
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['input-1']);
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['keep-1']);
+    });
+
+    it('reclaims exact-match pending proofs through the mint', async () => {
+      const operation = makePendingOp('op-exact-pending', {
+        needsSwap: false,
+        fee: Amount.zero(),
+        inputAmount: Amount.from(100),
+        inputProofSecrets: ['proof-100'],
+        outputData: undefined,
+      });
+      const sendProof = makeCoreProof('proof-100', 100, {
+        state: 'inflight',
+        createdByOperationId: 'op-exact-pending',
+      });
+
+      useOperationProofs([sendProof]);
+
+      await handler.rollback(buildRollbackContext(operation));
+
+      expect(proofService.restoreProofsToReady).not.toHaveBeenCalled();
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(99), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        },
+        {},
+      );
+      expect(mockWallet.receive).toHaveBeenCalled();
     });
   });
 

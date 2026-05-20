@@ -154,6 +154,18 @@ describe('SendOpsApi', () => {
 
     await api.reclaim(pendingOperation.id);
     expect(sendOperationService.rollback).toHaveBeenCalledWith(pendingOperation.id);
+
+    const rollingBackOperation: SendOperation = {
+      ...pendingOperation,
+      state: 'rolling_back',
+      updatedAt: Date.now(),
+    };
+    (sendOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      rollingBackOperation as SendOperation,
+    );
+
+    await expect(api.reclaim(rollingBackOperation.id)).rejects.toThrow("Expected 'pending'");
+    expect(sendOperationService.rollback).toHaveBeenCalledTimes(1);
   });
 
   it('finalize delegates directly to the service', async () => {

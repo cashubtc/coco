@@ -120,6 +120,18 @@ export class PaymentRequestError extends Error {
   }
 }
 
+export class PendingSendRollbackError extends Error {
+  readonly operationId: string;
+  override readonly cause?: unknown;
+
+  constructor(operationId: string, cause?: unknown) {
+    super('Cannot roll back safely without mint connection. Token might have been spent.');
+    this.name = 'PendingSendRollbackError';
+    this.operationId = operationId;
+    this.cause = cause;
+  }
+}
+
 /**
  * This error is thrown when attempting to modify an operation that is already in progress.
  */

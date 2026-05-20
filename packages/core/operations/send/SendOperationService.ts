@@ -30,6 +30,7 @@ import { generateSubId } from '../../utils';
 import {
   UnknownMintError,
   ProofValidationError,
+  PendingSendRollbackError,
   OperationInProgressError,
 } from '../../models/Error';
 import { MintScopedLock } from '../MintScopedLock';
@@ -489,11 +490,18 @@ export class SendOperationService {
         opForRollback = rollingBack;
       }
 
-      await handler.rollback({
-        ...this.buildDeps(),
-        operation: opForRollback,
-        wallet,
-      });
+      try {
+        await handler.rollback({
+          ...this.buildDeps(),
+          operation: opForRollback,
+          wallet,
+        });
+      } catch (error) {
+        if (operation.state === 'pending') {
+          throw new PendingSendRollbackError(operation.id, error);
+        }
+        throw error;
+      }
 
       await this.markAsRolledBack(opForRollback, reason);
     } finally {
