@@ -866,6 +866,14 @@ export class MeltOperationService {
     return matching[0]!;
   }
 
+  async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
+    const operations = await this.meltOperationRepository.getByQuoteId(
+      normalizeMintUrl(mintUrl),
+      quoteId,
+    );
+    return operations.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+
   async getPendingOperations(): Promise<MeltOperation[]> {
     return this.meltOperationRepository.getPending();
   }

@@ -54,7 +54,7 @@ export interface MintMethodDefinitions {
     methodData: Record<string, never>;
     createQuoteData: {
       unit: string;
-      amount?: Amount;
+      amount?: UnitAmount;
       description?: string;
     };
     quoteData: {

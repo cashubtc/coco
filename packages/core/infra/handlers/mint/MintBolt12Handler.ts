@@ -1,5 +1,5 @@
 import { Amount, type MintQuoteBolt12Response, type Wallet } from '@cashu/cashu-ts';
-import { assertSameUnit } from '@core/amounts';
+import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
@@ -27,10 +27,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
   async createQuote(ctx: CreateMintQuoteContext<'bolt12'>): Promise<MintQuote<'bolt12'>> {
     const quoteKey = await this.keyRingService.generateMintQuoteKeyPair();
+    const amount = ctx.createQuoteData.amount
+      ? normalizeUnitAmount(ctx.createQuoteData.amount).amount
+      : undefined;
     const remoteQuote = await this.createRemoteQuote(ctx.wallet, {
       pubkey: quoteKey.publicKeyHex,
       unit: ctx.createQuoteData.unit,
-      amount: ctx.createQuoteData.amount,
+      amount,
       description: ctx.createQuoteData.description,
     });
 
@@ -38,7 +41,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       remoteQuote,
       quoteKey.publicKeyHex,
       ctx.createQuoteData.unit,
-      ctx.createQuoteData.amount,
+      amount,
     );
 
     return mintQuoteFromBolt12Response(ctx.mintUrl, remoteQuote);

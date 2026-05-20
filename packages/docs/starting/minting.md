@@ -73,10 +73,10 @@ coco.on('mint-op:finalized', (payload) => {
 });
 ```
 
-Reusable onchain mint quotes are created through the same quote API. The quote
-request is the address or payment request to fund. Refresh the quote to observe
-new incoming amount, then prepare one or more partial mint operations against
-the same quote ID.
+Reusable onchain and BOLT12 mint quotes are created through the same quote API.
+The quote request is the address, offer, or payment request to fund. Refresh the
+quote to observe new incoming amount, then prepare one or more mint operations
+against the same quote ID.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -107,9 +107,30 @@ if (!claimable.isZero()) {
 }
 ```
 
+BOLT12 uses the same quote-first shape. Fixed-amount BOLT12 quotes can be
+prepared without repeating the amount.
+
+```ts
+const offerQuote = await coco.quotes.mint.create({
+  mintUrl: 'https://minturl.com',
+  method: 'bolt12',
+  unit: 'sat',
+  amount: { amount: 21, unit: 'sat' },
+  description: 'Mint 21 sats',
+});
+
+console.log('pay this offer:', offerQuote.request);
+
+const pendingOfferMint = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  method: 'bolt12',
+  quoteId: offerQuote.quoteId,
+});
+```
+
 `quoteId` identifies the remote quote, not a local mint operation. Store
-`pendingMint.id` or `pendingOnchainMint.id` when you need to resume a specific
-operation later.
+`pendingMint.id`, `pendingOnchainMint.id`, or `pendingOfferMint.id` when you
+need to resume a specific operation later.
 
 For the full state machine and action reference, see
 [Mint Operations](../pages/mint-operations.md). For multi-unit behavior, see
