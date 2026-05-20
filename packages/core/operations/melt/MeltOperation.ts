@@ -103,7 +103,9 @@ export interface MeltMethodFinalizedDataMap {
   bolt11: {
     preimage?: string;
   };
-  bolt12: never;
+  bolt12: {
+    preimage?: string;
+  };
   onchain: never;
 }
 

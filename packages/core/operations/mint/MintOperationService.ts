@@ -27,6 +27,7 @@ import type {
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
+import type { KeyRingService } from '../../services/KeyRingService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -53,6 +54,7 @@ export class MintOperationService {
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
+  private readonly keyRingService?: KeyRingService;
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
@@ -72,6 +74,7 @@ export class MintOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    keyRingService?: KeyRingService,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -83,6 +86,7 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.keyRingService = keyRingService;
 
     this.eventBus.on('mint-op:quote-state-changed', async ({ operationId, operation, state }) => {
       if (operation.state !== 'pending') {
@@ -103,6 +107,7 @@ export class MintOperationService {
       proofService: this.proofService,
       walletService: this.walletService,
       mintService: this.mintService,
+      keyRingService: this.keyRingService,
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -184,20 +189,22 @@ export class MintOperationService {
       throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    const existing = await this.getOperationByQuote(mintUrl, quote.quote);
-    if (existing?.state === 'pending') {
-      return existing;
-    }
-    if (existing?.state === 'init') {
-      return this.prepare(existing.id, {
-        importedQuote: quote,
-        skipMintLock: options?.skipMintLock,
-      });
-    }
-    if (existing) {
-      throw new Error(
-        `Mint quote ${quote.quote} is already tracked by operation ${existing.id} in state ${existing.state}`,
-      );
+    if (method !== 'bolt12') {
+      const existing = await this.getOperationByQuote(mintUrl, quote.quote);
+      if (existing?.state === 'pending') {
+        return existing;
+      }
+      if (existing?.state === 'init') {
+        return this.prepare(existing.id, {
+          importedQuote: quote,
+          skipMintLock: options?.skipMintLock,
+        });
+      }
+      if (existing) {
+        throw new Error(
+          `Mint quote ${quote.quote} is already tracked by operation ${existing.id} in state ${existing.state}`,
+        );
+      }
     }
 
     const initOperation = await this.init(
@@ -588,24 +595,37 @@ export class MintOperationService {
   }
 
   async getOperationByQuote(mintUrl: string, quoteId: string): Promise<MintOperation | null> {
+    const operations = await this.listOperationsByQuote(mintUrl, quoteId);
+    return operations[0] ?? null;
+  }
+
+  async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
     const operations = await this.mintOperationRepository.getByQuoteId(mintUrl, quoteId);
     if (operations.length === 0) {
-      return null;
+      return [];
     }
 
-    const sorted = operations.sort((a, b) => b.updatedAt - a.updatedAt);
+    const sorted = operations.sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      if (a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
 
     const finalized = sorted.find((op) => op.state === 'finalized');
     if (finalized) {
-      return finalized;
+      return [finalized, ...sorted.filter((op) => op.id !== finalized.id)];
     }
 
     const terminal = sorted.find((op) => isTerminalOperation(op));
     if (terminal) {
-      return terminal;
+      return [terminal, ...sorted.filter((op) => op.id !== terminal.id)];
     }
 
-    return sorted[0] ?? null;
+    return sorted;
   }
 
   async getInFlightOperations(): Promise<MintOperation[]> {

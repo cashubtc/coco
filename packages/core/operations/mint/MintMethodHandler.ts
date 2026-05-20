@@ -1,8 +1,14 @@
-import type { MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
+import type {
+  MintQuoteBolt11Response,
+  MintQuoteBolt12Response,
+  Proof,
+  Wallet,
+} from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintService } from '../../services/MintService';
+import type { KeyRingService } from '../../services/KeyRingService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -24,6 +30,14 @@ export interface MintMethodDefinitions {
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
     quote: MintQuoteBolt11Response;
   };
+  bolt12: {
+    methodData: {
+      description?: string;
+      amountless?: boolean;
+    };
+    remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
+    quote: MintQuoteBolt12Response;
+  };
 }
 
 export type MintMethod = keyof MintMethodDefinitions;
@@ -44,6 +58,7 @@ export interface BaseHandlerDeps {
   proofService: ProofService;
   walletService: WalletService;
   mintService: MintService;
+  keyRingService?: KeyRingService;
   mintAdapter: MintAdapter;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;

@@ -760,20 +760,27 @@ export class MeltOperationService {
   }
 
   async getOperationByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null> {
+    const operations = await this.listOperationsByQuote(mintUrl, quoteId);
+    return operations[0] ?? null;
+  }
+
+  async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
     const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
     const matching = operations.filter((operation) => hasPreparedData(operation));
 
     if (matching.length === 0) {
-      return null;
+      return [];
     }
 
-    if (matching.length > 1) {
-      throw new Error(
-        `Found ${matching.length} melt operations for mint ${mintUrl} and quote ${quoteId}`,
-      );
-    }
-
-    return matching[0]!;
+    return matching.sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      if (a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
   }
 
   async getPendingOperations(): Promise<MeltOperation[]> {
