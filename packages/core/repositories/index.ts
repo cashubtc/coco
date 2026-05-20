@@ -143,6 +143,14 @@ export interface HistoryRepository {
   addHistoryEntry(history: Omit<HistoryEntry, 'id'>): Promise<HistoryEntry>;
   getMintHistoryEntry(mintUrl: string, quoteId: string): Promise<MintHistoryEntry | null>;
   getMeltHistoryEntry(mintUrl: string, quoteId: string): Promise<MeltHistoryEntry | null>;
+  getMintHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MintHistoryEntry | null>;
+  getMeltHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MeltHistoryEntry | null>;
   getSendHistoryEntry(mintUrl: string, operationId: string): Promise<SendHistoryEntry | null>;
   getReceiveHistoryEntry(mintUrl: string, operationId: string): Promise<ReceiveHistoryEntry | null>;
   updateHistoryEntry(history: Omit<HistoryEntry, 'id' | 'createdAt'>): Promise<HistoryEntry>;

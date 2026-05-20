@@ -19,8 +19,13 @@ The canonical API is exposed through `coco.ops.mint`:
   stored state
 - `finalize(operationId)` executes or recovers the operation until it reaches a
   terminal state when possible
-- `get(operationId)`, `getByQuote(mintUrl, quoteId)`, `listPending()`, and
-  `listInFlight()` load persisted operation state
+- `get(operationId)`, `getByQuote(mintUrl, quoteId)`,
+  `listByQuote(mintUrl, quoteId)`, `listPending()`, and `listInFlight()` load
+  persisted operation state
+
+Built-in mint methods are `bolt11` and `bolt12`. `getByQuote()` is kept for
+compatibility and returns the latest relevant operation; use `listByQuote()`
+when quote IDs can be reused, such as BOLT12 offers.
 
 ## Operation States
 
@@ -74,6 +79,26 @@ if (check.category === 'ready' || check.category === 'completed') {
   console.log('Mint operation state:', terminal.state);
 }
 ```
+
+### BOLT12 Mint Offers
+
+```ts
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  amount: 100,
+  method: 'bolt12',
+  methodData: {
+    description: 'Coffee refill',
+    amountless: true,
+  },
+});
+
+showOffer(pending.request);
+```
+
+BOLT12 mint quotes are locked to a fresh Coco keyring key. For `amountless:
+true`, Coco omits the quote amount sent to the mint but still records
+`amount` as the ecash amount the operation should issue.
 
 ## Recovery
 

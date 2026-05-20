@@ -9,6 +9,7 @@ import {
   type ReceiveOperation,
   type SendOperation,
   type AuthSession,
+  type HistoryEntry,
 } from '@cashu/coco-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -269,6 +270,7 @@ function createDummySendOperationsByState(unit: string): SendOperation[] {
 }
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
+type PreparedMeltOperation = Extract<MeltOperation, { state: 'prepared' }>;
 
 export function createDummyMintOperation(
   overrides?: Partial<PendingMintOperation>,
@@ -289,6 +291,63 @@ export function createDummyMintOperation(
     outputData: { keep: [], send: [] },
     ...overrides,
   } satisfies PendingMintOperation;
+}
+
+function createDummyPreparedMeltOperation(
+  overrides?: Partial<PreparedMeltOperation>,
+): PreparedMeltOperation {
+  return {
+    id: 'melt-prepared',
+    state: 'prepared',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    method: 'bolt12',
+    methodData: { offer: 'lno1test' },
+    createdAt: 0,
+    updatedAt: 0,
+    needsSwap: false,
+    amount: Amount.from(3),
+    fee_reserve: Amount.from(1),
+    quoteId: 'quote-id',
+    swap_fee: Amount.zero(),
+    inputAmount: Amount.from(4),
+    inputProofSecrets: ['melt-secret-1'],
+    changeOutputData: { keep: [], send: [] },
+    ...overrides,
+  } satisfies PreparedMeltOperation;
+}
+
+function createDummyMintHistoryEntry(
+  overrides?: Partial<Omit<Extract<HistoryEntry, { type: 'mint' }>, 'id'>>,
+): Omit<Extract<HistoryEntry, { type: 'mint' }>, 'id'> {
+  return {
+    type: 'mint',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    operationId: 'mint-op',
+    paymentRequest: 'lnbc1test',
+    quoteId: 'quote-id',
+    state: 'UNPAID',
+    amount: Amount.from(3),
+    createdAt: 0,
+    ...overrides,
+  };
+}
+
+function createDummyMeltHistoryEntry(
+  overrides?: Partial<Omit<Extract<HistoryEntry, { type: 'melt' }>, 'id'>>,
+): Omit<Extract<HistoryEntry, { type: 'melt' }>, 'id'> {
+  return {
+    type: 'melt',
+    mintUrl: 'https://mint.test',
+    unit: 'sat',
+    operationId: 'melt-op',
+    quoteId: 'quote-id',
+    state: 'UNPAID',
+    amount: Amount.from(3),
+    createdAt: 0,
+    ...overrides,
+  };
 }
 
 export function createDummyReceiveOperation(): ReceiveOperation {
@@ -339,6 +398,38 @@ export async function runMintOperationRepositoryContract(
         }
         expect(stored.expiry).toBe(null);
         expect(pending[0].expiry).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips duplicate BOLT12 quote ids', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyMintOperation({
+          id: 'mint-bolt12-1',
+          method: 'bolt12',
+          methodData: { amountless: true },
+          quoteId: 'shared-bolt12-quote',
+        });
+        const second = createDummyMintOperation({
+          id: 'mint-bolt12-2',
+          method: 'bolt12',
+          methodData: { amountless: true },
+          quoteId: 'shared-bolt12-quote',
+        });
+
+        await repositories.mintOperationRepository.create(first);
+        await repositories.mintOperationRepository.create(second);
+
+        const stored = await repositories.mintOperationRepository.getByQuoteId(
+          first.mintUrl,
+          first.quoteId,
+        );
+
+        expect(stored).toHaveLength(2);
+        expect(stored[0]!.quoteId).toBe(first.quoteId);
+        expect(stored[1]!.quoteId).toBe(second.quoteId);
       } finally {
         await dispose();
       }
@@ -451,6 +542,113 @@ export async function runMeltOperationRepositoryContract(
         expect(stored).toBeDefined();
         expect(stored!.state).toBe('init');
         expect(stored!.unit).toBe('usd');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips duplicate BOLT12 quote ids', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyPreparedMeltOperation({
+          id: 'melt-bolt12-1',
+          quoteId: 'shared-bolt12-quote',
+        });
+        const second = createDummyPreparedMeltOperation({
+          id: 'melt-bolt12-2',
+          quoteId: 'shared-bolt12-quote',
+        });
+
+        await repositories.meltOperationRepository.create(first);
+        await repositories.meltOperationRepository.create(second);
+
+        const stored = await repositories.meltOperationRepository.getByQuoteId(
+          first.mintUrl,
+          first.quoteId,
+        );
+
+        expect(stored).toHaveLength(2);
+        expect(stored[0]!.quoteId).toBe(first.quoteId);
+        expect(stored[1]!.quoteId).toBe(second.quoteId);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runHistoryRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('HistoryRepository contract', () => {
+    it('updates duplicate mint quote history by operation id', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyMintHistoryEntry({
+          operationId: 'mint-history-1',
+          quoteId: 'shared-bolt12-quote',
+        });
+        const second = createDummyMintHistoryEntry({
+          operationId: 'mint-history-2',
+          quoteId: 'shared-bolt12-quote',
+        });
+
+        await repositories.historyRepository.addHistoryEntry(first);
+        await repositories.historyRepository.addHistoryEntry(second);
+        await repositories.historyRepository.updateHistoryEntry({
+          ...second,
+          state: 'PAID',
+        });
+
+        const storedFirst = await repositories.historyRepository.getMintHistoryEntryByOperationId(
+          first.mintUrl,
+          first.operationId!,
+        );
+        const storedSecond = await repositories.historyRepository.getMintHistoryEntryByOperationId(
+          second.mintUrl,
+          second.operationId!,
+        );
+
+        expect(storedFirst?.state).toBe('UNPAID');
+        expect(storedSecond?.state).toBe('PAID');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('updates duplicate melt quote history by operation id', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyMeltHistoryEntry({
+          operationId: 'melt-history-1',
+          quoteId: 'shared-bolt12-quote',
+        });
+        const second = createDummyMeltHistoryEntry({
+          operationId: 'melt-history-2',
+          quoteId: 'shared-bolt12-quote',
+        });
+
+        await repositories.historyRepository.addHistoryEntry(first);
+        await repositories.historyRepository.addHistoryEntry(second);
+        await repositories.historyRepository.updateHistoryEntry({
+          ...second,
+          state: 'PAID',
+        });
+
+        const storedFirst = await repositories.historyRepository.getMeltHistoryEntryByOperationId(
+          first.mintUrl,
+          first.operationId!,
+        );
+        const storedSecond = await repositories.historyRepository.getMeltHistoryEntryByOperationId(
+          second.mintUrl,
+          second.operationId!,
+        );
+
+        expect(storedFirst?.state).toBe('UNPAID');
+        expect(storedSecond?.state).toBe('PAID');
       } finally {
         await dispose();
       }

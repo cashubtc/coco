@@ -48,6 +48,26 @@ coco.on('mint-op:finalized', (payload) => {
 });
 ```
 
+## BOLT12 offers
+
+```ts
+const pendingOffer = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  amount: 21,
+  method: 'bolt12',
+  methodData: {
+    description: 'Mint 21 sats',
+    amountless: true,
+  },
+});
+
+console.log('pay this offer:', pendingOffer.request);
+```
+
+For BOLT12, Coco generates and stores the quote key in the keyring. Use
+`listByQuote(mintUrl, quoteId)` if you need to inspect all operations for a
+quote id.
+
 For the full state machine and action reference, see
 [Mint Operations](../pages/mint-operations.md). For multi-unit behavior, see
 [Multi-Unit Support](../pages/multi-unit-support.md).

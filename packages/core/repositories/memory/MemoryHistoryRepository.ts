@@ -55,6 +55,30 @@ export class MemoryHistoryRepository implements HistoryRepository {
     return null;
   }
 
+  async getMintHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MintHistoryEntry | null> {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (!e) continue;
+      if (e.type === 'mint' && e.mintUrl === mintUrl && e.operationId === operationId) return e;
+    }
+    return null;
+  }
+
+  async getMeltHistoryEntryByOperationId(
+    mintUrl: string,
+    operationId: string,
+  ): Promise<MeltHistoryEntry | null> {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i];
+      if (!e) continue;
+      if (e.type === 'melt' && e.mintUrl === mintUrl && e.operationId === operationId) return e;
+    }
+    return null;
+  }
+
   async getSendHistoryEntry(
     mintUrl: string,
     operationId: string,
@@ -90,9 +114,15 @@ export class MemoryHistoryRepository implements HistoryRepository {
   ): Promise<HistoryEntry> {
     const idx = this.entries.findIndex((e) => {
       if (e.type === 'mint' && history.type === 'mint') {
+        if (history.operationId) {
+          return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
+        }
         return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
       }
       if (e.type === 'melt' && history.type === 'melt') {
+        if (history.operationId) {
+          return e.mintUrl === history.mintUrl && e.operationId === history.operationId;
+        }
         return e.mintUrl === history.mintUrl && e.quoteId === history.quoteId;
       }
       if (e.type === 'send' && history.type === 'send') {

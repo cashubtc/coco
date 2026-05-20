@@ -36,11 +36,13 @@ import {
   MintAdapter,
   MintRequestProvider,
   MeltBolt11Handler,
+  MeltBolt12Handler,
   MeltHandlerProvider,
   SendHandlerProvider,
   DefaultSendHandler,
   P2pkSendHandler,
   MintBolt11Handler,
+  MintBolt12Handler,
   MintHandlerProvider,
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
@@ -767,6 +769,7 @@ export class Manager {
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
     const meltHandlerProvider = new MeltHandlerProvider({
       bolt11: new MeltBolt11Handler(),
+      bolt12: new MeltBolt12Handler(),
     });
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,
@@ -785,6 +788,7 @@ export class Manager {
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintHandlerProvider = new MintHandlerProvider({
       bolt11: new MintBolt11Handler(),
+      bolt12: new MintBolt12Handler(),
     });
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,
@@ -797,6 +801,7 @@ export class Manager {
       this.eventBus,
       mintOperationLogger,
       mintScopedLock,
+      keyRingService,
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 
