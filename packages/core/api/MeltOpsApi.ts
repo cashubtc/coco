@@ -7,7 +7,7 @@ import type {
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 
 /** Melt methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMeltMethod = 'bolt11';
+export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12';
 
 export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
   [M in TSupported]: {
@@ -112,6 +112,11 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
       input.method,
       input.quoteId,
     );
+  }
+
+  /** Lists melt operations for a mint URL and quote ID. */
+  async listByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
+    return this.meltOperationService.listOperationsByQuote(mintUrl, quoteId);
   }
 
   /** Lists melt operations that are prepared and ready to execute or cancel. */

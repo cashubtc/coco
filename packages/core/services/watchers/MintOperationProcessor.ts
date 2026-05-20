@@ -1,6 +1,6 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
-import type { MintOperationService } from '@core/operations/mint';
+import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -101,7 +101,7 @@ export class MintOperationProcessor {
     this.offQuoteUpdated = this.bus.on(
       'mint-quote:updated',
       async ({ mintUrl, method, quoteId, quote }) => {
-        if (quote.method === 'onchain') {
+        if (quote.reusable) {
           this.scheduleQuoteClaim(mintUrl, method, quoteId);
           return;
         }
@@ -134,6 +134,11 @@ export class MintOperationProcessor {
         operation.method,
         operation.quoteId,
       );
+      if (quote?.reusable) {
+        this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
+        return;
+      }
+
       if (quote && getMintQuoteRemoteState(quote) === 'PAID') {
         this.enqueue(mintUrl, operation.id, operation.method);
       }
@@ -292,8 +297,8 @@ export class MintOperationProcessor {
     }, this.processIntervalMs);
   }
 
-  private scheduleQuoteClaim(mintUrl: string, method: string, quoteId: string): void {
-    if (!this.autoClaimMintQuotes || method !== 'onchain') {
+  private scheduleQuoteClaim(mintUrl: string, method: MintMethod, quoteId: string): void {
+    if (!this.autoClaimMintQuotes) {
       return;
     }
 
@@ -312,7 +317,7 @@ export class MintOperationProcessor {
       try {
         const hasClaimableBalance = await this.mintOperations.hasLocallyClaimableMintQuoteBalance(
           mintUrl,
-          method as 'onchain',
+          method,
           quoteId,
         );
         if (!hasClaimableBalance) {
@@ -324,7 +329,7 @@ export class MintOperationProcessor {
           return;
         }
 
-        await this.mintOperations.claimMintQuote(mintUrl, method as 'onchain', quoteId, {
+        await this.mintOperations.claimMintQuote(mintUrl, method, quoteId, {
           autoClaimRemaining: true,
         });
       } catch (error) {
