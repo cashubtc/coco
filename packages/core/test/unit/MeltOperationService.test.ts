@@ -870,7 +870,7 @@ describe('MeltOperationService', () => {
       expect(operation).toBeNull();
     });
 
-    it('throws when multiple operations share a quote id', async () => {
+    it('returns the latest operation when multiple operations share a quote id', async () => {
       await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
       await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
 

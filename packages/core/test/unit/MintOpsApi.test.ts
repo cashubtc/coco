@@ -39,6 +39,9 @@ type _AssertGetByQuoteUsesObjectInput = Assert<
     ? true
     : false
 >;
+type _AssertDefaultAllowsBolt12Mint = Assert<
+  'bolt12' extends PrepareMintInput['method'] ? true : false
+>;
 
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',
@@ -77,6 +80,7 @@ describe('MintOpsApi', () => {
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
       getOperationByQuote: mock(async () => pendingOperation),
+      listOperationsByQuote: mock(async () => [pendingOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
       getInFlightOperations: mock(async () => [pendingOperation, executingOperation]),
       checkPendingOperation: mock(async () => ({
