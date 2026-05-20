@@ -706,11 +706,15 @@ describe('MeltOperationService', () => {
       expect(operation).toBeNull();
     });
 
-    it('throws when multiple operations share a quote id', async () => {
+    it('returns the latest operation when multiple operations share a quote id', async () => {
       await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
       await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
 
-      expect(service.getOperationByQuote(mintUrl, 'quote-dupe')).rejects.toThrow('melt operations');
+      const operation = await service.getOperationByQuote(mintUrl, 'quote-dupe');
+      const operations = await service.listOperationsByQuote(mintUrl, 'quote-dupe');
+
+      expect(operation?.id).toBe('op-quote-2');
+      expect(operations.map((op) => op.id)).toEqual(['op-quote-2', 'op-quote-1']);
     });
   });
 });

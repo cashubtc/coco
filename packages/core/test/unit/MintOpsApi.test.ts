@@ -31,6 +31,9 @@ type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
     ? true
     : false
 >;
+type _AssertDefaultAllowsBolt12Mint = Assert<
+  'bolt12' extends PrepareMintInput['method'] ? true : false
+>;
 
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',
@@ -81,6 +84,7 @@ describe('MintOpsApi', () => {
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
       getOperationByQuote: mock(async () => pendingOperation),
+      listOperationsByQuote: mock(async () => [pendingOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
       getInFlightOperations: mock(async () => [pendingOperation, executingOperation]),
       checkPendingOperation: mock(async () => ({
@@ -212,6 +216,13 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.getInFlightOperations).toHaveBeenCalledWith();
     expect(pending).toEqual([pendingOperation]);
     expect(inFlight).toHaveLength(2);
+  });
+
+  it('listByQuote delegates to the service', async () => {
+    const result = await api.listByQuote(mintUrl, quoteId);
+
+    expect(mintOperationService.listOperationsByQuote).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(result).toEqual([pendingOperation]);
   });
 
   it('refresh reconciles pending and executing operations', async () => {

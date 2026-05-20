@@ -183,6 +183,36 @@ describe('HistoryService', () => {
         }
         return null;
       },
+      async getMintHistoryEntryByOperationId(
+        mintUrl: string,
+        operationId: string,
+      ): Promise<MintHistoryEntry | null> {
+        for (const entry of historyEntries.values()) {
+          if (
+            entry.type === 'mint' &&
+            entry.mintUrl === mintUrl &&
+            entry.operationId === operationId
+          ) {
+            return entry as MintHistoryEntry;
+          }
+        }
+        return null;
+      },
+      async getMeltHistoryEntryByOperationId(
+        mintUrl: string,
+        operationId: string,
+      ): Promise<MeltHistoryEntry | null> {
+        for (const entry of historyEntries.values()) {
+          if (
+            entry.type === 'melt' &&
+            entry.mintUrl === mintUrl &&
+            entry.operationId === operationId
+          ) {
+            return entry as MeltHistoryEntry;
+          }
+        }
+        return null;
+      },
       async getPaginatedHistoryEntries(): Promise<HistoryEntry[]> {
         return Array.from(historyEntries.values());
       },
