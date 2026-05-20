@@ -18,13 +18,14 @@ export class MeltHandlerProvider {
   }
 
   register<M extends MeltMethod>(method: M, handler: MeltMethodHandler<M>): void {
-    this.registry[method] = handler;
+    this.set(method, handler);
   }
 
   registerMany(handlers: Partial<MeltMethodHandlerRegistry>): void {
-    for (const [method, handler] of Object.entries(handlers)) {
+    for (const method of Object.keys(handlers) as MeltMethod[]) {
+      const handler = handlers[method];
       if (handler) {
-        this.registry[method as MeltMethod] = handler;
+        this.set(method, handler as MeltMethodHandler<typeof method>);
       }
     }
   }
@@ -39,5 +40,9 @@ export class MeltHandlerProvider {
 
   getAll(): MeltMethodHandlerRegistry {
     return this.registry as MeltMethodHandlerRegistry;
+  }
+
+  private set<M extends MeltMethod>(method: M, handler: MeltMethodHandler<M>): void {
+    (this.registry as Partial<Record<M, MeltMethodHandler<M>>>)[method] = handler;
   }
 }

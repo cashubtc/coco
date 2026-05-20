@@ -674,7 +674,15 @@ export class MintOperationService {
       return null;
     }
 
-    const sorted = operations.sort((a, b) => b.updatedAt - a.updatedAt);
+    const sorted = operations.sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      if (a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
 
     const finalized = sorted.find((op) => op.state === 'finalized');
     if (finalized) {

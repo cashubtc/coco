@@ -2,6 +2,7 @@ import type {
   Amount,
   MintQuoteBolt11Response,
   MintQuoteOnchainResponse,
+  MintQuoteBolt12Response,
   Proof,
   Wallet,
 } from '@cashu/cashu-ts';
@@ -48,6 +49,22 @@ export interface MintMethodDefinitions {
     };
     remoteState: never;
     quote: MintQuoteOnchainResponse;
+  };
+  bolt12: {
+    methodData: Record<string, never>;
+    createQuoteData: {
+      unit: string;
+      amount?: Amount;
+      description?: string;
+    };
+    quoteData: {
+      pubkey: string;
+      amount?: Amount;
+      amountPaid: Amount;
+      amountIssued: Amount;
+    };
+    remoteState: never;
+    quote: MintQuoteBolt12Response;
   };
 }
 

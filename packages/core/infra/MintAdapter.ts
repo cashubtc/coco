@@ -89,12 +89,27 @@ export class MintAdapter {
     return await cashuMint.checkMeltQuoteBolt11(quoteId);
   }
 
+  // Check current state of a bolt12 melt quote (returns full response including change)
+  async checkMeltQuoteBolt12(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt12Response> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMeltQuoteBolt12(quoteId);
+  }
+
   // Check current state of a bolt11 melt quote (returns only state)
   async checkMeltQuoteState(
     mintUrl: string,
     quoteId: string,
   ): Promise<MeltQuoteBolt11Response['state']> {
     const res = await this.checkMeltQuote(mintUrl, quoteId);
+    return res.state;
+  }
+
+  // Check current state of a bolt12 melt quote (returns only state)
+  async checkMeltQuoteBolt12State(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<MeltQuoteBolt12Response['state']> {
+    const res = await this.checkMeltQuoteBolt12(mintUrl, quoteId);
     return res.state;
   }
 
