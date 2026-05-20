@@ -11,7 +11,7 @@ import type {
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11';
+export type DefaultSupportedMintMethod = 'bolt11' | 'bolt12';
 
 type PrepareMintInputCommon = {
   /** Mint that will execute the quote-backed mint operation. */
@@ -137,6 +137,11 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   /** Returns a mint operation by mint URL and quote ID, or `null` if not found. */
   async getByQuote(mintUrl: string, quoteId: string): Promise<MintOperation | null> {
     return this.mintOperationService.getOperationByQuote(mintUrl, quoteId);
+  }
+
+  /** Lists mint operations for a mint URL and quote ID. */
+  async listByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+    return this.mintOperationService.listOperationsByQuote(mintUrl, quoteId);
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */

@@ -227,7 +227,14 @@ export class HistoryService {
     state: MintQuoteState,
   ) {
     try {
-      const entry = await this.historyRepository.getMintHistoryEntry(mintUrl, quoteId);
+      let entry = await this.historyRepository.getMintHistoryEntryByOperationId(
+        mintUrl,
+        operationId,
+      );
+      if (!entry) {
+        const legacy = await this.historyRepository.getMintHistoryEntry(mintUrl, quoteId);
+        entry = legacy && !legacy.operationId ? legacy : null;
+      }
       if (!entry) {
         this.logger?.error('Mint operation quote state changed history entry not found', {
           mintUrl,
@@ -299,7 +306,14 @@ export class HistoryService {
     operation: PreparedOrLaterOperation,
     state: MeltQuoteState,
   ) {
-    const existing = await this.historyRepository.getMeltHistoryEntry(mintUrl, operation.quoteId);
+    let existing = await this.historyRepository.getMeltHistoryEntryByOperationId(
+      mintUrl,
+      operation.id,
+    );
+    if (!existing) {
+      const legacy = await this.historyRepository.getMeltHistoryEntry(mintUrl, operation.quoteId);
+      existing = legacy && !legacy.operationId ? legacy : null;
+    }
     const entry: Omit<MeltHistoryEntry, 'id'> = {
       type: 'melt',
       mintUrl,
@@ -353,7 +367,14 @@ export class HistoryService {
     };
 
     try {
-      const existing = await this.historyRepository.getMintHistoryEntry(mintUrl, operation.quoteId);
+      let existing = await this.historyRepository.getMintHistoryEntryByOperationId(
+        mintUrl,
+        operation.id,
+      );
+      if (!existing) {
+        const legacy = await this.historyRepository.getMintHistoryEntry(mintUrl, operation.quoteId);
+        existing = legacy && !legacy.operationId ? legacy : null;
+      }
       if (existing) {
         existing.operationId = entry.operationId;
         existing.unit = entry.unit;

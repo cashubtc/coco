@@ -11,12 +11,20 @@ export class SubscriptionApi {
     this.logger = logger;
   }
 
-  async awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<unknown> {
-    return this.awaitFirstNotification(mintUrl, 'bolt11_mint_quote', [quoteId]);
+  async awaitMintQuotePaid(
+    mintUrl: string,
+    quoteId: string,
+    method: 'bolt11' | 'bolt12' = 'bolt11',
+  ): Promise<unknown> {
+    return this.awaitFirstNotification(mintUrl, `${method}_mint_quote`, [quoteId]);
   }
 
-  async awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<unknown> {
-    return this.awaitFirstNotification(mintUrl, 'bolt11_melt_quote', [quoteId]);
+  async awaitMeltQuotePaid(
+    mintUrl: string,
+    quoteId: string,
+    method: 'bolt11' | 'bolt12' = 'bolt11',
+  ): Promise<unknown> {
+    return this.awaitFirstNotification(mintUrl, `${method}_melt_quote`, [quoteId]);
   }
 
   private async awaitFirstNotification(

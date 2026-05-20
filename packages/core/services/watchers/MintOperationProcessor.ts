@@ -15,7 +15,7 @@ interface OperationHandler {
   process(mintUrl: string, operationId: string): Promise<void>;
 }
 
-class Bolt11MintOperationHandler implements OperationHandler {
+class QuoteMintOperationHandler implements OperationHandler {
   constructor(
     private mintOperations: MintOperationService,
     private logger?: Logger,
@@ -69,8 +69,10 @@ export class MintOperationProcessor {
     this.baseRetryDelayMs = options?.baseRetryDelayMs ?? 5000;
     this.initialEnqueueDelayMs = options?.initialEnqueueDelayMs ?? 500;
 
-    // Register default handler for bolt11 mint operations
-    this.registerHandler('bolt11', new Bolt11MintOperationHandler(mintOperations, logger));
+    // Register default handlers for quote-backed mint operations.
+    const quoteHandler = new QuoteMintOperationHandler(mintOperations, logger);
+    this.registerHandler('bolt11', quoteHandler);
+    this.registerHandler('bolt12', quoteHandler);
   }
 
   registerHandler(method: string, handler: OperationHandler): void {
