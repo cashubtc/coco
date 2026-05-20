@@ -27,6 +27,7 @@ import type {
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
+import type { KeyRingService } from '../../services/KeyRingService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
@@ -56,6 +57,7 @@ export class MintOperationService {
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
+  private readonly keyRingService?: KeyRingService;
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
@@ -76,6 +78,7 @@ export class MintOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    keyRingService?: KeyRingService,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -88,6 +91,7 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.keyRingService = keyRingService;
 
     this.eventBus.on('mint-quote:updated', async ({ mintUrl, method, quoteId, quote }) => {
       const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
@@ -111,6 +115,7 @@ export class MintOperationService {
       proofService: this.proofService,
       walletService: this.walletService,
       mintService: this.mintService,
+      keyRingService: this.keyRingService,
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: this.logger,
@@ -713,7 +718,15 @@ export class MintOperationService {
       return null;
     }
 
-    const sorted = operations.sort((a, b) => b.updatedAt - a.updatedAt);
+    const sorted = operations.sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      if (a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
 
     const finalized = sorted.find((op) => op.state === 'finalized');
     if (finalized) {

@@ -9,6 +9,7 @@ import {
   type GetKeysetsResponse,
   type AuthProvider,
   type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
@@ -80,10 +81,22 @@ export class MintAdapter {
     return await cashuMint.checkMintQuoteBolt11(quoteId);
   }
 
+  // Check current state of a bolt12 mint quote
+  async checkMintQuoteBolt12(mintUrl: string, quoteId: string): Promise<MintQuoteBolt12Response> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMintQuoteBolt12(quoteId);
+  }
+
   // Check current state of a bolt11 melt quote (returns full response including change)
   async checkMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.checkMeltQuoteBolt11(quoteId);
+  }
+
+  // Check current state of a bolt12 melt quote (returns full response including change)
+  async checkMeltQuoteBolt12(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt12Response> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMeltQuoteBolt12(quoteId);
   }
 
   // Check current state of a bolt11 melt quote (returns only state)
@@ -92,6 +105,15 @@ export class MintAdapter {
     quoteId: string,
   ): Promise<MeltQuoteBolt11Response['state']> {
     const res = await this.checkMeltQuote(mintUrl, quoteId);
+    return res.state;
+  }
+
+  // Check current state of a bolt12 melt quote (returns only state)
+  async checkMeltQuoteBolt12State(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<MeltQuoteBolt12Response['state']> {
+    const res = await this.checkMeltQuoteBolt12(mintUrl, quoteId);
     return res.state;
   }
 

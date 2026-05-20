@@ -206,7 +206,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult> {
+  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult<'bolt11'>> {
     const { mintUrl, quoteId } = ctx.operation;
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 
