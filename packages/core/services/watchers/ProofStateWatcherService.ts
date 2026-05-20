@@ -96,6 +96,8 @@ export class ProofStateWatcherService {
               });
             }
           } else if (state === 'spent') {
+            const operationIds = new Set<string>();
+
             // Stop watching if we already are
             for (const secret of secrets) {
               const key = toKey(mintUrl, secret);
@@ -109,15 +111,24 @@ export class ProofStateWatcherService {
                 });
               }
 
+              if (!this.sendOperationService) continue;
+
               try {
-                await this.tryFinalizeSendOperation(mintUrl, secret);
+                const operationId = await this.getSendOperationIdForSpentProof(mintUrl, secret);
+                if (operationId) {
+                  operationIds.add(operationId);
+                }
               } catch (err) {
-                this.logger?.warn('Failed to finalize send operation from spent proof event', {
+                this.logger?.warn('Failed to resolve send operation from spent proof event', {
                   mintUrl,
                   secret,
                   err,
                 });
               }
+            }
+
+            for (const operationId of operationIds) {
+              await this.tryFinalizeSendOperation(mintUrl, operationId);
             }
           }
         } catch (err) {
@@ -358,17 +369,24 @@ export class ProofStateWatcherService {
   }
 
   /**
-   * Check if a spent proof is part of a send operation and finalize it if all send proofs are spent.
+   * Resolve the send operation associated with a spent proof, if any.
    */
-  private async tryFinalizeSendOperation(mintUrl: string, secret: string): Promise<void> {
+  private async getSendOperationIdForSpentProof(
+    mintUrl: string,
+    secret: string,
+  ): Promise<string | undefined> {
+    const spentProof = await this.proofRepository.getProofBySecret(mintUrl, secret);
+    // Check both usedByOperationId (for exact match sends) and createdByOperationId (for swap sends)
+    return spentProof?.usedByOperationId || spentProof?.createdByOperationId;
+  }
+
+  /**
+   * Check if all send proofs for an operation are spent and finalize it if so.
+   */
+  private async tryFinalizeSendOperation(mintUrl: string, operationId: string): Promise<void> {
     if (!this.sendOperationService) return;
 
     try {
-      // Look up the specific proof that was just spent
-      const spentProof = await this.proofRepository.getProofBySecret(mintUrl, secret);
-      // Check both usedByOperationId (for exact match sends) and createdByOperationId (for swap sends)
-      const operationId = spentProof?.usedByOperationId || spentProof?.createdByOperationId;
-      if (!operationId) return;
       const operation = await this.sendOperationService.getOperation(operationId);
 
       if (!operation || operation.state !== 'pending') return;
@@ -391,7 +409,7 @@ export class ProofStateWatcherService {
         await this.sendOperationService.finalize(operationId);
       }
     } catch (err) {
-      this.logger?.error('Failed to check/finalize send operation', { mintUrl, secret, err });
+      this.logger?.error('Failed to check/finalize send operation', { mintUrl, operationId, err });
     }
   }
 }
