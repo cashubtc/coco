@@ -320,8 +320,8 @@ async function awaitMintQuotePaid(
 
   let cancelWait: (() => void) | undefined;
   const paidEventPromise = new Promise<void>((resolve) => {
-    const off = manager.on('mint-op:quote-state-changed', (payload) => {
-      if (payload.operationId !== pendingMint.id || payload.state !== 'PAID') {
+    const off = manager.on('mint-quote:updated', (payload) => {
+      if (payload.quoteId !== pendingMint.quoteId || payload.quote.state !== 'PAID') {
         return;
       }
 

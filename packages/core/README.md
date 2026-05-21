@@ -282,8 +282,8 @@ include:
 - `proofs:wiped` → `{ mintUrl, keysetId }`
 - `proofs:reserved` → `{ mintUrl, operationId, secrets, amount }`
 - `proofs:released` → `{ mintUrl, secrets }`
+- `mint-quote:updated` → `{ mintUrl, method, quoteId, quote }`
 - `mint-op:pending` → `{ mintUrl, operationId, operation }`
-- `mint-op:quote-state-changed` → `{ mintUrl, operationId, operation, quoteId, state }`
 - `mint-op:requeue` → `{ mintUrl, operationId, operation }`
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
 - `mint-op:finalized` → `{ mintUrl, operationId, operation }`

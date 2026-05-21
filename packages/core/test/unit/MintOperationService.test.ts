@@ -365,10 +365,10 @@ describe('MintOperationService', () => {
   });
 
   it('prepare + finalize runs init -> pending -> execute for an existing tracked operation', async () => {
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
-    eventBus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
     });
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
@@ -391,9 +391,10 @@ describe('MintOperationService', () => {
     expect(saved).not.toBeNull();
     expect(saved?.createdByOperationId).toBe(finalized?.id);
 
-    expect(quoteStateEvents.length).toBe(1);
-    expect(quoteStateEvents[0]?.quoteId).toBe(quoteId);
-    expect(quoteStateEvents[0]?.state).toBe('ISSUED');
+    expect(quoteUpdatedEvents.length).toBe(1);
+    expect(quoteUpdatedEvents[0]?.quoteId).toBe(quoteId);
+    expect(quoteUpdatedEvents[0]?.method).toBe('bolt11');
+    expect(quoteUpdatedEvents[0]?.quote.state).toBe('ISSUED');
     expect(finalizedEvents.length).toBe(1);
     expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
     expect(finalizedEvents[0]?.operation.state).toBe('finalized');
@@ -563,11 +564,15 @@ describe('MintOperationService', () => {
     expect(stored.lastObservedRemoteStateAt).toEqual(expect.any(Number));
   });
 
-  it('recordPendingObservation updates the stored remote state without emitting another event', async () => {
+  it('recordPendingObservation updates the stored remote state and emits pending operation update', async () => {
     const pendingOp = makePendingOp('pending-4');
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
-    eventBus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
     });
     await operationRepo.create(pendingOp);
 
@@ -584,25 +589,65 @@ describe('MintOperationService', () => {
     expect(stored.lastObservedRemoteState).toBe('PAID');
     expect(stored.lastObservedRemoteStateAt).toBe(observedAt);
     expect(handler.checkPending).not.toHaveBeenCalled();
-    expect(quoteStateEvents).toHaveLength(0);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+    expect(pendingEvents).toHaveLength(1);
+    expect(pendingEvents[0]?.mintUrl).toBe(pendingOp.mintUrl);
+    expect(pendingEvents[0]?.operationId).toBe(pendingOp.id);
+    expect(pendingEvents[0]?.operation).toMatchObject({
+      id: pendingOp.id,
+      state: 'pending',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: observedAt,
+    });
   });
 
-  it('persists a pending quote-state-changed event emitted by another service', async () => {
-    const pendingOp = makePendingOp('pending-5');
+  it('recordQuoteObservation persists the canonical quote before emitting mint-quote:updated', async () => {
+    const pendingOp = makePendingOp('pending-quote-event');
     await operationRepo.create(pendingOp);
 
     const observedAt = Date.now();
-    await eventBus.emit('mint-op:quote-state-changed', {
+    const persistedDuringEvent: Array<string | undefined> = [];
+    eventBus.on('mint-quote:updated', async ({ quote }) => {
+      const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+      persistedDuringEvent.push(storedQuote?.state);
+    });
+
+    const quote = await service.recordQuoteObservation(pendingOp, 'PAID', observedAt);
+
+    expect(quote.state).toBe('PAID');
+    expect(quote.lastObservedRemoteStateAt).toBe(observedAt);
+    expect(persistedDuringEvent).toEqual(['PAID']);
+  });
+
+  it('persists a pending operation observation from a canonical quote update', async () => {
+    const pendingOp = makePendingOp('pending-5');
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
+    });
+    await operationRepo.create(pendingOp);
+
+    const observedAt = Date.now();
+    await eventBus.emit('mint-quote:updated', {
       mintUrl,
-      operationId: pendingOp.id,
-      operation: {
-        ...pendingOp,
+      method: pendingOp.method,
+      quoteId: pendingOp.quoteId,
+      quote: {
+        mintUrl,
+        method: pendingOp.method,
+        quoteId: pendingOp.quoteId,
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'PAID',
         lastObservedRemoteState: 'PAID',
         lastObservedRemoteStateAt: observedAt,
+        reusable: false,
+        createdAt: pendingOp.createdAt,
         updatedAt: observedAt,
       },
-      quoteId: pendingOp.quoteId,
-      state: 'PAID',
     });
 
     const stored = await operationRepo.getById(pendingOp.id);
@@ -613,6 +658,14 @@ describe('MintOperationService', () => {
     }
     expect(stored.lastObservedRemoteState).toBe('PAID');
     expect(stored.lastObservedRemoteStateAt).toBe(observedAt);
+    expect(pendingEvents).toHaveLength(1);
+    expect(pendingEvents[0]?.operationId).toBe(pendingOp.id);
+    expect(pendingEvents[0]?.operation).toMatchObject({
+      id: pendingOp.id,
+      state: 'pending',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: observedAt,
+    });
     expect(handler.checkPending).not.toHaveBeenCalled();
   });
 });

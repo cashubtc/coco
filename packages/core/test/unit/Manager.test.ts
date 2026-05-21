@@ -66,7 +66,7 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationProcessor();
     });
 
-    it('persists mint quote observations before emitting projected history updates', async () => {
+    it('projects mint history from quote observation updates with the processor disabled', async () => {
       const manager = await initializeCoco({
         ...baseConfig,
         watchers: {
@@ -88,17 +88,26 @@ describe('initializeCoco', () => {
       });
 
       const observedAt = 3_000;
-      await manager['eventBus'].emit('mint-op:quote-state-changed', {
+      await manager['eventBus'].emit('mint-quote:updated', {
         mintUrl: operation.mintUrl,
-        operationId: operation.id,
-        operation: {
-          ...operation,
+        method: operation.method,
+        quoteId: operation.quoteId,
+        quote: {
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          quoteId: operation.quoteId,
+          quote: operation.quoteId,
+          request: operation.request,
+          amount: operation.amount,
+          unit: operation.unit,
+          expiry: operation.expiry,
+          state: 'PAID',
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: observedAt,
+          reusable: false,
+          createdAt: operation.createdAt,
           updatedAt: observedAt,
         },
-        quoteId: operation.quoteId,
-        state: 'PAID',
       });
 
       expect(observedRepositoryEntries).toHaveLength(1);
@@ -106,6 +115,7 @@ describe('initializeCoco', () => {
         id: `mint:${operation.id}`,
         type: 'mint',
         operationId: operation.id,
+        state: 'pending',
         remoteState: 'PAID',
       });
     });

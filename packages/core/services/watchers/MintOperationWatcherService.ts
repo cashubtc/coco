@@ -268,24 +268,19 @@ export class MintOperationWatcherService {
                 updatedAt: observedAt,
               };
 
-              await this.bus.emit('mint-op:quote-state-changed', {
-                mintUrl: observedOperation.mintUrl,
-                operationId: observedOperation.id,
-                operation: observedOperation,
-                quoteId: observedOperation.quoteId,
-                state: payload.state,
-              });
-            } catch (err) {
-              this.logger?.error(
-                'Failed to emit pending mint operation update from remote update',
-                {
-                  operationId,
-                  mintUrl,
-                  quoteId,
-                  state: payload.state,
-                  err,
-                },
+              await this.mintOperations.recordQuoteObservation(
+                observedOperation,
+                payload.state,
+                observedAt,
               );
+            } catch (err) {
+              this.logger?.error('Failed to persist pending mint quote update from remote update', {
+                operationId,
+                mintUrl,
+                quoteId,
+                state: payload.state,
+                err,
+              });
             }
 
             if (payload.state === 'ISSUED') {

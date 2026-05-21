@@ -1239,12 +1239,10 @@ describe('useMintOperation', () => {
       expect(result.current.currentOperation).toEqual(pending);
     });
 
-    await emit('mint-op:quote-state-changed', {
+    await emit('mint-op:pending', {
       mintUrl: pending.mintUrl,
       operationId: pending.id,
       operation: observed,
-      quoteId: pending.quoteId,
-      state: 'PAID',
     });
 
     await waitForAssertion(() => {

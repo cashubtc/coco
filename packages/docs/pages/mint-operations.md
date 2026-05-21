@@ -102,8 +102,8 @@ coco.on('mint-op:pending', ({ operationId, operation }) => {
   console.log('Mint pending', operationId, operation.request);
 });
 
-coco.on('mint-op:quote-state-changed', ({ operationId, state }) => {
-  console.log('Quote state changed', operationId, state);
+coco.on('mint-quote:updated', ({ quoteId, quote }) => {
+  console.log('Quote updated', quoteId, quote.state);
 });
 
 coco.on('mint-op:executing', ({ operationId }) => {
