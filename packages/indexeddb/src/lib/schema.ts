@@ -913,4 +913,110 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         });
       }
     });
+
+  // Version 28: Make canonical melt quote records method-aware.
+  db.version(28)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
+      coco_cashu_melt_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      const now = Date.now();
+
+      await tx
+        .table('coco_cashu_melt_quotes')
+        .toCollection()
+        .modify(
+          (row: {
+            quote?: string;
+            quoteId?: string;
+            method?: string;
+            state?: string;
+            lastObservedRemoteState?: string;
+            lastObservedRemoteStateAt?: number;
+            createdAt?: number;
+            updatedAt?: number;
+          }) => {
+            row.method = row.method ?? 'bolt11';
+            row.quoteId = row.quoteId ?? row.quote ?? '';
+            row.lastObservedRemoteState = row.lastObservedRemoteState ?? row.state;
+            row.lastObservedRemoteStateAt = row.lastObservedRemoteStateAt ?? now;
+            row.createdAt = row.createdAt ?? now;
+            row.updatedAt = row.updatedAt ?? now;
+          },
+        );
+
+      const operations = (await tx.table('coco_cashu_melt_operations').toArray()) as Array<{
+        mintUrl?: string;
+        method?: string;
+        methodData?: { invoice?: string };
+        methodDataJson?: string;
+        quoteId?: string | null;
+        state?: string;
+        amount?: unknown;
+        unit?: string | null;
+        fee_reserve?: unknown;
+        finalizedData?: { preimage?: string };
+        finalizedDataJson?: string | null;
+        createdAt?: number;
+        updatedAt?: number;
+      }>;
+
+      for (const op of operations) {
+        if (!op.mintUrl || !op.method || !op.quoteId || op.amount == null || op.fee_reserve == null)
+          continue;
+        const methodData =
+          op.methodData ??
+          (op.methodDataJson ? (JSON.parse(op.methodDataJson) as { invoice?: string }) : {});
+        const finalizedData =
+          op.finalizedData ??
+          (op.finalizedDataJson ? (JSON.parse(op.finalizedDataJson) as { preimage?: string }) : {});
+        const existing = await tx
+          .table('coco_cashu_melt_quotes')
+          .get([op.mintUrl, op.method, op.quoteId]);
+        const observedState =
+          op.state === 'finalized'
+            ? 'PAID'
+            : op.state === 'pending' || op.state === 'executing'
+              ? 'PENDING'
+              : 'UNPAID';
+        const createdAt = (op.createdAt ?? Math.floor(now / 1000)) * 1000;
+        const updatedAt = (op.updatedAt ?? Math.floor(now / 1000)) * 1000;
+        await tx.table('coco_cashu_melt_quotes').put({
+          ...existing,
+          mintUrl: op.mintUrl,
+          method: op.method,
+          quoteId: op.quoteId,
+          quote: op.quoteId,
+          state: observedState,
+          request: methodData.invoice ?? op.quoteId,
+          amount: normalizeStoredAmount(op.amount) ?? '0',
+          unit: normalizeStoredUnit(op.unit),
+          fee_reserve: normalizeStoredAmount(op.fee_reserve) ?? '0',
+          expiry: existing?.expiry ?? 0,
+          payment_preimage: finalizedData.preimage ?? null,
+          lastObservedRemoteState: observedState,
+          lastObservedRemoteStateAt: updatedAt,
+          createdAt: existing?.createdAt ?? createdAt,
+          updatedAt,
+        });
+      }
+    });
 }

@@ -22,12 +22,12 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
   stored state
 - `finalize(operationId)` executes or recovers the operation until it reaches a
   terminal state when possible
-- `get(operationId)`, `getByQuote(mintUrl, quoteId)`, `listPending()`, and
+- `get(operationId)`, `getByQuote({ mintUrl, method, quoteId })`, `listPending()`, and
   `listInFlight()` load persisted operation state
 
-## Quote Resurfacing (`coco.mintQuotes`)
+## Quote Resurfacing (`coco.quotes.mint`)
 
-Use `coco.mintQuotes` when an app needs to show a quote payment request again
+Use `coco.quotes.mint` when an app needs to show a quote payment request again
 after reload without creating or loading a mint operation:
 
 - `create({ mintUrl, amount, unit?, method })` creates and persists a canonical

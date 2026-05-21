@@ -70,10 +70,16 @@ Melt operation preparation uses the invoice/request unit and continues to defaul
 bare amounts to sats.
 
 ```ts
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
 });
 
 console.log(prepared.amount, prepared.unit, prepared.fee_reserve);

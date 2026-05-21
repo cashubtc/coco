@@ -142,13 +142,14 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 ## Architecture
 
 - `Manager`: Facade wiring services together; exposes `mint`, `wallet`, `ops`,
-  `mintQuotes`, `paymentRequests`, and `subscription` APIs plus watcher helpers.
+  `quotes`, `paymentRequests`, and `subscription` APIs plus watcher helpers.
 - `MintService`: Fetches `mintInfo`, keysets and persists via repositories.
 - `WalletService`: Caches and constructs `Wallet` from stored keysets.
 - `ProofService`: Manages proofs, selection, states, and counters.
 - Legacy mint quote orchestration has been replaced by `MintOperationService`,
-  `manager.ops.mint`, and canonical quote resurfacing through `manager.mintQuotes`.
-- Legacy melt quote orchestration has been replaced by `MeltOperationService` and `manager.ops.melt`.
+  `manager.ops.mint`, and canonical quote resurfacing through `manager.quotes.mint`.
+- Legacy melt quote orchestration has been replaced by `MeltOperationService`,
+  `manager.ops.melt`, and canonical quote resurfacing through `manager.quotes.melt`.
 - `CounterService`: Simple per-(mint,keyset) numeric counter with events.
 - `EventBus<CoreEvents>`: Lightweight typed pub/sub used internally (includes `subscriptions:paused` and `subscriptions:resumed`).
 
@@ -175,7 +176,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
 
 ### Manager
 
-- `mint`, `wallet`, `auth`, `mintQuotes`, `paymentRequests`, `ops`,
+- `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`,
   `subscription`, `history`, and `keyring`
 - `ext: PluginExtensions`
 - `on/once/off` for `CoreEvents`

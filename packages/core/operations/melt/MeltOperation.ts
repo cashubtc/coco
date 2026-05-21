@@ -119,6 +119,8 @@ export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
  */
 export interface InitMeltOperation extends MeltOperationBase {
   state: 'init';
+  /** Existing canonical quote to prepare against. */
+  quoteId?: string;
 }
 
 /**
@@ -297,6 +299,7 @@ export function createMeltOperation(
   mintUrl: string,
   meta: MeltMethodMeta,
   unit = DEFAULT_UNIT,
+  options?: { quoteId?: string },
 ): InitMeltOperation {
   const now = Date.now();
   return {
@@ -305,6 +308,7 @@ export function createMeltOperation(
     state: 'init',
     mintUrl,
     unit: normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT }),
+    ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
     createdAt: now,
     updatedAt: now,
   };

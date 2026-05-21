@@ -10,13 +10,13 @@
 Add canonical method-aware mint quote records and make BOLT11 mint preparation
 quote-first.
 
-Core now exposes canonical quote resurfacing through `manager.mintQuotes` and
-supports preparing BOLT11 mint operations against an existing canonical quote ID
-while preserving the existing `prepare({ amount })` compatibility wrapper. Mint
-quote records are keyed by normalized `(mintUrl, method, quoteId)`, and mint
-operation quote lookups now return all sibling operations for the full quote
-identity.
+Core now exposes canonical quote resurfacing through `manager.quotes.mint` and
+`manager.quotes.melt`. BOLT11 melt quotes are created before
+`manager.ops.melt.prepare()`, matching the quote-first mint surface and keeping
+bare quote creation out of history. Mint quote records are keyed by normalized
+`(mintUrl, method, quoteId)`, and mint operation quote lookups now return all
+sibling operations for the full quote identity.
 
-Persistent adapters now store canonical mint quotes, migrate existing BOLT11
-operation quote snapshots into non-reusable quote rows, and expose contract
-coverage for quote records and sibling operation lookup.
+Persistent adapters now store canonical mint and melt quotes, migrate existing
+BOLT11 operation quote snapshots into quote rows, and expose contract coverage
+for quote records and sibling operation lookup.

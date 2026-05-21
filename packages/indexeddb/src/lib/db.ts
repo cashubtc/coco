@@ -1,4 +1,5 @@
 import Dexie, { type Transaction as DexieTransaction } from 'dexie';
+import type { SerializedBlindedSignature } from '@cashu/cashu-ts';
 
 export interface IdbDbOptions {
   name?: string;
@@ -165,6 +166,8 @@ export interface MintQuoteRow {
 
 export interface MeltQuoteRow {
   mintUrl: string;
+  method: string;
+  quoteId: string;
   quote: string;
   state: 'UNPAID' | 'PENDING' | 'PAID';
   request: string;
@@ -172,7 +175,12 @@ export interface MeltQuoteRow {
   unit: string;
   expiry: number;
   fee_reserve: string | number;
-  payment_preimage: string | null;
+  payment_preimage?: string | null;
+  change?: SerializedBlindedSignature[];
+  lastObservedRemoteState?: 'UNPAID' | 'PENDING' | 'PAID' | null;
+  lastObservedRemoteStateAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface SendOperationRow {

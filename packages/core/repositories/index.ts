@@ -1,6 +1,7 @@
 import type { AuthSession } from '@core/models/AuthSession';
 import type { HistoryEntry } from '@core/models/History';
 import type { Keypair } from '@core/models/Keypair';
+import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
@@ -122,6 +123,12 @@ export interface MintQuoteRepository {
     observedAt?: number,
   ): Promise<void>;
   getPendingMintQuotes(method?: string): Promise<MintQuote[]>;
+}
+
+export interface MeltQuoteRepository {
+  getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null>;
+  upsertMeltQuote(quote: MeltQuote): Promise<void>;
+  getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;
 }
 
 export interface KeyRingRepository {
@@ -285,6 +292,7 @@ interface RepositoriesBase {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
+  meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;

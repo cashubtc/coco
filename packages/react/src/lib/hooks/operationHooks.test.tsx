@@ -80,7 +80,7 @@ const MINT_IMPORT_QUOTE_INPUT: MintOperationImportQuoteInput = {
 const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
   mintUrl: MINT_URL,
   method: 'bolt11',
-  methodData: { invoice: 'lnbc1meltinvoice' },
+  quoteId: 'melt-quote-1',
 };
 
 function createEventBusMock() {
@@ -1313,7 +1313,7 @@ describe('useMeltOperation', () => {
     const input: MeltOperationPrepareInput = {
       mintUrl: MINT_URL,
       method: 'bolt11',
-      methodData: { invoice: 'lnbc1meltinvoice' },
+      quoteId: 'melt-quote-1',
       unit: 'USD',
     };
 

@@ -375,6 +375,30 @@ async function mintAmount(manager: Manager, mintUrl: string, amount: number, uni
   return pendingMint;
 }
 
+async function createMeltQuote(manager: Manager, mintUrl: string, invoice: string, unit = 'sat') {
+  return manager.quotes.melt.create({
+    mintUrl,
+    method: 'bolt11',
+    methodData: { invoice },
+    unit,
+  });
+}
+
+async function prepareMeltOperation(
+  manager: Manager,
+  mintUrl: string,
+  invoice: string,
+  unit = 'sat',
+) {
+  const quote = await createMeltQuote(manager, mintUrl, invoice, unit);
+  return manager.ops.melt.prepare({
+    mintUrl,
+    method: 'bolt11',
+    quoteId: quote.quoteId,
+    unit,
+  });
+}
+
 export async function runIntegrationTests<TRepositories extends Repositories = Repositories>(
   options: IntegrationTestOptions<TRepositories>,
   runner: IntegrationTestRunner,
@@ -671,12 +695,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await mintAmount(mgr!, mintUrl, 200, customUnit);
 
           const invoice = createFakeInvoice(20);
-          const prepared = await mgr!.ops.melt.prepare({
-            mintUrl,
-            method: 'bolt11',
-            methodData: { invoice },
-            unit: customUnit,
-          });
+          const prepared = await prepareMeltOperation(mgr!, mintUrl, invoice, customUnit);
 
           expect(prepared.unit).toBe(customUnit);
           expect(prepared.quoteId).toBeDefined();
@@ -1020,12 +1039,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should prepare a melt operation with a persisted quote id', async () => {
         const invoice = createFakeInvoice(100);
-        const prepared = await mgr!.ops.melt.prepare({
-          mintUrl,
-          method: 'bolt11',
-          methodData: { invoice },
-          unit: testUnit,
-        });
+        const prepared = await prepareMeltOperation(mgr!, mintUrl, invoice, testUnit);
 
         expect(prepared.quoteId).toBeDefined();
         expect(prepared.amount.toNumber()).toBeGreaterThan(0);
@@ -1036,17 +1050,21 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect((stored as { quoteId?: string } | null)?.quoteId).toBe(prepared.quoteId);
         expect(stored?.state).toBe('prepared');
 
-        const byQuote = await mgr!.ops.melt.getByQuote(mintUrl, prepared.quoteId);
+        const byQuote = await mgr!.ops.melt.getByQuote({
+          mintUrl,
+          method: 'bolt11',
+          quoteId: prepared.quoteId,
+        });
         expect(byQuote?.id).toBe(prepared.id);
       });
 
       it('should reject invalid melt preparation parameters', async () => {
         const invoice = createFakeInvoice(10);
         await expect(
-          mgr!.ops.melt.prepare({ mintUrl: '', method: 'bolt11', methodData: { invoice } }),
+          mgr!.quotes.melt.create({ mintUrl: '', method: 'bolt11', methodData: { invoice } }),
         ).rejects.toThrow();
         await expect(
-          mgr!.ops.melt.prepare({
+          mgr!.quotes.melt.create({
             mintUrl,
             method: 'bolt11',
             methodData: { invoice: '' },
@@ -1060,7 +1078,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         await mgr!.mint.untrustMint(mintUrl);
         const invoice = createFakeInvoice(15);
         await expect(
-          mgr!.ops.melt.prepare({
+          mgr!.quotes.melt.create({
             mintUrl,
             method: 'bolt11',
             methodData: { invoice },
@@ -1078,12 +1096,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const getMintBalance = async () =>
           (await mgr!.wallet.balances.byMint({ mintUrls: [mintUrl], units: [testUnit] }))[mintUrl]!;
         const balanceBefore = await getMintBalance();
-        const prepared = await mgr!.ops.melt.prepare({
-          mintUrl,
-          method: 'bolt11',
-          methodData: { invoice },
-          unit: testUnit,
-        });
+        const prepared = await prepareMeltOperation(mgr!, mintUrl, invoice, testUnit);
 
         expect(prepared.quoteId).toBeDefined();
         expect(prepared.amount.toNumber()).toBeGreaterThan(0);
@@ -1116,12 +1129,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
       it('should execute a melt operation by quote params', async () => {
         const invoice = createFakeInvoice(25);
-        const prepared = await mgr!.ops.melt.prepare({
-          mintUrl,
-          method: 'bolt11',
-          methodData: { invoice },
-          unit: testUnit,
-        });
+        const prepared = await prepareMeltOperation(mgr!, mintUrl, invoice, testUnit);
 
         expect(prepared.quoteId).toBeDefined();
 
@@ -1132,7 +1140,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(stored).toHaveLength(1);
         expect(stored[0]!.state).toBe('prepared');
 
-        const byQuote = await mgr!.ops.melt.getByQuote(mintUrl, prepared.quoteId);
+        const byQuote = await mgr!.ops.melt.getByQuote({
+          mintUrl,
+          method: 'bolt11',
+          quoteId: prepared.quoteId,
+        });
         expect(byQuote?.id).toBeDefined();
 
         const executed = await mgr!.ops.melt.execute(byQuote!.id);
@@ -1216,7 +1228,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       });
 
       it('should return null when resolving a missing melt quote', async () => {
-        const missingOperation = await mgr!.ops.melt.getByQuote(mintUrl, 'missing-quote');
+        const missingOperation = await mgr!.ops.melt.getByQuote({
+          mintUrl,
+          method: 'bolt11',
+          quoteId: 'missing-quote',
+        });
         expect(missingOperation).toBe(null);
       });
     });
@@ -1298,12 +1314,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should create melt history entry when a melt operation is prepared', async () => {
         const invoice = createFakeInvoice(15);
         const historyPromise = waitForMeltHistoryState(mgr!, 'prepared');
-        const prepared = await mgr!.ops.melt.prepare({
-          mintUrl,
-          method: 'bolt11',
-          methodData: { invoice },
-          unit: testUnit,
-        });
+        const prepared = await prepareMeltOperation(mgr!, mintUrl, invoice, testUnit);
 
         const historyEvent = await historyPromise;
         expect(historyEvent.entry.quoteId).toBe(prepared.quoteId);

@@ -3,7 +3,7 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
-import { MintQuotesApi } from '../../api/MintQuotesApi';
+import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
 import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -67,10 +67,10 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationProcessor();
     });
 
-    it('should expose the dedicated mint quotes api', async () => {
+    it('should expose the dedicated quotes api', async () => {
       const manager = await initializeCoco(baseConfig);
 
-      expect(manager.mintQuotes).toBeInstanceOf(MintQuotesApi);
+      expect(manager.quotes).toBeInstanceOf(QuoteApi);
 
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();

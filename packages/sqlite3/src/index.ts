@@ -5,6 +5,7 @@ import type {
   KeyRingRepository,
   CounterRepository,
   ProofRepository,
+  MeltQuoteRepository,
   MintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
@@ -22,6 +23,7 @@ import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
+import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
@@ -42,6 +44,7 @@ export class SqliteRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly historyRepository: SqliteHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
@@ -60,6 +63,7 @@ export class SqliteRepositories implements Repositories {
     this.counterRepository = new SqliteCounterRepository(this.db);
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
+    this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
     this.historyRepository = new SqliteHistoryRepository(this.db);
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
@@ -86,6 +90,7 @@ export class SqliteRepositories implements Repositories {
         counterRepository: new SqliteCounterRepository(txDb),
         keysetRepository: new SqliteKeysetRepository(txDb),
         proofRepository: new SqliteProofRepository(txDb),
+        meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
         mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
         historyRepository: new SqliteHistoryRepository(txDb),
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
@@ -115,6 +120,7 @@ export {
   SqliteKeysetRepository,
   SqliteCounterRepository,
   SqliteProofRepository,
+  SqliteMeltQuoteRepository,
   SqliteMintQuoteRepository,
   SqliteHistoryRepository,
   SqliteSendOperationRepository,

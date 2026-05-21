@@ -1,6 +1,7 @@
 import type {
   Repositories,
   MintQuoteRepository,
+  MeltQuoteRepository,
   MintOperationRepository,
   SendOperationRepository,
   MeltOperationRepository,
@@ -59,7 +60,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
-  MintQuotesApi,
+  QuoteApi,
   PaymentRequestsApi,
 } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
@@ -200,7 +201,7 @@ export class Manager {
   readonly history: HistoryApi;
   readonly auth: AuthApi;
   readonly ops: OpsApi;
-  readonly mintQuotes: MintQuotesApi;
+  readonly quotes: QuoteApi;
   readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
@@ -214,6 +215,7 @@ export class Manager {
   private mintOperationWatcher?: MintOperationWatcherService;
   private mintOperationProcessor?: MintOperationProcessor;
   private mintQuoteRepository: MintQuoteRepository;
+  private meltQuoteRepository: MeltQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
   private seedService: SeedService;
@@ -289,6 +291,7 @@ export class Manager {
     this.paymentRequestReceiveAttemptRepository = core.paymentRequestReceiveAttemptRepository;
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
+    this.meltQuoteRepository = core.meltQuoteRepository;
     this.authSessionService = core.authSessionService;
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
@@ -301,7 +304,7 @@ export class Manager {
     this.subscription = apis.subscription;
     this.history = apis.history;
     this.ops = apis.ops;
-    this.mintQuotes = apis.mintQuotes;
+    this.quotes = apis.quotes;
     this.auth = apis.auth;
     this.paymentRequests = apis.paymentRequests;
 
@@ -662,6 +665,7 @@ export class Manager {
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
     mintQuoteRepository: MintQuoteRepository;
+    meltQuoteRepository: MeltQuoteRepository;
     historyService: HistoryService;
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
@@ -776,6 +780,7 @@ export class Manager {
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,
       repositories.meltOperationRepository,
+      repositories.meltQuoteRepository,
       repositories.proofRepository,
       proofService,
       mintService,
@@ -786,6 +791,7 @@ export class Manager {
       mintScopedLock,
     );
     const meltOperationRepository = repositories.meltOperationRepository;
+    const meltQuoteRepository = repositories.meltQuoteRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
     const mintHandlerProvider = new MintHandlerProvider({
@@ -853,6 +859,7 @@ export class Manager {
       walletRestoreService,
       keyRingService,
       mintQuoteRepository,
+      meltQuoteRepository,
       historyService,
       paymentRequestService,
       sendOperationService,
@@ -878,7 +885,7 @@ export class Manager {
     subscription: SubscriptionApi;
     history: HistoryApi;
     ops: OpsApi;
-    mintQuotes: MintQuotesApi;
+    quotes: QuoteApi;
     auth: AuthApi;
     paymentRequests: PaymentRequestsApi;
   } {
@@ -900,9 +907,9 @@ export class Manager {
     const send = new SendOpsApi(this.sendOperationService);
     const receive = new ReceiveOpsApi(this.receiveOperationService);
     const mintOps = new MintOpsApi(this.mintOperationService);
-    const mintQuotes = new MintQuotesApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
+    const quotes = new QuoteApi(this.mintOperationService, this.meltOperationService);
     const auth = new AuthApi(this.authService);
     const paymentRequests = new PaymentRequestsApi(
       this.paymentRequestService,
@@ -915,7 +922,7 @@ export class Manager {
       subscription,
       history,
       ops,
-      mintQuotes,
+      quotes,
       auth,
       paymentRequests,
     };

@@ -6,6 +6,7 @@ import {
   type Repositories,
   type MeltOperation,
   type MintQuote,
+  type MeltQuote,
   type MintOperation,
   type PaymentRequestReceiveAttempt,
   type PaymentRequestReceiveOperation,
@@ -214,6 +215,7 @@ export function createDummyMeltOperation(
     unit: 'sat',
     method: 'bolt11',
     methodData: { invoice: 'lnbc1test', amountSats: Amount.from(1) },
+    quoteId: 'melt-quote-id',
     createdAt: 0,
     updatedAt: 0,
     ...overrides,
@@ -289,6 +291,25 @@ export function createDummyMintQuote(overrides?: Partial<MintQuote>): MintQuote 
     updatedAt: 0,
     ...overrides,
   } satisfies MintQuote;
+}
+
+export function createDummyMeltQuote(overrides?: Partial<MeltQuote>): MeltQuote {
+  return {
+    mintUrl: 'https://mint.test',
+    method: 'bolt11',
+    quoteId: 'melt-quote-id',
+    quote: 'melt-quote-id',
+    state: 'UNPAID',
+    request: 'lnbc1test',
+    amount: Amount.from(3),
+    unit: 'sat',
+    fee_reserve: Amount.from(1),
+    expiry: 1_730_000_000,
+    payment_preimage: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  } satisfies MeltQuote;
 }
 
 export function createDummyMintOperation(
@@ -475,6 +496,69 @@ export async function runMintOperationRepositoryContract(
         expect(stored!.state).toBe('PAID');
         expect(stored!.lastObservedRemoteState).toBe('PAID');
         expect(stored!.lastObservedRemoteStateAt).toBe(20);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runMeltQuoteRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MeltQuoteRepository contract', () => {
+    it('persists canonical melt quotes by full quote identity', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'canonical-melt-quote',
+          quote: 'canonical-melt-quote',
+          state: 'PENDING',
+          lastObservedRemoteState: 'PENDING',
+          lastObservedRemoteStateAt: 20,
+        });
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+
+        const stored = await repositories.meltQuoteRepository.getMeltQuote(
+          'https://mint.test',
+          'bolt11',
+          'canonical-melt-quote',
+        );
+
+        expect(stored).toBeDefined();
+        expect(stored!.mintUrl).toBe('https://mint.test');
+        expect(stored!.method).toBe('bolt11');
+        expect(stored!.quoteId).toBe('canonical-melt-quote');
+        expect(stored!.state).toBe('PENDING');
+        expect(stored!.lastObservedRemoteState).toBe('PENDING');
+        expect(stored!.lastObservedRemoteStateAt).toBe(20);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('lists only active melt quotes, optionally scoped by method', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.meltQuoteRepository.upsertMeltQuote(
+          createDummyMeltQuote({ quoteId: 'unpaid', quote: 'unpaid', state: 'UNPAID' }),
+        );
+        await repositories.meltQuoteRepository.upsertMeltQuote(
+          createDummyMeltQuote({ quoteId: 'pending', quote: 'pending', state: 'PENDING' }),
+        );
+        await repositories.meltQuoteRepository.upsertMeltQuote(
+          createDummyMeltQuote({ quoteId: 'paid', quote: 'paid', state: 'PAID' }),
+        );
+
+        const pending = await repositories.meltQuoteRepository.getPendingMeltQuotes('bolt11');
+
+        expect(pending).toHaveLength(2);
+        expect(pending.some((quote) => quote.quoteId === 'paid')).toBe(false);
       } finally {
         await dispose();
       }

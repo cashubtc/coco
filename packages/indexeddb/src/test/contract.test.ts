@@ -8,6 +8,7 @@ import {
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
+  runMeltQuoteRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -41,5 +42,7 @@ runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, ex
 runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
