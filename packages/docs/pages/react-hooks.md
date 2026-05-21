@@ -126,15 +126,18 @@ if (pendingMint.state === 'pending') {
 Use this for outbound payment flows such as bolt11 melts.
 
 ```tsx
-import { useMeltOperation } from '@cashu/coco-react';
+import { useManager, useMeltOperation } from '@cashu/coco-react';
 
+const manager = useManager();
 const { prepare, execute, refresh, finalize, reclaim, currentOperation } = useMeltOperation();
 
-const preparedMelt = await prepare({
+const quote = await manager.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
 });
+
+const preparedMelt = await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
 
 if (preparedMelt.state === 'prepared') {
   await execute();

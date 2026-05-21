@@ -42,7 +42,7 @@ export class MintOperationProcessor {
   private queue: QueueItem[] = [];
   private processing = false;
   private processingTimer?: ReturnType<typeof setTimeout>;
-  private offStateChanged?: () => void;
+  private offQuoteUpdated?: () => void;
   private offPending?: () => void;
   private offRequeue?: () => void;
   private offUntrusted?: () => void;
@@ -87,12 +87,23 @@ export class MintOperationProcessor {
     this.running = true;
     this.logger?.info('MintOperationProcessor started');
 
-    // Subscribe to operation-owned quote-state changes
-    this.offStateChanged = this.bus.on(
-      'mint-op:quote-state-changed',
-      async ({ mintUrl, operationId, operation, state }) => {
-        if (state === 'PAID') {
-          this.enqueue(mintUrl, operationId, operation.method);
+    // Subscribe to canonical quote updates and resolve all affected local operations.
+    this.offQuoteUpdated = this.bus.on(
+      'mint-quote:updated',
+      async ({ mintUrl, method, quoteId, quote }) => {
+        if (quote.state !== 'PAID') {
+          return;
+        }
+
+        const operations = await this.mintOperations.getOperationsForQuote(
+          mintUrl,
+          method,
+          quoteId,
+        );
+        for (const operation of operations) {
+          if (operation.state === 'pending') {
+            this.enqueue(mintUrl, operation.id, operation.method);
+          }
         }
       },
     );
@@ -123,13 +134,13 @@ export class MintOperationProcessor {
     this.running = false;
 
     // Unsubscribe from events
-    if (this.offStateChanged) {
+    if (this.offQuoteUpdated) {
       try {
-        this.offStateChanged();
+        this.offQuoteUpdated();
       } catch {
         // ignore
       } finally {
-        this.offStateChanged = undefined;
+        this.offQuoteUpdated = undefined;
       }
     }
 

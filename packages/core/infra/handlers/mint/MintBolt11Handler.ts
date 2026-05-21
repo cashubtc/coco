@@ -19,11 +19,19 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async prepare(
     ctx: PrepareContext<'bolt11'>,
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
-    const quote =
-      ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
+    const quote = ctx.importedQuote;
+    if (!quote) {
+      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
+    }
 
     if (!quote.amount || quote.amount.isZero()) {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
+    }
+
+    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+      throw new Error(
+        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
+      );
     }
 
     if (!quote.amount.equals(ctx.operation.amount)) {

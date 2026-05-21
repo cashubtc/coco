@@ -13,12 +13,23 @@ import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
 
-type PrepareMintInputCommon = {
+type MintQuoteAmountInputCommon = {
   /** Mint that will execute the quote-backed mint operation. */
   mintUrl: string;
   /** Amount to request from the mint. Bare amounts use `sat` unless `unit` is set. */
   amount: UnitAmountLike;
   /** Unit to request from the mint. */
+  unit?: string;
+};
+
+type PrepareMintInputCommon = MintQuoteAmountInputCommon;
+
+type PrepareExistingQuoteInputCommon = {
+  /** Mint that issued the canonical quote. */
+  mintUrl: string;
+  /** Existing canonical mint quote ID to prepare against. */
+  quoteId: string;
+  /** Optional expected unit for the quote. */
   unit?: string;
 };
 
@@ -38,12 +49,19 @@ type MethodDataInput<M extends MintMethod> =
         methodData: MintMethodData<M>;
       };
 
-export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: PrepareMintInputCommon & {
-    /** Mint method to prepare, for example `bolt11`. */
-    method: M;
-  } & MethodDataInput<M>;
-}[TSupported];
+export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> =
+  | {
+      [M in TSupported]: PrepareMintInputCommon & {
+        /** Mint method to prepare, for example `bolt11`. */
+        method: M;
+      } & MethodDataInput<M>;
+    }[TSupported]
+  | {
+      [M in TSupported]: PrepareExistingQuoteInputCommon & {
+        /** Mint method to prepare, for example `bolt11`. */
+        method: M;
+      } & MethodDataInput<M>;
+    }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: ImportMintQuoteInputCommon & {
@@ -90,9 +108,19 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Creates a new remote quote, then persists a prepared mint operation without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
+    if ('quoteId' in input) {
+      return this.mintOperationService.prepareExistingQuote(
+        input.mintUrl,
+        input.method,
+        input.quoteId,
+        methodData,
+        input.unit,
+      );
+    }
+
+    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     return this.mintOperationService.prepareNewQuote(
       input.mintUrl,
       parsed,
@@ -135,8 +163,12 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   }
 
   /** Returns a mint operation by mint URL and quote ID, or `null` if not found. */
-  async getByQuote(mintUrl: string, quoteId: string): Promise<MintOperation | null> {
-    return this.mintOperationService.getOperationByQuote(mintUrl, quoteId);
+  async getByQuote(
+    mintUrl: string,
+    quoteId: string,
+    method: TSupported = 'bolt11' as TSupported,
+  ): Promise<MintOperation | null> {
+    return this.mintOperationService.getOperationByQuote(mintUrl, method, quoteId);
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */

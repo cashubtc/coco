@@ -1,6 +1,7 @@
 import type { AuthSession } from '@core/models/AuthSession';
 import type { HistoryEntry } from '@core/models/History';
 import type { Keypair } from '@core/models/Keypair';
+import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
@@ -112,10 +113,22 @@ export interface ProofRepository {
 }
 
 export interface MintQuoteRepository {
-  getMintQuote(mintUrl: string, quoteId: string): Promise<MintQuote | null>;
-  addMintQuote(quote: MintQuote): Promise<void>;
-  setMintQuoteState(mintUrl: string, quoteId: string, state: MintQuote['state']): Promise<void>;
-  getPendingMintQuotes(): Promise<MintQuote[]>;
+  getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null>;
+  upsertMintQuote(quote: MintQuote): Promise<void>;
+  setMintQuoteState(
+    mintUrl: string,
+    method: string,
+    quoteId: string,
+    state: MintQuote['state'],
+    observedAt?: number,
+  ): Promise<void>;
+  getPendingMintQuotes(method?: string): Promise<MintQuote[]>;
+}
+
+export interface MeltQuoteRepository {
+  getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null>;
+  upsertMeltQuote(quote: MeltQuote): Promise<void>;
+  getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;
 }
 
 export interface KeyRingRepository {
@@ -211,8 +224,8 @@ export interface MintOperationRepository {
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<MintOperation[]>;
 
-  /** Get all operations for a mint/quote pair */
-  getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]>;
+  /** Get all operations for a mint/method/quote tuple */
+  getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
 
   /** Delete a mint operation */
   delete(id: string): Promise<void>;
@@ -279,6 +292,7 @@ interface RepositoriesBase {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
+  meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
   meltOperationRepository: MeltOperationRepository;

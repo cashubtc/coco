@@ -114,9 +114,10 @@ await coco.ops.send.finalize(operationId);
 
 Use melt operations to pay BOLT11 invoices via `coco.ops.melt`:
 
-- `prepare({ mintUrl, method: 'bolt11', methodData: { invoice } }): Promise<PreparedMeltOperation>`
+- `quotes.melt.create({ mintUrl, method: 'bolt11', methodData: { invoice } }): Promise<MeltQuote>`
+- `prepare({ mintUrl, method: 'bolt11', quoteId }): Promise<PreparedMeltOperation>`
 - `execute(operationOrId): Promise<PendingMeltOperation | FinalizedMeltOperation>`
-- `getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null>`
+- `getByQuote({ mintUrl, method, quoteId }): Promise<MeltOperation | null>`
 - `refresh(operationId: string): Promise<MeltOperation>`
 
 Finalized melt operations include `changeAmount` and `effectiveFee` when that settlement data is available.

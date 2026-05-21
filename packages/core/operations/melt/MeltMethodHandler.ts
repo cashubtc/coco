@@ -1,4 +1,10 @@
-import { Amount, type AmountLike, type Wallet, type Proof } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type AmountLike,
+  type MeltQuoteBolt11Response,
+  type Wallet,
+  type Proof,
+} from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -42,8 +48,20 @@ export type MeltMethod = keyof MeltMethodDefinitions;
 
 export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefinitions[M];
 
+export interface MeltMethodQuoteDefinitions {
+  bolt11: MeltQuoteBolt11Response;
+  bolt12: MeltQuoteBolt11Response;
+  onchain: never;
+}
+
 export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =
   M extends keyof MeltMethodInputDefinitions ? MeltMethodInputDefinitions[M] : never;
+
+export type MeltMethodRemoteState<M extends MeltMethod = MeltMethod> =
+  MeltMethodQuoteDefinitions[M]['state'];
+
+export type MeltMethodQuoteSnapshot<M extends MeltMethod = MeltMethod> =
+  MeltMethodQuoteDefinitions[M];
 
 export interface MeltMethodMeta<M extends MeltMethod = MeltMethod> {
   method: M;
@@ -85,6 +103,7 @@ export interface BaseHandlerDeps {
 export interface BasePrepareContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: InitMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
+  quote: MeltMethodQuoteSnapshot<M>;
 }
 
 export interface PreparedContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {

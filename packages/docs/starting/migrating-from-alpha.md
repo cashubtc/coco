@@ -171,11 +171,12 @@ Use these forms after migrating:
 await manager.ops.send.prepare({ mintUrl, amount: 100 });
 await manager.ops.receive.prepare({ token });
 await manager.ops.mint.prepare({ mintUrl, amount: 100, method: 'bolt11' });
-await manager.ops.melt.prepare({
+const meltQuote = await manager.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
 });
+await manager.ops.melt.prepare({ mintUrl, method: 'bolt11', quoteId: meltQuote.quoteId });
 
 const balancesByMint = await manager.wallet.balances.byMint();
 const trustedBalancesByMint = await manager.wallet.balances.byMint({ trustedOnly: true });

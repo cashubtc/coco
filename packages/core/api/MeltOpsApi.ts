@@ -4,7 +4,7 @@ import type {
   PendingMeltOperation,
   PreparedMeltOperation,
 } from '@core/operations/melt';
-import type { MeltMethod, MeltMethodInputData, MeltOperationService } from '@core/operations/melt';
+import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 
 /** Melt methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMeltMethod = 'bolt11';
@@ -15,10 +15,21 @@ export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMel
     mintUrl: string;
     /** Melt method to prepare, for example `bolt11`. */
     method: M;
-    /** Method-specific payload required for the selected melt method. */
-    methodData: MeltMethodInputData<M>;
+    /** Existing canonical melt quote ID to prepare against. */
+    quoteId: string;
     /** Unit to melt. Defaults to `sat`. */
     unit?: string;
+  };
+}[TSupported];
+
+export type GetMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
+  [M in TSupported]: {
+    /** Mint that owns the melt operation. */
+    mintUrl: string;
+    /** Melt method to resolve, for example `bolt11`. */
+    method: M;
+    /** Canonical melt quote ID. */
+    quoteId: string;
   };
 }[TSupported];
 
@@ -56,19 +67,18 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   constructor(private readonly meltOperationService: MeltOperationService) {}
 
   /**
-   * Creates and prepares a melt operation without executing it.
+   * Prepares a melt operation against an existing canonical quote without executing it.
    *
    * Use this to inspect the generated operation and any quote-related data
    * before committing to the external payment.
    */
   async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
-    const initOperation = await this.meltOperationService.init(
+    return this.meltOperationService.prepareExistingQuote(
       input.mintUrl,
       input.method,
-      input.methodData,
+      input.quoteId,
       input.unit,
     );
-    return this.meltOperationService.prepare(initOperation.id);
   }
 
   /**
@@ -95,9 +105,13 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
     return this.meltOperationService.getOperation(operationId);
   }
 
-  /** Returns a melt operation by mint URL and quote ID, or `null` if not found. */
-  async getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null> {
-    return this.meltOperationService.getOperationByQuote(mintUrl, quoteId);
+  /** Returns a melt operation by mint URL, method, and quote ID, or `null` if not found. */
+  async getByQuote(input: GetMeltByQuoteInput<TSupported>): Promise<MeltOperation | null> {
+    return this.meltOperationService.getOperationByQuote(
+      input.mintUrl,
+      input.method,
+      input.quoteId,
+    );
   }
 
   /** Lists melt operations that are prepared and ready to execute or cancel. */

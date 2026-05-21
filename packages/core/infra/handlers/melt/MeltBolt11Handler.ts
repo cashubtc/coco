@@ -95,7 +95,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
    * Prepare a bolt11 melt operation.
    *
    * This method:
-   * 1. Creates a melt quote from the mint for the lightning invoice
+   * 1. Uses the canonical melt quote provided by the caller
    * 2. Selects proofs to cover the quote amount + fee reserve with input fees
    * 3. Determines if a pre-swap is needed (when selected amount >> required)
    * 4. Reserves the input proofs for this operation
@@ -109,15 +109,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     const { mintUrl, id: operationId } = ctx.operation;
     ctx.logger?.debug('Preparing bolt11 melt operation', { operationId, mintUrl });
 
-    const amountMsat =
-      ctx.operation.methodData.amountSats === undefined
-        ? undefined
-        : ctx.operation.methodData.amountSats.multiplyBy(1000);
-
-    const quote = await ctx.wallet.createMeltQuoteBolt11(
-      ctx.operation.methodData.invoice,
-      amountMsat,
-    );
+    const quote = ctx.quote;
     assertSameUnit(quote.unit, ctx.operation.unit, `Melt quote ${quote.quote}`);
     const { amount, fee_reserve } = quote;
     const totalAmount = amount.add(fee_reserve);

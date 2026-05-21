@@ -5,6 +5,7 @@ import type {
   KeyRingRepository,
   CounterRepository,
   ProofRepository,
+  MeltQuoteRepository,
   MintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
@@ -22,6 +23,7 @@ import { IdbKeysetRepository } from './repositories/KeysetRepository.ts';
 import { IdbKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { IdbCounterRepository } from './repositories/CounterRepository.ts';
 import { IdbProofRepository } from './repositories/ProofRepository.ts';
+import { IdbMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { IdbMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
 import { IdbHistoryRepository } from './repositories/HistoryRepository.ts';
 import { IdbSendOperationRepository } from './repositories/SendOperationRepository.ts';
@@ -42,6 +44,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
   readonly historyRepository: IdbHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
@@ -61,6 +64,7 @@ export class IndexedDbRepositories implements Repositories {
     this.counterRepository = new IdbCounterRepository(this.db);
     this.keysetRepository = new IdbKeysetRepository(this.db);
     this.proofRepository = new IdbProofRepository(this.db);
+    this.meltQuoteRepository = new IdbMeltQuoteRepository(this.db);
     this.mintQuoteRepository = new IdbMintQuoteRepository(this.db);
     this.historyRepository = new IdbHistoryRepository(this.db);
     this.sendOperationRepository = new IdbSendOperationRepository(this.db);
@@ -96,6 +100,7 @@ export class IndexedDbRepositories implements Repositories {
         counterRepository: new IdbCounterRepository(scopedDb),
         keysetRepository: new IdbKeysetRepository(scopedDb),
         proofRepository: new IdbProofRepository(scopedDb),
+        meltQuoteRepository: new IdbMeltQuoteRepository(scopedDb),
         mintQuoteRepository: new IdbMintQuoteRepository(scopedDb),
         historyRepository: new IdbHistoryRepository(scopedDb),
         sendOperationRepository: new IdbSendOperationRepository(scopedDb),
@@ -123,6 +128,7 @@ export {
   IdbKeysetRepository,
   IdbCounterRepository,
   IdbProofRepository,
+  IdbMeltQuoteRepository,
   IdbMintQuoteRepository,
   IdbHistoryRepository,
   IdbSendOperationRepository,

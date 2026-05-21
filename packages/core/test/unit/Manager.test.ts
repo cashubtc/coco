@@ -3,6 +3,7 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
+import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
 import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -66,7 +67,17 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationProcessor();
     });
 
-    it('persists mint quote observations before emitting projected history updates', async () => {
+    it('should expose the dedicated quotes api', async () => {
+      const manager = await initializeCoco(baseConfig);
+
+      expect(manager.quotes).toBeInstanceOf(QuoteApi);
+
+      await manager.disableMintOperationWatcher();
+      await manager.disableProofStateWatcher();
+      await manager.disableMintOperationProcessor();
+    });
+
+    it('projects mint history from quote observation updates with the processor disabled', async () => {
       const manager = await initializeCoco({
         ...baseConfig,
         watchers: {
@@ -88,17 +99,26 @@ describe('initializeCoco', () => {
       });
 
       const observedAt = 3_000;
-      await manager['eventBus'].emit('mint-op:quote-state-changed', {
+      await manager['eventBus'].emit('mint-quote:updated', {
         mintUrl: operation.mintUrl,
-        operationId: operation.id,
-        operation: {
-          ...operation,
+        method: operation.method,
+        quoteId: operation.quoteId,
+        quote: {
+          mintUrl: operation.mintUrl,
+          method: operation.method,
+          quoteId: operation.quoteId,
+          quote: operation.quoteId,
+          request: operation.request,
+          amount: operation.amount,
+          unit: operation.unit,
+          expiry: operation.expiry,
+          state: 'PAID',
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: observedAt,
+          reusable: false,
+          createdAt: operation.createdAt,
           updatedAt: observedAt,
         },
-        quoteId: operation.quoteId,
-        state: 'PAID',
       });
 
       expect(observedRepositoryEntries).toHaveLength(1);
@@ -106,8 +126,52 @@ describe('initializeCoco', () => {
         id: `mint:${operation.id}`,
         type: 'mint',
         operationId: operation.id,
+        state: 'pending',
         remoteState: 'PAID',
       });
+    });
+
+    it('does not project history for quote-only updates', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      const observedRepositoryEntries: Array<CoreEvents['history:updated']['entry']> = [];
+      manager['eventBus'].on('history:updated', ({ entry }) => {
+        observedRepositoryEntries.push(entry);
+      });
+
+      const observedAt = 3_000;
+      await manager['eventBus'].emit('mint-quote:updated', {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'quote-only',
+        quote: {
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+          quoteId: 'quote-only',
+          quote: 'quote-only',
+          request: 'lnbc1quoteonly',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          lastObservedRemoteState: 'PAID',
+          lastObservedRemoteStateAt: observedAt,
+          reusable: false,
+          createdAt: observedAt,
+          updatedAt: observedAt,
+        },
+      });
+
+      expect(observedRepositoryEntries).toHaveLength(0);
     });
 
     it('should use NullLogger by default', async () => {

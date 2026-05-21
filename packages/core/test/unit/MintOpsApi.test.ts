@@ -77,6 +77,7 @@ describe('MintOpsApi', () => {
 
     mintOperationService = {
       prepareNewQuote: mock(async () => pendingOperation),
+      prepareExistingQuote: mock(async () => pendingOperation),
       importQuote: mock(async () => pendingOperation),
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
@@ -146,6 +147,25 @@ describe('MintOpsApi', () => {
       'bolt11',
       {},
     );
+  });
+
+  it('prepare can target an existing canonical quote', async () => {
+    const result = await api.prepare({
+      mintUrl,
+      quoteId,
+      method: 'bolt11',
+      methodData: {},
+    });
+
+    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      quoteId,
+      {},
+      undefined,
+    );
+    expect(mintOperationService.prepareNewQuote).not.toHaveBeenCalled();
+    expect(result).toBe(pendingOperation);
   });
 
   it('importQuote delegates to the mint operation service', async () => {

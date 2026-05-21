@@ -17,7 +17,9 @@ import type {
 } from '../../operations/mint/MintMethodHandler';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
+import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -31,6 +33,7 @@ describe('MintOperationService', () => {
   const keysetId = 'keyset-1';
 
   let operationRepo: MemoryMintOperationRepository;
+  let quoteRepo: MemoryMintQuoteRepository;
   let proofRepo: MemoryProofRepository;
   let proofService: ProofService;
   let mintService: MintService;
@@ -89,6 +92,19 @@ describe('MintOperationService', () => {
     updatedAt: Date.now(),
   });
 
+  const persistQuote = async (quote = quoteId): Promise<void> => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+  };
+
   const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation => ({
     ...makeInitOp(id),
     state: 'pending',
@@ -108,6 +124,7 @@ describe('MintOperationService', () => {
 
   beforeEach(async () => {
     operationRepo = new MemoryMintOperationRepository();
+    quoteRepo = new MemoryMintQuoteRepository();
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
@@ -161,14 +178,35 @@ describe('MintOperationService', () => {
     } as unknown as MintService;
 
     walletService = {
-      getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })),
+      getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
+        wallet: {
+          createMintQuoteBolt11: mock(async (amount: Amount) => ({
+            quote: quoteId,
+            request: 'lnbc1test',
+            amount,
+            unit,
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+            state: 'UNPAID',
+          })),
+        },
+      })),
     } as unknown as WalletService;
 
-    mintAdapter = {} as MintAdapter;
+    mintAdapter = {
+      checkMintQuoteState: mock(async () => ({
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      })),
+    } as unknown as MintAdapter;
 
     service = new MintOperationService(
       handlerProvider,
       operationRepo,
+      quoteRepo,
       proofRepo,
       proofService,
       mintService,
@@ -232,6 +270,134 @@ describe('MintOperationService', () => {
     });
   });
 
+  it('createQuote persists a canonical quote without creating operation output data', async () => {
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const created = await service.createQuote(mintUrl, {
+      amount: Amount.from(10),
+      unit: 'sat',
+    });
+
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', created.quoteId);
+    const operations = await operationRepo.getAll();
+
+    expect(storedQuote?.quoteId).toBe(created.quoteId);
+    expect(storedQuote?.method).toBe('bolt11');
+    expect(storedQuote?.reusable).toBe(false);
+    expect(operations).toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('getQuote returns a persisted quote by full identity', async () => {
+    await persistQuote('quote-exact');
+
+    const found = await service.getQuote(mintUrl, 'bolt11', 'quote-exact');
+    const wrongQuoteId = await service.getQuote(mintUrl, 'bolt11', 'quote-other');
+    const wrongMint = await service.getQuote('https://other-mint.test', 'bolt11', 'quote-exact');
+
+    expect(found?.quoteId).toBe('quote-exact');
+    expect(wrongQuoteId).toBeNull();
+    expect(wrongMint).toBeNull();
+  });
+
+  it('getPendingQuotes returns non-issued canonical quotes with optional method filtering', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-unpaid',
+        request: 'lnbc1unpaid',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-issued',
+        request: 'lnbc1issued',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+      }),
+    );
+
+    const allPending = await service.getPendingQuotes();
+    const bolt11Pending = await service.getPendingQuotes('bolt11');
+
+    expect(allPending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
+    expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
+  });
+
+  it('refreshQuote fails when the canonical quote is missing', async () => {
+    await expect(service.refreshQuote(mintUrl, 'bolt11', 'missing-quote')).rejects.toThrow(
+      'was not found',
+    );
+
+    expect(mintAdapter.checkMintQuoteState).not.toHaveBeenCalled();
+  });
+
+  it('refreshQuote persists the canonical quote before emitting mint-quote:updated', async () => {
+    await persistQuote();
+    const observedAt = Date.now();
+    (mintAdapter.checkMintQuoteState as Mock<any>).mockImplementationOnce(async () => ({
+      quote: quoteId,
+      request: 'lnbc1paid',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    }));
+
+    const persistedDuringEvent: Array<string | undefined> = [];
+    eventBus.on('mint-quote:updated', async ({ quote }) => {
+      const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+      persistedDuringEvent.push(storedQuote?.state);
+    });
+
+    const refreshed = await service.refreshQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(refreshed.state).toBe('PAID');
+    expect(refreshed.request).toBe('lnbc1paid');
+    expect(refreshed.lastObservedRemoteState).toBe('PAID');
+    expect(refreshed.lastObservedRemoteStateAt).toBeGreaterThanOrEqual(observedAt);
+    expect(persistedDuringEvent).toEqual(['PAID']);
+  });
+
+  it('prepareExistingQuote fails before creating an operation when the quote is missing', async () => {
+    await expect(
+      service.prepareExistingQuote(mintUrl, 'bolt11', 'missing-quote', {}),
+    ).rejects.toThrow('was not found');
+
+    await expect(operationRepo.getAll()).resolves.toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('prepareExistingQuote fails before creating an operation when the quote is terminal', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'issued-quote',
+        request: 'lnbc1issued',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+      }),
+    );
+
+    await expect(
+      service.prepareExistingQuote(mintUrl, 'bolt11', 'issued-quote', {}),
+    ).rejects.toThrow('quote is terminal');
+
+    await expect(operationRepo.getAll()).resolves.toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
   it('importQuote persists a pending operation and emits mint-op:pending', async () => {
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     eventBus.on('mint-op:pending', (event) => {
@@ -291,10 +457,10 @@ describe('MintOperationService', () => {
   });
 
   it('prepare + finalize runs init -> pending -> execute for an existing tracked operation', async () => {
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
-    eventBus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
     });
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
@@ -302,13 +468,14 @@ describe('MintOperationService', () => {
 
     const initOp = makeInitOp('mint-op-redeem');
     await operationRepo.create(initOp);
+    await persistQuote();
 
     const pending = await service.prepare(initOp.id);
     const finalized = await service.finalize(pending.id);
 
     expect(finalized?.state).toBe('finalized');
 
-    const stored = await operationRepo.getByQuoteId(mintUrl, quoteId);
+    const stored = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(stored.length).toBe(1);
     expect(stored[0]?.state).toBe('finalized');
 
@@ -316,9 +483,10 @@ describe('MintOperationService', () => {
     expect(saved).not.toBeNull();
     expect(saved?.createdByOperationId).toBe(finalized?.id);
 
-    expect(quoteStateEvents.length).toBe(1);
-    expect(quoteStateEvents[0]?.quoteId).toBe(quoteId);
-    expect(quoteStateEvents[0]?.state).toBe('ISSUED');
+    expect(quoteUpdatedEvents.length).toBe(1);
+    expect(quoteUpdatedEvents[0]?.quoteId).toBe(quoteId);
+    expect(quoteUpdatedEvents[0]?.method).toBe('bolt11');
+    expect(quoteUpdatedEvents[0]?.quote.state).toBe('ISSUED');
     expect(finalizedEvents.length).toBe(1);
     expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
     expect(finalizedEvents[0]?.operation.state).toBe('finalized');
@@ -327,6 +495,7 @@ describe('MintOperationService', () => {
   it('finalize is idempotent after finalize', async () => {
     const initOp = makeInitOp('mint-op-idempotent');
     await operationRepo.create(initOp);
+    await persistQuote();
 
     const pending = await service.prepare(initOp.id);
     const first = await service.finalize(pending.id);
@@ -335,7 +504,7 @@ describe('MintOperationService', () => {
     expect(first?.state).toBe('finalized');
     expect(second?.id).toBe(first?.id);
 
-    const ops = await operationRepo.getByQuoteId(mintUrl, quoteId);
+    const ops = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(ops.length).toBe(1);
   });
 
@@ -424,7 +593,7 @@ describe('MintOperationService', () => {
   });
 
   it('getOperationByQuote returns null when no tracked operation exists for the quote', async () => {
-    await expect(service.getOperationByQuote(mintUrl, quoteId)).resolves.toBeNull();
+    await expect(service.getOperationByQuote(mintUrl, 'bolt11', quoteId)).resolves.toBeNull();
   });
 
   it('execute finalizes when already issued proofs cannot be restored', async () => {
@@ -487,11 +656,15 @@ describe('MintOperationService', () => {
     expect(stored.lastObservedRemoteStateAt).toEqual(expect.any(Number));
   });
 
-  it('recordPendingObservation updates the stored remote state without emitting another event', async () => {
+  it('recordPendingObservation updates the stored remote state and emits pending operation update', async () => {
     const pendingOp = makePendingOp('pending-4');
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
-    eventBus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
     });
     await operationRepo.create(pendingOp);
 
@@ -508,25 +681,65 @@ describe('MintOperationService', () => {
     expect(stored.lastObservedRemoteState).toBe('PAID');
     expect(stored.lastObservedRemoteStateAt).toBe(observedAt);
     expect(handler.checkPending).not.toHaveBeenCalled();
-    expect(quoteStateEvents).toHaveLength(0);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+    expect(pendingEvents).toHaveLength(1);
+    expect(pendingEvents[0]?.mintUrl).toBe(pendingOp.mintUrl);
+    expect(pendingEvents[0]?.operationId).toBe(pendingOp.id);
+    expect(pendingEvents[0]?.operation).toMatchObject({
+      id: pendingOp.id,
+      state: 'pending',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: observedAt,
+    });
   });
 
-  it('persists a pending quote-state-changed event emitted by another service', async () => {
-    const pendingOp = makePendingOp('pending-5');
+  it('recordQuoteObservation persists the canonical quote before emitting mint-quote:updated', async () => {
+    const pendingOp = makePendingOp('pending-quote-event');
     await operationRepo.create(pendingOp);
 
     const observedAt = Date.now();
-    await eventBus.emit('mint-op:quote-state-changed', {
+    const persistedDuringEvent: Array<string | undefined> = [];
+    eventBus.on('mint-quote:updated', async ({ quote }) => {
+      const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+      persistedDuringEvent.push(storedQuote?.state);
+    });
+
+    const quote = await service.recordQuoteObservation(pendingOp, 'PAID', observedAt);
+
+    expect(quote.state).toBe('PAID');
+    expect(quote.lastObservedRemoteStateAt).toBe(observedAt);
+    expect(persistedDuringEvent).toEqual(['PAID']);
+  });
+
+  it('persists a pending operation observation from a canonical quote update', async () => {
+    const pendingOp = makePendingOp('pending-5');
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
+    });
+    await operationRepo.create(pendingOp);
+
+    const observedAt = Date.now();
+    await eventBus.emit('mint-quote:updated', {
       mintUrl,
-      operationId: pendingOp.id,
-      operation: {
-        ...pendingOp,
+      method: pendingOp.method,
+      quoteId: pendingOp.quoteId,
+      quote: {
+        mintUrl,
+        method: pendingOp.method,
+        quoteId: pendingOp.quoteId,
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'PAID',
         lastObservedRemoteState: 'PAID',
         lastObservedRemoteStateAt: observedAt,
+        reusable: false,
+        createdAt: pendingOp.createdAt,
         updatedAt: observedAt,
       },
-      quoteId: pendingOp.quoteId,
-      state: 'PAID',
     });
 
     const stored = await operationRepo.getById(pendingOp.id);
@@ -537,6 +750,14 @@ describe('MintOperationService', () => {
     }
     expect(stored.lastObservedRemoteState).toBe('PAID');
     expect(stored.lastObservedRemoteStateAt).toBe(observedAt);
+    expect(pendingEvents).toHaveLength(1);
+    expect(pendingEvents[0]?.operationId).toBe(pendingOp.id);
+    expect(pendingEvents[0]?.operation).toMatchObject({
+      id: pendingOp.id,
+      state: 'pending',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: observedAt,
+    });
     expect(handler.checkPending).not.toHaveBeenCalled();
   });
 });

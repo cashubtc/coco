@@ -307,4 +307,57 @@ describe('expo-sqlite schema migrations', () => {
       },
     });
   });
+
+  it('backfills method-aware mint quotes from existing mint operations', async () => {
+    await ensureSchemaUpTo(db, '030_method_aware_mint_quotes');
+
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson,
+         amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt,
+         terminalFailureJson, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'mint-op-finalized',
+        'https://mint.test',
+        'quote-finalized',
+        'finalized',
+        1,
+        2,
+        null,
+        'bolt11',
+        '{}',
+        '21',
+        'sat',
+        'lnbc1finalized',
+        1_730_000_000,
+        null,
+        'ISSUED',
+        2_000,
+        null,
+        JSON.stringify({ keep: [], send: [] }),
+      ],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    const row = await db.get<{
+      method: string;
+      quoteId: string;
+      state: string;
+      amount: string;
+      reusable: number;
+    }>(
+      `SELECT method, quoteId, state, amount, reusable
+       FROM coco_cashu_mint_quotes
+       WHERE mintUrl = ? AND method = ? AND quoteId = ?`,
+      ['https://mint.test', 'bolt11', 'quote-finalized'],
+    );
+
+    expect(row?.method).toBe('bolt11');
+    expect(row?.quoteId).toBe('quote-finalized');
+    expect(row?.state).toBe('ISSUED');
+    expect(row?.amount).toBe('21');
+    expect(row?.reusable).toBe(0);
+  });
 });

@@ -7,10 +7,16 @@ Melting converts Cashu proofs back into sats by paying a Lightning invoice throu
 ```ts
 await coco.mint.addMint(mintUrl, { trusted: true });
 
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
 });
 
 console.log('Quote:', prepared.quoteId);
@@ -31,14 +37,14 @@ if (result.state === 'pending') {
 }
 ```
 
-`coco.ops.melt.prepare()` creates the melt quote, reserves proofs, and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
+`coco.quotes.melt.create()` creates the melt quote without creating history. `coco.ops.melt.prepare()` reserves proofs and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
 ## Resume by quote
 
 ```ts
-const operation = await coco.ops.melt.getByQuote(mintUrl, quoteId);
+const operation = await coco.ops.melt.getByQuote({ mintUrl, method: 'bolt11', quoteId });
 
 if (operation) {
   const result = await coco.ops.melt.execute(operation.id);

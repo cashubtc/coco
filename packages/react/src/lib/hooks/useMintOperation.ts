@@ -121,12 +121,6 @@ export function useMintOperation(
     const unsubscribePending = manager.on('mint-op:pending', ({ operation }) => {
       handleObservedOperation(operation);
     });
-    const unsubscribeQuoteStateChanged = manager.on(
-      'mint-op:quote-state-changed',
-      ({ operation }) => {
-        handleObservedOperation(operation);
-      },
-    );
     const unsubscribeExecuting = manager.on('mint-op:executing', ({ operation }) => {
       handleObservedOperation(operation);
     });
@@ -136,7 +130,6 @@ export function useMintOperation(
 
     return () => {
       unsubscribePending();
-      unsubscribeQuoteStateChanged();
       unsubscribeExecuting();
       unsubscribeFinalized();
     };
