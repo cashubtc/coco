@@ -5,10 +5,10 @@ import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type { MintService } from '../MintService';
 import type { MintOperationService, PendingMintOperation } from '@core/operations/mint';
 
-type QuoteKey = string; // `${mintUrl}::${quoteId}`
+type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
-function toKey(mintUrl: string, quoteId: string): QuoteKey {
-  return `${mintUrl}::${quoteId}`;
+function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
+  return `${mintUrl}::${method}::${quoteId}`;
 }
 
 export interface MintOperationWatcherOptions {
@@ -220,11 +220,12 @@ export class MintOperationWatcherService {
 
       const uniqueByQuote = new Map<string, PendingMintOperation>();
       for (const operation of mintOperations) {
-        uniqueByQuote.set(operation.quoteId, operation);
+        uniqueByQuote.set(`${operation.method}::${operation.quoteId}`, operation);
       }
 
       const toWatch = Array.from(uniqueByQuote.values()).filter(
-        (operation) => !this.unsubscribeByKey.has(toKey(mintUrl, operation.quoteId)),
+        (operation) =>
+          !this.unsubscribeByKey.has(toKey(mintUrl, operation.method, operation.quoteId)),
       );
       if (toWatch.length === 0) continue;
 
@@ -248,7 +249,7 @@ export class MintOperationWatcherService {
 
             const quoteId = payload.quote;
             if (!quoteId) return;
-            const key = toKey(mintUrl, quoteId);
+            const key = toKey(mintUrl, 'bolt11', quoteId);
             const operationId = this.operationIdByKey.get(key) ?? operationIdByQuote.get(quoteId);
             if (!operationId) return;
 
@@ -317,7 +318,7 @@ export class MintOperationWatcherService {
         };
 
         for (const operation of batch) {
-          const key = toKey(mintUrl, operation.quoteId);
+          const key = toKey(mintUrl, operation.method, operation.quoteId);
           const perKeyStop: UnsubscribeHandler = async () => {
             if (remaining.has(operation.quoteId)) remaining.delete(operation.quoteId);
             if (remaining.size === 0) {

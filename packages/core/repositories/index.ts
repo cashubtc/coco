@@ -112,10 +112,16 @@ export interface ProofRepository {
 }
 
 export interface MintQuoteRepository {
-  getMintQuote(mintUrl: string, quoteId: string): Promise<MintQuote | null>;
-  addMintQuote(quote: MintQuote): Promise<void>;
-  setMintQuoteState(mintUrl: string, quoteId: string, state: MintQuote['state']): Promise<void>;
-  getPendingMintQuotes(): Promise<MintQuote[]>;
+  getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null>;
+  upsertMintQuote(quote: MintQuote): Promise<void>;
+  setMintQuoteState(
+    mintUrl: string,
+    method: string,
+    quoteId: string,
+    state: MintQuote['state'],
+    observedAt?: number,
+  ): Promise<void>;
+  getPendingMintQuotes(method?: string): Promise<MintQuote[]>;
 }
 
 export interface KeyRingRepository {
@@ -211,8 +217,8 @@ export interface MintOperationRepository {
   /** Get all operations for a specific mint */
   getByMintUrl(mintUrl: string): Promise<MintOperation[]>;
 
-  /** Get all operations for a mint/quote pair */
-  getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]>;
+  /** Get all operations for a mint/method/quote tuple */
+  getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
 
   /** Delete a mint operation */
   delete(id: string): Promise<void>;

@@ -5,6 +5,7 @@ import {
   type CoreProof,
   type Repositories,
   type MeltOperation,
+  type MintQuote,
   type MintOperation,
   type PaymentRequestReceiveAttempt,
   type PaymentRequestReceiveOperation,
@@ -272,6 +273,24 @@ function createDummySendOperationsByState(unit: string): SendOperation[] {
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
 
+export function createDummyMintQuote(overrides?: Partial<MintQuote>): MintQuote {
+  return {
+    mintUrl: 'https://mint.test',
+    method: 'bolt11',
+    quoteId: 'quote-id',
+    quote: 'quote-id',
+    state: 'UNPAID',
+    request: 'lnbc1test',
+    amount: Amount.from(3),
+    unit: 'sat',
+    expiry: 1_730_000_000,
+    reusable: false,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  } satisfies MintQuote;
+}
+
 export function createDummyMintOperation(
   overrides?: Partial<PendingMintOperation>,
 ): PendingMintOperation {
@@ -380,6 +399,82 @@ export async function runMintOperationRepositoryContract(
         }
         expect(stored.expiry).toBe(null);
         expect(pending[0].expiry).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('returns sibling mint operations by full quote identity in deterministic order', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const first = createDummyMintOperation({
+          id: 'mint-op-a',
+          quoteId: 'shared-quote',
+          createdAt: 2_000,
+        });
+        const second = createDummyMintOperation({
+          id: 'mint-op-b',
+          quoteId: 'shared-quote',
+          createdAt: 1_000,
+        });
+        const otherMethod = createDummyMintOperation({
+          id: 'mint-op-other',
+          quoteId: 'shared-quote',
+          method: 'bolt11',
+          mintUrl: 'https://other-mint.test',
+        });
+
+        await repositories.mintOperationRepository.create(first);
+        await repositories.mintOperationRepository.create(second);
+        await repositories.mintOperationRepository.create(otherMethod);
+
+        const stored = await repositories.mintOperationRepository.getByQuoteId(
+          'https://mint.test',
+          'bolt11',
+          'shared-quote',
+        );
+
+        expect(stored).toHaveLength(2);
+        expect(stored[0]?.id).toBe('mint-op-b');
+        expect(stored[1]?.id).toBe('mint-op-a');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('persists canonical mint quotes by full quote identity', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'canonical-quote',
+          quote: 'canonical-quote',
+          lastObservedRemoteState: 'UNPAID',
+          lastObservedRemoteStateAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+          'PAID',
+          20,
+        );
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+        );
+
+        expect(stored).toBeDefined();
+        expect(stored!.mintUrl).toBe('https://mint.test');
+        expect(stored!.method).toBe('bolt11');
+        expect(stored!.quoteId).toBe('canonical-quote');
+        expect(stored!.reusable).toBe(false);
+        expect(stored!.state).toBe('PAID');
+        expect(stored!.lastObservedRemoteState).toBe('PAID');
+        expect(stored!.lastObservedRemoteStateAt).toBe(20);
       } finally {
         await dispose();
       }

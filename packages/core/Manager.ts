@@ -493,7 +493,8 @@ export class Manager {
 
       const existing = await this.mintOperationService.getOperationByQuote(
         quote.mintUrl,
-        quote.quote,
+        quote.method,
+        quote.quoteId,
       );
       if (existing && existing.state !== 'init') {
         skipped.push(quote.quote);
@@ -790,6 +791,7 @@ export class Manager {
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,
       repositories.mintOperationRepository,
+      repositories.mintQuoteRepository,
       repositories.proofRepository,
       proofService,
       mintService,

@@ -177,13 +177,15 @@ export class IdbMintOperationRepository implements MintOperationRepository {
     return rows.map(rowToOperation);
   }
 
-  async getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+  async getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]> {
     const rows = (await (this.db as any)
       .table('coco_cashu_mint_operations')
-      .where('[mintUrl+quoteId]')
-      .equals([mintUrl, quoteId])
+      .where('[mintUrl+method+quoteId]')
+      .equals([mintUrl, method, quoteId])
       .toArray()) as MintOperationRow[];
-    return rows.map(rowToOperation);
+    return rows
+      .map(rowToOperation)
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
   async delete(id: string): Promise<void> {

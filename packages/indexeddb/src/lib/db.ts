@@ -148,13 +148,19 @@ export interface ProofRow {
 
 export interface MintQuoteRow {
   mintUrl: string;
-  quote: string;
+  method: string;
+  quoteId: string;
   state: 'UNPAID' | 'PAID' | 'ISSUED';
   request: string;
   amount: string | number;
   unit: string;
   expiry: number | null;
   pubkey?: string | null;
+  lastObservedRemoteState?: 'UNPAID' | 'PAID' | 'ISSUED' | null;
+  lastObservedRemoteStateAt?: number | null;
+  reusable: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MeltQuoteRow {

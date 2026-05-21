@@ -17,7 +17,9 @@ import type {
 } from '../../operations/mint/MintMethodHandler';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
+import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -31,6 +33,7 @@ describe('MintOperationService', () => {
   const keysetId = 'keyset-1';
 
   let operationRepo: MemoryMintOperationRepository;
+  let quoteRepo: MemoryMintQuoteRepository;
   let proofRepo: MemoryProofRepository;
   let proofService: ProofService;
   let mintService: MintService;
@@ -89,6 +92,19 @@ describe('MintOperationService', () => {
     updatedAt: Date.now(),
   });
 
+  const persistQuote = async (quote = quoteId): Promise<void> => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+  };
+
   const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation => ({
     ...makeInitOp(id),
     state: 'pending',
@@ -108,6 +124,7 @@ describe('MintOperationService', () => {
 
   beforeEach(async () => {
     operationRepo = new MemoryMintOperationRepository();
+    quoteRepo = new MemoryMintQuoteRepository();
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
@@ -161,7 +178,18 @@ describe('MintOperationService', () => {
     } as unknown as MintService;
 
     walletService = {
-      getWalletWithActiveKeysetId: mock(async () => ({ wallet: {} })),
+      getWalletWithActiveKeysetId: mock(async (_mintUrl: string, unit: string) => ({
+        wallet: {
+          createMintQuoteBolt11: mock(async (amount: Amount) => ({
+            quote: quoteId,
+            request: 'lnbc1test',
+            amount,
+            unit,
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+            state: 'UNPAID',
+          })),
+        },
+      })),
     } as unknown as WalletService;
 
     mintAdapter = {} as MintAdapter;
@@ -169,6 +197,7 @@ describe('MintOperationService', () => {
     service = new MintOperationService(
       handlerProvider,
       operationRepo,
+      quoteRepo,
       proofRepo,
       proofService,
       mintService,
@@ -230,6 +259,51 @@ describe('MintOperationService', () => {
       amount: Amount.from(10),
       unit: 'usd',
     });
+  });
+
+  it('createQuote persists a canonical quote without creating operation output data', async () => {
+    const created = await service.createQuote(mintUrl, {
+      amount: Amount.from(10),
+      unit: 'sat',
+    });
+
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', created.quoteId);
+    const operations = await operationRepo.getAll();
+
+    expect(storedQuote?.quoteId).toBe(created.quoteId);
+    expect(storedQuote?.method).toBe('bolt11');
+    expect(storedQuote?.reusable).toBe(false);
+    expect(operations).toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('prepareExistingQuote fails before creating an operation when the quote is missing', async () => {
+    await expect(
+      service.prepareExistingQuote(mintUrl, 'bolt11', 'missing-quote', {}),
+    ).rejects.toThrow('was not found');
+
+    await expect(operationRepo.getAll()).resolves.toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('prepareExistingQuote fails before creating an operation when the quote is terminal', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'issued-quote',
+        request: 'lnbc1issued',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+      }),
+    );
+
+    await expect(
+      service.prepareExistingQuote(mintUrl, 'bolt11', 'issued-quote', {}),
+    ).rejects.toThrow('quote is terminal');
+
+    await expect(operationRepo.getAll()).resolves.toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
   });
 
   it('importQuote persists a pending operation and emits mint-op:pending', async () => {
@@ -302,13 +376,14 @@ describe('MintOperationService', () => {
 
     const initOp = makeInitOp('mint-op-redeem');
     await operationRepo.create(initOp);
+    await persistQuote();
 
     const pending = await service.prepare(initOp.id);
     const finalized = await service.finalize(pending.id);
 
     expect(finalized?.state).toBe('finalized');
 
-    const stored = await operationRepo.getByQuoteId(mintUrl, quoteId);
+    const stored = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(stored.length).toBe(1);
     expect(stored[0]?.state).toBe('finalized');
 
@@ -327,6 +402,7 @@ describe('MintOperationService', () => {
   it('finalize is idempotent after finalize', async () => {
     const initOp = makeInitOp('mint-op-idempotent');
     await operationRepo.create(initOp);
+    await persistQuote();
 
     const pending = await service.prepare(initOp.id);
     const first = await service.finalize(pending.id);
@@ -335,7 +411,7 @@ describe('MintOperationService', () => {
     expect(first?.state).toBe('finalized');
     expect(second?.id).toBe(first?.id);
 
-    const ops = await operationRepo.getByQuoteId(mintUrl, quoteId);
+    const ops = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(ops.length).toBe(1);
   });
 
@@ -424,7 +500,7 @@ describe('MintOperationService', () => {
   });
 
   it('getOperationByQuote returns null when no tracked operation exists for the quote', async () => {
-    await expect(service.getOperationByQuote(mintUrl, quoteId)).resolves.toBeNull();
+    await expect(service.getOperationByQuote(mintUrl, 'bolt11', quoteId)).resolves.toBeNull();
   });
 
   it('execute finalizes when already issued proofs cannot be restored', async () => {
