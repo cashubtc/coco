@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
-import { MeltBolt12Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
+import { MeltBolt12Handler } from '../../infra/handlers/melt/MeltBolt12Handler';
 import type { Logger } from '../../logging/Logger';
 import type {
   BasePrepareContext,

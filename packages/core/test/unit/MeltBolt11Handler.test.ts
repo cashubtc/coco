@@ -8,7 +8,7 @@ import { MeltBolt11Handler } from '../../infra/handlers/melt/MeltBolt11Handler';
 import {
   SWAP_THRESHOLD_DENOMINATOR,
   SWAP_THRESHOLD_NUMERATOR,
-} from '../../infra/handlers/melt/MeltBolt11Handler.utils';
+} from '../../infra/handlers/melt/BoltMeltHandler.utils';
 import type { Logger } from '../../logging/Logger';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import type {
