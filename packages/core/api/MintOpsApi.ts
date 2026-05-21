@@ -9,12 +9,11 @@ import type {
   TerminalMintOperation,
 } from '@core/operations/mint';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
-import type { MintQuote } from '../models/MintQuote';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
 
-type CreateMintQuoteInputCommon = {
+type MintQuoteAmountInputCommon = {
   /** Mint that will execute the quote-backed mint operation. */
   mintUrl: string;
   /** Amount to request from the mint. Bare amounts use `sat` unless `unit` is set. */
@@ -23,7 +22,7 @@ type CreateMintQuoteInputCommon = {
   unit?: string;
 };
 
-type PrepareMintInputCommon = CreateMintQuoteInputCommon;
+type PrepareMintInputCommon = MintQuoteAmountInputCommon;
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -63,13 +62,6 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
         method: M;
       } & MethodDataInput<M>;
     }[TSupported];
-
-export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: CreateMintQuoteInputCommon & {
-    /** Mint method to create a quote for, for example `bolt11`. */
-    method: M;
-  } & MethodDataInput<M>;
-}[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: ImportMintQuoteInputCommon & {
@@ -135,14 +127,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
       input.method,
       methodData,
     );
-  }
-
-  /**
-   * Creates and persists a canonical remote quote without creating operation output data.
-   */
-  async createQuote(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-    return this.mintOperationService.createQuote(input.mintUrl, parsed, input.method);
   }
 
   /**

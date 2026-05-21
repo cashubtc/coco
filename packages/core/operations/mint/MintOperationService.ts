@@ -234,6 +234,59 @@ export class MintOperationService {
     }
   }
 
+  async getQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintQuote | null> {
+    return this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
+  }
+
+  async getPendingQuotes(method?: MintMethod): Promise<MintQuote[]> {
+    return this.mintQuoteRepository.getPendingMintQuotes(method);
+  }
+
+  async refreshQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintQuote> {
+    const existingQuote = await this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
+    if (!existingQuote) {
+      throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
+    }
+
+    switch (method) {
+      case 'bolt11': {
+        const remoteQuote = await this.mintAdapter.checkMintQuoteState(mintUrl, quoteId);
+        await this.mintQuoteRepository.upsertMintQuote(
+          mintQuoteFromBolt11Response(existingQuote.mintUrl, remoteQuote),
+        );
+        const quote = await this.mintQuoteRepository.getMintQuote(
+          existingQuote.mintUrl,
+          method,
+          quoteId,
+        );
+        if (!quote) {
+          throw new Error(
+            `Cannot refresh quote: mint quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
+          );
+        }
+
+        await this.eventBus.emit('mint-quote:updated', {
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+          quoteId: quote.quoteId,
+          quote,
+        });
+
+        return quote;
+      }
+      default:
+        throw new Error(`Unsupported mint quote refresh method ${String(method)}`);
+    }
+  }
+
   async prepareExistingQuote(
     mintUrl: string,
     method: MintMethod,

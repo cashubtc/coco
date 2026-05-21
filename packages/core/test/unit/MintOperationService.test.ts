@@ -192,7 +192,16 @@ describe('MintOperationService', () => {
       })),
     } as unknown as WalletService;
 
-    mintAdapter = {} as MintAdapter;
+    mintAdapter = {
+      checkMintQuoteState: mock(async () => ({
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      })),
+    } as unknown as MintAdapter;
 
     service = new MintOperationService(
       handlerProvider,
@@ -262,6 +271,11 @@ describe('MintOperationService', () => {
   });
 
   it('createQuote persists a canonical quote without creating operation output data', async () => {
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
     const created = await service.createQuote(mintUrl, {
       amount: Amount.from(10),
       unit: 'sat',
@@ -275,6 +289,84 @@ describe('MintOperationService', () => {
     expect(storedQuote?.reusable).toBe(false);
     expect(operations).toHaveLength(0);
     expect(handler.prepare).not.toHaveBeenCalled();
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('getQuote returns a persisted quote by full identity', async () => {
+    await persistQuote('quote-exact');
+
+    const found = await service.getQuote(mintUrl, 'bolt11', 'quote-exact');
+    const wrongQuoteId = await service.getQuote(mintUrl, 'bolt11', 'quote-other');
+    const wrongMint = await service.getQuote('https://other-mint.test', 'bolt11', 'quote-exact');
+
+    expect(found?.quoteId).toBe('quote-exact');
+    expect(wrongQuoteId).toBeNull();
+    expect(wrongMint).toBeNull();
+  });
+
+  it('getPendingQuotes returns non-issued canonical quotes with optional method filtering', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-unpaid',
+        request: 'lnbc1unpaid',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-issued',
+        request: 'lnbc1issued',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+      }),
+    );
+
+    const allPending = await service.getPendingQuotes();
+    const bolt11Pending = await service.getPendingQuotes('bolt11');
+
+    expect(allPending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
+    expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
+  });
+
+  it('refreshQuote fails when the canonical quote is missing', async () => {
+    await expect(service.refreshQuote(mintUrl, 'bolt11', 'missing-quote')).rejects.toThrow(
+      'was not found',
+    );
+
+    expect(mintAdapter.checkMintQuoteState).not.toHaveBeenCalled();
+  });
+
+  it('refreshQuote persists the canonical quote before emitting mint-quote:updated', async () => {
+    await persistQuote();
+    const observedAt = Date.now();
+    (mintAdapter.checkMintQuoteState as Mock<any>).mockImplementationOnce(async () => ({
+      quote: quoteId,
+      request: 'lnbc1paid',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    }));
+
+    const persistedDuringEvent: Array<string | undefined> = [];
+    eventBus.on('mint-quote:updated', async ({ quote }) => {
+      const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+      persistedDuringEvent.push(storedQuote?.state);
+    });
+
+    const refreshed = await service.refreshQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(refreshed.state).toBe('PAID');
+    expect(refreshed.request).toBe('lnbc1paid');
+    expect(refreshed.lastObservedRemoteState).toBe('PAID');
+    expect(refreshed.lastObservedRemoteStateAt).toBeGreaterThanOrEqual(observedAt);
+    expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
   it('prepareExistingQuote fails before creating an operation when the quote is missing', async () => {

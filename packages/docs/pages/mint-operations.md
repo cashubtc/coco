@@ -1,12 +1,15 @@
 # Mint Operations
 
-Mint operations track quote-backed issuance from quote creation through proof
-redemption. They are durable so apps can show an invoice, wait for remote
-payment, recover after crashes, and avoid losing issued proofs.
+Mint operations track quote-backed issuance from operation preparation through
+proof redemption. They are durable so apps can wait for remote payment, recover
+after crashes, and avoid losing issued proofs.
+
+Bare quote creation is durable quote state, not a value movement. It does not
+create history; history starts when an operation exists.
 
 ## API Surface (`coco.ops.mint`)
 
-The canonical API is exposed through `coco.ops.mint`:
+The operation lifecycle API is exposed through `coco.ops.mint`:
 
 - `prepare({ mintUrl, amount, unit?, method, methodData? })` creates a remote
   quote and persists a pending mint operation
@@ -21,6 +24,22 @@ The canonical API is exposed through `coco.ops.mint`:
   terminal state when possible
 - `get(operationId)`, `getByQuote(mintUrl, quoteId)`, `listPending()`, and
   `listInFlight()` load persisted operation state
+
+## Quote Resurfacing (`coco.mintQuotes`)
+
+Use `coco.mintQuotes` when an app needs to show a quote payment request again
+after reload without creating or loading a mint operation:
+
+- `create({ mintUrl, amount, unit?, method })` creates and persists a canonical
+  quote row only
+- `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
+- `listPending({ method? })` lists canonical quote rows that have not reached
+  `ISSUED`
+- `refresh({ mintUrl, method, quoteId })` checks the remote quote state and
+  persists the canonical quote update before emitting `mint-quote:updated`
+
+For BOLT11 quotes, the invoice is available at `quote.request`. Future onchain
+address/payment request support should use this same canonical quote surface.
 
 ## Operation States
 

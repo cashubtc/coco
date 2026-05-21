@@ -59,6 +59,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  MintQuotesApi,
   PaymentRequestsApi,
 } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
@@ -199,6 +200,7 @@ export class Manager {
   readonly history: HistoryApi;
   readonly auth: AuthApi;
   readonly ops: OpsApi;
+  readonly mintQuotes: MintQuotesApi;
   readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
@@ -299,6 +301,7 @@ export class Manager {
     this.subscription = apis.subscription;
     this.history = apis.history;
     this.ops = apis.ops;
+    this.mintQuotes = apis.mintQuotes;
     this.auth = apis.auth;
     this.paymentRequests = apis.paymentRequests;
 
@@ -875,6 +878,7 @@ export class Manager {
     subscription: SubscriptionApi;
     history: HistoryApi;
     ops: OpsApi;
+    mintQuotes: MintQuotesApi;
     auth: AuthApi;
     paymentRequests: PaymentRequestsApi;
   } {
@@ -896,6 +900,7 @@ export class Manager {
     const send = new SendOpsApi(this.sendOperationService);
     const receive = new ReceiveOpsApi(this.receiveOperationService);
     const mintOps = new MintOpsApi(this.mintOperationService);
+    const mintQuotes = new MintQuotesApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
     const auth = new AuthApi(this.authService);
@@ -910,6 +915,7 @@ export class Manager {
       subscription,
       history,
       ops,
+      mintQuotes,
       auth,
       paymentRequests,
     };

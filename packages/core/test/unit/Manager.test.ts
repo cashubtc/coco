@@ -3,6 +3,7 @@ import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
+import { MintQuotesApi } from '../../api/MintQuotesApi';
 import type { CoreEvents } from '../../events/types';
 import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -66,6 +67,16 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationProcessor();
     });
 
+    it('should expose the dedicated mint quotes api', async () => {
+      const manager = await initializeCoco(baseConfig);
+
+      expect(manager.mintQuotes).toBeInstanceOf(MintQuotesApi);
+
+      await manager.disableMintOperationWatcher();
+      await manager.disableProofStateWatcher();
+      await manager.disableMintOperationProcessor();
+    });
+
     it('projects mint history from quote observation updates with the processor disabled', async () => {
       const manager = await initializeCoco({
         ...baseConfig,
@@ -118,6 +129,49 @@ describe('initializeCoco', () => {
         state: 'pending',
         remoteState: 'PAID',
       });
+    });
+
+    it('does not project history for quote-only updates', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      const observedRepositoryEntries: Array<CoreEvents['history:updated']['entry']> = [];
+      manager['eventBus'].on('history:updated', ({ entry }) => {
+        observedRepositoryEntries.push(entry);
+      });
+
+      const observedAt = 3_000;
+      await manager['eventBus'].emit('mint-quote:updated', {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'quote-only',
+        quote: {
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+          quoteId: 'quote-only',
+          quote: 'quote-only',
+          request: 'lnbc1quoteonly',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          lastObservedRemoteState: 'PAID',
+          lastObservedRemoteStateAt: observedAt,
+          reusable: false,
+          createdAt: observedAt,
+          updatedAt: observedAt,
+        },
+      });
+
+      expect(observedRepositoryEntries).toHaveLength(0);
     });
 
     it('should use NullLogger by default', async () => {

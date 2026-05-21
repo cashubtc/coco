@@ -10,7 +10,6 @@ import type {
   TerminalMintOperation,
 } from '../../operations/mint/MintOperation.ts';
 import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
-import type { MintQuote } from '../../models/MintQuote.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -56,7 +55,6 @@ describe('MintOpsApi', () => {
   let mintOperationService: MintOperationService;
   let pendingOperation: PendingMintOperation;
   let quote: MintQuoteBolt11Response;
-  let canonicalQuote: MintQuote<'bolt11'>;
 
   beforeEach(() => {
     pendingOperation = makePendingOperation();
@@ -68,22 +66,6 @@ describe('MintOpsApi', () => {
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
     };
-    canonicalQuote = {
-      mintUrl,
-      method: 'bolt11',
-      quoteId,
-      quote: quoteId,
-      request: quote.request,
-      amount: quote.amount,
-      unit: quote.unit,
-      expiry: quote.expiry,
-      state: quote.state,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: Date.now(),
-      reusable: false,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
     const executingOperation: ExecutingMintOperation = {
       ...pendingOperation,
       state: 'executing',
@@ -94,7 +76,6 @@ describe('MintOpsApi', () => {
     };
 
     mintOperationService = {
-      createQuote: mock(async () => canonicalQuote),
       prepareNewQuote: mock(async () => pendingOperation),
       prepareExistingQuote: mock(async () => pendingOperation),
       importQuote: mock(async () => pendingOperation),
@@ -166,23 +147,6 @@ describe('MintOpsApi', () => {
       'bolt11',
       {},
     );
-  });
-
-  it('createQuote delegates without preparing operation output data', async () => {
-    const result = await api.createQuote({
-      mintUrl,
-      amount: Amount.from(10),
-      method: 'bolt11',
-      methodData: {},
-    });
-
-    expect(mintOperationService.createQuote).toHaveBeenCalledWith(
-      mintUrl,
-      { amount: Amount.from(10), unit: 'sat' },
-      'bolt11',
-    );
-    expect(mintOperationService.prepareNewQuote).not.toHaveBeenCalled();
-    expect(result).toBe(canonicalQuote);
   });
 
   it('prepare can target an existing canonical quote', async () => {
