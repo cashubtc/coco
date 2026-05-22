@@ -1,4 +1,4 @@
-import { Amount, type Proof, type Wallet } from '@cashu/cashu-ts';
+import { Amount, type Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, serializeOutputData } from '@core/utils';
@@ -40,9 +40,8 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   async fetchRemoteQuote(
     ctx: FetchRemoteMintQuoteContext<'onchain'>,
   ): Promise<MintQuote<'onchain'>> {
-    const remoteQuote = await ctx.mintAdapter.checkMintQuote<MintQuoteOnchainResponse>(
+    const remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
       ctx.quote.mintUrl,
-      'onchain',
       ctx.quote.quoteId,
     );
 
@@ -103,21 +102,17 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
 
     const outputData = deserializeOutputData(ctx.operation.outputData);
-    const genericWallet = ctx.wallet as Wallet & {
-      mintProofs(
-        method: string,
-        amount: Amount,
-        quote: { quote: string; pubkey?: string },
-        config?: { privkey?: string },
-        outputType?: { type: 'custom'; data: typeof outputData.keep },
-      ): Promise<Proof[]>;
-    };
+    const remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
+      ctx.operation.mintUrl,
+      ctx.operation.quoteId,
+    );
+    this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
 
-    const proofs = await genericWallet.mintProofs(
-      'onchain',
+    const proofs = await ctx.wallet.mintProofsOnchain(
       ctx.operation.amount,
-      { quote: ctx.operation.quoteId, pubkey: ctx.operation.pubkey },
-      { privkey: bytesToHex(quoteKey.secretKey) },
+      remoteQuote,
+      bytesToHex(quoteKey.secretKey),
+      undefined,
       { type: 'custom', data: outputData.keep },
     );
 
@@ -138,11 +133,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     wallet: Wallet,
     payload: { pubkey: string; unit: string },
   ): Promise<MintQuoteOnchainResponse> {
-    const genericWallet = wallet as Wallet & {
-      createMintQuote<TRes>(method: string, payload: Record<string, unknown>): Promise<TRes>;
-    };
-
-    return genericWallet.createMintQuote<MintQuoteOnchainResponse>('onchain', payload);
+    const quote = await wallet.createMintQuoteOnchain(payload.pubkey);
+    assertSameUnit(quote.unit, payload.unit, `Onchain mint quote ${quote.quote}`);
+    return quote;
   }
 
   private async requireQuoteKey(pubkey: string): Promise<void> {

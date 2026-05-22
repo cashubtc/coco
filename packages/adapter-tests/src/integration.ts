@@ -189,6 +189,36 @@ function createTestMint(mintUrl: string): Mint {
   return new Mint(mintUrl, { customRequest: testMintRequest });
 }
 
+type NutMethodSetting = {
+  disabled?: boolean;
+  methods?: Array<{
+    method?: string;
+    unit?: string;
+  }>;
+};
+
+async function mintSupportsMethodUnit(
+  manager: Manager,
+  mintUrl: string,
+  nut: 5 | 30,
+  method: string,
+  unit: string,
+): Promise<boolean> {
+  const info = await manager.mint.getMintInfo(mintUrl);
+  const settings = (info as { nuts?: Record<string, NutMethodSetting | undefined> }).nuts?.[
+    String(nut)
+  ];
+
+  if (!settings || settings.disabled || !Array.isArray(settings.methods)) {
+    return false;
+  }
+
+  const normalizedUnit = normalizeUnit(unit);
+  return settings.methods.some(
+    (entry) => entry.method === method && normalizeUnit(entry.unit ?? 'sat') === normalizedUnit,
+  );
+}
+
 const watcherTestSubscriptions = {
   slowPollingIntervalMs: 50,
   fastPollingIntervalMs: 50,
@@ -617,6 +647,72 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await executeMintOperation(mgr!, pendingMint.id);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(50);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should create and prepare an onchain mint quote when NUT-30 is advertised', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 30, 'onchain', testUnit))) {
+            return;
+          }
+
+          const quote = await mgr.quotes.mint.create({
+            mintUrl,
+            method: 'onchain',
+            unit: testUnit,
+          });
+
+          expect(quote.method).toBe('onchain');
+          if (quote.method !== 'onchain') {
+            throw new Error(`Expected onchain quote, got ${quote.method}`);
+          }
+
+          expect(quote.reusable).toBe(true);
+          expect(quote.request).toBeDefined();
+          expect(quote.quoteData.pubkey).toBeDefined();
+          expectAmountEquals(expect, quote.quoteData.amountPaid, 0);
+          expectAmountEquals(expect, quote.quoteData.amountIssued, 0);
+
+          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          expect(storedQuote?.quoteId).toBe(quote.quoteId);
+
+          const pending = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(1),
+            methodData: {},
+          });
+
+          expect(pending.method).toBe('onchain');
+          expect(pending.quoteId).toBe(quote.quoteId);
+          expect(pending.state).toBe('pending');
+          expectAmountEquals(expect, pending.amount, 1);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
@@ -1089,6 +1185,27 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintUrl,
             method: 'bolt11',
             methodData: { invoice },
+            unit: testUnit,
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('should reject onchain melt quotes until the default manager wires an onchain melt handler', async () => {
+        const createOnchainMeltQuote = (input: {
+          mintUrl: string;
+          method: 'onchain';
+          methodData: { address: string; amountSats: AmountLike };
+          unit: string;
+        }): Promise<unknown> => mgr!.quotes.melt.create(input as never);
+
+        await expect(
+          createOnchainMeltQuote({
+            mintUrl,
+            method: 'onchain',
+            methodData: {
+              address: 'bc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9e75rs',
+              amountSats: 1,
+            },
             unit: testUnit,
           }),
         ).rejects.toThrow();

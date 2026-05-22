@@ -1,4 +1,10 @@
-import type { Amount, MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
+import type {
+  Amount,
+  MintQuoteBolt11Response,
+  MintQuoteOnchainResponse,
+  Proof,
+  Wallet,
+} from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -41,15 +47,7 @@ export interface MintMethodDefinitions {
       amountIssued: Amount;
     };
     remoteState: never;
-    quote: {
-      quote: string;
-      request: string;
-      unit: string;
-      expiry: number | null;
-      pubkey: string;
-      amount_paid: Amount;
-      amount_issued: Amount;
-    };
+    quote: MintQuoteOnchainResponse;
   };
 }
 

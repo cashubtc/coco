@@ -136,8 +136,8 @@ describe('MintOnchainHandler', () => {
     handler = new MintOnchainHandler(keyRingService);
 
     wallet = {
-      createMintQuote: mock(async () => remoteQuote),
-      mintProofs: mock(async () => [
+      createMintQuoteOnchain: mock(async () => remoteQuote),
+      mintProofsOnchain: mock(async () => [
         {
           id: 'keyset-1',
           amount: Amount.from(10),
@@ -148,7 +148,7 @@ describe('MintOnchainHandler', () => {
     } as unknown as Wallet;
 
     mintAdapter = {
-      checkMintQuote: mock(async () => remoteQuote),
+      checkMintQuoteOnchain: mock(async () => remoteQuote),
     } as unknown as MintAdapter;
 
     proofService = {
@@ -165,7 +165,7 @@ describe('MintOnchainHandler', () => {
     const result = await handler.createQuote(buildCreateQuoteContext());
 
     expect(keyRingService.generateMintQuoteKeyPair).toHaveBeenCalled();
-    expect(wallet.createMintQuote).toHaveBeenCalledWith('onchain', { unit: 'sat', pubkey });
+    expect(wallet.createMintQuoteOnchain).toHaveBeenCalledWith(pubkey);
     expect(result.method).toBe('onchain');
     expect(result.reusable).toBe(true);
     expect(result.quoteData.pubkey).toBe(pubkey);
@@ -189,11 +189,11 @@ describe('MintOnchainHandler', () => {
         purpose: 'nut20_mint_quote' as const,
       };
     });
-    (wallet.createMintQuote as Mock<any>).mockImplementation(
-      async (_method: string, payload: { pubkey: string }) => ({
+    (wallet.createMintQuoteOnchain as Mock<any>).mockImplementation(
+      async (payloadPubkey: string) => ({
         ...remoteQuote,
-        quote: `quote-${payload.pubkey.at(-1)}`,
-        pubkey: payload.pubkey,
+        quote: `quote-${payloadPubkey.at(-1)}`,
+        pubkey: payloadPubkey,
       }),
     );
 
@@ -206,7 +206,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('rejects an onchain quote that returns a different pubkey', async () => {
-    (wallet.createMintQuote as Mock<any>).mockImplementationOnce(async () => ({
+    (wallet.createMintQuoteOnchain as Mock<any>).mockImplementationOnce(async () => ({
       ...remoteQuote,
       pubkey: '02'.padEnd(66, '2'),
     }));
@@ -219,7 +219,7 @@ describe('MintOnchainHandler', () => {
   it('fetches the latest onchain quote through the mint adapter', async () => {
     const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
-    expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', quoteId);
+    expect(mintAdapter.checkMintQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
     expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
     expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
   });
@@ -269,11 +269,12 @@ describe('MintOnchainHandler', () => {
     const result = await handler.execute(context);
 
     expect(result.status).toBe('ISSUED');
-    expect(wallet.mintProofs).toHaveBeenCalledWith(
-      'onchain',
+    expect(mintAdapter.checkMintQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledWith(
       Amount.from(10),
-      { quote: quoteId, pubkey },
-      { privkey: ''.padEnd(64, '0') },
+      remoteQuote,
+      ''.padEnd(64, '0'),
+      undefined,
       { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
     );
   });

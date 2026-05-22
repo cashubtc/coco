@@ -10,6 +10,7 @@ import {
   type AuthProvider,
   type MintQuoteBolt11Response,
   type MintQuoteBaseResponse,
+  type MintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
@@ -88,6 +89,15 @@ export class MintAdapter {
   ): Promise<TRes> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.checkMintQuote<TRes>(method, quoteId);
+  }
+
+  // Check current state of an onchain mint quote
+  async checkMintQuoteOnchain(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<MintQuoteOnchainResponse> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMintQuoteOnchain(quoteId);
   }
 
   // Check current state of a bolt11 melt quote (returns full response including change)
