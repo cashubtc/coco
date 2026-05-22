@@ -512,18 +512,18 @@ Deliverables:
       quote's persisted key.
 - [x] Before a reusable quote operation leaves `executing`, refresh or update the canonical quote row
       with a NUT-30 quote response whose `amount_issued` reflects the redemption.
-- [ ] Support multiple partial withdrawals from the same quote.
+- [x] Support multiple partial withdrawals from the same quote.
 
 Validation:
 
 - [x] Direct finalization of an underfunded reusable quote leaves the operation pending without entering
       executing.
 - [x] Direct finalization of a funded smaller withdrawal succeeds.
-- [ ] Duplicate refresh events for an unchanged quote snapshot do not schedule overlapping execution
+- [x] Duplicate refresh events for an unchanged quote snapshot do not schedule overlapping execution
       because executing siblings are subtracted.
 - [x] A finalized reusable quote operation is not allowed to stop contributing local reservation before
       the quote row reflects the corresponding remote `quoteData.amountIssued` increase.
-- [ ] Recovery can finalize one sibling operation without touching another sibling on the same quote.
+- [x] Recovery can finalize one sibling operation without touching another sibling on the same quote.
 
 ### Phase 5: Watchers, Auto-Claim, and Recovery Policy
 

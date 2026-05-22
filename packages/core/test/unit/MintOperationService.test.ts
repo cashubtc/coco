@@ -1200,6 +1200,155 @@ describe('MintOperationService', () => {
     expect(storedSecond?.state).toBe('pending');
   });
 
+  it('claimMintQuote ignores duplicate unchanged reusable quote snapshots', async () => {
+    const onchainQuoteId = 'onchain-quote-duplicate';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const first: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-duplicate-a'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(7),
+      pubkey: '02'.padEnd(66, '1'),
+      createdAt: 1,
+      lastObservedRemoteState: undefined as never,
+    };
+    const second: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-duplicate-b'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(5),
+      pubkey: '02'.padEnd(66, '1'),
+      createdAt: 2,
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(first);
+    await operationRepo.create(second);
+
+    const onchainHandler = {
+      ...handler,
+      execute: mock(
+        async ({ operation }: any): Promise<MintExecutionResult> => ({
+          status: 'ISSUED',
+          proofs: [makeProof(operation.id)],
+        }),
+      ),
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.from(7),
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
+
+    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const storedSecond = await operationRepo.getById(second.id);
+
+    expect(firstClaim.map((operation) => operation.id)).toEqual([first.id]);
+    expect(secondClaim).toEqual([]);
+    expect(onchainHandler.execute).toHaveBeenCalledTimes(1);
+    expect(storedSecond?.state).toBe('pending');
+  });
+
+  it('claimMintQuote supports multiple partial withdrawals from one reusable quote', async () => {
+    const onchainQuoteId = 'onchain-quote-partials';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const first: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-partial-a'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(7),
+      pubkey: '02'.padEnd(66, '1'),
+      createdAt: 1,
+      lastObservedRemoteState: undefined as never,
+    };
+    const second: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-partial-b'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(5),
+      pubkey: '02'.padEnd(66, '1'),
+      createdAt: 2,
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(first);
+    await operationRepo.create(second);
+
+    const issuedSnapshots = [Amount.from(7), Amount.from(12)];
+    const paidSnapshots = [Amount.from(10), Amount.from(12)];
+    const onchainHandler = {
+      ...handler,
+      execute: mock(
+        async ({ operation }: any): Promise<MintExecutionResult> => ({
+          status: 'ISSUED',
+          proofs: [makeProof(operation.id)],
+        }),
+      ),
+      fetchRemoteQuote: mock(async ({ quote }) => {
+        const issued = issuedSnapshots.shift() ?? Amount.from(12);
+        const paid = paidSnapshots.shift() ?? Amount.from(12);
+        return mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: paid,
+          amount_issued: issued,
+        });
+      }),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
+
+    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(12), issued: Amount.from(7) });
+    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(firstClaim.map((operation) => operation.id)).toEqual([first.id]);
+    expect(secondClaim.map((operation) => operation.id)).toEqual([second.id]);
+    expect((await operationRepo.getById(first.id))?.state).toBe('finalized');
+    expect((await operationRepo.getById(second.id))?.state).toBe('finalized');
+  });
+
+  it('recoverExecutingOperation finalizes one reusable quote sibling without touching another', async () => {
+    const onchainQuoteId = 'onchain-quote-recover-sibling';
+    const executing: ExecutingMintOperation<'onchain'> = {
+      ...makeExecutingOp('onchain-recover-executing'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    const pending: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-recover-pending'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(executing);
+    await operationRepo.create(pending);
+
+    const onchainHandler = {
+      ...handler,
+      recoverExecuting: mock(
+        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED' }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
+
+    await service.recoverExecutingOperation(executing);
+
+    expect((await operationRepo.getById(executing.id))?.state).toBe('finalized');
+    expect((await operationRepo.getById(pending.id))?.state).toBe('pending');
+  });
+
   it('recoverExecutingOperation finalizes when handler marks FINALIZED', async () => {
     const op = makeExecutingOp('exec-1');
     await operationRepo.create(op);

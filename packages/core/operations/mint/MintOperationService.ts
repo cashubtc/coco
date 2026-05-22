@@ -1047,17 +1047,23 @@ export class MintOperationService {
     }
 
     const observedRemoteStateAt = Date.now();
-    await this.recordQuoteObservation(
-      current as PendingOrLaterOperation,
-      'ISSUED',
-      observedRemoteStateAt,
-    );
+    if (current.method === 'bolt11') {
+      await this.recordQuoteObservation(
+        current as PendingOrLaterOperation,
+        'ISSUED',
+        observedRemoteStateAt,
+      );
+    }
 
     const finalized: FinalizedMintOperation = {
       ...(current as PendingOrLaterOperation),
       state: 'finalized',
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: observedRemoteStateAt,
+      ...(current.method === 'bolt11'
+        ? {
+            lastObservedRemoteState: 'ISSUED' as const,
+            lastObservedRemoteStateAt: observedRemoteStateAt,
+          }
+        : {}),
       updatedAt: Date.now(),
       error,
     };
