@@ -9,6 +9,8 @@ Completion boundary for this pass:
 - Merge-readiness was checked against the current branch and `origin/master`.
 - Accepted findings were fixed at the quote-operation boundary.
 - Regression coverage was added for both URL-normalization cases.
+- The sqlite-bun CI integration failure was fixed at the pending quote observation
+  boundary.
 - Local review reports no accepted/actionable findings.
 
 ## Scope Reviewed
@@ -47,6 +49,21 @@ Completion boundary for this pass:
 - Regression: `MintOperationService.test.ts` imports the same quote twice with a
   variant URL and asserts the second import reuses the first operation.
 
+### P2: Serialize pending mint quote observations with execution
+
+- File: `packages/core/operations/mint/MintOperationService.ts:945`
+- Problem: `./scripts/test-integration.sh sqlite-bun` failed when a NUT-17
+  mint quote notification raced with manual `ops.mint.execute()`. The watcher
+  could start a pending observation update, `execute()` could move the same
+  operation to `executing`, and the stale observation write could then restore
+  the row to `pending`. Finalization then failed with
+  `Cannot finalize operation ... in state pending`.
+- Fix: pending observation writes now use the same per-operation lock, and
+  `execute()` waits for an in-flight observation lock before reloading the
+  operation.
+- Regression: `MintOperationService.test.ts` stalls a pending observation write
+  and asserts execution cannot start until the observation releases the lock.
+
 ## Verification Run
 
 Post-fix verification passed:
@@ -54,10 +71,12 @@ Post-fix verification passed:
 - `git diff --check`
 - `bun prettier packages/core/operations/mint/MintOperationService.ts packages/core/operations/melt/MeltOperationService.ts packages/core/test/unit/MintOperationService.test.ts packages/core/test/unit/MeltOperationService.test.ts FEATURE_TODO.md --check`
 - `bun run --filter='@cashu/coco-core' test -- test/unit/MintOperationService.test.ts`
-  (`31 pass`)
+  (`32 pass`)
 - `bun run --filter='@cashu/coco-core' test -- test/unit/MeltOperationService.test.ts`
   (`37 pass`)
 - `bun run --filter='@cashu/coco-core' typecheck`
+- `./scripts/test-integration.sh sqlite-bun` (`76 pass`)
+- `./scripts/test-integration.sh sqlite-bun --custom-unit usd` (`80 pass`)
 - `bun run --filter='@cashu/coco-core' test:unit` (`772 pass`)
 - `~/.codex/skills/codex-review/scripts/codex-review --mode local --full-access`
   reported no accepted/actionable findings.
@@ -94,6 +113,8 @@ Review:
 
 - [x] Fix canonical mint URL binding in `MeltOperationService.prepareExistingQuote()`.
 - [x] Fix canonical identity lookup in `MintOperationService.importQuote()`.
+- [x] Fix sqlite-bun CI race between pending quote observations and mint execution.
 - [x] Add focused regression coverage for both URL-normalization cases.
+- [x] Add focused regression coverage for pending observation execution locking.
 - [x] Rerun focused verification.
 - [x] Rerun Codex review and require no accepted/actionable findings.

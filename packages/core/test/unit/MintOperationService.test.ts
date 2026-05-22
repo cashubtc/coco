@@ -46,6 +46,16 @@ describe('MintOperationService', () => {
   let quoteLifecycle: QuoteLifecycle;
   let service: MintOperationService;
 
+  function createDeferred<T = void>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject } as const;
+  }
+
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
@@ -929,6 +939,49 @@ describe('MintOperationService', () => {
       lastObservedRemoteState: 'PAID',
       lastObservedRemoteStateAt: observedAt,
     });
+  });
+
+  it('serializes pending quote observations with operation execution', async () => {
+    const pendingOp = makePendingOp('pending-observation-race');
+    await operationRepo.create(pendingOp);
+
+    const observationReady = createDeferred();
+    const allowObservationWrite = createDeferred();
+    const originalUpdate = operationRepo.update.bind(operationRepo);
+    operationRepo.update = mock(async (operation) => {
+      if (
+        operation.id === pendingOp.id &&
+        operation.state === 'pending' &&
+        operation.lastObservedRemoteState === 'PAID'
+      ) {
+        observationReady.resolve();
+        await allowObservationWrite.promise;
+      }
+      return originalUpdate(operation);
+    });
+
+    let executeStarted = false;
+    (handler.execute as Mock<any>).mockImplementationOnce(
+      async (): Promise<MintExecutionResult> => {
+        executeStarted = true;
+        return { status: 'ISSUED', proofs: [makeProof('out-1')] };
+      },
+    );
+
+    const observationPromise = service.recordPendingObservation(pendingOp.id, 'PAID', Date.now());
+    await observationReady.promise;
+
+    const executePromise = service.execute(pendingOp.id);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(executeStarted).toBe(false);
+    allowObservationWrite.resolve();
+
+    const [, finalized] = await Promise.all([observationPromise, executePromise]);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(finalized.state).toBe('finalized');
+    expect(stored?.state).toBe('finalized');
   });
 
   it('recordQuoteObservation persists the canonical quote before emitting mint-quote:updated', async () => {

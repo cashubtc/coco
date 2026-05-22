@@ -121,6 +121,19 @@ export class MintOperationService {
     return this.operationIdLock.acquire(operationId);
   }
 
+  private async acquireOperationLockAfterWait(operationId: string): Promise<() => void> {
+    try {
+      return await this.acquireOperationLock(operationId);
+    } catch (error) {
+      if (!(error instanceof OperationInProgressError)) {
+        throw error;
+      }
+
+      await this.operationIdLock.waitForUnlock(operationId);
+      return this.acquireOperationLock(operationId);
+    }
+  }
+
   isOperationLocked(operationId: string): boolean {
     return this.operationIdLock.isLocked(operationId);
   }
@@ -345,7 +358,7 @@ export class MintOperationService {
   }
 
   async execute(operationId: string): Promise<TerminalMintOperation> {
-    const releaseLock = await this.acquireOperationLock(operationId);
+    const releaseLock = await this.acquireOperationLockAfterWait(operationId);
     try {
       const operation = await this.mintOperationRepository.getById(operationId);
       if (!operation || operation.state !== 'pending') {
@@ -929,29 +942,34 @@ export class MintOperationService {
     observedRemoteState: MintMethodRemoteState,
     observedRemoteStateAt = Date.now(),
   ): Promise<PendingMintOperation> {
-    const op = await this.getOperation(operationId);
-    if (!op || op.state !== 'pending') {
-      throw new Error(
-        `Cannot record observation for operation ${operationId}: expected state 'pending' but found '${
-          op?.state ?? 'not found'
-        }'`,
-      );
+    const releaseLock = await this.acquireOperationLock(operationId);
+    try {
+      const op = await this.getOperation(operationId);
+      if (!op || op.state !== 'pending') {
+        throw new Error(
+          `Cannot record observation for operation ${operationId}: expected state 'pending' but found '${
+            op?.state ?? 'not found'
+          }'`,
+        );
+      }
+
+      const observedPending: PendingMintOperation = {
+        ...op,
+        lastObservedRemoteState: observedRemoteState,
+        lastObservedRemoteStateAt: observedRemoteStateAt,
+        updatedAt: Date.now(),
+      };
+      await this.mintOperationRepository.update(observedPending);
+      await this.eventBus.emit('mint-op:pending', {
+        mintUrl: observedPending.mintUrl,
+        operationId: observedPending.id,
+        operation: observedPending,
+      });
+
+      return observedPending;
+    } finally {
+      releaseLock();
     }
-
-    const observedPending: PendingMintOperation = {
-      ...op,
-      lastObservedRemoteState: observedRemoteState,
-      lastObservedRemoteStateAt: observedRemoteStateAt,
-      updatedAt: Date.now(),
-    };
-    await this.mintOperationRepository.update(observedPending);
-    await this.eventBus.emit('mint-op:pending', {
-      mintUrl: observedPending.mintUrl,
-      operationId: observedPending.id,
-      operation: observedPending,
-    });
-
-    return observedPending;
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingMintCheckResult> {
