@@ -1,6 +1,7 @@
 import type {
   Repositories,
   MintQuoteRepository,
+  LegacyMintQuoteRepository,
   MeltQuoteRepository,
   MintOperationRepository,
   SendOperationRepository,
@@ -215,6 +216,7 @@ export class Manager {
   private mintOperationWatcher?: MintOperationWatcherService;
   private mintOperationProcessor?: MintOperationProcessor;
   private mintQuoteRepository: MintQuoteRepository;
+  private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private meltQuoteRepository: MeltQuoteRepository;
   private proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
@@ -279,6 +281,7 @@ export class Manager {
     this.seedService = core.seedService;
     this.counterService = core.counterService;
     this.mintQuoteRepository = core.mintQuoteRepository;
+    this.legacyMintQuoteRepository = core.legacyMintQuoteRepository;
     this.historyService = core.historyService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
@@ -478,10 +481,9 @@ export class Manager {
   ): Promise<{ reconciled: string[]; skipped: string[] }> {
     const reconciled: string[] = [];
     const skipped: string[] = [];
-    const quotes = await this.mintQuoteRepository.getPendingMintQuotes();
+    const quotes = await this.legacyMintQuoteRepository.getPendingLegacyMintQuotes(mintUrl);
 
     for (const quote of quotes) {
-      if (mintUrl && quote.mintUrl !== mintUrl) continue;
       if (quote.state === 'ISSUED') {
         skipped.push(quote.quote);
         continue;
@@ -665,6 +667,7 @@ export class Manager {
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
     mintQuoteRepository: MintQuoteRepository;
+    legacyMintQuoteRepository: LegacyMintQuoteRepository;
     meltQuoteRepository: MeltQuoteRepository;
     historyService: HistoryService;
     paymentRequestService: PaymentRequestService;
@@ -819,6 +822,7 @@ export class Manager {
     );
 
     const mintQuoteRepository = repositories.mintQuoteRepository;
+    const legacyMintQuoteRepository = repositories.legacyMintQuoteRepository;
 
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
@@ -859,6 +863,7 @@ export class Manager {
       walletRestoreService,
       keyRingService,
       mintQuoteRepository,
+      legacyMintQuoteRepository,
       meltQuoteRepository,
       historyService,
       paymentRequestService,

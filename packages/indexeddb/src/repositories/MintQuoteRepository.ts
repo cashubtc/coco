@@ -12,7 +12,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
 
   async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
     const row = (await (this.db as any)
-      .table('coco_cashu_mint_quotes')
+      .table('coco_cashu_canonical_mint_quotes')
       .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
     if (!row) return null;
     const quote: MintQuote = {
@@ -53,7 +53,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt || now,
     };
-    await (this.db as any).table('coco_cashu_mint_quotes').put(row);
+    await (this.db as any).table('coco_cashu_canonical_mint_quotes').put(row);
   }
 
   async setMintQuoteState(
@@ -64,10 +64,10 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
     observedAt = Date.now(),
   ): Promise<void> {
     const existing = (await (this.db as any)
-      .table('coco_cashu_mint_quotes')
+      .table('coco_cashu_canonical_mint_quotes')
       .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
     if (!existing) return;
-    await (this.db as any).table('coco_cashu_mint_quotes').put({
+    await (this.db as any).table('coco_cashu_canonical_mint_quotes').put({
       ...existing,
       state,
       lastObservedRemoteState: state,
@@ -78,7 +78,7 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {
     const rows = (await (this.db as any)
-      .table('coco_cashu_mint_quotes')
+      .table('coco_cashu_canonical_mint_quotes')
       .toArray()) as MintQuoteRow[];
     return rows
       .filter((r) => r.state !== 'ISSUED' && (!method || r.method === method))

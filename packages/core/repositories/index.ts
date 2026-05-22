@@ -125,6 +125,10 @@ export interface MintQuoteRepository {
   getPendingMintQuotes(method?: string): Promise<MintQuote[]>;
 }
 
+export interface LegacyMintQuoteRepository {
+  getPendingLegacyMintQuotes(mintUrl?: string): Promise<MintQuote[]>;
+}
+
 export interface MeltQuoteRepository {
   getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null>;
   upsertMeltQuote(quote: MeltQuote): Promise<void>;
@@ -292,6 +296,7 @@ interface RepositoriesBase {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
+  legacyMintQuoteRepository: LegacyMintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;

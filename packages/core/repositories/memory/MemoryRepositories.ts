@@ -4,6 +4,7 @@ import type {
   HistoryProjectionRepository,
   KeyRingRepository,
   KeysetRepository,
+  LegacyMintQuoteRepository,
   MeltQuoteRepository,
   MeltOperationRepository,
   MintQuoteRepository,
@@ -24,6 +25,7 @@ import { MemoryKeyRingRepository } from './MemoryKeyRingRepository';
 import { MemoryKeysetRepository } from './MemoryKeysetRepository';
 import { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import { MemoryMeltQuoteRepository } from './MemoryMeltQuoteRepository';
+import { MemoryLegacyMintQuoteRepository } from './MemoryLegacyMintQuoteRepository';
 import { MemoryMintQuoteRepository } from './MemoryMintQuoteRepository';
 import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
@@ -42,6 +44,7 @@ export class MemoryRepositories implements Repositories {
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;
   mintQuoteRepository: MintQuoteRepository;
+  legacyMintQuoteRepository: LegacyMintQuoteRepository;
   meltQuoteRepository: MeltQuoteRepository;
   historyRepository: HistoryProjectionRepository;
   sendOperationRepository: SendOperationRepository;
@@ -68,6 +71,7 @@ export class MemoryRepositories implements Repositories {
     this.mintOperationRepository = mintOperationRepository;
     this.receiveOperationRepository = receiveOperationRepository;
     this.mintQuoteRepository = new MemoryMintQuoteRepository();
+    this.legacyMintQuoteRepository = new MemoryLegacyMintQuoteRepository();
     this.meltQuoteRepository = new MemoryMeltQuoteRepository();
     this.historyRepository = new MemoryHistoryRepository({
       sendOperationRepository,

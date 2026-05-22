@@ -33,7 +33,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
     }>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
               lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt
-       FROM coco_cashu_mint_quotes
+       FROM coco_cashu_canonical_mint_quotes
        WHERE mintUrl = ? AND method = ? AND quoteId = ? LIMIT 1`,
       [normalizeMintUrl(mintUrl), method, quoteId],
     );
@@ -62,7 +62,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
   async upsertMintQuote(quote: MintQuote): Promise<void> {
     const now = Date.now();
     await this.db.run(
-      `INSERT INTO coco_cashu_mint_quotes
+      `INSERT INTO coco_cashu_canonical_mint_quotes
          (mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
           lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -104,7 +104,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
     observedAt = Date.now(),
   ): Promise<void> {
     await this.db.run(
-      `UPDATE coco_cashu_mint_quotes
+      `UPDATE coco_cashu_canonical_mint_quotes
        SET state = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, updatedAt = ?
        WHERE mintUrl = ? AND method = ? AND quoteId = ?`,
       [state, state, observedAt, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
@@ -130,7 +130,7 @@ export class ExpoMintQuoteRepository implements MintQuoteRepository {
     }>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
               lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt
-       FROM coco_cashu_mint_quotes
+       FROM coco_cashu_canonical_mint_quotes
        WHERE state != 'ISSUED' ${method ? 'AND method = ?' : ''}`,
       method ? [method] : [],
     );

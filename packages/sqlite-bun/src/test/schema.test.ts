@@ -364,7 +364,7 @@ describe('sqlite-bun schema migrations', () => {
       reusable: number;
     }>(
       `SELECT method, quoteId, state, amount, reusable
-       FROM coco_cashu_mint_quotes
+       FROM coco_cashu_canonical_mint_quotes
        WHERE mintUrl = ? AND method = ? AND quoteId = ?`,
       ['https://mint.test', 'bolt11', 'quote-finalized'],
     );

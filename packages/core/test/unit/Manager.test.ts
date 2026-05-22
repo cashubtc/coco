@@ -5,6 +5,7 @@ import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
+import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
@@ -75,6 +76,37 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
+    });
+
+    it('does not reconcile canonical quote-only rows into mint operations on startup', async () => {
+      await repositories.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Response('https://mint.test', {
+          quote: 'quote-only-restart',
+          request: 'lnbc1quoteonlyrestart',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+        }),
+      );
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      const operations =
+        await repositories.mintOperationRepository.getByMintUrl('https://mint.test');
+      const pendingQuotes = await manager.quotes.mint.listPending();
+
+      expect(operations).toHaveLength(0);
+      expect(pendingQuotes.map((quote) => quote.quoteId)).toEqual(['quote-only-restart']);
     });
 
     it('projects mint history from quote observation updates with the processor disabled', async () => {

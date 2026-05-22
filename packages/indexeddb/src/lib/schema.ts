@@ -811,7 +811,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         });
     });
 
-  // Version 27: Make canonical mint quote records method-aware and add method-aware operation lookup.
+  // Version 27: Add canonical mint quote records and method-aware operation lookup.
   db.version(27)
     .stores({
       coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
@@ -819,7 +819,8 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
       coco_cashu_counters: '&[mintUrl+keysetId]',
       coco_cashu_proofs:
         '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
-      coco_cashu_mint_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
       coco_cashu_melt_quotes: '&[mintUrl+quote], state, mintUrl',
       coco_cashu_history:
         '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
@@ -836,32 +837,6 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     })
     .upgrade(async (tx) => {
       const now = Date.now();
-
-      await tx
-        .table('coco_cashu_mint_quotes')
-        .toCollection()
-        .modify(
-          (row: {
-            quote?: string;
-            quoteId?: string;
-            method?: string;
-            state?: string;
-            lastObservedRemoteState?: string;
-            lastObservedRemoteStateAt?: number;
-            reusable?: number;
-            createdAt?: number;
-            updatedAt?: number;
-          }) => {
-            row.method = row.method ?? 'bolt11';
-            row.quoteId = row.quoteId ?? row.quote ?? '';
-            row.lastObservedRemoteState = row.lastObservedRemoteState ?? row.state;
-            row.lastObservedRemoteStateAt = row.lastObservedRemoteStateAt ?? now;
-            row.reusable = row.reusable ?? 0;
-            row.createdAt = row.createdAt ?? now;
-            row.updatedAt = row.updatedAt ?? now;
-            delete row.quote;
-          },
-        );
 
       const operations = (await tx.table('coco_cashu_mint_operations').toArray()) as Array<{
         mintUrl?: string;
@@ -882,7 +857,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
       for (const op of operations) {
         if (!op.mintUrl || !op.method || !op.quoteId || !op.request || op.amount == null) continue;
         const existing = await tx
-          .table('coco_cashu_mint_quotes')
+          .table('coco_cashu_canonical_mint_quotes')
           .get([op.mintUrl, op.method, op.quoteId]);
         const observedState =
           op.lastObservedRemoteState === 'UNPAID' ||
@@ -894,7 +869,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
               : 'UNPAID';
         const createdAt = (op.createdAt ?? Math.floor(now / 1000)) * 1000;
         const updatedAt = (op.updatedAt ?? Math.floor(now / 1000)) * 1000;
-        await tx.table('coco_cashu_mint_quotes').put({
+        await tx.table('coco_cashu_canonical_mint_quotes').put({
           ...existing,
           mintUrl: op.mintUrl,
           method: op.method,
@@ -922,7 +897,8 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
       coco_cashu_counters: '&[mintUrl+keysetId]',
       coco_cashu_proofs:
         '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
-      coco_cashu_mint_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
       coco_cashu_melt_quotes: '&[mintUrl+method+quoteId], state, mintUrl, method',
       coco_cashu_history:
         '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
