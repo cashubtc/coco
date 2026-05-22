@@ -268,6 +268,7 @@ export class MintOperationService {
     quoteId: string,
     methodData: MintMethodData = {},
     expectedUnit?: string,
+    explicitAmount?: UnitAmount,
   ): Promise<PendingMintOperation> {
     const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
       mintUrl,
@@ -276,12 +277,21 @@ export class MintOperationService {
       expectedUnit,
     );
 
-    const amount = getMintQuoteAmount(quote);
+    const fixedAmount = getMintQuoteAmount(quote);
+    const amount = fixedAmount ?? explicitAmount?.amount;
     if (!amount) {
       throw new Error(
         `Mint quote ${quoteId} for ${method} at ${mintUrl} does not have a fixed amount; pass an explicit amount for reusable quote preparation`,
       );
     }
+    if (explicitAmount && explicitAmount.unit !== quote.unit) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} unit ${quote.unit} does not match requested unit ${explicitAmount.unit}`,
+      );
+    }
+
+    const handler = this.handlerProvider.get(method);
+    await handler.validateQuoteForPrepare?.(quote as any);
 
     const initOperation = await this.init(
       quote.mintUrl,
@@ -377,10 +387,17 @@ export class MintOperationService {
           options?.importedQuote ??
           (await this.quoteLifecycle.loadMintQuoteSnapshotForOperation(initOp));
         const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
-          amount: initOp.amount,
-          unit: initOp.unit,
-        });
+        await this.mintService.assertMethodUnitSupported(
+          initOp.mintUrl,
+          initOp.method === 'onchain' ? 30 : 4,
+          initOp.method,
+          initOp.method === 'onchain'
+            ? initOp.unit
+            : {
+                amount: initOp.amount,
+                unit: initOp.unit,
+              },
+        );
         const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
           initOp.mintUrl,
           initOp.unit,

@@ -1,6 +1,7 @@
 import { Amount, type Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
+import { serializeOutputData } from '@core/utils';
 import {
   mintQuoteFromOnchainResponse,
   type MintQuote,
@@ -49,8 +50,47 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     return mintQuoteFromOnchainResponse(ctx.quote.mintUrl, remoteQuote);
   }
 
-  async prepare(_ctx: PrepareContext<'onchain'>): Promise<PendingMintOperation<'onchain'>> {
-    throw new Error('Onchain mint operation preparation is not implemented yet');
+  async validateQuoteForPrepare(quote: MintQuote<'onchain'>): Promise<void> {
+    await this.requireQuoteKey(quote.quoteData.pubkey);
+  }
+
+  async prepare(ctx: PrepareContext<'onchain'>): Promise<PendingMintOperation<'onchain'>> {
+    const quote = ctx.importedQuote;
+    if (!quote) {
+      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
+    }
+
+    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+      throw new Error(
+        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
+      );
+    }
+
+    assertSameUnit(quote.unit, ctx.operation.unit, `Onchain mint quote ${quote.quote}`);
+    await this.requireQuoteKey(quote.pubkey);
+
+    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
+      ctx.operation.mintUrl,
+      {
+        keep: { amount: ctx.operation.amount, unit: ctx.operation.unit },
+        send: { amount: Amount.zero(), unit: ctx.operation.unit },
+      },
+      {},
+    );
+
+    if (outputData.keep.length === 0) {
+      throw new Error('Failed to create deterministic outputs for onchain mint operation');
+    }
+
+    return {
+      ...ctx.operation,
+      quoteId: quote.quote,
+      request: quote.request,
+      expiry: quote.expiry,
+      pubkey: quote.pubkey,
+      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
+      state: 'pending',
+    };
   }
 
   async execute(_ctx: ExecuteContext<'onchain'>): Promise<MintExecutionResult> {
@@ -76,6 +116,13 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     };
 
     return genericWallet.createMintQuote<MintQuoteOnchainResponse>('onchain', payload);
+  }
+
+  private async requireQuoteKey(pubkey: string): Promise<void> {
+    const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
+    if (!quoteKey) {
+      throw new Error(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
+    }
   }
 
   private assertQuoteMatchesRequest(

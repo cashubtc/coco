@@ -1,4 +1,4 @@
-import { Amount, type Wallet } from '@cashu/cashu-ts';
+import { Amount, OutputData, type Wallet } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
@@ -14,6 +14,7 @@ import { getMintQuoteAvailableAmount, type MintQuoteOnchainResponse } from '../.
 import type { InitMintOperation } from '../../operations/mint/MintOperation';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService, MintService, ProofService, WalletService } from '../../services';
+import { deserializeOutputData } from '../../utils';
 
 describe('MintOnchainHandler', () => {
   const mintUrl = 'https://mint.test';
@@ -40,6 +41,16 @@ describe('MintOnchainHandler', () => {
     amount_paid: Amount.from(21),
     amount_issued: Amount.from(8),
   };
+
+  const output = new OutputData(
+    {
+      amount: Amount.from(10),
+      id: 'keyset-1',
+      B_: 'B_out_1',
+    },
+    BigInt(1),
+    new TextEncoder().encode('out-1'),
+  );
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'onchain'> => ({
     mintUrl,
@@ -113,6 +124,12 @@ describe('MintOnchainHandler', () => {
         derivationIndex: 0,
         purpose: 'nut20_mint_quote' as const,
       })),
+      getMintQuoteKeyPair: mock(async () => ({
+        publicKeyHex: pubkey,
+        secretKey: new Uint8Array(32),
+        derivationIndex: 0,
+        purpose: 'nut20_mint_quote' as const,
+      })),
     } as unknown as KeyRingService;
 
     handler = new MintOnchainHandler(keyRingService);
@@ -125,7 +142,9 @@ describe('MintOnchainHandler', () => {
       checkMintQuote: mock(async () => remoteQuote),
     } as unknown as MintAdapter;
 
-    proofService = {} as ProofService;
+    proofService = {
+      createOutputsAndIncrementCounters: mock(async () => ({ keep: [output], send: [] })),
+    } as unknown as ProofService;
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
     mintService = {} as MintService;
@@ -196,9 +215,32 @@ describe('MintOnchainHandler', () => {
     expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
   });
 
-  it('keeps operation preparation unsupported until the withdrawal slice', async () => {
-    await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
-      'Onchain mint operation preparation is not implemented yet',
+  it('prepares deterministic outputs without requiring available quote balance', async () => {
+    const result = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: { ...remoteQuote, amount_paid: Amount.zero(), amount_issued: Amount.zero() },
+    });
+
+    expect(keyRingService.getMintQuoteKeyPair).toHaveBeenCalledWith(pubkey);
+    expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        keep: { amount: Amount.from(10), unit: 'sat' },
+        send: { amount: Amount.zero(), unit: 'sat' },
+      },
+      {},
     );
+    expect(result.state).toBe('pending');
+    expect(result.quoteId).toBe(quoteId);
+    expect(result.pubkey).toBe(pubkey);
+    expect(deserializeOutputData(result.outputData).keep).toHaveLength(1);
+  });
+
+  it('fails onchain preparation when the quote key is missing', async () => {
+    (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
+
+    await expect(
+      handler.prepare({ ...buildPrepareContext(), importedQuote: remoteQuote }),
+    ).rejects.toThrow('Missing NUT-20 mint quote key');
   });
 });

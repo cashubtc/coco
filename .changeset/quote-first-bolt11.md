@@ -43,3 +43,8 @@ user-facing P2PK key management APIs.
 NUT-30 onchain mint quote creation now derives a fresh NUT-20 key, submits the
 public key in the onchain quote request, and persists the reusable address quote
 with `amount_paid`/`amount_issued` balance metadata.
+
+Onchain mint operation preparation now accepts an explicit withdrawal amount for
+pre-created reusable quotes, verifies the quote signing key before operation
+persistence, and creates operation-scoped deterministic outputs without requiring
+available remote balance during prepare.

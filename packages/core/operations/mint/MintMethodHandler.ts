@@ -145,6 +145,7 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
+  validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;

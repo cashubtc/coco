@@ -8,9 +8,10 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '@core/operations/mint';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11';
+export type DefaultSupportedMintMethod = 'bolt11' | 'onchain';
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -41,17 +42,23 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
   [M in TSupported]: PrepareExistingQuoteInputCommon & {
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
-  } & MethodDataInput<M>;
+  } & (M extends 'onchain'
+      ? {
+          /** Amount to withdraw from the reusable onchain quote. */
+          amount: UnitAmountLike;
+        }
+      : {}) &
+    MethodDataInput<M>;
 }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: ImportMintQuoteInputCommon & {
+  [M in Extract<TSupported, 'bolt11'>]: ImportMintQuoteInputCommon & {
     /** Existing quote snapshot to track as an operation. */
     quote: MintMethodQuoteSnapshot<M>;
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
   } & MethodDataInput<M>;
-}[TSupported];
+}[Extract<TSupported, 'bolt11'>];
 
 export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: {
@@ -101,6 +108,8 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
+    const explicitAmount =
+      'amount' in input ? parseUnitAmount(input.amount, { explicitUnit: input.unit }) : undefined;
 
     return this.mintOperationService.prepareExistingQuote(
       input.mintUrl,
@@ -108,6 +117,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
       input.quoteId,
       methodData,
       input.unit,
+      explicitAmount,
     );
   }
 

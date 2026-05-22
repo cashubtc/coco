@@ -25,6 +25,13 @@ type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
     ? true
     : false
 >;
+type _AssertOnchainPrepareRequiresAmount = Assert<
+  Extract<PrepareMintInput, { method: 'onchain' }> extends {
+    amount: unknown;
+  }
+    ? true
+    : false
+>;
 type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
   Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
     methodData?: Record<string, never>;
@@ -115,6 +122,7 @@ describe('MintOpsApi', () => {
       quoteId,
       {},
       undefined,
+      undefined,
     );
     expect(result).toBe(pendingOperation);
   });
@@ -134,6 +142,26 @@ describe('MintOpsApi', () => {
       quoteId,
       {},
       'usd',
+      undefined,
+    );
+  });
+
+  it('prepare passes explicit onchain withdrawal amounts to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      quoteId,
+      method: 'onchain',
+      amount: 10,
+      unit: 'sat',
+    });
+
+    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain',
+      quoteId,
+      {},
+      'sat',
+      { amount: Amount.from(10), unit: 'sat' },
     );
   });
 

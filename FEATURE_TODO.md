@@ -470,26 +470,26 @@ lifecycle `init -> pending -> executing -> finalized | failed`.
 
 Deliverables:
 
-- [ ] Extend the existing pre-created-quote mint prepare path so onchain accepts an explicit withdrawal
+- [x] Extend the existing pre-created-quote mint prepare path so onchain accepts an explicit withdrawal
       amount with `quoteId`.
-- [ ] Preserve quote-ID-required preparation; do not add `prepare({ amount })` or create-quote wrappers
+- [x] Preserve quote-ID-required preparation; do not add `prepare({ amount })` or create-quote wrappers
       back to `manager.ops.mint.prepare()`.
-- [ ] Validate that the canonical quote row and required NUT-20 signing material are available before
+- [x] Validate that the canonical quote row and required NUT-20 signing material are available before
       persisting the operation.
-- [ ] Do not require sufficient remote quote balance during prepare.
-- [ ] Create deterministic outputs for the operation during prepare so recovery can redeem later.
-- [ ] Accept consumed output counters if operation persistence fails; never roll counters back.
-- [ ] Create deterministic outputs per withdrawal operation, not per quote.
+- [x] Do not require sufficient remote quote balance during prepare.
+- [x] Create deterministic outputs for the operation during prepare so recovery can redeem later.
+- [x] Accept consumed output counters if operation persistence fails; never roll counters back.
+- [x] Create deterministic outputs per withdrawal operation, not per quote.
 - [ ] Preserve crash recovery for operations that already have output data.
 
 Validation:
 
-- [ ] A reusable quote with no available balance can still prepare a pending operation.
-- [ ] Preparing against an existing onchain quote without required NUT-20 signing material fails before
+- [x] A reusable quote with no available balance can still prepare a pending operation.
+- [x] Preparing against an existing onchain quote without required NUT-20 signing material fails before
       persisting the operation.
-- [ ] If onchain prepare fails before operation persistence commits, no operation is persisted and
+- [x] If onchain prepare fails before operation persistence commits, no operation is persisted and
       consumed output counters are not rolled back.
-- [ ] Two mint operations can share one `(mintUrl, method, quoteId)` and both persist independently.
+- [x] Two mint operations can share one `(mintUrl, method, quoteId)` and both persist independently.
 
 ### Phase 4: Quote Claiming and Onchain Mint Execution
 

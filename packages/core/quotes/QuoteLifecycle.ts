@@ -246,13 +246,7 @@ export class QuoteLifecycle {
     this.assertMintQuoteCanPrepare(quote, `operation ${op.id} mint quote ${op.quoteId}`);
 
     const quoteAmount = getMintQuoteAmount(quote);
-    if (!quoteAmount) {
-      throw new Error(
-        `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} for ${op.method} does not have a fixed amount`,
-      );
-    }
-
-    if (!quoteAmount.equals(op.amount)) {
+    if (quoteAmount && !quoteAmount.equals(op.amount)) {
       throw new Error(
         `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} amount ${quoteAmount} does not match requested amount ${op.amount}`,
       );
@@ -475,7 +469,7 @@ export class QuoteLifecycle {
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (quote.reusable) {
+    if (quote.reusable && quote.method !== 'onchain') {
       throw new Error(`Cannot prepare ${context}: reusable quote is unsupported`);
     }
 
@@ -483,7 +477,7 @@ export class QuoteLifecycle {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
 
-    if (quote.state === 'ISSUED') {
+    if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
     }
   }
