@@ -1,4 +1,5 @@
 import type {
+  CreateMintQuoteContext,
   ExecuteContext,
   MintMethodMeta,
   PrepareContext,
@@ -9,13 +10,28 @@ import type {
   RecoverExecutingContext,
   PendingContext,
   PendingMintCheckResult,
+  RefreshMintQuoteContext,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
+  async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
+    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.intent.amount);
+    return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
+  }
+
+  async refreshQuote(ctx: RefreshMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
+    const remoteQuote = await ctx.mintAdapter.checkMintQuoteState(
+      ctx.quote.mintUrl,
+      ctx.quote.quoteId,
+    );
+    return mintQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
+  }
+
   async prepare(
     ctx: PrepareContext<'bolt11'>,
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {

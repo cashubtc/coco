@@ -169,6 +169,30 @@ describe('MeltOperationService', () => {
     eventBus = new EventBus<CoreEvents>();
 
     handler = {
+      createQuote: mock(async ({ mintUrl: quoteMintUrl, methodData, unit }) =>
+        meltQuoteFromBolt11Response(quoteMintUrl, {
+          quote: 'quote-created',
+          request: methodData.invoice,
+          amount: Amount.from(100),
+          unit,
+          fee_reserve: Amount.from(1),
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+          payment_preimage: null,
+        }),
+      ),
+      refreshQuote: mock(async ({ quote }) =>
+        meltQuoteFromBolt11Response(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          amount: quote.amount,
+          unit: quote.unit,
+          fee_reserve: quote.fee_reserve,
+          expiry: quote.expiry,
+          state: 'PENDING',
+          payment_preimage: null,
+        }),
+      ),
       prepare: mock(async ({ operation }) =>
         makePreparedOp(operation.id, {
           mintUrl: operation.mintUrl,
@@ -286,46 +310,19 @@ describe('MeltOperationService', () => {
 
   describe('quotes', () => {
     it('creates and persists a canonical melt quote without creating an operation', async () => {
-      const wallet = {
-        createMeltQuoteBolt11: mock(async () => ({
-          quote: 'quote-created',
-          request: invoice,
-          amount: Amount.from(100),
-          unit: 'sat',
-          fee_reserve: Amount.from(1),
-          expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'UNPAID' as const,
-          payment_preimage: null,
-        })),
-      };
-      (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({ wallet });
-
       const quote = await service.createQuote(mintUrl, 'bolt11', { invoice });
 
       expect(quote.quoteId).toBe('quote-created');
-      expect(wallet.createMeltQuoteBolt11).toHaveBeenCalledWith(invoice, undefined);
+      expect(handler.createQuote).toHaveBeenCalled();
       expect(await service.getQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
       expect(await meltOperationRepository.getAll()).toHaveLength(0);
     });
 
-    it('passes amountless invoice amounts to cashu-ts in millisatoshis', async () => {
-      const wallet = {
-        createMeltQuoteBolt11: mock(async () => ({
-          quote: 'quote-amounted',
-          request: invoice,
-          amount: Amount.from(1000),
-          unit: 'sat',
-          fee_reserve: Amount.from(1),
-          expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'UNPAID' as const,
-          payment_preimage: null,
-        })),
-      };
-      (walletService.getWalletWithActiveKeysetId as Mock<any>).mockResolvedValueOnce({ wallet });
-
+    it('normalizes amountSats before passing method data to the handler', async () => {
       await service.createQuote(mintUrl, 'bolt11', { invoice, amountSats: Amount.from(1000) });
 
-      expect(wallet.createMeltQuoteBolt11).toHaveBeenCalledWith(invoice, Amount.from(1_000_000));
+      const ctx = (handler.createQuote as Mock<any>).mock.calls.at(-1)?.[0] as any;
+      expect(ctx.methodData.amountSats?.toString()).toBe('1000');
     });
 
     it('lists active canonical melt quotes', async () => {
@@ -337,34 +334,10 @@ describe('MeltOperationService', () => {
       expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
     });
 
-    it('refreshes a canonical melt quote from the mint', async () => {
-      mintAdapter = {
-        checkMeltQuote: mock(async () => ({
-          quote: 'quote-1',
-          request: invoice,
-          amount: Amount.from(100),
-          unit: 'sat',
-          fee_reserve: Amount.from(1),
-          expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'PENDING' as const,
-          payment_preimage: null,
-        })),
-      } as unknown as MintAdapter;
-      service = new MeltOperationService(
-        handlerProvider,
-        meltOperationRepository,
-        meltQuoteRepository,
-        proofRepository,
-        proofService,
-        mintService,
-        walletService,
-        mintAdapter,
-        eventBus,
-        logger,
-      );
-
+    it('refreshes and persists a canonical melt quote through the handler', async () => {
       const quote = await service.refreshQuote(mintUrl, 'bolt11', 'quote-1');
 
+      expect(handler.refreshQuote).toHaveBeenCalled();
       expect(quote.state).toBe('PENDING');
       expect(await service.getQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
     });

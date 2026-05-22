@@ -149,6 +149,26 @@ describe('MintOperationService', () => {
     );
 
     handler = {
+      createQuote: mock(async ({ mintUrl: quoteMintUrl, intent }) =>
+        mintQuoteFromBolt11Response(quoteMintUrl, {
+          quote: quoteId,
+          request: 'lnbc1test',
+          amount: intent.amount,
+          unit: intent.unit,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+        }),
+      ),
+      refreshQuote: mock(async ({ quote }) =>
+        mintQuoteFromBolt11Response(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: 'lnbc1paid',
+          amount: quote.amount,
+          unit: quote.unit,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+        }),
+      ),
       prepare: mockPrepare,
       execute: mockExecute,
       recoverExecuting: mockRecoverExecuting,
@@ -288,6 +308,7 @@ describe('MintOperationService', () => {
     expect(storedQuote?.method).toBe('bolt11');
     expect(storedQuote?.reusable).toBe(false);
     expect(operations).toHaveLength(0);
+    expect(handler.createQuote).toHaveBeenCalled();
     expect(handler.prepare).not.toHaveBeenCalled();
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
@@ -338,20 +359,22 @@ describe('MintOperationService', () => {
       'was not found',
     );
 
-    expect(mintAdapter.checkMintQuoteState).not.toHaveBeenCalled();
+    expect(handler.refreshQuote).not.toHaveBeenCalled();
   });
 
   it('refreshQuote persists the canonical quote before emitting mint-quote:updated', async () => {
     await persistQuote();
     const observedAt = Date.now();
-    (mintAdapter.checkMintQuoteState as Mock<any>).mockImplementationOnce(async () => ({
-      quote: quoteId,
-      request: 'lnbc1paid',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      state: 'PAID',
-    }));
+    (handler.refreshQuote as Mock<any>).mockImplementationOnce(async ({ quote }: any) =>
+      mintQuoteFromBolt11Response(quote.mintUrl, {
+        quote: quote.quoteId,
+        request: 'lnbc1paid',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
 
     const persistedDuringEvent: Array<string | undefined> = [];
     eventBus.on('mint-quote:updated', async ({ quote }) => {
@@ -361,7 +384,7 @@ describe('MintOperationService', () => {
 
     const refreshed = await service.refreshQuote(mintUrl, 'bolt11', quoteId);
 
-    expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(handler.refreshQuote).toHaveBeenCalled();
     expect(refreshed.state).toBe('PAID');
     expect(refreshed.request).toBe('lnbc1paid');
     expect(refreshed.lastObservedRemoteState).toBe('PAID');

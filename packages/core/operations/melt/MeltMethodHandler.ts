@@ -23,6 +23,7 @@ import type {
   PreparedOrLaterOperation,
 } from './MeltOperation';
 import type { MintAdapter } from '@core/infra';
+import type { MeltQuote } from '../../models/MeltQuote';
 
 /**
  * Registry of supported melt methods and their public input payload shapes.
@@ -100,6 +101,19 @@ export interface BaseHandlerDeps {
   logger?: Logger;
 }
 
+export interface CreateMeltQuoteContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
+  mintUrl: string;
+  methodData: MeltMethodData<M>;
+  unit: string;
+  wallet: Wallet;
+}
+
+export interface RefreshMeltQuoteContext<
+  M extends MeltMethod = MeltMethod,
+> extends BaseHandlerDeps {
+  quote: MeltQuote<M>;
+}
+
 export interface BasePrepareContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: InitMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
@@ -170,6 +184,8 @@ export type ExecutionResult<M extends MeltMethod = MeltMethod> =
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 
 export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
+  createQuote(ctx: CreateMeltQuoteContext<M>): Promise<MeltQuote<M>>;
+  refreshQuote(ctx: RefreshMeltQuoteContext<M>): Promise<MeltQuote<M>>;
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
   finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult<M>>;

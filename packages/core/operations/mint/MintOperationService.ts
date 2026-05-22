@@ -213,32 +213,28 @@ export class MintOperationService {
     await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, parsed.unit);
 
-    switch (method) {
-      case 'bolt11': {
-        const remoteQuote = await wallet.createMintQuoteBolt11(parsed.amount);
-        const quote = mintQuoteFromBolt11Response(mintUrl, remoteQuote);
-        await this.mintQuoteRepository.upsertMintQuote(quote);
-        const persistedQuote =
-          (await this.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', quote.quoteId)) ?? quote;
-        this.logger?.info('Mint quote created', {
-          mintUrl: persistedQuote.mintUrl,
-          quoteId: persistedQuote.quoteId,
-          method,
-          amount: persistedQuote.amount,
-          unit: persistedQuote.unit,
-        });
-        return persistedQuote;
-      }
-      default:
-        throw new Error(`Unsupported mint quote method ${String(method)}`);
-    }
+    const handler = this.handlerProvider.get(method);
+    const quote = await handler.createQuote({
+      ...this.buildDeps(),
+      mintUrl,
+      intent: parsed,
+      wallet,
+    });
+
+    await this.mintQuoteRepository.upsertMintQuote(quote);
+    const persistedQuote =
+      (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
+    this.logger?.info('Mint quote created', {
+      mintUrl: persistedQuote.mintUrl,
+      quoteId: persistedQuote.quoteId,
+      method,
+      amount: persistedQuote.amount,
+      unit: persistedQuote.unit,
+    });
+    return persistedQuote;
   }
 
-  async getQuote(
-    mintUrl: string,
-    method: MintMethod,
-    quoteId: string,
-  ): Promise<MintQuote | null> {
+  async getQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote | null> {
     return this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
   }
 
@@ -246,45 +242,38 @@ export class MintOperationService {
     return this.mintQuoteRepository.getPendingMintQuotes(method);
   }
 
-  async refreshQuote(
-    mintUrl: string,
-    method: MintMethod,
-    quoteId: string,
-  ): Promise<MintQuote> {
+  async refreshQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote> {
     const existingQuote = await this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
     if (!existingQuote) {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    switch (method) {
-      case 'bolt11': {
-        const remoteQuote = await this.mintAdapter.checkMintQuoteState(mintUrl, quoteId);
-        await this.mintQuoteRepository.upsertMintQuote(
-          mintQuoteFromBolt11Response(existingQuote.mintUrl, remoteQuote),
-        );
-        const quote = await this.mintQuoteRepository.getMintQuote(
-          existingQuote.mintUrl,
-          method,
-          quoteId,
-        );
-        if (!quote) {
-          throw new Error(
-            `Cannot refresh quote: mint quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
-          );
-        }
+    const handler = this.handlerProvider.get(method);
+    const refreshed = await handler.refreshQuote({
+      ...this.buildDeps(),
+      quote: existingQuote,
+    });
 
-        await this.eventBus.emit('mint-quote:updated', {
-          mintUrl: quote.mintUrl,
-          method: quote.method,
-          quoteId: quote.quoteId,
-          quote,
-        });
-
-        return quote;
-      }
-      default:
-        throw new Error(`Unsupported mint quote refresh method ${String(method)}`);
+    await this.mintQuoteRepository.upsertMintQuote(refreshed);
+    const quote = await this.mintQuoteRepository.getMintQuote(
+      existingQuote.mintUrl,
+      method,
+      quoteId,
+    );
+    if (!quote) {
+      throw new Error(
+        `Cannot refresh quote: mint quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
+      );
     }
+
+    await this.eventBus.emit('mint-quote:updated', {
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      quote,
+    });
+
+    return quote;
   }
 
   async prepareExistingQuote(

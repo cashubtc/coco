@@ -9,6 +9,7 @@ import {
 import { MintOperationError, ProofValidationError } from '@core/models';
 import type {
   BasePrepareContext,
+  CreateMeltQuoteContext,
   ExecuteContext,
   ExecutionResult,
   FinalizeContext,
@@ -19,6 +20,7 @@ import type {
   PendingContext,
   PreparedMeltOperation,
   RecoverExecutingContext,
+  RefreshMeltQuoteContext,
   RollbackContext,
 } from '@core/operations/melt';
 import {
@@ -38,6 +40,7 @@ import {
   type MeltQuoteData,
 } from './MeltBolt11Handler.utils.ts';
 import { assertSameUnit } from '@core/amounts';
+import { meltQuoteFromBolt11Response, type MeltQuote } from '../../../models/MeltQuote';
 
 export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
   // ============================================================================
@@ -85,6 +88,20 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     paymentPreimage?: string | null,
   ): FinalizeResult<'bolt11'>['finalizedData'] {
     return paymentPreimage == null ? undefined : { preimage: paymentPreimage };
+  }
+
+  async createQuote(ctx: CreateMeltQuoteContext<'bolt11'>): Promise<MeltQuote<'bolt11'>> {
+    const amountMsat =
+      ctx.methodData.amountSats === undefined
+        ? undefined
+        : ctx.methodData.amountSats.multiplyBy(1000);
+    const remoteQuote = await ctx.wallet.createMeltQuoteBolt11(ctx.methodData.invoice, amountMsat);
+    return meltQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
+  }
+
+  async refreshQuote(ctx: RefreshMeltQuoteContext<'bolt11'>): Promise<MeltQuote<'bolt11'>> {
+    const remoteQuote = await ctx.mintAdapter.checkMeltQuote(ctx.quote.mintUrl, ctx.quote.quoteId);
+    return meltQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
   }
 
   // ============================================================================

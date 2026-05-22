@@ -36,11 +36,7 @@ import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
-import {
-  meltQuoteFromBolt11Response,
-  meltQuoteToMethodSnapshot,
-  type MeltQuote,
-} from '../../models/MeltQuote';
+import { meltQuoteToMethodSnapshot, type MeltQuote } from '../../models/MeltQuote';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -192,26 +188,22 @@ export class MeltOperationService {
       normalizedUnit,
     );
 
-    switch (method) {
-      case 'bolt11': {
-        const bolt11Data = normalizedMethodData as MeltMethodData<'bolt11'>;
-        const amountMsat =
-          bolt11Data.amountSats === undefined ? undefined : bolt11Data.amountSats.multiplyBy(1000);
-        const remoteQuote = await wallet.createMeltQuoteBolt11(bolt11Data.invoice, amountMsat);
-        const quote = meltQuoteFromBolt11Response(mintUrl, remoteQuote);
-        if (quote.unit !== normalizedUnit) {
-          throw new ProofValidationError(
-            `Melt quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${normalizedUnit}`,
-          );
-        }
-        await this.meltQuoteRepository.upsertMeltQuote(quote);
-        return (
-          (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote
-        );
-      }
-      default:
-        throw new Error(`Unsupported melt quote method ${String(method)}`);
+    const handler = this.handlerProvider.get(method);
+    const quote = await handler.createQuote({
+      ...this.buildDeps(),
+      mintUrl,
+      methodData: normalizedMethodData,
+      unit: normalizedUnit,
+      wallet,
+    });
+    if (quote.unit !== normalizedUnit) {
+      throw new ProofValidationError(
+        `Melt quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${normalizedUnit}`,
+      );
     }
+
+    await this.meltQuoteRepository.upsertMeltQuote(quote);
+    return (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
   }
 
   async getQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote | null> {
@@ -228,27 +220,24 @@ export class MeltOperationService {
       throw new Error(`Melt quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    switch (method) {
-      case 'bolt11': {
-        const remoteQuote = await this.mintAdapter.checkMeltQuote(mintUrl, quoteId);
-        await this.meltQuoteRepository.upsertMeltQuote(
-          meltQuoteFromBolt11Response(existingQuote.mintUrl, remoteQuote),
-        );
-        const quote = await this.meltQuoteRepository.getMeltQuote(
-          existingQuote.mintUrl,
-          method,
-          quoteId,
-        );
-        if (!quote) {
-          throw new Error(
-            `Cannot refresh quote: melt quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
-          );
-        }
-        return quote;
-      }
-      default:
-        throw new Error(`Unsupported melt quote refresh method ${String(method)}`);
+    const handler = this.handlerProvider.get(method);
+    const refreshed = await handler.refreshQuote({
+      ...this.buildDeps(),
+      quote: existingQuote,
+    });
+
+    await this.meltQuoteRepository.upsertMeltQuote(refreshed);
+    const quote = await this.meltQuoteRepository.getMeltQuote(
+      existingQuote.mintUrl,
+      method,
+      quoteId,
+    );
+    if (!quote) {
+      throw new Error(
+        `Cannot refresh quote: melt quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
+      );
     }
+    return quote;
   }
 
   async prepareExistingQuote(

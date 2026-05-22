@@ -6,9 +6,11 @@ import { MintOperationError } from '../../models/Error';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type {
+  CreateMintQuoteContext,
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
+  RefreshMintQuoteContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 import type { ProofService } from '../../services/ProofService';
@@ -92,6 +94,45 @@ describe('MintBolt11Handler', () => {
     logger,
   });
 
+  const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
+    mintUrl,
+    intent: { amount: Amount.from(10), unit: 'sat' },
+    wallet,
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  const buildRefreshQuoteContext = (): RefreshMintQuoteContext<'bolt11'> => ({
+    quote: {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: quoteId,
+      request: quote.request,
+      unit: quote.unit,
+      amount: quote.amount,
+      expiry: quote.expiry,
+      state: quote.state,
+      lastObservedRemoteState: quote.state,
+      lastObservedRemoteStateAt: Date.now(),
+      reusable: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
@@ -144,6 +185,24 @@ describe('MintBolt11Handler', () => {
     mintService = {} as MintService;
     eventBus = new EventBus<CoreEvents>();
     logger = { info: mock(() => {}) } as unknown as Logger;
+  });
+
+  describe('quotes', () => {
+    it('creates a BOLT11 mint quote through the wallet', async () => {
+      const result = await handler.createQuote(buildCreateQuoteContext());
+
+      expect(wallet.createMintQuoteBolt11).toHaveBeenCalledWith(Amount.from(10));
+      expect(result.quoteId).toBe(quoteId);
+      expect(result.method).toBe('bolt11');
+    });
+
+    it('refreshes a BOLT11 mint quote through the mint adapter', async () => {
+      const result = await handler.refreshQuote(buildRefreshQuoteContext());
+
+      expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+      expect(result.quoteId).toBe(quoteId);
+      expect(result.method).toBe('bolt11');
+    });
   });
 
   describe('recoverExecuting', () => {
