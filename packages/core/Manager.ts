@@ -116,6 +116,7 @@ export interface CocoConfig {
       maxRetries?: number;
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
+      autoClaimMintQuotes?: boolean;
     };
   };
   /**
@@ -415,6 +416,7 @@ export class Manager {
     maxRetries?: number;
     baseRetryDelayMs?: number;
     initialEnqueueDelayMs?: number;
+    autoClaimMintQuotes?: boolean;
   }): Promise<boolean> {
     if (this.mintOperationProcessor?.isRunning()) return false;
     const processorLogger = this.logger.child

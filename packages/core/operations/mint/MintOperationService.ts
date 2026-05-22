@@ -51,6 +51,10 @@ import {
 } from '../../models/MintQuote';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
+export interface ClaimMintQuoteOptions {
+  autoClaimRemaining?: boolean;
+}
+
 /**
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
  */
@@ -788,6 +792,7 @@ export class MintOperationService {
     mintUrl: string,
     method: MintMethod,
     quoteId: string,
+    options: ClaimMintQuoteOptions = {},
   ): Promise<MintOperation[]> {
     if (method !== 'onchain') {
       return [];
@@ -811,6 +816,7 @@ export class MintOperationService {
       const siblings = await this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
       let selectedAmount = Amount.zero();
       const selected: PendingMintOperation[] = [];
+      const autoClaimRemaining = options.autoClaimRemaining ?? true;
 
       for (const operation of siblings) {
         if (operation.state !== 'pending') {
@@ -831,10 +837,47 @@ export class MintOperationService {
         claimed.push(await this.executeReadyOperation(operation.id));
       }
 
+      const remaining = claimable.subtract(selectedAmount);
+      if (autoClaimRemaining && !remaining.isZero()) {
+        const refreshedQuote =
+          (await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId)) ?? quote;
+        if (refreshedQuote.method === 'onchain') {
+          const currentClaimable = await this.getLocallyClaimableQuoteAmount(refreshedQuote);
+          const autoClaimAmount = remaining.lessThan(currentClaimable)
+            ? remaining
+            : currentClaimable;
+
+          if (!autoClaimAmount.isZero()) {
+            const autoClaim = await this.createAutoClaimOperation(refreshedQuote, autoClaimAmount);
+            claimed.push(await this.executeReadyOperation(autoClaim.id));
+          }
+        }
+      }
+
       return claimed;
     } finally {
       releaseQuoteLock();
     }
+  }
+
+  async claimPendingMintQuotes(options: ClaimMintQuoteOptions = {}): Promise<MintOperation[]> {
+    const quotes = await this.quoteLifecycle.getPendingMintQuotes('onchain');
+    const claimed: MintOperation[] = [];
+
+    for (const quote of quotes) {
+      if (quote.method !== 'onchain') {
+        continue;
+      }
+      if (getMintQuoteAvailableAmount(quote).isZero()) {
+        continue;
+      }
+
+      claimed.push(
+        ...(await this.claimMintQuote(quote.mintUrl, quote.method, quote.quoteId, options)),
+      );
+    }
+
+    return claimed;
   }
 
   private async claimReusableQuoteOperation(
@@ -878,6 +921,21 @@ export class MintOperationService {
     } finally {
       releaseQuoteLock();
     }
+  }
+
+  private async createAutoClaimOperation(
+    quote: MintQuote<'onchain'>,
+    amount: Amount,
+  ): Promise<PendingMintOperation<'onchain'>> {
+    const initOperation = await this.init(
+      quote.mintUrl,
+      { amount, unit: quote.unit },
+      quote.method,
+      {},
+      { quoteId: quote.quoteId },
+    );
+
+    return this.prepare(initOperation.id) as Promise<PendingMintOperation<'onchain'>>;
   }
 
   private async getLocallyClaimableQuoteAmount(

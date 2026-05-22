@@ -13,6 +13,7 @@ describe('MintOperationProcessor', () => {
   let mockMintOperationService: MintOperationService;
   let finalizeCalls: string[];
   let claimCalls: Array<{ mintUrl: string; method: string; quoteId: string }>;
+  let startupClaimCalls: number;
 
   const TEST_PROCESS_INTERVAL = 50;
   const TEST_RETRY_DELAY = 100;
@@ -22,6 +23,7 @@ describe('MintOperationProcessor', () => {
     bus = new EventBus<CoreEvents>();
     finalizeCalls = [];
     claimCalls = [];
+    startupClaimCalls = 0;
 
     mockMintOperationService = {
       async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
@@ -39,6 +41,10 @@ describe('MintOperationProcessor', () => {
       },
       async claimMintQuote(mintUrl: string, method: string, quoteId: string) {
         claimCalls.push({ mintUrl, method, quoteId });
+        return [];
+      },
+      async claimPendingMintQuotes() {
+        startupClaimCalls++;
         return [];
       },
     } as unknown as MintOperationService;
@@ -162,10 +168,55 @@ describe('MintOperationProcessor', () => {
       } as any,
     });
 
+    await processor.waitForCompletion();
+
     expect(claimCalls).toEqual([
       { mintUrl: 'https://mint.test', method: 'onchain', quoteId: 'onchain-quote-1' },
     ]);
     expect(finalizeCalls).toEqual([]);
+  });
+
+  it('claims pending reusable mint quotes on startup', async () => {
+    await processor.start();
+    await processor.waitForCompletion();
+
+    expect(startupClaimCalls).toBe(1);
+  });
+
+  it('can disable reusable mint quote auto-claiming', async () => {
+    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
+      processIntervalMs: TEST_PROCESS_INTERVAL,
+      baseRetryDelayMs: TEST_RETRY_DELAY,
+      maxRetries: 3,
+      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      autoClaimMintQuotes: false,
+    });
+
+    await processor.start();
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'onchain',
+      quoteId: 'onchain-quote-disabled',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'onchain',
+        quoteId: 'onchain-quote-disabled',
+        quote: 'onchain-quote-disabled',
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: null,
+        reusable: true,
+        quoteData: {
+          pubkey: '02'.padEnd(66, '1'),
+          amountPaid: 10,
+          amountIssued: 0,
+        },
+      } as any,
+    });
+    await processor.waitForCompletion();
+
+    expect(startupClaimCalls).toBe(0);
+    expect(claimCalls).toEqual([]);
   });
 
   it('processes already-paid pending operations from mint-op:pending', async () => {

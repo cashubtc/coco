@@ -68,12 +68,12 @@ describe('MintOperationService', () => {
       C: `C_${secret}`,
     }) as Proof;
 
-  const makeSerializedOutputData = (secret: string) =>
+  const makeSerializedOutputData = (secret: string, amount = Amount.from(10)) =>
     serializeOutputData({
       keep: [
         new OutputData(
           {
-            amount: Amount.from(10),
+            amount,
             id: keysetId,
             B_: `B_${secret}`,
           },
@@ -136,6 +136,51 @@ describe('MintOperationService', () => {
         amount_issued: amounts.issued ?? Amount.zero(),
       }),
     );
+  };
+
+  const useAutoClaimOnchainHandler = (paid = Amount.from(10)) => {
+    let issued = Amount.zero();
+    let lastExecutedAmount = Amount.zero();
+    const executedAmounts: string[] = [];
+
+    const onchainHandler = {
+      ...handler,
+      validateQuoteForPrepare: mock(async () => {}),
+      prepare: mock(async ({ operation, importedQuote }: any) => ({
+        ...operation,
+        state: 'pending',
+        quoteId: importedQuote.quote,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        pubkey: importedQuote.pubkey,
+        outputData: makeSerializedOutputData(operation.id, operation.amount),
+      })),
+      execute: mock(
+        async ({ operation }: any): Promise<MintExecutionResult> => {
+          lastExecutedAmount = operation.amount;
+          executedAmounts.push(operation.amount.toString());
+          return { status: 'ISSUED', proofs: [makeProof(operation.id)] };
+        },
+      ),
+      fetchRemoteQuote: mock(async ({ quote }) => {
+        issued = issued.add(lastExecutedAmount);
+        return mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: paid,
+          amount_issued: issued,
+        });
+      }),
+    } as unknown as MintMethodHandler<'onchain'>;
+
+    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
+      method === 'onchain' ? onchainHandler : handler,
+    );
+
+    return { onchainHandler, executedAmounts };
   };
 
   const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation => ({
@@ -1191,7 +1236,9 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
-    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId, {
+      autoClaimRemaining: false,
+    });
     const storedFirst = await operationRepo.getById(first.id);
     const storedSecond = await operationRepo.getById(second.id);
 
@@ -1246,8 +1293,12 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
-    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
-    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId, {
+      autoClaimRemaining: false,
+    });
+    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId, {
+      autoClaimRemaining: false,
+    });
     const storedSecond = await operationRepo.getById(second.id);
 
     expect(firstClaim.map((operation) => operation.id)).toEqual([first.id]);
@@ -1306,14 +1357,63 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
-    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const firstClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId, {
+      autoClaimRemaining: false,
+    });
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(12), issued: Amount.from(7) });
-    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const secondClaim = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId, {
+      autoClaimRemaining: false,
+    });
 
     expect(firstClaim.map((operation) => operation.id)).toEqual([first.id]);
     expect(secondClaim.map((operation) => operation.id)).toEqual([second.id]);
     expect((await operationRepo.getById(first.id))?.state).toBe('finalized');
     expect((await operationRepo.getById(second.id))?.state).toBe('finalized');
+  });
+
+  it('claimMintQuote creates one auto-claim operation when a reusable quote has no pending siblings', async () => {
+    const onchainQuoteId = 'onchain-quote-auto-empty';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const { executedAmounts } = useAutoClaimOnchainHandler(Amount.from(10));
+
+    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(claimed).toHaveLength(1);
+    expect(executedAmounts).toEqual(['10']);
+    expect(operations).toHaveLength(1);
+    expect(operations[0]?.state).toBe('finalized');
+    expect(operations[0]?.amount.equals(Amount.from(10))).toBe(true);
+  });
+
+  it('claimMintQuote auto-claims the remaining reusable quote balance after pending siblings', async () => {
+    const onchainQuoteId = 'onchain-quote-auto-remainder';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const pending: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-auto-existing', 'onchain-auto-existing'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(7),
+      pubkey: '02'.padEnd(66, '1'),
+      createdAt: 1,
+      outputData: makeSerializedOutputData('onchain-auto-existing', Amount.from(7)),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pending);
+    const { executedAmounts } = useAutoClaimOnchainHandler(Amount.from(10));
+
+    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(claimed).toHaveLength(2);
+    expect(executedAmounts).toEqual(['7', '3']);
+    expect(operations).toHaveLength(2);
+    expect(operations.every((operation) => operation.state === 'finalized')).toBe(true);
+    expect(
+      operations
+        .map((operation) => operation.amount.toString())
+        .sort((a, b) => Number(a) - Number(b)),
+    ).toEqual(['3', '7']);
   });
 
   it('recoverExecutingOperation finalizes one reusable quote sibling without touching another', async () => {

@@ -536,29 +536,29 @@ Deliverables:
       current BOLT11 watcher is still operation-driven: it starts from `mint-op:pending`, subscribes by
       quote, and maps notifications back to an operation ID.
 - [ ] For methods without WebSocket support, rely on polling/explicit refresh.
-- [ ] Keep watchers as observation code: they update canonical quote records and emit quote-level claim
+- [x] Keep watchers as observation code: they update canonical quote records and emit quote-level claim
       work, but they should not directly create operations or execute mint requests inline.
-- [ ] Use the existing quote-level claim trigger,
+- [x] Use the existing quote-level claim trigger,
       `mint-quote:updated { mintUrl, method, quoteId, quote }`, emitted only after the canonical quote
       row is updated.
-- [ ] Do not reintroduce operation-shaped quote-state events for quote-level claim work.
-- [ ] Process quote-level claim work by full `(mintUrl, method, quoteId)` identity.
-- [ ] When automatic claiming is enabled and selected pending operations do not exhaust claimable
+- [x] Do not reintroduce operation-shaped quote-state events for quote-level claim work.
+- [x] Process quote-level claim work by full `(mintUrl, method, quoteId)` identity.
+- [x] When automatic claiming is enabled and selected pending operations do not exhaust claimable
       balance, create one new pending auto-claim operation for the remaining claimable amount and move
       it to `executing` inside the same quote-level claim lock.
-- [ ] Enable mint auto-claim by default when the mint quote watcher/processor is running, with an
+- [x] Enable mint auto-claim by default when the mint quote watcher/processor is running, with an
       explicit manager/watcher opt-out.
-- [ ] Keep auto-claim processors scoped to mint operations only.
+- [x] Keep auto-claim processors scoped to mint operations only.
 - [ ] Ensure any melt watcher/processor work only reconciles explicit operations already in `executing`
       or `pending`; it must not create melt operations or execute `prepared` melts.
 
 Validation:
 
-- [ ] A funded quote with no existing mint operation can trigger auto-claim through the quote-level
+- [x] A funded quote with no existing mint operation can trigger auto-claim through the quote-level
       event/service path.
-- [ ] A quote update with remaining claimable balance and no pending operation creates one auto-claim
+- [x] A quote update with remaining claimable balance and no pending operation creates one auto-claim
       operation for the full remaining amount and moves it to `executing`.
-- [ ] A quote update with pending operations that only partially consume claimable balance creates one
+- [x] A quote update with pending operations that only partially consume claimable balance creates one
       auto-claim operation for the remainder.
 - [ ] Mint auto-claim events do not create or execute melt operations.
 - [ ] A stale `prepared` melt operation is not executed by watcher startup, quote processing, polling,
