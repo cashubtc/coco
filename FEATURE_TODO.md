@@ -570,24 +570,24 @@ Purpose: make the new flow understandable and keep public surfaces aligned with 
 
 Deliverables:
 
-- [ ] Expose reusable quote flow from `manager.quotes.mint`, not from `MintOpsApi`.
-- [ ] Keep `manager.ops.mint` focused on operation creation, execution, refresh, and finalization.
-- [ ] Keep `manager.ops.mint.prepare()` and `manager.ops.melt.prepare()` quote-ID-required entry points;
+- [x] Expose reusable quote flow from `manager.quotes.mint`, not from `MintOpsApi`.
+- [x] Keep `manager.ops.mint` focused on operation creation, execution, refresh, and finalization.
+- [x] Keep `manager.ops.mint.prepare()` and `manager.ops.melt.prepare()` quote-ID-required entry points;
       examples and docs should show quote creation through `manager.quotes` first.
-- [ ] Decide the React hook surface for quote tracking versus operation execution.
-- [ ] Decide whether React quote tracking should wrap `manager.quotes` directly or use a dedicated quote
+- [x] Decide the React hook surface for quote tracking versus operation execution.
+- [x] Decide whether React quote tracking should wrap `manager.quotes` directly or use a dedicated quote
       hook separate from operation hooks.
-- [ ] Document that `quoteId` is not a stable local operation identifier.
-- [ ] Add examples for onchain quote refresh and partial minting.
+- [x] Document that `quoteId` is not a stable local operation identifier.
+- [x] Add examples for onchain quote refresh and partial minting.
 
 Validation:
 
-- [ ] Core typecheck passes.
-- [ ] Core unit tests pass.
-- [ ] Adapter contract tests pass for affected adapters.
-- [ ] React typecheck/lint passes if React surfaces change.
-- [ ] Docs build passes if docs change.
-- [ ] Generated `dist/` remains untouched.
+- [x] Core typecheck passes.
+- [x] Core unit tests pass.
+- [x] Adapter contract tests pass for affected adapters.
+- [x] React typecheck/lint passes if React surfaces change.
+- [x] Docs build passes if docs change.
+- [x] Generated `dist/` remains untouched.
 
 ## Invariants
 

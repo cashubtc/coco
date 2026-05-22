@@ -95,7 +95,9 @@ if (preparedReceive.state === 'prepared') {
 ## useMintOperation
 
 Use this for quote-backed mint lifecycles, including imported quotes and remote
-payment checks.
+payment checks. Quote creation, lookup, listing, and refresh stay on
+`manager.quotes.mint`; the hook binds only to a local mint operation after
+`prepare()` or `importQuote()`.
 
 ```tsx
 import { useManager, useMintOperation } from '@cashu/coco-react';
@@ -127,6 +129,10 @@ if (pendingMint.state === 'pending') {
 ```
 
 `prepare()` and `importQuote()` both bind the hook to a pending mint operation.
+Keep using `manager.quotes.mint.refresh(...)` when a component only needs to
+track quote-level state, such as an onchain quote receiving more funds. Use the
+operation hook once the UI is ready to prepare or follow a specific local
+operation ID.
 
 ## useMeltOperation
 

@@ -73,6 +73,46 @@ coco.on('mint-op:finalized', (payload) => {
 });
 ```
 
+Reusable onchain mint quotes are created through the same quote API. The quote
+request is the address or payment request to fund. Refresh the quote to observe
+new incoming amount, then prepare one or more partial mint operations against
+the same quote ID.
+
+```ts
+const quote = await coco.quotes.mint.create({
+  mintUrl: 'https://minturl.com',
+  method: 'onchain',
+  unit: 'sat',
+});
+
+console.log('fund this: ', quote.request);
+
+const refreshed = await coco.quotes.mint.refresh({
+  mintUrl: 'https://minturl.com',
+  method: 'onchain',
+  quoteId: quote.quoteId,
+});
+
+const claimable = refreshed.quoteData.amountPaid.subtract(
+  refreshed.quoteData.amountIssued,
+);
+
+if (!claimable.isZero()) {
+  const pendingOnchainMint = await coco.ops.mint.prepare({
+    mintUrl: 'https://minturl.com',
+    method: 'onchain',
+    quoteId: quote.quoteId,
+    amount: { amount: 5, unit: 'sat' },
+  });
+
+  await coco.ops.mint.finalize(pendingOnchainMint.id);
+}
+```
+
+`quoteId` identifies the remote quote, not a local mint operation. Store
+`pendingMint.id` or `pendingOnchainMint.id` when you need to resume a specific
+operation later.
+
 For the full state machine and action reference, see
 [Mint Operations](../pages/mint-operations.md). For multi-unit behavior, see
 [Multi-Unit Support](../pages/multi-unit-support.md).
