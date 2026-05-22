@@ -165,7 +165,7 @@ export class MeltOperationService {
       expectedUnit,
     );
     const methodData = this.quoteLifecycle.methodDataFromMeltQuote(quote);
-    const initOperation = await this.init(mintUrl, method, methodData, quote.unit, {
+    const initOperation = await this.init(quote.mintUrl, method, methodData, quote.unit, {
       quoteId: quote.quoteId,
     });
     return this.prepare(initOperation.id);

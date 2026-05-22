@@ -363,6 +363,21 @@ describe('MeltOperationService', () => {
   });
 
   describe('prepare', () => {
+    it('prepares existing quotes using the canonical quote mint URL', async () => {
+      const prepared = await service.prepareExistingQuote(
+        'https://MINT.test/',
+        'bolt11',
+        'quote-1',
+      );
+
+      const stored = await meltOperationRepository.getById(prepared.id);
+      const byQuote = await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-1');
+
+      expect(prepared.mintUrl).toBe(mintUrl);
+      expect(stored?.mintUrl).toBe(mintUrl);
+      expect(byQuote?.id).toBe(prepared.id);
+    });
+
     it('prepares operation and emits event', async () => {
       const initOp = makeInitOp('op-1');
       await meltOperationRepository.create(initOp);

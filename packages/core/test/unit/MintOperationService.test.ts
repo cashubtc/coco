@@ -478,6 +478,39 @@ describe('MintOperationService', () => {
     expect(importedOperation?.lastObservedRemoteState).toBe(importedQuote.state);
   });
 
+  it('importQuote resolves existing operations by canonical imported quote identity', async () => {
+    const variantMintUrl = 'https://MINT.test/';
+    const importedQuote: MintQuoteBolt11Response = {
+      quote: 'quote-canonical-import',
+      request: 'lnbc1canonicalimport',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    };
+
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        mintUrl: operation.mintUrl,
+        quoteId: importedQuote.quote,
+        amount: importedQuote.amount,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        lastObservedRemoteState: importedQuote.state,
+      }),
+    );
+
+    const first = await service.importQuote(variantMintUrl, importedQuote, 'bolt11', {});
+    const second = await service.importQuote(variantMintUrl, importedQuote, 'bolt11', {});
+    const operations = await operationRepo.getAll();
+
+    expect(second.id).toBe(first.id);
+    expect(second.mintUrl).toBe(mintUrl);
+    expect(operations).toHaveLength(1);
+    expect(handler.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it('importQuote does not downgrade canonical state for an already tracked pending quote', async () => {
     const pendingOp = makePendingOp('pending-import-stale');
     await operationRepo.create(pendingOp);

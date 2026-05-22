@@ -231,7 +231,7 @@ export class MintOperationService {
     const imported = await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
     const importedSnapshot = mintQuoteToMethodSnapshot(imported);
 
-    const existing = await this.getOperationByQuote(mintUrl, method, quote.quote);
+    const existing = await this.getOperationByQuote(imported.mintUrl, method, imported.quoteId);
     if (existing?.state === 'pending') {
       return existing;
     }
