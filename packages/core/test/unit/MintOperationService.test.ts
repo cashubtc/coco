@@ -161,7 +161,7 @@ describe('MintOperationService', () => {
           state: 'UNPAID',
         }),
       ),
-      refreshQuote: mock(async ({ quote }) =>
+      fetchRemoteQuote: mock(async ({ quote }) =>
         mintQuoteFromBolt11Response(quote.mintUrl, {
           quote: quote.quoteId,
           request: 'lnbc1paid',
@@ -373,18 +373,18 @@ describe('MintOperationService', () => {
     expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
   });
 
-  it('refreshQuote fails when the canonical quote is missing', async () => {
+  it('refreshMintQuote fails when the canonical quote is missing', async () => {
     await expect(
       quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', 'missing-quote'),
     ).rejects.toThrow('was not found');
 
-    expect(handler.refreshQuote).not.toHaveBeenCalled();
+    expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
   });
 
-  it('refreshQuote persists the canonical quote before emitting mint-quote:updated', async () => {
+  it('refreshMintQuote persists the canonical quote before emitting mint-quote:updated', async () => {
     await persistQuote();
     const observedAt = Date.now();
-    (handler.refreshQuote as Mock<any>).mockImplementationOnce(async ({ quote }: any) =>
+    (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(async ({ quote }: any) =>
       mintQuoteFromBolt11Response(quote.mintUrl, {
         quote: quote.quoteId,
         request: 'lnbc1paid',
@@ -403,7 +403,7 @@ describe('MintOperationService', () => {
 
     const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', quoteId);
 
-    expect(handler.refreshQuote).toHaveBeenCalled();
+    expect(handler.fetchRemoteQuote).toHaveBeenCalled();
     expect(refreshed.state).toBe('PAID');
     expect(refreshed.request).toBe('lnbc1paid');
     expect(refreshed.lastObservedRemoteState).toBe('PAID');
@@ -476,6 +476,169 @@ describe('MintOperationService', () => {
     expect(importedOperation?.quoteId).toBe(importedQuote.quote);
     expect(importedOperation?.request).toBe(importedQuote.request);
     expect(importedOperation?.lastObservedRemoteState).toBe(importedQuote.state);
+  });
+
+  it('importQuote does not downgrade canonical state for an already tracked pending quote', async () => {
+    const pendingOp = makePendingOp('pending-import-stale');
+    await operationRepo.create(pendingOp);
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'PAID',
+      }),
+    );
+
+    const staleQuote: MintQuoteBolt11Response = {
+      quote: pendingOp.quoteId,
+      request: pendingOp.request,
+      amount: pendingOp.amount,
+      unit: pendingOp.unit,
+      expiry: pendingOp.expiry,
+      state: 'UNPAID',
+    };
+
+    const imported = await service.importQuote(mintUrl, staleQuote, 'bolt11', {});
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', pendingOp.quoteId);
+
+    expect(imported.id).toBe(pendingOp.id);
+    expect(storedQuote?.state).toBe('PAID');
+    expect(storedQuote?.lastObservedRemoteState).toBe('PAID');
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('importQuote upgrades canonical state for an already tracked pending quote', async () => {
+    const pendingOp = makePendingOp('pending-import-upgrade');
+    await operationRepo.create(pendingOp);
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'UNPAID',
+      }),
+    );
+
+    const paidQuote: MintQuoteBolt11Response = {
+      quote: pendingOp.quoteId,
+      request: pendingOp.request,
+      amount: pendingOp.amount,
+      unit: pendingOp.unit,
+      expiry: pendingOp.expiry,
+      state: 'PAID',
+    };
+
+    const imported = await service.importQuote(mintUrl, paidQuote, 'bolt11', {});
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', pendingOp.quoteId);
+
+    expect(imported.id).toBe(pendingOp.id);
+    expect(storedQuote?.state).toBe('PAID');
+    expect(storedQuote?.lastObservedRemoteState).toBe('PAID');
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('importQuote prepares an already tracked init operation from an upgraded canonical quote', async () => {
+    const initOp = makeInitOp('init-import-upgrade');
+    const initQuoteId = initOp.quoteId;
+    if (!initQuoteId) {
+      throw new Error('Test setup expected init operation to have a quote id');
+    }
+    await operationRepo.create(initOp);
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: initQuoteId,
+        request: 'lnbc1init',
+        amount: initOp.amount,
+        unit: initOp.unit,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+
+    const paidQuote: MintQuoteBolt11Response = {
+      quote: initQuoteId,
+      request: 'lnbc1init',
+      amount: initOp.amount,
+      unit: initOp.unit,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    };
+
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({
+        operation,
+        importedQuote,
+      }: {
+        operation: InitMintOperation;
+        importedQuote: MintQuoteBolt11Response;
+      }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: importedQuote.quote,
+        amount: importedQuote.amount,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        lastObservedRemoteState: importedQuote.state,
+      }),
+    );
+
+    const pending = await service.importQuote(mintUrl, paidQuote, 'bolt11', {});
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', initQuoteId);
+
+    expect(pending.id).toBe(initOp.id);
+    expect(pending.lastObservedRemoteState).toBe('PAID');
+    expect(storedQuote?.state).toBe('PAID');
+    expect(storedQuote?.lastObservedRemoteState).toBe('PAID');
+  });
+
+  it('importQuote prepares new operations from the persisted canonical quote state', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-canonical-paid',
+        request: 'lnbc1canonical',
+        amount: Amount.from(12),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+
+    const staleQuote: MintQuoteBolt11Response = {
+      quote: 'quote-canonical-paid',
+      request: 'lnbc1canonical',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+    };
+
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({
+        operation,
+        importedQuote,
+      }: {
+        operation: InitMintOperation;
+        importedQuote: MintQuoteBolt11Response;
+      }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: importedQuote.quote,
+        amount: importedQuote.amount,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        lastObservedRemoteState: importedQuote.state,
+      }),
+    );
+
+    const pending = await service.importQuote(mintUrl, staleQuote, 'bolt11', {});
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', staleQuote.quote);
+
+    expect(pending.quoteId).toBe(staleQuote.quote);
+    expect(pending.lastObservedRemoteState).toBe('PAID');
+    expect(storedQuote?.state).toBe('PAID');
   });
 
   it('importQuote delegates unsupported quote units to capability validation', async () => {

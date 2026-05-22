@@ -42,7 +42,7 @@ import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import type { MintQuote } from '../../models/MintQuote';
+import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 /**
@@ -228,7 +228,8 @@ export class MintOperationService {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
 
-    await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
+    const imported = await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
+    const importedSnapshot = mintQuoteToMethodSnapshot(imported);
 
     const existing = await this.getOperationByQuote(mintUrl, method, quote.quote);
     if (existing?.state === 'pending') {
@@ -236,7 +237,7 @@ export class MintOperationService {
     }
     if (existing?.state === 'init') {
       return this.prepare(existing.id, {
-        importedQuote: quote,
+        importedQuote: importedSnapshot,
         skipMintLock: options?.skipMintLock,
       });
     }
@@ -247,15 +248,15 @@ export class MintOperationService {
     }
 
     const initOperation = await this.init(
-      mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      imported.mintUrl,
+      { amount: imported.amount, unit: imported.unit },
       method,
       methodData,
-      { quoteId: quote.quote },
+      { quoteId: imported.quoteId },
     );
 
     return this.prepare(initOperation.id, {
-      importedQuote: quote,
+      importedQuote: importedSnapshot,
       skipMintLock: options?.skipMintLock,
     });
   }

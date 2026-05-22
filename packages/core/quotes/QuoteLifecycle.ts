@@ -33,6 +33,19 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 
+const MINT_QUOTE_STATE_RANK: Record<string, number> = {
+  UNPAID: 0,
+  PAID: 1,
+  ISSUED: 2,
+};
+
+function isMintQuoteStateDowngrade(
+  existing: MintMethodRemoteState,
+  incoming: MintMethodRemoteState,
+): boolean {
+  return (MINT_QUOTE_STATE_RANK[incoming] ?? 0) < (MINT_QUOTE_STATE_RANK[existing] ?? 0);
+}
+
 export interface QuoteLifecycleDeps {
   mintHandlerProvider: MintHandlerProvider;
   meltHandlerProvider: MeltHandlerProvider;
@@ -140,7 +153,7 @@ export class QuoteLifecycle {
     }
 
     const handler = this.mintHandlerProvider.get(method);
-    const refreshed = await handler.refreshQuote({
+    const refreshed = await handler.fetchRemoteQuote({
       ...this.buildDeps(),
       quote: existingQuote,
     });
@@ -231,8 +244,23 @@ export class QuoteLifecycle {
     }
 
     const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, quote as MintQuoteBolt11Response);
+    const existing = await this.mintQuoteRepository.getMintQuote(
+      canonicalQuote.mintUrl,
+      canonicalQuote.method,
+      canonicalQuote.quoteId,
+    );
+    if (existing && isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)) {
+      return existing;
+    }
+
     await this.mintQuoteRepository.upsertMintQuote(canonicalQuote);
-    return canonicalQuote;
+    return (
+      (await this.mintQuoteRepository.getMintQuote(
+        canonicalQuote.mintUrl,
+        canonicalQuote.method,
+        canonicalQuote.quoteId,
+      )) ?? canonicalQuote
+    );
   }
 
   async recordMintQuoteObservation(
@@ -329,7 +357,7 @@ export class QuoteLifecycle {
     }
 
     const handler = this.meltHandlerProvider.get(method);
-    const refreshed = await handler.refreshQuote({
+    const refreshed = await handler.fetchRemoteQuote({
       ...this.buildDeps(),
       quote: existingQuote,
     });

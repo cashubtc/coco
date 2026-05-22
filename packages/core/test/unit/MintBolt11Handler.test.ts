@@ -10,7 +10,7 @@ import type {
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
-  RefreshMintQuoteContext,
+  FetchRemoteMintQuoteContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 import type { ProofService } from '../../services/ProofService';
@@ -107,7 +107,7 @@ describe('MintBolt11Handler', () => {
     logger,
   });
 
-  const buildRefreshQuoteContext = (): RefreshMintQuoteContext<'bolt11'> => ({
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt11'> => ({
     quote: {
       mintUrl,
       method: 'bolt11',
@@ -196,8 +196,8 @@ describe('MintBolt11Handler', () => {
       expect(result.method).toBe('bolt11');
     });
 
-    it('refreshes a BOLT11 mint quote through the mint adapter', async () => {
-      const result = await handler.refreshQuote(buildRefreshQuoteContext());
+    it('fetches a remote BOLT11 mint quote through the mint adapter', async () => {
+      const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
       expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
       expect(result.quoteId).toBe(quoteId);

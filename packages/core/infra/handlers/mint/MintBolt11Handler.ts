@@ -10,7 +10,7 @@ import type {
   RecoverExecutingContext,
   PendingContext,
   PendingMintCheckResult,
-  RefreshMintQuoteContext,
+  FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
@@ -24,7 +24,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
 
-  async refreshQuote(ctx: RefreshMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
+  async fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
     const remoteQuote = await ctx.mintAdapter.checkMintQuoteState(
       ctx.quote.mintUrl,
       ctx.quote.quoteId,

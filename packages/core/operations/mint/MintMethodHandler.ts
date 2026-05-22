@@ -57,7 +57,7 @@ export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> exten
   wallet: Wallet;
 }
 
-export interface RefreshMintQuoteContext<
+export interface FetchRemoteMintQuoteContext<
   M extends MintMethod = MintMethod,
 > extends BaseHandlerDeps {
   quote: MintQuote<M>;
@@ -115,7 +115,7 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
 
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
-  refreshQuote(ctx: RefreshMintQuoteContext<M>): Promise<MintQuote<M>>;
+  fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;

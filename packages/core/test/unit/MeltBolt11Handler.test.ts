@@ -19,7 +19,7 @@ import type {
   MeltMethodMeta,
   PendingContext,
   RecoverExecutingContext,
-  RefreshMeltQuoteContext,
+  FetchRemoteMeltQuoteContext,
   RollbackContext,
 } from '../../operations/melt/MeltMethodHandler';
 import type {
@@ -325,7 +325,7 @@ describe('MeltBolt11Handler', () => {
     logger,
   });
 
-  const buildRefreshQuoteContext = (): RefreshMeltQuoteContext<'bolt11'> => ({
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMeltQuoteContext<'bolt11'> => ({
     quote: {
       mintUrl,
       method: 'bolt11',
@@ -447,8 +447,8 @@ describe('MeltBolt11Handler', () => {
       );
     });
 
-    it('refreshes BOLT11 melt quotes through the mint adapter', async () => {
-      const quote = await handler.refreshQuote(buildRefreshQuoteContext());
+    it('fetches remote BOLT11 melt quotes through the mint adapter', async () => {
+      const quote = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
       expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, 'quote-123');
       expect(quote.quoteId).toBe('quote-123');

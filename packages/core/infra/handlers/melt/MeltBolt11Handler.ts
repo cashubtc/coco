@@ -20,7 +20,7 @@ import type {
   PendingContext,
   PreparedMeltOperation,
   RecoverExecutingContext,
-  RefreshMeltQuoteContext,
+  FetchRemoteMeltQuoteContext,
   RollbackContext,
 } from '@core/operations/melt';
 import {
@@ -99,7 +99,7 @@ export class MeltBolt11Handler implements MeltMethodHandler<'bolt11'> {
     return meltQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
 
-  async refreshQuote(ctx: RefreshMeltQuoteContext<'bolt11'>): Promise<MeltQuote<'bolt11'>> {
+  async fetchRemoteQuote(ctx: FetchRemoteMeltQuoteContext<'bolt11'>): Promise<MeltQuote<'bolt11'>> {
     const remoteQuote = await ctx.mintAdapter.checkMeltQuote(ctx.quote.mintUrl, ctx.quote.quoteId);
     return meltQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
   }

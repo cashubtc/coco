@@ -108,7 +108,7 @@ export interface CreateMeltQuoteContext<M extends MeltMethod = MeltMethod> exten
   wallet: Wallet;
 }
 
-export interface RefreshMeltQuoteContext<
+export interface FetchRemoteMeltQuoteContext<
   M extends MeltMethod = MeltMethod,
 > extends BaseHandlerDeps {
   quote: MeltQuote<M>;
@@ -185,7 +185,7 @@ export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 
 export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   createQuote(ctx: CreateMeltQuoteContext<M>): Promise<MeltQuote<M>>;
-  refreshQuote(ctx: RefreshMeltQuoteContext<M>): Promise<MeltQuote<M>>;
+  fetchRemoteQuote(ctx: FetchRemoteMeltQuoteContext<M>): Promise<MeltQuote<M>>;
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
   finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult<M>>;

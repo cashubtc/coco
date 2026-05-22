@@ -183,7 +183,7 @@ describe('MeltOperationService', () => {
           payment_preimage: null,
         }),
       ),
-      refreshQuote: mock(async ({ quote }) =>
+      fetchRemoteQuote: mock(async ({ quote }) =>
         meltQuoteFromBolt11Response(quote.mintUrl, {
           quote: quote.quoteId,
           request: quote.request,
@@ -353,10 +353,10 @@ describe('MeltOperationService', () => {
       expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
     });
 
-    it('refreshes and persists a canonical melt quote through the handler', async () => {
+    it('refreshMeltQuote persists a canonical melt quote after fetching remote state', async () => {
       const quote = await quoteLifecycle.refreshMeltQuote(mintUrl, 'bolt11', 'quote-1');
 
-      expect(handler.refreshQuote).toHaveBeenCalled();
+      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
       expect(quote.state).toBe('PENDING');
       expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
     });
