@@ -69,7 +69,11 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   };
 
   if (!isPreparedState(row.state)) {
-    return { ...base, state: 'init' };
+    return {
+      ...base,
+      state: 'init',
+      ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+    };
   }
 
   const preparedData = {
@@ -119,7 +123,7 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
       operation.error ?? null,
       operation.method,
       methodDataJson,
-      null,
+      operation.quoteId ?? null,
       operation.unit,
       null,
       null,
@@ -221,7 +225,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_melt_operations
-         SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, unit = ?
+         SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -229,6 +233,7 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
           operation.error ?? null,
           operation.method,
           stringifyJson(operation.methodData),
+          operation.quoteId ?? null,
           operation.unit,
           operation.id,
         ],

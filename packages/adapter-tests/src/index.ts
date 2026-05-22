@@ -333,6 +333,26 @@ export function createDummyMintOperation(
   } satisfies PendingMintOperation;
 }
 
+type InitMintOperation = Extract<MintOperation, { state: 'init' }>;
+
+export function createDummyInitMintOperation(
+  overrides?: Partial<InitMintOperation>,
+): InitMintOperation {
+  return {
+    id: 'mint-op-init',
+    state: 'init',
+    mintUrl: 'https://mint.test',
+    quoteId: 'mint-quote-id',
+    method: 'bolt11',
+    methodData: {},
+    createdAt: 0,
+    updatedAt: 0,
+    amount: Amount.from(3),
+    unit: 'sat',
+    ...overrides,
+  } satisfies InitMintOperation;
+}
+
 export function createDummyReceiveOperation(): ReceiveOperation {
   return {
     id: 'receive-op',
@@ -404,6 +424,22 @@ export async function runMintOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MintOperationRepository contract', () => {
+    it('round-trips init mint operation quote ids', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyInitMintOperation({ quoteId: 'init-mint-quote' });
+        await repositories.mintOperationRepository.create(operation);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.state).toBe('init');
+        expect(stored!.quoteId).toBe('init-mint-quote');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('preserves null quote expiries for pending operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -839,13 +875,17 @@ export async function runMeltOperationRepositoryContract(
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
-        const operation = createDummyMeltOperation({ unit: 'usd' });
+        const operation = createDummyMeltOperation({
+          quoteId: 'init-melt-quote',
+          unit: 'usd',
+        });
         await repositories.meltOperationRepository.create(operation);
 
         const stored = await repositories.meltOperationRepository.getById(operation.id);
 
         expect(stored).toBeDefined();
         expect(stored!.state).toBe('init');
+        expect(stored!.quoteId).toBe('init-melt-quote');
         expect(stored!.unit).toBe('usd');
       } finally {
         await dispose();
