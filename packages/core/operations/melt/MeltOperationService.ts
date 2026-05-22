@@ -1,8 +1,4 @@
-import type {
-  MeltOperationRepository,
-  MeltQuoteRepository,
-  ProofRepository,
-} from '../../repositories';
+import type { MeltOperationRepository, ProofRepository } from '../../repositories';
 import type {
   MeltOperation,
   InitMeltOperation,
@@ -15,12 +11,7 @@ import type {
   PreparedOrLaterOperation,
 } from './MeltOperation';
 import { createMeltOperation, hasPreparedData } from './MeltOperation';
-import type {
-  MeltMethod,
-  MeltMethodInputData,
-  PendingCheckResult,
-  MeltMethodData,
-} from './MeltMethodHandler';
+import type { MeltMethod, MeltMethodInputData, PendingCheckResult } from './MeltMethodHandler';
 import { normalizeMeltMethodData } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -36,7 +27,7 @@ import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
-import { meltQuoteToMethodSnapshot, type MeltQuote } from '../../models/MeltQuote';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -45,7 +36,7 @@ import { meltQuoteToMethodSnapshot, type MeltQuote } from '../../models/MeltQuot
 export class MeltOperationService {
   private readonly handlerProvider: MeltHandlerProvider;
   private readonly meltOperationRepository: MeltOperationRepository;
-  private readonly meltQuoteRepository: MeltQuoteRepository;
+  private readonly quoteLifecycle: QuoteLifecycle;
   private readonly proofRepository: ProofRepository;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
@@ -61,7 +52,7 @@ export class MeltOperationService {
   constructor(
     handlerProvider: MeltHandlerProvider,
     meltOperationRepository: MeltOperationRepository,
-    meltQuoteRepository: MeltQuoteRepository,
+    quoteLifecycle: QuoteLifecycle,
     proofRepository: ProofRepository,
     proofService: ProofService,
     mintService: MintService,
@@ -73,7 +64,7 @@ export class MeltOperationService {
   ) {
     this.handlerProvider = handlerProvider;
     this.meltOperationRepository = meltOperationRepository;
-    this.meltQuoteRepository = meltQuoteRepository;
+    this.quoteLifecycle = quoteLifecycle;
     this.proofRepository = proofRepository;
     this.proofService = proofService;
     this.mintService = mintService;
@@ -161,128 +152,23 @@ export class MeltOperationService {
     return operation;
   }
 
-  async createQuote(
-    mintUrl: string,
-    method: MeltMethod,
-    methodData: MeltMethodInputData,
-    unit = DEFAULT_UNIT,
-  ): Promise<MeltQuote> {
-    const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
-    const trusted = await this.mintService.isTrustedMint(mintUrl);
-    if (!trusted) {
-      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
-    }
-
-    const normalizedMethodData = normalizeMeltMethodData(methodData);
-    if (
-      'amountSats' in normalizedMethodData &&
-      normalizedMethodData.amountSats !== undefined &&
-      normalizedMethodData.amountSats.isZero()
-    ) {
-      throw new ProofValidationError('Amount must be a positive number');
-    }
-
-    await this.mintService.assertMethodUnitSupported(mintUrl, 5, method, normalizedUnit);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-      normalizedUnit,
-    );
-
-    const handler = this.handlerProvider.get(method);
-    const quote = await handler.createQuote({
-      ...this.buildDeps(),
-      mintUrl,
-      methodData: normalizedMethodData,
-      unit: normalizedUnit,
-      wallet,
-    });
-    if (quote.unit !== normalizedUnit) {
-      throw new ProofValidationError(
-        `Melt quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${normalizedUnit}`,
-      );
-    }
-
-    await this.meltQuoteRepository.upsertMeltQuote(quote);
-    return (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
-  }
-
-  async getQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote | null> {
-    return this.meltQuoteRepository.getMeltQuote(mintUrl, method, quoteId);
-  }
-
-  async getPendingQuotes(method?: MeltMethod): Promise<MeltQuote[]> {
-    return this.meltQuoteRepository.getPendingMeltQuotes(method);
-  }
-
-  async refreshQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote> {
-    const existingQuote = await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quoteId);
-    if (!existingQuote) {
-      throw new Error(`Melt quote ${quoteId} for ${method} at ${mintUrl} was not found`);
-    }
-
-    const handler = this.handlerProvider.get(method);
-    const refreshed = await handler.refreshQuote({
-      ...this.buildDeps(),
-      quote: existingQuote,
-    });
-
-    await this.meltQuoteRepository.upsertMeltQuote(refreshed);
-    const quote = await this.meltQuoteRepository.getMeltQuote(
-      existingQuote.mintUrl,
-      method,
-      quoteId,
-    );
-    if (!quote) {
-      throw new Error(
-        `Cannot refresh quote: melt quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
-      );
-    }
-    return quote;
-  }
-
   async prepareExistingQuote(
     mintUrl: string,
     method: MeltMethod,
     quoteId: string,
     expectedUnit?: string,
   ): Promise<PreparedMeltOperation> {
-    const quote = await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quoteId);
-    if (!quote) {
-      throw new Error(`Melt quote ${quoteId} for ${method} at ${mintUrl} was not found`);
-    }
-
-    if (expectedUnit && quote.unit !== normalizeUnit(expectedUnit, { defaultUnit: DEFAULT_UNIT })) {
-      throw new Error(
-        `Melt quote ${quoteId} unit ${quote.unit} does not match requested unit ${expectedUnit}`,
-      );
-    }
-
-    this.assertQuoteCanPrepare(quote, `melt quote ${quoteId}`);
-
-    const methodData = this.methodDataFromQuote(quote);
+    const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
+      mintUrl,
+      method,
+      quoteId,
+      expectedUnit,
+    );
+    const methodData = this.quoteLifecycle.methodDataFromMeltQuote(quote);
     const initOperation = await this.init(mintUrl, method, methodData, quote.unit, {
       quoteId: quote.quoteId,
     });
     return this.prepare(initOperation.id);
-  }
-
-  private assertQuoteCanPrepare(quote: MeltQuote, context: string): void {
-    if (quote.expiry * 1000 <= Date.now()) {
-      throw new Error(`Cannot prepare ${context}: quote is expired`);
-    }
-
-    if (quote.state !== 'UNPAID') {
-      throw new Error(`Cannot prepare ${context}: quote is ${quote.state}`);
-    }
-  }
-
-  private methodDataFromQuote(quote: MeltQuote): MeltMethodData {
-    switch (quote.method) {
-      case 'bolt11':
-        return { invoice: quote.request };
-      default:
-        throw new Error(`Unsupported melt quote method ${String(quote.method)}`);
-    }
   }
 
   /**
@@ -319,30 +205,12 @@ export class MeltOperationService {
           initOp.mintUrl,
           initOp.unit,
         );
-        if (!initOp.quoteId) {
-          throw new Error(`Cannot prepare operation ${operationId}: no melt quote ID is attached`);
-        }
-        const quote = await this.meltQuoteRepository.getMeltQuote(
-          initOp.mintUrl,
-          initOp.method,
-          initOp.quoteId,
-        );
-        if (!quote) {
-          throw new Error(
-            `Cannot prepare operation ${operationId}: melt quote ${initOp.quoteId} for ${initOp.method} at ${initOp.mintUrl} was not found`,
-          );
-        }
-        this.assertQuoteCanPrepare(quote, `operation ${operationId} melt quote ${initOp.quoteId}`);
-        if (quote.unit !== initOp.unit) {
-          throw new Error(
-            `Cannot prepare operation ${operationId}: melt quote ${initOp.quoteId} unit ${quote.unit} does not match requested unit ${initOp.unit}`,
-          );
-        }
+        const quote = await this.quoteLifecycle.loadMeltQuoteSnapshotForOperation(initOp);
         const prepared = await handler.prepare({
           ...this.buildDeps(),
           operation: initOp,
           wallet,
-          quote: meltQuoteToMethodSnapshot(quote),
+          quote,
         });
 
         const preparedOp: PreparedMeltOperation = {

@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { QuoteApi } from '../../api/QuoteApi.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
-import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
-import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -46,28 +45,25 @@ const makeMeltQuote = (): MeltQuote<'bolt11'> => ({
 
 describe('QuoteApi', () => {
   let api: QuoteApi;
-  let mintOperationService: MintOperationService;
-  let meltOperationService: MeltOperationService;
+  let quoteLifecycle: QuoteLifecycle;
   let mintQuote: MintQuote<'bolt11'>;
   let meltQuote: MeltQuote<'bolt11'>;
 
   beforeEach(() => {
     mintQuote = makeMintQuote();
     meltQuote = makeMeltQuote();
-    mintOperationService = {
-      createQuote: mock(async () => mintQuote),
-      getQuote: mock(async () => mintQuote),
-      getPendingQuotes: mock(async () => [mintQuote]),
-      refreshQuote: mock(async () => ({ ...mintQuote, state: 'PAID' })),
-    } as unknown as MintOperationService;
-    meltOperationService = {
-      createQuote: mock(async () => meltQuote),
-      getQuote: mock(async () => meltQuote),
-      getPendingQuotes: mock(async () => [meltQuote]),
-      refreshQuote: mock(async () => ({ ...meltQuote, state: 'PENDING' })),
-    } as unknown as MeltOperationService;
+    quoteLifecycle = {
+      createMintQuote: mock(async () => mintQuote),
+      getMintQuote: mock(async () => mintQuote),
+      getPendingMintQuotes: mock(async () => [mintQuote]),
+      refreshMintQuote: mock(async () => ({ ...mintQuote, state: 'PAID' })),
+      createMeltQuote: mock(async () => meltQuote),
+      getMeltQuote: mock(async () => meltQuote),
+      getPendingMeltQuotes: mock(async () => [meltQuote]),
+      refreshMeltQuote: mock(async () => ({ ...meltQuote, state: 'PENDING' })),
+    } as unknown as QuoteLifecycle;
 
-    api = new QuoteApi(mintOperationService, meltOperationService);
+    api = new QuoteApi(quoteLifecycle);
   });
 
   it('delegates mint quote methods', async () => {
@@ -80,14 +76,14 @@ describe('QuoteApi', () => {
       state: 'PAID',
     });
 
-    expect(mintOperationService.createQuote).toHaveBeenCalledWith(
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
     );
-    expect(mintOperationService.getQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-    expect(mintOperationService.getPendingQuotes).toHaveBeenCalledWith('bolt11');
-    expect(mintOperationService.refreshQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
+    expect(quoteLifecycle.refreshMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
   });
 
   it('delegates melt quote methods', async () => {
@@ -104,14 +100,14 @@ describe('QuoteApi', () => {
       state: 'PENDING',
     });
 
-    expect(meltOperationService.createQuote).toHaveBeenCalledWith(
+    expect(quoteLifecycle.createMeltQuote).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
       { invoice: 'lnbc1melt' },
       undefined,
     );
-    expect(meltOperationService.getQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
-    expect(meltOperationService.getPendingQuotes).toHaveBeenCalledWith('bolt11');
-    expect(meltOperationService.refreshQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getPendingMeltQuotes).toHaveBeenCalledWith('bolt11');
+    expect(quoteLifecycle.refreshMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
   });
 });

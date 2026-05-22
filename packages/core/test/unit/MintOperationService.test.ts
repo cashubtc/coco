@@ -20,6 +20,7 @@ import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryM
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
+import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
@@ -42,6 +43,7 @@ describe('MintOperationService', () => {
   let eventBus: EventBus<CoreEvents>;
   let handler: MintMethodHandler<'bolt11'>;
   let handlerProvider: MintHandlerProvider;
+  let quoteLifecycle: QuoteLifecycle;
   let service: MintOperationService;
 
   const makeProof = (secret: string): Proof =>
@@ -223,10 +225,23 @@ describe('MintOperationService', () => {
       })),
     } as unknown as MintAdapter;
 
+    quoteLifecycle = new QuoteLifecycle({
+      mintHandlerProvider: handlerProvider,
+      meltHandlerProvider: {} as any,
+      mintQuoteRepository: quoteRepo,
+      meltQuoteRepository: {} as any,
+      proofRepository: proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+    });
+
     service = new MintOperationService(
       handlerProvider,
       operationRepo,
-      quoteRepo,
+      quoteLifecycle,
       proofRepo,
       proofService,
       mintService,
@@ -296,7 +311,7 @@ describe('MintOperationService', () => {
       quoteUpdatedEvents.push(event);
     });
 
-    const created = await service.createQuote(mintUrl, {
+    const created = await quoteLifecycle.createMintQuote(mintUrl, {
       amount: Amount.from(10),
       unit: 'sat',
     });
@@ -316,9 +331,13 @@ describe('MintOperationService', () => {
   it('getQuote returns a persisted quote by full identity', async () => {
     await persistQuote('quote-exact');
 
-    const found = await service.getQuote(mintUrl, 'bolt11', 'quote-exact');
-    const wrongQuoteId = await service.getQuote(mintUrl, 'bolt11', 'quote-other');
-    const wrongMint = await service.getQuote('https://other-mint.test', 'bolt11', 'quote-exact');
+    const found = await quoteLifecycle.getMintQuote(mintUrl, 'bolt11', 'quote-exact');
+    const wrongQuoteId = await quoteLifecycle.getMintQuote(mintUrl, 'bolt11', 'quote-other');
+    const wrongMint = await quoteLifecycle.getMintQuote(
+      'https://other-mint.test',
+      'bolt11',
+      'quote-exact',
+    );
 
     expect(found?.quoteId).toBe('quote-exact');
     expect(wrongQuoteId).toBeNull();
@@ -347,17 +366,17 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const allPending = await service.getPendingQuotes();
-    const bolt11Pending = await service.getPendingQuotes('bolt11');
+    const allPending = await quoteLifecycle.getPendingMintQuotes();
+    const bolt11Pending = await quoteLifecycle.getPendingMintQuotes('bolt11');
 
     expect(allPending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
     expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
   });
 
   it('refreshQuote fails when the canonical quote is missing', async () => {
-    await expect(service.refreshQuote(mintUrl, 'bolt11', 'missing-quote')).rejects.toThrow(
-      'was not found',
-    );
+    await expect(
+      quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', 'missing-quote'),
+    ).rejects.toThrow('was not found');
 
     expect(handler.refreshQuote).not.toHaveBeenCalled();
   });
@@ -382,7 +401,7 @@ describe('MintOperationService', () => {
       persistedDuringEvent.push(storedQuote?.state);
     });
 
-    const refreshed = await service.refreshQuote(mintUrl, 'bolt11', quoteId);
+    const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', quoteId);
 
     expect(handler.refreshQuote).toHaveBeenCalled();
     expect(refreshed.state).toBe('PAID');

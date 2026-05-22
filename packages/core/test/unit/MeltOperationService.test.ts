@@ -13,6 +13,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { CoreProof } from '../../types.ts';
+import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type {
   InitMeltOperation,
   PreparedMeltOperation,
@@ -49,6 +50,7 @@ describe('MeltOperationService', () => {
   let logger: Logger;
   let handlerProvider: MeltHandlerProvider;
   let handler: MeltMethodHandler;
+  let quoteLifecycle: QuoteLifecycle;
   let service: MeltOperationService;
 
   const makeProof = (secret: string, overrides?: Partial<CoreProof>): CoreProof =>
@@ -255,10 +257,24 @@ describe('MeltOperationService', () => {
       error: mock(() => {}),
     } as Logger;
 
+    quoteLifecycle = new QuoteLifecycle({
+      mintHandlerProvider: {} as any,
+      meltHandlerProvider: handlerProvider,
+      mintQuoteRepository: {} as any,
+      meltQuoteRepository,
+      proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+      logger,
+    });
+
     service = new MeltOperationService(
       handlerProvider,
       meltOperationRepository,
-      meltQuoteRepository,
+      quoteLifecycle,
       proofRepository,
       proofService,
       mintService,
@@ -310,16 +326,19 @@ describe('MeltOperationService', () => {
 
   describe('quotes', () => {
     it('creates and persists a canonical melt quote without creating an operation', async () => {
-      const quote = await service.createQuote(mintUrl, 'bolt11', { invoice });
+      const quote = await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', { invoice });
 
       expect(quote.quoteId).toBe('quote-created');
       expect(handler.createQuote).toHaveBeenCalled();
-      expect(await service.getQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
+      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
       expect(await meltOperationRepository.getAll()).toHaveLength(0);
     });
 
     it('normalizes amountSats before passing method data to the handler', async () => {
-      await service.createQuote(mintUrl, 'bolt11', { invoice, amountSats: Amount.from(1000) });
+      await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', {
+        invoice,
+        amountSats: Amount.from(1000),
+      });
 
       const ctx = (handler.createQuote as Mock<any>).mock.calls.at(-1)?.[0] as any;
       expect(ctx.methodData.amountSats?.toString()).toBe('1000');
@@ -329,17 +348,17 @@ describe('MeltOperationService', () => {
       await persistMeltQuote('quote-pending', 'PENDING');
       await persistMeltQuote('quote-paid', 'PAID');
 
-      const quotes = await service.getPendingQuotes('bolt11');
+      const quotes = await quoteLifecycle.getPendingMeltQuotes('bolt11');
 
       expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
     });
 
     it('refreshes and persists a canonical melt quote through the handler', async () => {
-      const quote = await service.refreshQuote(mintUrl, 'bolt11', 'quote-1');
+      const quote = await quoteLifecycle.refreshMeltQuote(mintUrl, 'bolt11', 'quote-1');
 
       expect(handler.refreshQuote).toHaveBeenCalled();
       expect(quote.state).toBe('PENDING');
-      expect(await service.getQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
+      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
     });
   });
 
