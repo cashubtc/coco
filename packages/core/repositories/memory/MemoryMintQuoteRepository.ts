@@ -1,4 +1,5 @@
-import type { MintQuote } from '@core/models/MintQuote';
+import { isMintQuotePending, isStatefulMintQuote, type MintQuote } from '@core/models/MintQuote';
+import type { MintMethodRemoteState } from '@core/operations/mint/MintMethodHandler';
 import type { MintQuoteRepository } from '..';
 import { normalizeMintUrl } from '../../utils';
 
@@ -33,12 +34,13 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     mintUrl: string,
     method: string,
     quoteId: string,
-    state: MintQuote['state'],
+    state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<void> {
     const key = this.makeKey(mintUrl, method, quoteId);
     const existing = this.quotes.get(key);
     if (!existing) return;
+    if (!isStatefulMintQuote(existing)) return;
     this.quotes.set(key, {
       ...existing,
       state,
@@ -52,7 +54,7 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     const result: MintQuote[] = [];
     for (const q of this.quotes.values()) {
       if (method && q.method !== method) continue;
-      if (q.state !== 'ISSUED') result.push({ ...q });
+      if (isMintQuotePending(q)) result.push({ ...q });
     }
     return result;
   }

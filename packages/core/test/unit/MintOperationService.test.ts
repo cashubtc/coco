@@ -140,8 +140,8 @@ describe('MintOperationService', () => {
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
-    const mockPrepare = mock(async ({ operation }: { operation: InitMintOperation }) => {
-      return makePendingOp(operation.id);
+    const mockPrepare = mock(async ({ operation }: { operation: InitMintOperation<'bolt11'> }) => {
+      return makePendingOp(operation.id) as PendingMintOperation<'bolt11'>;
     });
 
     const mockExecute = mock(async (): Promise<MintExecutionResult> => {
@@ -161,12 +161,12 @@ describe('MintOperationService', () => {
     );
 
     handler = {
-      createQuote: mock(async ({ mintUrl: quoteMintUrl, intent }) =>
+      createQuote: mock(async ({ mintUrl: quoteMintUrl, createQuoteData }) =>
         mintQuoteFromBolt11Response(quoteMintUrl, {
           quote: quoteId,
           request: 'lnbc1test',
-          amount: intent.amount,
-          unit: intent.unit,
+          amount: createQuoteData.amount.amount,
+          unit: createQuoteData.amount.unit,
           expiry: Math.floor(Date.now() / 1000) + 3600,
           state: 'UNPAID',
         }),
@@ -1104,7 +1104,7 @@ describe('MintOperationService', () => {
       quoteId: pendingOp.quoteId,
       quote: {
         mintUrl,
-        method: pendingOp.method,
+        method: 'bolt11',
         quoteId: pendingOp.quoteId,
         quote: pendingOp.quoteId,
         request: pendingOp.request,
@@ -1115,6 +1115,9 @@ describe('MintOperationService', () => {
         lastObservedRemoteState: 'PAID',
         lastObservedRemoteStateAt: observedAt,
         reusable: false,
+        quoteData: {
+          amount: pendingOp.amount,
+        },
         createdAt: pendingOp.createdAt,
         updatedAt: observedAt,
       },

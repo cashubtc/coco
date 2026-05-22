@@ -20,6 +20,7 @@ import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
 import type { SendOperation, SendOperationState } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
+import type { MintMethodRemoteState } from '../operations/mint/MintMethodHandler';
 
 export interface ProofUnitFilter {
   unit?: string;
@@ -119,7 +120,7 @@ export interface MintQuoteRepository {
     mintUrl: string,
     method: string,
     quoteId: string,
-    state: MintQuote['state'],
+    state: MintMethodRemoteState,
     observedAt?: number,
   ): Promise<void>;
   getPendingMintQuotes(method?: string): Promise<MintQuote[]>;

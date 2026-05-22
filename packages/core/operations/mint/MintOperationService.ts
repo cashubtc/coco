@@ -42,7 +42,12 @@ import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote';
+import {
+  getMintQuoteAmount,
+  getMintQuoteRemoteState,
+  mintQuoteToMethodSnapshot,
+  type MintQuote,
+} from '../../models/MintQuote';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 /**
@@ -90,6 +95,9 @@ export class MintOperationService {
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
 
     this.eventBus.on('mint-quote:updated', async ({ mintUrl, method, quoteId, quote }) => {
+      const remoteState = getMintQuoteRemoteState(quote);
+      if (!remoteState) return;
+
       const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
       await Promise.all(
         operations
@@ -97,7 +105,7 @@ export class MintOperationService {
           .map((operation) =>
             this.recordPendingObservation(
               operation.id,
-              quote.state,
+              remoteState,
               quote.lastObservedRemoteStateAt ?? Date.now(),
             ),
           ),
@@ -268,9 +276,16 @@ export class MintOperationService {
       expectedUnit,
     );
 
+    const amount = getMintQuoteAmount(quote);
+    if (!amount) {
+      throw new Error(
+        `Mint quote ${quoteId} for ${method} at ${mintUrl} does not have a fixed amount; pass an explicit amount for reusable quote preparation`,
+      );
+    }
+
     const initOperation = await this.init(
       quote.mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      { amount, unit: quote.unit },
       method,
       methodData,
       { quoteId: quote.quoteId },
@@ -286,15 +301,20 @@ export class MintOperationService {
     methodData: MintMethodData = {},
     options?: { skipMintLock?: boolean },
   ): Promise<PendingMintOperation> {
-    if (!quote.amount || quote.amount.isZero()) {
-      throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
-    }
-
     if (method !== 'bolt11') {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
 
-    const imported = await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
+    const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
+    if (!bolt11Quote.amount || bolt11Quote.amount.isZero()) {
+      throw new ProofValidationError(`Mint quote ${bolt11Quote.quote} has invalid amount`);
+    }
+
+    const imported = (await this.quoteLifecycle.importMintQuoteSnapshot(
+      mintUrl,
+      method,
+      bolt11Quote,
+    )) as MintQuote<'bolt11'>;
     const importedSnapshot = mintQuoteToMethodSnapshot(imported);
 
     const existing = await this.getOperationByQuote(imported.mintUrl, method, imported.quoteId);

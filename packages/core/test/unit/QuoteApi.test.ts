@@ -21,6 +21,9 @@ const makeMintQuote = (): MintQuote<'bolt11'> => ({
   lastObservedRemoteState: 'UNPAID',
   lastObservedRemoteStateAt: Date.now(),
   reusable: false,
+  quoteData: {
+    amount: Amount.from(10),
+  },
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -78,12 +81,24 @@ describe('QuoteApi', () => {
 
     expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(
       mintUrl,
-      { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
+      { amount: { amount: Amount.from(10), unit: 'sat' } },
     );
     expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+  });
+
+  it('delegates onchain mint quote creation without an amount', async () => {
+    const onchainApi = new QuoteApi<'bolt11' | 'onchain'>(quoteLifecycle);
+
+    await expect(
+      onchainApi.mint.create({ mintUrl, method: 'onchain', unit: 'sat' }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', {
+      unit: 'sat',
+    });
   });
 
   it('delegates melt quote methods', async () => {

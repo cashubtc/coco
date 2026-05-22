@@ -1317,6 +1317,50 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_quotes(method);
     `,
   },
+  {
+    id: '032_mint_quote_method_data',
+    sql: `
+      ALTER TABLE coco_cashu_canonical_mint_quotes
+        RENAME TO coco_cashu_canonical_mint_quotes_legacy_quote_data;
+
+      CREATE TABLE coco_cashu_canonical_mint_quotes (
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT CHECK (state IS NULL OR state IN ('UNPAID','PAID','ISSUED')),
+        request TEXT NOT NULL,
+        amount TEXT,
+        unit TEXT NOT NULL,
+        expiry INTEGER,
+        pubkey TEXT,
+        quoteDataJson TEXT NOT NULL DEFAULT '{}',
+        lastObservedRemoteState TEXT,
+        lastObservedRemoteStateAt INTEGER,
+        reusable INTEGER NOT NULL DEFAULT 0,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (mintUrl, method, quoteId)
+      );
+
+      INSERT INTO coco_cashu_canonical_mint_quotes (
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey, quoteDataJson,
+        lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt
+      )
+      SELECT
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey, '{}',
+        lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt
+      FROM coco_cashu_canonical_mint_quotes_legacy_quote_data;
+
+      DROP TABLE coco_cashu_canonical_mint_quotes_legacy_quote_data;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_state
+        ON coco_cashu_canonical_mint_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_mint
+        ON coco_cashu_canonical_mint_quotes(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_method
+        ON coco_cashu_canonical_mint_quotes(method);
+    `,
+  },
 ];
 
 // Export for testing

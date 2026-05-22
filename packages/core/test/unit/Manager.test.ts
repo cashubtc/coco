@@ -137,7 +137,7 @@ describe('initializeCoco', () => {
         quoteId: operation.quoteId,
         quote: {
           mintUrl: operation.mintUrl,
-          method: operation.method,
+          method: 'bolt11',
           quoteId: operation.quoteId,
           quote: operation.quoteId,
           request: operation.request,
@@ -148,6 +148,9 @@ describe('initializeCoco', () => {
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: observedAt,
           reusable: false,
+          quoteData: {
+            amount: operation.amount,
+          },
           createdAt: operation.createdAt,
           updatedAt: observedAt,
         },
@@ -198,6 +201,9 @@ describe('initializeCoco', () => {
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: observedAt,
           reusable: false,
+          quoteData: {
+            amount: Amount.from(10),
+          },
           createdAt: observedAt,
           updatedAt: observedAt,
         },

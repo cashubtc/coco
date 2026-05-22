@@ -30,3 +30,8 @@ events.
 Persistent adapters now store canonical mint and melt quotes, migrate existing
 BOLT11 operation quote snapshots into quote rows, and expose contract coverage
 for quote records and sibling operation lookup.
+
+Mint quote records now store method-scoped `quoteData` so BOLT11 fixed amounts
+and NUT-30 onchain balance snapshots can share the same canonical quote
+repository without requiring universal top-level quote `amount` or `state`
+fields.

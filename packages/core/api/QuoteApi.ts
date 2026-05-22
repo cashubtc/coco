@@ -1,6 +1,6 @@
 import type { MeltMethod, MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethod } from '@core/operations/mint';
-import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+import type { MintMethod, MintMethodCreateQuoteData } from '@core/operations/mint';
+import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
@@ -20,12 +20,16 @@ type MeltQuoteIdentityInput<M extends MeltMethod> = {
 };
 
 export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: {
-    mintUrl: string;
-    amount: UnitAmountLike;
-    unit?: string;
-    method: M;
-  };
+  [M in TSupported]: { mintUrl: string; method: M } & (M extends 'bolt11'
+    ? {
+        amount: UnitAmountLike;
+        unit?: string;
+      }
+    : M extends 'onchain'
+      ? {
+          unit?: string;
+        }
+      : never);
 }[TSupported];
 
 export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
@@ -65,8 +69,16 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintMe
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-    return this.quoteLifecycle.createMintQuote(input.mintUrl, parsed, input.method);
+    if ('amount' in input) {
+      const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+        amount: parsed,
+      } as MintMethodCreateQuoteData<typeof input.method>);
+    }
+
+    return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+      unit: normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT }),
+    } as MintMethodCreateQuoteData<typeof input.method>);
   }
 
   get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {

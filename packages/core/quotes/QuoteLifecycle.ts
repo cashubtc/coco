@@ -8,8 +8,10 @@ import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
 import {
+  getMintQuoteAmount,
   mintQuoteFromBolt11Response,
   mintQuoteToMethodSnapshot,
+  isStatefulMintQuote,
   type MintQuote,
 } from '../models/MintQuote';
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
@@ -29,6 +31,7 @@ import { normalizeMeltMethodData } from '../operations/melt/MeltMethodHandler';
 import type { InitMintOperation, PendingOrLaterOperation } from '../operations/mint/MintOperation';
 import type {
   MintMethod,
+  MintMethodCreateQuoteData,
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
@@ -99,31 +102,53 @@ export class QuoteLifecycle {
     };
   }
 
+  async createMintQuote(mintUrl: string, intent: UnitAmount, method?: 'bolt11'): Promise<MintQuote>;
+  async createMintQuote<M extends MintMethod>(
+    mintUrl: string,
+    method: M,
+    createQuoteData: MintMethodCreateQuoteData<M>,
+  ): Promise<MintQuote<M>>;
   async createMintQuote(
     mintUrl: string,
-    intent: UnitAmount,
-    method: MintMethod = 'bolt11',
+    methodOrIntent: MintMethod | UnitAmount,
+    createQuoteDataOrMethod?: MintMethodCreateQuoteData | 'bolt11',
   ): Promise<MintQuote> {
-    const parsed = normalizeUnitAmount(intent);
+    const method =
+      typeof methodOrIntent === 'string'
+        ? methodOrIntent
+        : typeof createQuoteDataOrMethod === 'string'
+          ? createQuoteDataOrMethod
+          : 'bolt11';
+    const createQuoteData =
+      typeof methodOrIntent === 'string'
+        ? (createQuoteDataOrMethod as MintMethodCreateQuoteData)
+        : ({ amount: normalizeUnitAmount(methodOrIntent) } as MintMethodCreateQuoteData);
+    const parsed =
+      'amount' in createQuoteData ? normalizeUnitAmount(createQuoteData.amount) : undefined;
+    const unit =
+      parsed?.unit ??
+      normalizeUnit('unit' in createQuoteData ? createQuoteData.unit : undefined, {
+        defaultUnit: DEFAULT_UNIT,
+      });
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (parsed.amount.isZero()) {
+    if (parsed?.amount.isZero()) {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, parsed.unit);
+    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed ?? unit);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     const handler = this.mintHandlerProvider.get(method);
     const quote = await handler.createQuote({
       ...this.buildDeps(),
       mintUrl,
-      intent: parsed,
+      createQuoteData,
       wallet,
-    });
+    } as any);
 
     await this.mintQuoteRepository.upsertMintQuote(quote);
     const persistedQuote =
@@ -132,7 +157,7 @@ export class QuoteLifecycle {
       mintUrl: persistedQuote.mintUrl,
       quoteId: persistedQuote.quoteId,
       method,
-      amount: persistedQuote.amount,
+      amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
     });
     return persistedQuote;
@@ -215,9 +240,16 @@ export class QuoteLifecycle {
 
     this.assertMintQuoteCanPrepare(quote, `operation ${op.id} mint quote ${op.quoteId}`);
 
-    if (!quote.amount.equals(op.amount)) {
+    const quoteAmount = getMintQuoteAmount(quote);
+    if (!quoteAmount) {
       throw new Error(
-        `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} amount ${quote.amount} does not match requested amount ${op.amount}`,
+        `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} for ${op.method} does not have a fixed amount`,
+      );
+    }
+
+    if (!quoteAmount.equals(op.amount)) {
+      throw new Error(
+        `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} amount ${quoteAmount} does not match requested amount ${op.amount}`,
       );
     }
 
@@ -235,21 +267,29 @@ export class QuoteLifecycle {
     method: MintMethod,
     quote: MintMethodQuoteSnapshot,
   ): Promise<MintQuote> {
-    if (!quote.amount || quote.amount.isZero()) {
-      throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
-    }
-
     if (method !== 'bolt11') {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
 
-    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, quote as MintQuoteBolt11Response);
+    const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
+    if (!bolt11Quote.amount || bolt11Quote.amount.isZero()) {
+      throw new ProofValidationError(`Mint quote ${bolt11Quote.quote} has invalid amount`);
+    }
+
+    const canonicalQuote = mintQuoteFromBolt11Response(
+      mintUrl,
+      bolt11Quote as MintQuoteBolt11Response,
+    );
     const existing = await this.mintQuoteRepository.getMintQuote(
       canonicalQuote.mintUrl,
       canonicalQuote.method,
       canonicalQuote.quoteId,
     );
-    if (existing && isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)) {
+    if (
+      existing &&
+      isStatefulMintQuote(existing) &&
+      isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)
+    ) {
       return existing;
     }
 
@@ -462,6 +502,11 @@ export class QuoteLifecycle {
       operation.quoteId,
     );
     if (existing) return;
+    if (operation.method !== 'bolt11') {
+      throw new Error(
+        `Cannot create canonical quote record from ${operation.method} operation observation`,
+      );
+    }
 
     await this.mintQuoteRepository.upsertMintQuote({
       mintUrl: operation.mintUrl,
@@ -473,10 +518,13 @@ export class QuoteLifecycle {
       amount: operation.amount,
       expiry: operation.expiry,
       pubkey: operation.pubkey,
-      state: (operation.lastObservedRemoteState ?? 'UNPAID') as MintQuote['state'],
+      state: operation.lastObservedRemoteState ?? 'UNPAID',
       lastObservedRemoteState: operation.lastObservedRemoteState,
       lastObservedRemoteStateAt: operation.lastObservedRemoteStateAt,
       reusable: false,
+      quoteData: {
+        amount: operation.amount,
+      },
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
     });

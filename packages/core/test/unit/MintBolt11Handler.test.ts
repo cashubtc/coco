@@ -96,7 +96,7 @@ describe('MintBolt11Handler', () => {
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
     mintUrl,
-    intent: { amount: Amount.from(10), unit: 'sat' },
+    createQuoteData: { amount: { amount: Amount.from(10), unit: 'sat' } },
     wallet,
     mintAdapter,
     proofService,
@@ -121,6 +121,9 @@ describe('MintBolt11Handler', () => {
       lastObservedRemoteState: quote.state,
       lastObservedRemoteStateAt: Date.now(),
       reusable: false,
+      quoteData: {
+        amount: quote.amount,
+      },
       createdAt: Date.now(),
       updatedAt: Date.now(),
     },

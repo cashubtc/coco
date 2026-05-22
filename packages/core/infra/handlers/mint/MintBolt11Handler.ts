@@ -20,7 +20,7 @@ import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/Min
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
-    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.intent.amount);
+    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.createQuoteData.amount.amount);
     return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
 
@@ -206,7 +206,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult> {
+  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult<'bolt11'>> {
     const { mintUrl, quoteId } = ctx.operation;
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 

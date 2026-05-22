@@ -2,6 +2,7 @@ import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -91,7 +92,7 @@ export class MintOperationProcessor {
     this.offQuoteUpdated = this.bus.on(
       'mint-quote:updated',
       async ({ mintUrl, method, quoteId, quote }) => {
-        if (quote.state !== 'PAID') {
+        if (getMintQuoteRemoteState(quote) !== 'PAID') {
           return;
         }
 

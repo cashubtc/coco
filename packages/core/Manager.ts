@@ -66,6 +66,7 @@ import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
+import { isStatefulMintQuote, mintQuoteToMethodSnapshot } from './models/MintQuote.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -481,6 +482,11 @@ export class Manager {
     const quotes = await this.legacyMintQuoteRepository.getPendingLegacyMintQuotes(mintUrl);
 
     for (const quote of quotes) {
+      if (!isStatefulMintQuote(quote)) {
+        skipped.push(quote.quote);
+        continue;
+      }
+
       if (quote.state === 'ISSUED') {
         skipped.push(quote.quote);
         continue;
@@ -509,7 +515,7 @@ export class Manager {
       try {
         const operation = await this.mintOperationService.importQuote(
           quote.mintUrl,
-          quote,
+          mintQuoteToMethodSnapshot(quote),
           'bolt11',
           {},
         );

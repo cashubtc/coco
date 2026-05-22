@@ -1,4 +1,4 @@
-import type { MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
+import type { Amount, MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -23,14 +23,43 @@ import type { MintQuote } from '../../models/MintQuote';
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
+    createQuoteData: { amount: UnitAmount };
+    quoteData: {
+      amount: Amount;
+    };
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
     quote: MintQuoteBolt11Response;
+  };
+  onchain: {
+    methodData: Record<string, never>;
+    createQuoteData: {
+      unit: string;
+    };
+    quoteData: {
+      pubkey: string;
+      amountPaid: Amount;
+      amountIssued: Amount;
+    };
+    remoteState: never;
+    quote: {
+      quote: string;
+      request: string;
+      unit: string;
+      expiry: number | null;
+      pubkey: string;
+      amount_paid: Amount;
+      amount_issued: Amount;
+    };
   };
 }
 
 export type MintMethod = keyof MintMethodDefinitions;
 export type MintMethodData<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['methodData'];
+export type MintMethodCreateQuoteData<M extends MintMethod = MintMethod> =
+  MintMethodDefinitions[M]['createQuoteData'];
+export type MintMethodQuoteData<M extends MintMethod = MintMethod> =
+  MintMethodDefinitions[M]['quoteData'];
 export type MintMethodRemoteState<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['remoteState'];
 export type MintMethodQuoteSnapshot<M extends MintMethod = MintMethod> =
@@ -53,7 +82,7 @@ export interface BaseHandlerDeps {
 
 export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
   mintUrl: string;
-  intent: UnitAmount;
+  createQuoteData: MintMethodCreateQuoteData<M>;
   wallet: Wallet;
 }
 
