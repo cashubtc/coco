@@ -39,3 +39,7 @@ fields.
 Keyring persistence now tracks key purpose metadata so NUT-20 mint quote keys
 can use a separate deterministic derivation branch and stay hidden from
 user-facing P2PK key management APIs.
+
+NUT-30 onchain mint quote creation now derives a fresh NUT-20 key, submits the
+public key in the onchain quote request, and persists the reusable address quote
+with `amount_paid`/`amount_issued` balance metadata.

@@ -79,22 +79,18 @@ describe('QuoteApi', () => {
       state: 'PAID',
     });
 
-    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      { amount: { amount: Amount.from(10), unit: 'sat' } },
-    );
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
+      amount: { amount: Amount.from(10), unit: 'sat' },
+    });
     expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
   });
 
   it('delegates onchain mint quote creation without an amount', async () => {
-    const onchainApi = new QuoteApi<'bolt11' | 'onchain'>(quoteLifecycle);
-
-    await expect(
-      onchainApi.mint.create({ mintUrl, method: 'onchain', unit: 'sat' }),
-    ).resolves.toBe(mintQuote);
+    await expect(api.mint.create({ mintUrl, method: 'onchain', unit: 'sat' })).resolves.toBe(
+      mintQuote,
+    );
 
     expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', {
       unit: 'sat',

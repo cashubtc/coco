@@ -21,7 +21,7 @@ const MINT_REFRESH_TTL_S = 60 * 5;
 export interface MethodUnitCapability {
   supported: boolean;
   disabled: boolean;
-  nut: 4 | 5;
+  nut: 4 | 5 | 30;
   method: string;
   unit: string;
   minAmount?: Amount | null;
@@ -187,7 +187,7 @@ export class MintService {
 
   async getMintMethodUnitCapability(
     mintUrl: string,
-    nut: 4 | 5,
+    nut: 4 | 5 | 30,
     method: string,
     unit: string,
   ): Promise<MethodUnitCapability> {
@@ -208,7 +208,7 @@ export class MintService {
     }
 
     if (!settings || !Array.isArray(settings.methods)) {
-      if (normalizedUnit === DEFAULT_UNIT) {
+      if (nut !== 30 && normalizedUnit === DEFAULT_UNIT) {
         return {
           supported: true,
           disabled: false,
@@ -263,7 +263,7 @@ export class MintService {
 
   async assertMethodUnitSupported(
     mintUrl: string,
-    nut: 4 | 5,
+    nut: 4 | 5 | 30,
     method: string,
     scope: string | UnitAmount,
   ): Promise<void> {
@@ -323,7 +323,7 @@ export class MintService {
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
-  private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5): NutMethodSettings | undefined {
+  private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5 | 30): NutMethodSettings | undefined {
     const nuts = mintInfo.nuts as Record<string, unknown> | undefined;
     return nuts?.[String(nut)] as NutMethodSettings | undefined;
   }

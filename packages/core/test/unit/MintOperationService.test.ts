@@ -19,7 +19,11 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
-import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
+import {
+  getMintQuoteAvailableAmount,
+  mintQuoteFromBolt11Response,
+  mintQuoteFromOnchainResponse,
+} from '../../models/MintQuote';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -423,6 +427,56 @@ describe('MintOperationService', () => {
     expect(refreshed.lastObservedRemoteState).toBe('PAID');
     expect(refreshed.lastObservedRemoteStateAt).toBeGreaterThanOrEqual(observedAt);
     expect(persistedDuringEvent).toEqual(['PAID']);
+  });
+
+  it('refreshMintQuote updates reusable onchain quote data before emitting', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-1';
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromOnchainResponse(mintUrl, {
+        quote: onchainQuoteId,
+        request: 'bc1qold',
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        pubkey,
+        amount_paid: Amount.from(0),
+        amount_issued: Amount.from(0),
+      }),
+    );
+
+    const onchainHandler = {
+      ...handler,
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: 'bc1qold',
+          unit: 'sat',
+          expiry: quote.expiry,
+          pubkey,
+          amount_paid: Amount.from(21),
+          amount_issued: Amount.from(8),
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementationOnce(() => onchainHandler);
+
+    const persistedDuringEvent: Array<string> = [];
+    eventBus.on('mint-quote:updated', async ({ quote }) => {
+      const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+      if (storedQuote?.method === 'onchain') {
+        persistedDuringEvent.push(storedQuote.quoteData.amountPaid.toString());
+      }
+    });
+
+    const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(onchainHandler.fetchRemoteQuote).toHaveBeenCalled();
+    expect(refreshed.method).toBe('onchain');
+    if (refreshed.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(refreshed.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(refreshed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(getMintQuoteAvailableAmount(refreshed).equals(Amount.from(13))).toBe(true);
+    expect(persistedDuringEvent).toEqual(['21']);
   });
 
   it('prepareExistingQuote fails before creating an operation when the quote is missing', async () => {

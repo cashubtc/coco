@@ -9,6 +9,7 @@ import {
   type GetKeysetsResponse,
   type AuthProvider,
   type MintQuoteBolt11Response,
+  type MintQuoteBaseResponse,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
@@ -78,6 +79,15 @@ export class MintAdapter {
   async checkMintQuoteState(mintUrl: string, quoteId: string): Promise<MintQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.checkMintQuoteBolt11(quoteId);
+  }
+
+  async checkMintQuote<TRes extends MintQuoteBaseResponse = MintQuoteBaseResponse>(
+    mintUrl: string,
+    method: string,
+    quoteId: string,
+  ): Promise<TRes> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMintQuote<TRes>(method, quoteId);
   }
 
   // Check current state of a bolt11 melt quote (returns full response including change)

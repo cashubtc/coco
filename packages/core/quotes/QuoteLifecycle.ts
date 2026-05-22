@@ -139,7 +139,12 @@ export class QuoteLifecycle {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed ?? unit);
+    await this.mintService.assertMethodUnitSupported(
+      mintUrl,
+      method === 'onchain' ? 30 : 4,
+      method,
+      parsed ?? unit,
+    );
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
 
     const handler = this.mintHandlerProvider.get(method);

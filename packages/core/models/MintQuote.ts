@@ -63,6 +63,14 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   return isStatefulMintQuote(quote) ? quote.amount : undefined;
 }
 
+export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
+  if (quote.method === 'onchain') {
+    return quote.quoteData.amountPaid.subtract(quote.quoteData.amountIssued);
+  }
+
+  return quote.state === 'PAID' ? quote.amount : Amount.zero();
+}
+
 export function isMintQuotePending(quote: MintQuote): boolean {
   if (isStatefulMintQuote(quote)) {
     return quote.state !== 'ISSUED';

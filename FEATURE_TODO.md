@@ -447,20 +447,20 @@ Deliverables:
 - [x] Filter user-facing keyring APIs so `nut20_mint_quote` keys are not returned or removed by generic
       user/P2PK key management flows.
 - [x] Derive NUT-20 quote keys from `m/129373'/20'/0'/0'/{index}`.
-- [ ] Generate and persist exactly one fresh NUT-20 quote key per new onchain quote; do not reuse keys
+- [x] Generate and persist exactly one fresh NUT-20 quote key per new onchain quote; do not reuse keys
       across quotes.
-- [ ] Add the onchain mint quote handler path that sends `{ unit, pubkey }` and persists the returned
+- [x] Add the onchain mint quote handler path that sends `{ unit, pubkey }` and persists the returned
       `quote`, `request`, `unit`, `expiry`, `pubkey`, `amount_paid`, and `amount_issued`.
-- [ ] Refresh onchain quote observations and compute available amount as
+- [x] Refresh onchain quote observations and compute available amount as
       `quoteData.amountPaid - quoteData.amountIssued`.
 - [ ] Treat below-`min_amount` UTXOs as unavailable because NUT-30 says they do not increase
       `amount_paid` and must not be aggregated.
 
 Validation:
 
-- [ ] Creating two onchain quotes derives two distinct NUT-20 public keys.
-- [ ] Onchain quote creation persists `pubkey`, `amountPaid`, and `amountIssued`.
-- [ ] Onchain quote refresh updates canonical `quoteData` before emitting/calling quote-level work.
+- [x] Creating two onchain quotes derives two distinct NUT-20 public keys.
+- [x] Onchain quote creation persists `pubkey`, `amountPaid`, and `amountIssued`.
+- [x] Onchain quote refresh updates canonical `quoteData` before emitting/calling quote-level work.
 - [x] Generic latest/all/remove keyring APIs do not expose or delete `nut20_mint_quote` keys.
 
 ### Phase 3: Explicit Onchain Withdrawal Preparation

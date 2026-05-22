@@ -44,6 +44,7 @@ import {
   P2pkSendHandler,
   MintBolt11Handler,
   MintHandlerProvider,
+  MintOnchainHandler,
   PaymentRequestReceiveTransportHandlerProvider,
 } from './infra';
 import { EventBus, type CoreEvents } from './events';
@@ -785,6 +786,7 @@ export class Manager {
     });
     const mintHandlerProvider = new MintHandlerProvider({
       bolt11: new MintBolt11Handler(),
+      onchain: new MintOnchainHandler(keyRingService),
     });
     const quoteLifecycle = new QuoteLifecycle({
       mintHandlerProvider,

@@ -5,7 +5,8 @@ import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
-import type { DefaultSupportedMintMethod } from './MintOpsApi.ts';
+
+export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain';
 
 type MintQuoteIdentityInput<M extends MintMethod> = {
   mintUrl: string;
@@ -19,30 +20,32 @@ type MeltQuoteIdentityInput<M extends MeltMethod> = {
   quoteId: string;
 };
 
-export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: { mintUrl: string; method: M } & (M extends 'bolt11'
-    ? {
-        amount: UnitAmountLike;
-        unit?: string;
-      }
-    : M extends 'onchain'
+export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
+  {
+    [M in TSupported]: { mintUrl: string; method: M } & (M extends 'bolt11'
       ? {
+          amount: UnitAmountLike;
           unit?: string;
         }
-      : never);
-}[TSupported];
+      : M extends 'onchain'
+        ? {
+            unit?: string;
+          }
+        : never);
+  }[TSupported];
 
-export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
+export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> = {
   [M in TSupported]: MintQuoteIdentityInput<M>;
 }[TSupported];
 
-export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> =
+export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
   GetMintQuoteInput<TSupported>;
 
-export type ListPendingMintQuotesInput<TSupported extends MintMethod = DefaultSupportedMintMethod> =
-  {
-    method?: TSupported;
-  };
+export type ListPendingMintQuotesInput<
+  TSupported extends MintMethod = DefaultSupportedMintQuoteMethod,
+> = {
+  method?: TSupported;
+};
 
 export type CreateMeltQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
   [M in TSupported]: {
@@ -65,7 +68,7 @@ export type ListPendingMeltQuotesInput<TSupported extends MeltMethod = DefaultSu
     method?: TSupported;
   };
 
-export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
+export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
@@ -125,7 +128,7 @@ export class MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMe
  * Quote rows are not value movements and are separate from operation history.
  */
 export class QuoteApi<
-  TMintSupported extends MintMethod = DefaultSupportedMintMethod,
+  TMintSupported extends MintMethod = DefaultSupportedMintQuoteMethod,
   TMeltSupported extends MeltMethod = DefaultSupportedMeltMethod,
 > {
   readonly mint: MintQuoteApi<TMintSupported>;

@@ -1,0 +1,204 @@
+import { Amount, type Wallet } from '@cashu/cashu-ts';
+import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
+import { EventBus } from '../../events/EventBus';
+import type { CoreEvents } from '../../events/types';
+import { MintOnchainHandler } from '../../infra/handlers/mint/MintOnchainHandler';
+import type { MintAdapter } from '../../infra/MintAdapter';
+import type { Logger } from '../../logging/Logger';
+import type {
+  CreateMintQuoteContext,
+  FetchRemoteMintQuoteContext,
+  PrepareContext,
+} from '../../operations/mint';
+import { getMintQuoteAvailableAmount, type MintQuoteOnchainResponse } from '../../models/MintQuote';
+import type { InitMintOperation } from '../../operations/mint/MintOperation';
+import type { ProofRepository } from '../../repositories';
+import type { KeyRingService, MintService, ProofService, WalletService } from '../../services';
+
+describe('MintOnchainHandler', () => {
+  const mintUrl = 'https://mint.test';
+  const quoteId = 'onchain-quote-1';
+  const pubkey = '02'.padEnd(66, '1');
+
+  let handler: MintOnchainHandler;
+  let keyRingService: KeyRingService;
+  let wallet: Wallet;
+  let mintAdapter: MintAdapter;
+  let proofService: ProofService;
+  let proofRepository: ProofRepository;
+  let walletService: WalletService;
+  let mintService: MintService;
+  let eventBus: EventBus<CoreEvents>;
+  let logger: Logger;
+
+  const remoteQuote: MintQuoteOnchainResponse = {
+    quote: quoteId,
+    request: 'bc1qtestaddress',
+    unit: 'sat',
+    expiry: Math.floor(Date.now() / 1000) + 3600,
+    pubkey,
+    amount_paid: Amount.from(21),
+    amount_issued: Amount.from(8),
+  };
+
+  const buildCreateQuoteContext = (): CreateMintQuoteContext<'onchain'> => ({
+    mintUrl,
+    createQuoteData: { unit: 'sat' },
+    wallet,
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'onchain'> => ({
+    quote: {
+      mintUrl,
+      method: 'onchain',
+      quoteId,
+      quote: quoteId,
+      request: remoteQuote.request,
+      unit: 'sat',
+      expiry: remoteQuote.expiry,
+      pubkey,
+      reusable: true,
+      quoteData: {
+        pubkey,
+        amountPaid: Amount.from(0),
+        amountIssued: Amount.from(0),
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  const buildPrepareContext = (): PrepareContext<'onchain'> => ({
+    operation: {
+      id: 'op-1',
+      state: 'init',
+      mintUrl,
+      amount: Amount.from(10),
+      unit: 'sat',
+      method: 'onchain',
+      methodData: {},
+      quoteId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } satisfies InitMintOperation<'onchain'>,
+    wallet,
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  beforeEach(() => {
+    keyRingService = {
+      generateMintQuoteKeyPair: mock(async () => ({
+        publicKeyHex: pubkey,
+        secretKey: new Uint8Array(32),
+        derivationIndex: 0,
+        purpose: 'nut20_mint_quote' as const,
+      })),
+    } as unknown as KeyRingService;
+
+    handler = new MintOnchainHandler(keyRingService);
+
+    wallet = {
+      createMintQuote: mock(async () => remoteQuote),
+    } as unknown as Wallet;
+
+    mintAdapter = {
+      checkMintQuote: mock(async () => remoteQuote),
+    } as unknown as MintAdapter;
+
+    proofService = {} as ProofService;
+    proofRepository = {} as ProofRepository;
+    walletService = {} as WalletService;
+    mintService = {} as MintService;
+    eventBus = new EventBus<CoreEvents>();
+    logger = { info: mock(() => {}) } as unknown as Logger;
+  });
+
+  it('creates an onchain quote with a fresh NUT-20 public key', async () => {
+    const result = await handler.createQuote(buildCreateQuoteContext());
+
+    expect(keyRingService.generateMintQuoteKeyPair).toHaveBeenCalled();
+    expect(wallet.createMintQuote).toHaveBeenCalledWith('onchain', { unit: 'sat', pubkey });
+    expect(result.method).toBe('onchain');
+    expect(result.reusable).toBe(true);
+    expect(result.quoteData.pubkey).toBe(pubkey);
+    expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(getMintQuoteAvailableAmount(result).equals(Amount.from(13))).toBe(true);
+  });
+
+  it('derives a distinct NUT-20 public key for each new onchain quote', async () => {
+    const firstPubkey = '02'.padEnd(66, '1');
+    const secondPubkey = '02'.padEnd(66, '2');
+    const pubkeys = [firstPubkey, secondPubkey];
+
+    (keyRingService.generateMintQuoteKeyPair as Mock<any>).mockImplementation(async () => {
+      const nextPubkey = pubkeys.shift();
+      if (!nextPubkey) throw new Error('unexpected key generation');
+      return {
+        publicKeyHex: nextPubkey,
+        secretKey: new Uint8Array(32),
+        derivationIndex: 0,
+        purpose: 'nut20_mint_quote' as const,
+      };
+    });
+    (wallet.createMintQuote as Mock<any>).mockImplementation(
+      async (_method: string, payload: { pubkey: string }) => ({
+        ...remoteQuote,
+        quote: `quote-${payload.pubkey.at(-1)}`,
+        pubkey: payload.pubkey,
+      }),
+    );
+
+    const first = await handler.createQuote(buildCreateQuoteContext());
+    const second = await handler.createQuote(buildCreateQuoteContext());
+
+    expect(first.quoteData.pubkey).toBe(firstPubkey);
+    expect(second.quoteData.pubkey).toBe(secondPubkey);
+    expect(first.quoteData.pubkey).not.toBe(second.quoteData.pubkey);
+  });
+
+  it('rejects an onchain quote that returns a different pubkey', async () => {
+    (wallet.createMintQuote as Mock<any>).mockImplementationOnce(async () => ({
+      ...remoteQuote,
+      pubkey: '02'.padEnd(66, '2'),
+    }));
+
+    await expect(handler.createQuote(buildCreateQuoteContext())).rejects.toThrow(
+      'instead of requested pubkey',
+    );
+  });
+
+  it('fetches the latest onchain quote through the mint adapter', async () => {
+    const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
+
+    expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', quoteId);
+    expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+  });
+
+  it('keeps operation preparation unsupported until the withdrawal slice', async () => {
+    await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
+      'Onchain mint operation preparation is not implemented yet',
+    );
+  });
+});
