@@ -6,7 +6,6 @@ import type {
   MintOperationService,
   PendingMintCheckResult,
   PendingMintOperation,
-  TerminalMintOperation,
 } from '@core/operations/mint';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
@@ -136,9 +135,9 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   }
 
   /**
-   * Executes a pending mint operation and returns its terminal state.
+   * Executes a pending mint operation and returns the latest operation state.
    */
-  async execute(operationOrId: MintOperation | string): Promise<TerminalMintOperation> {
+  async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'pending') {
       throw new Error(
@@ -210,7 +209,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Pending operations are executed, executing operations are recovered,
    * and terminal operations are returned as-is.
    */
-  async finalize(operationId: string): Promise<TerminalMintOperation> {
+  async finalize(operationId: string): Promise<MintOperation> {
     return this.mintOperationService.finalize(operationId);
   }
 

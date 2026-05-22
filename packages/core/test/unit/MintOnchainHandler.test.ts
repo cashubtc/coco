@@ -7,6 +7,7 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import type {
   CreateMintQuoteContext,
+  ExecuteContext,
   FetchRemoteMintQuoteContext,
   PrepareContext,
 } from '../../operations/mint';
@@ -136,6 +137,14 @@ describe('MintOnchainHandler', () => {
 
     wallet = {
       createMintQuote: mock(async () => remoteQuote),
+      mintProofs: mock(async () => [
+        {
+          id: 'keyset-1',
+          amount: Amount.from(10),
+          secret: 'out-1',
+          C: 'C_out_1',
+        },
+      ]),
     } as unknown as Wallet;
 
     mintAdapter = {
@@ -242,5 +251,30 @@ describe('MintOnchainHandler', () => {
     await expect(
       handler.prepare({ ...buildPrepareContext(), importedQuote: remoteQuote }),
     ).rejects.toThrow('Missing NUT-20 mint quote key');
+  });
+
+  it('executes onchain mint proofs with the persisted quote key', async () => {
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    const context: ExecuteContext<'onchain'> = {
+      ...buildPrepareContext(),
+      operation: {
+        ...pending,
+        state: 'executing',
+      },
+    };
+
+    const result = await handler.execute(context);
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofs).toHaveBeenCalledWith(
+      'onchain',
+      Amount.from(10),
+      { quote: quoteId, pubkey },
+      { privkey: ''.padEnd(64, '0') },
+      { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
+    );
   });
 });

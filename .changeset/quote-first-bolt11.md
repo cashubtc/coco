@@ -48,3 +48,8 @@ Onchain mint operation preparation now accepts an explicit withdrawal amount for
 pre-created reusable quotes, verifies the quote signing key before operation
 persistence, and creates operation-scoped deterministic outputs without requiring
 available remote balance during prepare.
+
+Onchain mint finalization now gates reusable quote execution on available remote
+balance minus locally executing siblings, keeps underfunded operations pending,
+signs mint requests with the persisted NUT-20 quote key, and refreshes the
+canonical quote before finalizing redeemed operations.

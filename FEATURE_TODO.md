@@ -500,28 +500,28 @@ Deliverables:
 
 - [ ] Add quote-update claiming for reusable quotes: load pending siblings, sort by `createdAt` then
       `operationId`, and select the ordered prefix whose running sum fits the current claimable balance.
-- [ ] Compute local reservation as the sum of `executing` mint operations for the same
+- [x] Compute local reservation as the sum of `executing` mint operations for the same
       `(mintUrl, method, quoteId)`; do not add `amountReserved` to quote rows.
 - [ ] Move selected pending operations to `executing` before releasing the quote-level claim lock.
-- [ ] Use quote availability checks as a scheduling/finalization gate, not as a prepare gate.
+- [x] Use quote availability checks as a scheduling/finalization gate, not as a prepare gate.
 - [ ] Make direct `finalize(operationId)` enter the same serialized quote-level claim processor, while
       allowing explicit caller intent to target a later sibling if it fits.
-- [ ] Keep insufficient reusable quote balance as `pending` or a retryable funding result, not a
+- [x] Keep insufficient reusable quote balance as `pending` or a retryable funding result, not a
       terminal `failed` operation.
-- [ ] Execute mint requests with the NUT-20 signature over `quoteId || B_0 || ... || B_n` using the
+- [x] Execute mint requests with the NUT-20 signature over `quoteId || B_0 || ... || B_n` using the
       quote's persisted key.
-- [ ] Before a reusable quote operation leaves `executing`, refresh or update the canonical quote row
+- [x] Before a reusable quote operation leaves `executing`, refresh or update the canonical quote row
       with a NUT-30 quote response whose `amount_issued` reflects the redemption.
 - [ ] Support multiple partial withdrawals from the same quote.
 
 Validation:
 
-- [ ] Direct finalization of an underfunded reusable quote leaves the operation pending without entering
+- [x] Direct finalization of an underfunded reusable quote leaves the operation pending without entering
       executing.
-- [ ] Direct finalization of a funded smaller withdrawal succeeds.
+- [x] Direct finalization of a funded smaller withdrawal succeeds.
 - [ ] Duplicate refresh events for an unchanged quote snapshot do not schedule overlapping execution
       because executing siblings are subtracted.
-- [ ] A finalized reusable quote operation is not allowed to stop contributing local reservation before
+- [x] A finalized reusable quote operation is not allowed to stop contributing local reservation before
       the quote row reflects the corresponding remote `quoteData.amountIssued` increase.
 - [ ] Recovery can finalize one sibling operation without touching another sibling on the same quote.
 
@@ -655,7 +655,7 @@ Validation:
   rejection, or unrecoverable issued-without-proofs cases. Insufficient reusable quote funding is
   retryable waiting, not terminal failure.
 - A reusable onchain quote's remote mintable amount is `quoteData.amountPaid -
-  quoteData.amountIssued`.
+quoteData.amountIssued`.
 - Local finalization does not make `quoteData.amountIssued` canonical; the next websocket, polling, or
   explicit refresh observation updates the quote row and can trigger the next claim pass.
 - `executing` sibling operations protect against stale remote snapshots until the mint reports a new

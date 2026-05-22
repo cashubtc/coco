@@ -1,7 +1,8 @@
-import { Amount, type Wallet } from '@cashu/cashu-ts';
+import { Amount, type Proof, type Wallet } from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
-import { serializeOutputData } from '@core/utils';
+import { deserializeOutputData, serializeOutputData } from '@core/utils';
+import { bytesToHex } from '@noble/curves/utils.js';
 import {
   mintQuoteFromOnchainResponse,
   type MintQuote,
@@ -93,8 +94,34 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     };
   }
 
-  async execute(_ctx: ExecuteContext<'onchain'>): Promise<MintExecutionResult> {
-    throw new Error('Onchain mint operation execution is not implemented yet');
+  async execute(ctx: ExecuteContext<'onchain'>): Promise<MintExecutionResult> {
+    const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
+    if (!quoteKey) {
+      throw new Error(
+        `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
+      );
+    }
+
+    const outputData = deserializeOutputData(ctx.operation.outputData);
+    const genericWallet = ctx.wallet as Wallet & {
+      mintProofs(
+        method: string,
+        amount: Amount,
+        quote: { quote: string; pubkey?: string },
+        config?: { privkey?: string },
+        outputType?: { type: 'custom'; data: typeof outputData.keep },
+      ): Promise<Proof[]>;
+    };
+
+    const proofs = await genericWallet.mintProofs(
+      'onchain',
+      ctx.operation.amount,
+      { quote: ctx.operation.quoteId, pubkey: ctx.operation.pubkey },
+      { privkey: bytesToHex(quoteKey.secretKey) },
+      { type: 'custom', data: outputData.keep },
+    );
+
+    return { status: 'ISSUED', proofs };
   }
 
   async recoverExecuting(

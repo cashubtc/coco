@@ -121,7 +121,10 @@ describe('MintOperationService', () => {
     );
   };
 
-  const persistOnchainQuote = async (quote = 'onchain-quote-1'): Promise<void> => {
+  const persistOnchainQuote = async (
+    quote = 'onchain-quote-1',
+    amounts: { paid?: Amount; issued?: Amount } = {},
+  ): Promise<void> => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromOnchainResponse(mintUrl, {
         quote,
@@ -129,8 +132,8 @@ describe('MintOperationService', () => {
         unit: 'sat',
         expiry: Math.floor(Date.now() / 1000) + 3600,
         pubkey: '02'.padEnd(66, '1'),
-        amount_paid: Amount.zero(),
-        amount_issued: Amount.zero(),
+        amount_paid: amounts.paid ?? Amount.zero(),
+        amount_issued: amounts.issued ?? Amount.zero(),
       }),
     );
   };
@@ -1043,6 +1046,103 @@ describe('MintOperationService', () => {
 
     const ops = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(ops.length).toBe(1);
+  });
+
+  it('finalize leaves underfunded reusable onchain operations pending', async () => {
+    const onchainQuoteId = 'onchain-quote-underfunded';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(4), issued: Amount.zero() });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-underfunded'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(10),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const result = await service.finalize(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(result.state).toBe('pending');
+    expect(stored?.state).toBe('pending');
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('finalize executes funded reusable onchain withdrawals and refreshes quote issuance first', async () => {
+    const onchainQuoteId = 'onchain-quote-funded';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-funded'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(5),
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const onchainHandler = {
+      ...handler,
+      execute: mock(
+        async (): Promise<MintExecutionResult> => ({
+          status: 'ISSUED',
+          proofs: [makeProof('out-1')],
+        }),
+      ),
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.from(5),
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
+
+    const result = await service.finalize(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(result.state).toBe('finalized');
+    expect(stored?.state).toBe('finalized');
+    expect(onchainHandler.execute).toHaveBeenCalled();
+    expect(onchainHandler.fetchRemoteQuote).toHaveBeenCalled();
+    expect(quote?.method).toBe('onchain');
+    if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(quote.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
+  });
+
+  it('finalize subtracts executing reusable onchain siblings from claimable balance', async () => {
+    const onchainQuoteId = 'onchain-quote-reserved';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    await operationRepo.create({
+      ...makeExecutingOp('onchain-executing-sibling'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(7),
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-reserved-pending'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(5),
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const result = await service.finalize(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(result.state).toBe('pending');
+    expect(stored?.state).toBe('pending');
+    expect(handler.execute).not.toHaveBeenCalled();
   });
 
   it('recoverExecutingOperation finalizes when handler marks FINALIZED', async () => {

@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import { Amount, type Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -43,6 +43,7 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import {
+  getMintQuoteAvailableAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   mintQuoteToMethodSnapshot,
@@ -447,7 +448,16 @@ export class MintOperationService {
     throw new Error(`Failed to prepare operation ${operationId}`);
   }
 
-  async execute(operationId: string): Promise<TerminalMintOperation> {
+  async execute(operationId: string): Promise<MintOperation> {
+    const operation = await this.mintOperationRepository.getById(operationId);
+    if (operation?.state === 'pending' && operation.method === 'onchain') {
+      return this.claimReusableQuoteOperation(operation as PendingMintOperation);
+    }
+
+    return this.executeReadyOperation(operationId);
+  }
+
+  private async executeReadyOperation(operationId: string): Promise<TerminalMintOperation> {
     const releaseLock = await this.acquireOperationLockAfterWait(operationId);
     try {
       const operation = await this.mintOperationRepository.getById(operationId);
@@ -491,6 +501,7 @@ export class MintOperationService {
             if (!(await this.ensureOutputsSaved(executing, result.proofs))) {
               throw new Error(`Failed to persist output proofs for operation ${executing.id}`);
             }
+            await this.ensureReusableQuoteIssuanceObserved(executing);
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
             const proofsRecovered = await this.ensureOutputsSaved(executing);
@@ -526,7 +537,7 @@ export class MintOperationService {
     }
   }
 
-  async finalize(operationId: string): Promise<TerminalMintOperation> {
+  async finalize(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationRepository.getById(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);
@@ -771,6 +782,110 @@ export class MintOperationService {
     quoteId: string,
   ): Promise<MintOperation[]> {
     return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
+  }
+
+  private async claimReusableQuoteOperation(
+    operation: PendingMintOperation,
+  ): Promise<MintOperation> {
+    const releaseQuoteLock = await this.mintScopedLock.acquire(
+      this.quoteLockKey(operation.mintUrl, operation.method, operation.quoteId),
+    );
+    try {
+      const current = await this.mintOperationRepository.getById(operation.id);
+      if (!current || current.state !== 'pending') {
+        if (current) return current;
+        throw new Error(`Operation ${operation.id} not found`);
+      }
+
+      const pending = current as PendingMintOperation;
+      const quote = await this.quoteLifecycle.getMintQuote(
+        pending.mintUrl,
+        pending.method,
+        pending.quoteId,
+      );
+      if (!quote) {
+        throw new Error(
+          `Cannot claim operation ${pending.id}: mint quote ${pending.quoteId} for ${pending.method} at ${pending.mintUrl} was not found`,
+        );
+      }
+
+      const claimable = await this.getLocallyClaimableQuoteAmount(quote, pending.id);
+      if (pending.amount.greaterThan(claimable)) {
+        this.logger?.info('Reusable mint quote is not sufficiently funded for operation', {
+          operationId: pending.id,
+          mintUrl: pending.mintUrl,
+          quoteId: pending.quoteId,
+          requestedAmount: pending.amount.toString(),
+          claimableAmount: claimable.toString(),
+        });
+        return pending;
+      }
+
+      return this.executeReadyOperation(pending.id);
+    } finally {
+      releaseQuoteLock();
+    }
+  }
+
+  private async getLocallyClaimableQuoteAmount(
+    quote: MintQuote,
+    targetOperationId?: string,
+  ): Promise<Amount> {
+    const remoteAvailable = getMintQuoteAvailableAmount(quote);
+    const siblings = await this.mintOperationRepository.getByQuoteId(
+      quote.mintUrl,
+      quote.method,
+      quote.quoteId,
+    );
+    const locallyReserved = siblings.reduce((total, operation) => {
+      if (operation.state !== 'executing' || operation.id === targetOperationId) {
+        return total;
+      }
+
+      return total.add(operation.amount);
+    }, Amount.zero());
+
+    if (remoteAvailable.lessThan(locallyReserved)) {
+      return Amount.zero();
+    }
+
+    return remoteAvailable.subtract(locallyReserved);
+  }
+
+  private async ensureReusableQuoteIssuanceObserved(
+    operation: ExecutingMintOperation,
+  ): Promise<void> {
+    if (operation.method !== 'onchain') {
+      return;
+    }
+
+    const before = await this.quoteLifecycle.getMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    const refreshed = await this.quoteLifecycle.refreshMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+
+    if (before?.method !== 'onchain' || refreshed.method !== 'onchain') {
+      throw new Error(
+        `Cannot verify onchain quote issuance for operation ${operation.id}: quote is not onchain`,
+      );
+    }
+
+    const requiredIssued = before.quoteData.amountIssued.add(operation.amount);
+    if (refreshed.quoteData.amountIssued.lessThan(requiredIssued)) {
+      throw new Error(
+        `Cannot finalize operation ${operation.id}: onchain quote ${operation.quoteId} amount_issued ${refreshed.quoteData.amountIssued} does not include redeemed amount ${operation.amount}`,
+      );
+    }
+  }
+
+  private quoteLockKey(mintUrl: string, method: MintMethod, quoteId: string): string {
+    return `${mintUrl}::${method}::${quoteId}`;
   }
 
   async getInFlightOperations(): Promise<MintOperation[]> {
