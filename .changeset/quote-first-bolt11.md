@@ -53,3 +53,8 @@ Onchain mint finalization now gates reusable quote execution on available remote
 balance minus locally executing siblings, keeps underfunded operations pending,
 signs mint requests with the persisted NUT-20 quote key, and refreshes the
 canonical quote before finalizing redeemed operations.
+
+Reusable onchain quote updates now drive quote-level claiming: pending sibling
+operations are considered in deterministic order, only the currently funded
+prefix is executed under the quote lock, and BOLT11 quote processing remains on
+the existing paid-operation queue.

@@ -12,6 +12,7 @@ describe('MintOperationProcessor', () => {
   let processor: MintOperationProcessor;
   let mockMintOperationService: MintOperationService;
   let finalizeCalls: string[];
+  let claimCalls: Array<{ mintUrl: string; method: string; quoteId: string }>;
 
   const TEST_PROCESS_INTERVAL = 50;
   const TEST_RETRY_DELAY = 100;
@@ -20,6 +21,7 @@ describe('MintOperationProcessor', () => {
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
     finalizeCalls = [];
+    claimCalls = [];
 
     mockMintOperationService = {
       async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
@@ -34,6 +36,10 @@ describe('MintOperationProcessor', () => {
       },
       async finalize(operationId: string) {
         finalizeCalls.push(operationId);
+      },
+      async claimMintQuote(mintUrl: string, method: string, quoteId: string) {
+        claimCalls.push({ mintUrl, method, quoteId });
+        return [];
       },
     } as unknown as MintOperationService;
 
@@ -130,6 +136,36 @@ describe('MintOperationProcessor', () => {
     await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
 
     expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
+  });
+
+  it('claims reusable onchain quotes directly from mint-quote:updated', async () => {
+    await processor.start();
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'onchain',
+      quoteId: 'onchain-quote-1',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'onchain',
+        quoteId: 'onchain-quote-1',
+        quote: 'onchain-quote-1',
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: null,
+        reusable: true,
+        quoteData: {
+          pubkey: '02'.padEnd(66, '1'),
+          amountPaid: 10,
+          amountIssued: 0,
+        },
+      } as any,
+    });
+
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'onchain', quoteId: 'onchain-quote-1' },
+    ]);
+    expect(finalizeCalls).toEqual([]);
   });
 
   it('processes already-paid pending operations from mint-op:pending', async () => {

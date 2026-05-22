@@ -498,13 +498,13 @@ same remote snapshot.
 
 Deliverables:
 
-- [ ] Add quote-update claiming for reusable quotes: load pending siblings, sort by `createdAt` then
+- [x] Add quote-update claiming for reusable quotes: load pending siblings, sort by `createdAt` then
       `operationId`, and select the ordered prefix whose running sum fits the current claimable balance.
 - [x] Compute local reservation as the sum of `executing` mint operations for the same
       `(mintUrl, method, quoteId)`; do not add `amountReserved` to quote rows.
-- [ ] Move selected pending operations to `executing` before releasing the quote-level claim lock.
+- [x] Move selected pending operations to `executing` before releasing the quote-level claim lock.
 - [x] Use quote availability checks as a scheduling/finalization gate, not as a prepare gate.
-- [ ] Make direct `finalize(operationId)` enter the same serialized quote-level claim processor, while
+- [x] Make direct `finalize(operationId)` enter the same serialized quote-level claim processor, while
       allowing explicit caller intent to target a later sibling if it fits.
 - [x] Keep insufficient reusable quote balance as `pending` or a retryable funding result, not a
       terminal `failed` operation.

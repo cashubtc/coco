@@ -784,6 +784,59 @@ export class MintOperationService {
     return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
   }
 
+  async claimMintQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintOperation[]> {
+    if (method !== 'onchain') {
+      return [];
+    }
+
+    const releaseQuoteLock = await this.mintScopedLock.acquire(
+      this.quoteLockKey(mintUrl, method, quoteId),
+    );
+    try {
+      const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+      if (!quote) {
+        throw new Error(
+          `Cannot claim mint quote ${quoteId}: quote for ${method} at ${mintUrl} was not found`,
+        );
+      }
+      if (quote.method !== 'onchain') {
+        return [];
+      }
+
+      const claimable = await this.getLocallyClaimableQuoteAmount(quote);
+      const siblings = await this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
+      let selectedAmount = Amount.zero();
+      const selected: PendingMintOperation[] = [];
+
+      for (const operation of siblings) {
+        if (operation.state !== 'pending') {
+          continue;
+        }
+
+        const nextAmount = selectedAmount.add(operation.amount);
+        if (nextAmount.greaterThan(claimable)) {
+          break;
+        }
+
+        selected.push(operation as PendingMintOperation);
+        selectedAmount = nextAmount;
+      }
+
+      const claimed: MintOperation[] = [];
+      for (const operation of selected) {
+        claimed.push(await this.executeReadyOperation(operation.id));
+      }
+
+      return claimed;
+    } finally {
+      releaseQuoteLock();
+    }
+  }
+
   private async claimReusableQuoteOperation(
     operation: PendingMintOperation,
   ): Promise<MintOperation> {

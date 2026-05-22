@@ -92,6 +92,20 @@ export class MintOperationProcessor {
     this.offQuoteUpdated = this.bus.on(
       'mint-quote:updated',
       async ({ mintUrl, method, quoteId, quote }) => {
+        if (quote.method === 'onchain') {
+          try {
+            await this.mintOperations.claimMintQuote(mintUrl, method, quoteId);
+          } catch (error) {
+            this.logger?.warn('Failed to claim reusable mint quote', {
+              mintUrl,
+              method,
+              quoteId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return;
+        }
+
         if (getMintQuoteRemoteState(quote) !== 'PAID') {
           return;
         }
