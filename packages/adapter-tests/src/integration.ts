@@ -1,5 +1,11 @@
-import type { Repositories, Manager, Logger, UnitAmountLike } from '@cashu/coco-core';
-import { initializeCoco, getEncodedToken, ConsoleLogger, normalizeUnit } from '@cashu/coco-core';
+import type { Repositories, Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import {
+  initializeCoco,
+  getEncodedToken,
+  ConsoleLogger,
+  normalizeUnit,
+  getMintQuoteAvailableAmount,
+} from '@cashu/coco-core';
 import {
   HttpResponseError,
   JSONInt,
@@ -200,7 +206,7 @@ type NutMethodSetting = {
 async function mintSupportsMethodUnit(
   manager: Manager,
   mintUrl: string,
-  nut: 5 | 30,
+  nut: 4 | 5,
   method: string,
   unit: string,
 ): Promise<boolean> {
@@ -216,6 +222,46 @@ async function mintSupportsMethodUnit(
   const normalizedUnit = normalizeUnit(unit);
   return settings.methods.some(
     (entry) => entry.method === method && normalizeUnit(entry.unit ?? 'sat') === normalizedUnit,
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForOnchainQuoteAvailable(
+  manager: Manager,
+  mintUrl: string,
+  quoteId: string,
+  amount: AmountLike,
+): Promise<MintQuote<'onchain'>> {
+  const requested = Amount.from(amount);
+  let latest: MintQuote | undefined;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    latest = await manager.quotes.mint.refresh({
+      mintUrl,
+      method: 'onchain',
+      quoteId,
+    });
+
+    if (latest.method !== 'onchain') {
+      throw new Error(`Expected onchain quote, got ${latest.method}`);
+    }
+
+    if (getMintQuoteAvailableAmount(latest).greaterThanOrEqual(requested)) {
+      return latest;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(
+    `Onchain quote ${quoteId} did not become funded enough for ${requested.toString()}; last observed available amount: ${
+      latest && latest.method === 'onchain'
+        ? getMintQuoteAvailableAmount(latest).toString()
+        : 'unknown'
+    }`,
   );
 }
 
@@ -657,7 +703,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should create and prepare an onchain mint quote when NUT-30 is advertised', async () => {
+      it('should redeem a funded onchain mint quote when onchain minting is advertised', async () => {
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
@@ -673,7 +719,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           await mgr.mint.addMint(mintUrl, { trusted: true });
 
-          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 30, 'onchain', testUnit))) {
+          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 4, 'onchain', testUnit))) {
             return;
           }
 
@@ -694,25 +740,126 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expectAmountEquals(expect, quote.quoteData.amountPaid, 0);
           expectAmountEquals(expect, quote.quoteData.amountIssued, 0);
 
-          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+          const fundedQuote = await waitForOnchainQuoteAvailable(
+            mgr,
             mintUrl,
-            'onchain',
             quote.quoteId,
+            testAmount(12),
           );
-          expect(storedQuote?.quoteId).toBe(quote.quoteId);
+          expect(fundedQuote.quoteId).toBe(quote.quoteId);
+          expectAmountEquals(expect, fundedQuote.quoteData.amountIssued, 0);
+          expect(getMintQuoteAvailableAmount(fundedQuote).greaterThanOrEqual(Amount.from(12))).toBe(
+            true,
+          );
 
           const pending = await mgr.ops.mint.prepare({
             mintUrl,
             method: 'onchain',
             quoteId: quote.quoteId,
-            amount: testAmount(1),
+            amount: testAmount(12),
             methodData: {},
           });
 
           expect(pending.method).toBe('onchain');
           expect(pending.quoteId).toBe(quote.quoteId);
           expect(pending.state).toBe('pending');
-          expectAmountEquals(expect, pending.amount, 1);
+          expectAmountEquals(expect, pending.amount, 12);
+
+          const finalized = await mgr.ops.mint.execute(pending.id);
+          expect(finalized.state).toBe('finalized');
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(12);
+
+          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          expect(storedQuote?.quoteId).toBe(quote.quoteId);
+          if (storedQuote?.method !== 'onchain') {
+            throw new Error('Expected stored onchain quote');
+          }
+          expect(storedQuote.quoteData.amountIssued.greaterThanOrEqual(Amount.from(12))).toBe(true);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should redeem multiple withdrawals from one funded onchain mint quote', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 4, 'onchain', testUnit))) {
+            return;
+          }
+
+          const quote = await mgr.quotes.mint.create({
+            mintUrl,
+            method: 'onchain',
+            unit: testUnit,
+          });
+          if (quote.method !== 'onchain') {
+            throw new Error(`Expected onchain quote, got ${quote.method}`);
+          }
+
+          await waitForOnchainQuoteAvailable(mgr, mintUrl, quote.quoteId, testAmount(12));
+
+          const first = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(7),
+            methodData: {},
+          });
+          const second = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(5),
+            methodData: {},
+          });
+
+          expect(first.quoteId).toBe(quote.quoteId);
+          expect(second.quoteId).toBe(quote.quoteId);
+          const siblings = await repositories.mintOperationRepository.getByQuoteId(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          expect(siblings).toHaveLength(2);
+
+          const finalizedFirst = await mgr.ops.mint.execute(first.id);
+          const finalizedSecond = await mgr.ops.mint.execute(second.id);
+
+          expect(finalizedFirst.state).toBe('finalized');
+          expect(finalizedSecond.state).toBe('finalized');
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(12);
+
+          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          if (storedQuote?.method !== 'onchain') {
+            throw new Error('Expected stored onchain quote');
+          }
+          expect(storedQuote.quoteData.amountIssued.greaterThanOrEqual(Amount.from(12))).toBe(true);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();

@@ -2,7 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
 import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { SeedService } from '@core/services/SeedService.ts';
@@ -55,7 +55,10 @@ export class KeyRingService {
     if (!secretKey) {
       throw new Error('Failed to derive secret key');
     }
-    const publicKeyHex = this.getPublicKeyHex(secretKey);
+    const publicKeyHex =
+      purpose === 'nut20_mint_quote'
+        ? this.getCompressedPublicKeyHex(secretKey)
+        : this.getPublicKeyHex(secretKey);
     await this.keyRingRepository.setPersistedKeyPair({
       publicKeyHex,
       secretKey,
@@ -141,5 +144,9 @@ export class KeyRingService {
   private getPublicKeyHex(secretKey: Uint8Array): string {
     const publicKey = schnorr.getPublicKey(secretKey);
     return '02' + bytesToHex(publicKey);
+  }
+
+  private getCompressedPublicKeyHex(secretKey: Uint8Array): string {
+    return bytesToHex(secp256k1.getPublicKey(secretKey, true));
   }
 }

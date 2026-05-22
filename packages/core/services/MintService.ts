@@ -208,7 +208,7 @@ export class MintService {
     }
 
     if (!settings || !Array.isArray(settings.methods)) {
-      if (nut !== 30 && normalizedUnit === DEFAULT_UNIT) {
+      if (method === 'bolt11' && normalizedUnit === DEFAULT_UNIT) {
         return {
           supported: true,
           disabled: false,

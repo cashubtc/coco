@@ -4,7 +4,7 @@ import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
@@ -123,6 +123,9 @@ describe('KeyRingService', () => {
       expect(p2pk.purpose).toBe('p2pk');
       expect(quoteKey.derivationIndex).toBe(0);
       expect(quoteKey.purpose).toBe('nut20_mint_quote');
+      expect(quoteKey.publicKeyHex).toBe(
+        bytesToHex(secp256k1.getPublicKey(quoteKey.secretKey, true)),
+      );
     });
 
     it('keeps mint quote keys out of user-facing key queries and removal', async () => {

@@ -394,7 +394,7 @@ export class MintOperationService {
         const handler = this.handlerProvider.get(initOp.method);
         await this.mintService.assertMethodUnitSupported(
           initOp.mintUrl,
-          initOp.method === 'onchain' ? 30 : 4,
+          4,
           initOp.method,
           initOp.method === 'onchain'
             ? initOp.unit

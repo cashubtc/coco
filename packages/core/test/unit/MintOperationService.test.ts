@@ -416,7 +416,7 @@ describe('MintOperationService', () => {
     expect(onchainHandler.validateQuoteForPrepare).toHaveBeenCalled();
     expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(
       mintUrl,
-      30,
+      4,
       'onchain',
       'sat',
     );

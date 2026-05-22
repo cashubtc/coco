@@ -338,12 +338,12 @@ describe('MintService', () => {
       expect(capability.legacySatAllowed).toBe(true);
     });
 
-    it('requires explicit NUT-30 method metadata for onchain quotes', async () => {
+    it('requires explicit NUT-04 onchain method metadata for onchain quotes', async () => {
       useMintInfo({ ...mockMintInfo, nuts: {} } as MintInfo);
 
       const capability = await service.getMintMethodUnitCapability(
         testMintUrl,
-        30,
+        4,
         'onchain',
         'sat',
       );
@@ -351,21 +351,21 @@ describe('MintService', () => {
       expect(capability.supported).toBe(false);
       expect(capability.legacySatAllowed).toBeUndefined();
       await expect(
-        service.assertMethodUnitSupported(testMintUrl, 30, 'onchain', 'sat'),
+        service.assertMethodUnitSupported(testMintUrl, 4, 'onchain', 'sat'),
       ).rejects.toThrow(ProofValidationError);
     });
 
-    it('accepts advertised NUT-30 onchain method metadata', async () => {
+    it('accepts advertised NUT-04 onchain method metadata', async () => {
       useMintInfo({
         ...mockMintInfo,
         nuts: {
-          '30': { methods: [{ method: 'onchain', unit: 'sat', min_amount: 10 }] },
+          '4': { methods: [{ method: 'onchain', unit: 'sat', min_amount: 10 }] },
         },
       } as unknown as MintInfo);
 
       const capability = await service.getMintMethodUnitCapability(
         testMintUrl,
-        30,
+        4,
         'onchain',
         'sat',
       );
@@ -373,7 +373,7 @@ describe('MintService', () => {
       expect(capability.supported).toBe(true);
       expect(capability.minAmount?.equals(Amount.from(10))).toBe(true);
       await expect(
-        service.assertMethodUnitSupported(testMintUrl, 30, 'onchain', 'sat'),
+        service.assertMethodUnitSupported(testMintUrl, 4, 'onchain', 'sat'),
       ).resolves.toBeUndefined();
     });
 

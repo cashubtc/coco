@@ -1,4 +1,4 @@
-import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Amount, type AmountLike, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type {
   MintMethod,
   MintMethodQuoteData,
@@ -85,6 +85,7 @@ export function mintQuoteFromBolt11Response(
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
   const now = options?.now ?? Date.now();
+  const amount = Amount.from(quote.amount as unknown as AmountLike);
   return {
     mintUrl,
     method: 'bolt11',
@@ -92,7 +93,7 @@ export function mintQuoteFromBolt11Response(
     quote: quote.quote,
     request: quote.request,
     unit: quote.unit,
-    amount: quote.amount,
+    amount,
     expiry: quote.expiry,
     pubkey: quote.pubkey,
     state: quote.state,
@@ -100,7 +101,7 @@ export function mintQuoteFromBolt11Response(
     lastObservedRemoteStateAt: now,
     reusable: false,
     quoteData: {
-      amount: quote.amount,
+      amount,
     },
     createdAt: now,
     updatedAt: now,

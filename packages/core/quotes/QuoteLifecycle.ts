@@ -1,4 +1,4 @@
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { Amount, type AmountLike, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type { UnitAmount } from '../amounts.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts';
 import type { EventBus } from '../events/EventBus';
@@ -141,7 +141,7 @@ export class QuoteLifecycle {
 
     await this.mintService.assertMethodUnitSupported(
       mintUrl,
-      method === 'onchain' ? 30 : 4,
+      4,
       method,
       parsed ?? unit,
     );
@@ -277,14 +277,20 @@ export class QuoteLifecycle {
     }
 
     const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
-    if (!bolt11Quote.amount || bolt11Quote.amount.isZero()) {
-      throw new ProofValidationError(`Mint quote ${bolt11Quote.quote} has invalid amount`);
+    const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
+    if (rawAmount === undefined || rawAmount === null) {
+      throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
     }
 
-    const canonicalQuote = mintQuoteFromBolt11Response(
-      mintUrl,
-      bolt11Quote as MintQuoteBolt11Response,
-    );
+    const amount = Amount.from(rawAmount as AmountLike);
+    if (amount.isZero()) {
+      throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+    }
+
+    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, {
+      ...bolt11Quote,
+      amount,
+    } as MintQuoteBolt11Response);
     const existing = await this.mintQuoteRepository.getMintQuote(
       canonicalQuote.mintUrl,
       canonicalQuote.method,
