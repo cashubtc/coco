@@ -7,6 +7,7 @@ import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
+import type { MintQuote } from '../../models/MintQuote.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
@@ -37,6 +38,26 @@ describe('MintOperationWatcherService', () => {
     updatedAt: Date.now(),
   });
 
+  const makeBolt11Quote = (): MintQuote<'bolt11'> => ({
+    mintUrl,
+    method: 'bolt11',
+    quoteId,
+    quote: quoteId,
+    request: 'lnbc1test',
+    amount: Amount.from(10),
+    unit: 'sat',
+    expiry: Math.floor(Date.now() / 1000) + 3600,
+    state: 'UNPAID',
+    lastObservedRemoteState: 'UNPAID',
+    lastObservedRemoteStateAt: Date.now(),
+    reusable: false,
+    quoteData: {
+      amount: Amount.from(10),
+    },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
     unsubscribe = mock(async () => {});
@@ -54,28 +75,84 @@ describe('MintOperationWatcherService', () => {
     );
   });
 
+  it('watches existing pending canonical mint quotes on startup', async () => {
+    const quote = makeBolt11Quote();
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        getPendingMintQuotes: mock(async () => [quote]),
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false },
+    );
+
+    await watcher.start();
+
+    expect(subscribe).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11_mint_quote',
+      [quoteId],
+      expect.any(Function),
+    );
+
+    await watcher.stop();
+  });
+
+  it('watches canonical mint quotes created after startup', async () => {
+    const quote = makeBolt11Quote();
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {} as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote,
+    });
+
+    expect(subscribe).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11_mint_quote',
+      [quoteId],
+      expect.any(Function),
+    );
+
+    await watcher.stop();
+  });
+
   it('records PAID subscription updates without re-checking the quote remotely', async () => {
     const operation = makePendingOperation();
     const observePendingOperation = mock(async () => {
       throw new Error('should not re-check');
     });
-    const recordQuoteObservation = mock(
-      async (_operation: PendingMintOperation, _state: 'UNPAID' | 'PAID' | 'ISSUED') => ({
+    const recordMintQuoteSnapshot = mock(
+      async (_mintUrl: string, _method: string, quote: MintQuoteBolt11Response) => ({
         mintUrl,
         method: 'bolt11',
-        quoteId,
-        quote: quoteId,
-        request: operation.request,
-        amount: operation.amount,
-        unit: operation.unit,
-        expiry: operation.expiry,
-        state: 'PAID',
+        quoteId: quote.quote,
+        quote: quote.quote,
+        request: quote.request,
+        amount: quote.amount,
+        unit: quote.unit,
+        expiry: quote.expiry,
+        state: quote.state,
         reusable: false,
         createdAt: operation.createdAt,
         updatedAt: Date.now(),
       }),
     );
-    const getOperation = mock(async () => operation);
+    const getOperation = mock(async () => {
+      throw new Error('should not need an operation');
+    });
 
     const watcher = new MintOperationWatcherService(
       { subscribe } as unknown as SubscriptionManager,
@@ -83,11 +160,11 @@ describe('MintOperationWatcherService', () => {
       {
         observePendingOperation,
         getOperation,
-        recordQuoteObservation,
+        recordMintQuoteSnapshot,
       } as unknown as MintOperationService,
       bus,
       new NullLogger(),
-      { watchExistingPendingOnStart: false },
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
     );
 
     await watcher.start();
@@ -111,15 +188,13 @@ describe('MintOperationWatcherService', () => {
       state: 'PAID',
     });
 
-    expect(getOperation).toHaveBeenCalledWith(operation.id);
+    expect(getOperation).not.toHaveBeenCalled();
     expect(observePendingOperation).not.toHaveBeenCalled();
-    expect(recordQuoteObservation).toHaveBeenCalledTimes(1);
-    const [paidOperation, state] = recordQuoteObservation.mock.calls[0] ?? [];
-    expect(state).toBe('PAID');
-    if (!paidOperation || paidOperation.state !== 'pending') {
-      throw new Error('Expected pending operation in PAID observation');
-    }
-    expect(paidOperation.lastObservedRemoteState).toBe('PAID');
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      expect.objectContaining({ quote: quoteId, state: 'PAID' }),
+    );
     expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
@@ -127,17 +202,17 @@ describe('MintOperationWatcherService', () => {
 
   it('records ISSUED subscription updates and stops watching the operation', async () => {
     const operation = makePendingOperation();
-    const recordQuoteObservation = mock(
-      async (_operation: PendingMintOperation, _state: 'UNPAID' | 'PAID' | 'ISSUED') => ({
+    const recordMintQuoteSnapshot = mock(
+      async (_mintUrl: string, _method: string, quote: MintQuoteBolt11Response) => ({
         mintUrl,
         method: 'bolt11',
-        quoteId,
-        quote: quoteId,
-        request: operation.request,
-        amount: operation.amount,
-        unit: operation.unit,
-        expiry: operation.expiry,
-        state: 'ISSUED',
+        quoteId: quote.quote,
+        quote: quote.quote,
+        request: quote.request,
+        amount: quote.amount,
+        unit: quote.unit,
+        expiry: quote.expiry,
+        state: quote.state,
         reusable: false,
         createdAt: operation.createdAt,
         updatedAt: Date.now(),
@@ -149,11 +224,11 @@ describe('MintOperationWatcherService', () => {
       { isTrustedMint: mock(async () => true) } as unknown as MintService,
       {
         getOperation: mock(async () => operation),
-        recordQuoteObservation,
+        recordMintQuoteSnapshot,
       } as unknown as MintOperationService,
       bus,
       new NullLogger(),
-      { watchExistingPendingOnStart: false },
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
     );
 
     await watcher.start();
@@ -176,13 +251,11 @@ describe('MintOperationWatcherService', () => {
       state: 'ISSUED',
     });
 
-    expect(recordQuoteObservation).toHaveBeenCalledTimes(1);
-    const [issuedOperation, state] = recordQuoteObservation.mock.calls[0] ?? [];
-    expect(state).toBe('ISSUED');
-    if (!issuedOperation || issuedOperation.state !== 'pending') {
-      throw new Error('Expected pending operation in ISSUED observation');
-    }
-    expect(issuedOperation.lastObservedRemoteState).toBe('ISSUED');
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      expect.objectContaining({ quote: quoteId, state: 'ISSUED' }),
+    );
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();

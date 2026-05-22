@@ -788,6 +788,18 @@ export class MintOperationService {
     return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
   }
 
+  getPendingMintQuotes(method?: MintMethod): Promise<MintQuote[]> {
+    return this.quoteLifecycle.getPendingMintQuotes(method);
+  }
+
+  recordMintQuoteSnapshot(
+    mintUrl: string,
+    method: MintMethod,
+    snapshot: MintMethodQuoteSnapshot,
+  ): Promise<MintQuote> {
+    return this.quoteLifecycle.recordMintQuoteSnapshot(mintUrl, method, snapshot);
+  }
+
   async claimMintQuote(
     mintUrl: string,
     method: MintMethod,

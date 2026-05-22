@@ -539,7 +539,15 @@ describe('MintOperationService', () => {
     expect(operations).toHaveLength(0);
     expect(handler.createQuote).toHaveBeenCalled();
     expect(handler.prepare).not.toHaveBeenCalled();
-    expect(quoteUpdatedEvents).toHaveLength(0);
+    expect(quoteUpdatedEvents).toHaveLength(1);
+    expect(quoteUpdatedEvents[0]).toMatchObject({
+      mintUrl,
+      method: 'bolt11',
+      quoteId: created.quoteId,
+      quote: {
+        quoteId: created.quoteId,
+      },
+    });
   });
 
   it('getQuote returns a persisted quote by full identity', async () => {

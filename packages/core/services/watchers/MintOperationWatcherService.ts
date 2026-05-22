@@ -4,6 +4,7 @@ import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/Subscr
 import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import type { MintService } from '../MintService';
 import type { MintOperationService, PendingMintOperation } from '@core/operations/mint';
+import type { MintQuote } from '../../models/MintQuote.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
@@ -14,7 +15,11 @@ function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
 export interface MintOperationWatcherOptions {
   // If true, on start() the watcher will also load and watch all pending mint operations
   watchExistingPendingOnStart?: boolean;
+  // If true, on start() the watcher will also load and watch all pending canonical mint quotes
+  watchExistingPendingQuotesOnStart?: boolean;
 }
+
+type WatchableMintQuote = Pick<MintQuote<'bolt11'>, 'mintUrl' | 'method' | 'quoteId'>;
 
 export class MintOperationWatcherService {
   private readonly subs: SubscriptionManager;
@@ -28,6 +33,7 @@ export class MintOperationWatcherService {
   private unsubscribeByKey = new Map<QuoteKey, UnsubscribeHandler>();
   private operationIdByKey = new Map<QuoteKey, string>();
   private keyByOperationId = new Map<string, QuoteKey>();
+  private offQuoteUpdated?: () => void;
   private offPending?: () => void;
   private offExecuting?: () => void;
   private offFinalized?: () => void;
@@ -39,14 +45,20 @@ export class MintOperationWatcherService {
     mintOperations: MintOperationService,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
-    options: MintOperationWatcherOptions = { watchExistingPendingOnStart: true },
+    options: MintOperationWatcherOptions = {
+      watchExistingPendingOnStart: true,
+      watchExistingPendingQuotesOnStart: true,
+    },
   ) {
     this.subs = subs;
     this.mintService = mintService;
     this.mintOperations = mintOperations;
     this.bus = bus;
     this.logger = logger;
-    this.options = options;
+    this.options = {
+      watchExistingPendingOnStart: options.watchExistingPendingOnStart ?? true,
+      watchExistingPendingQuotesOnStart: options.watchExistingPendingQuotesOnStart ?? true,
+    };
   }
 
   isRunning(): boolean {
@@ -69,6 +81,26 @@ export class MintOperationWatcherService {
           operationId: operation.id,
           mintUrl: operation.mintUrl,
           quoteId: operation.quoteId,
+          err,
+        });
+      }
+    });
+
+    this.offQuoteUpdated = this.bus.on('mint-quote:updated', async ({ quote }) => {
+      if (quote.method !== 'bolt11') return;
+
+      const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
+      if (quote.state === 'ISSUED') {
+        await this.stopWatching(key);
+        return;
+      }
+
+      try {
+        await this.watchMintQuotes([quote]);
+      } catch (err) {
+        this.logger?.error('Failed to start watching canonical mint quote', {
+          mintUrl: quote.mintUrl,
+          quoteId: quote.quoteId,
           err,
         });
       }
@@ -143,11 +175,30 @@ export class MintOperationWatcherService {
         this.logger?.error('Failed to load pending mint operations to watch', { err });
       }
     }
+
+    if (this.options.watchExistingPendingQuotesOnStart) {
+      try {
+        const quotes = await this.mintOperations.getPendingMintQuotes('bolt11');
+        await this.watchMintQuotes(quotes.filter((quote) => quote.method === 'bolt11'));
+      } catch (err) {
+        this.logger?.error('Failed to load pending mint quotes to watch', { err });
+      }
+    }
   }
 
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+
+    if (this.offQuoteUpdated) {
+      try {
+        this.offQuoteUpdated();
+      } catch {
+        // ignore
+      } finally {
+        this.offQuoteUpdated = undefined;
+      }
+    }
 
     if (this.offPending) {
       try {
@@ -200,45 +251,57 @@ export class MintOperationWatcherService {
     if (!this.running) return;
     if (operations.length === 0) return;
 
-    const byMint = new Map<string, PendingMintOperation[]>();
+    const uniqueByQuote = new Map<QuoteKey, WatchableMintQuote>();
     for (const operation of operations) {
-      if (!operation.quoteId) continue;
-      let group = byMint.get(operation.mintUrl);
-      if (!group) {
-        group = [];
-        byMint.set(operation.mintUrl, group);
+      if (!operation.quoteId || operation.method !== 'bolt11') {
+        continue;
       }
-      group.push(operation);
+      const key = toKey(operation.mintUrl, operation.method, operation.quoteId);
+      uniqueByQuote.set(key, {
+        mintUrl: operation.mintUrl,
+        method: operation.method,
+        quoteId: operation.quoteId,
+      });
+      this.linkOperationToQuote(operation.id, key);
     }
 
-    for (const [mintUrl, mintOperations] of byMint.entries()) {
+    await this.watchMintQuotes(Array.from(uniqueByQuote.values()));
+  }
+
+  private async watchMintQuotes(quotes: WatchableMintQuote[]): Promise<void> {
+    if (!this.running) return;
+    if (quotes.length === 0) return;
+
+    const byMint = new Map<string, WatchableMintQuote[]>();
+    for (const quote of quotes) {
+      if (quote.method !== 'bolt11') continue;
+      const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
+      if (this.unsubscribeByKey.has(key)) {
+        continue;
+      }
+
+      let group = byMint.get(quote.mintUrl);
+      if (!group) {
+        group = [];
+        byMint.set(quote.mintUrl, group);
+      }
+      group.push(quote);
+    }
+
+    for (const [mintUrl, mintQuotes] of byMint.entries()) {
       const trusted = await this.mintService.isTrustedMint(mintUrl);
       if (!trusted) {
         this.logger?.debug('Skipping watch for untrusted mint', { mintUrl });
         continue;
       }
 
-      const uniqueByQuote = new Map<string, PendingMintOperation>();
-      for (const operation of mintOperations) {
-        uniqueByQuote.set(toKey(mintUrl, operation.method, operation.quoteId), operation);
-      }
-
-      const toWatch = Array.from(uniqueByQuote.values()).filter(
-        (operation) =>
-          !this.unsubscribeByKey.has(toKey(mintUrl, operation.method, operation.quoteId)),
-      );
-      if (toWatch.length === 0) continue;
-
-      const chunks: PendingMintOperation[][] = [];
-      for (let i = 0; i < toWatch.length; i += 100) {
-        chunks.push(toWatch.slice(i, i + 100));
+      const chunks: WatchableMintQuote[][] = [];
+      for (let i = 0; i < mintQuotes.length; i += 100) {
+        chunks.push(mintQuotes.slice(i, i + 100));
       }
 
       for (const batch of chunks) {
-        const quoteIds = batch.map((operation) => operation.quoteId);
-        const operationIdByQuote = new Map(
-          batch.map((operation) => [operation.quoteId, operation.id]),
-        );
+        const quoteIds = batch.map((quote) => quote.quoteId);
         const { subId, unsubscribe } = await this.subs.subscribe<MintQuoteBolt11Response>(
           mintUrl,
           'bolt11_mint_quote',
@@ -250,32 +313,11 @@ export class MintOperationWatcherService {
             const quoteId = payload.quote;
             if (!quoteId) return;
             const key = toKey(mintUrl, 'bolt11', quoteId);
-            const operationId = this.operationIdByKey.get(key) ?? operationIdByQuote.get(quoteId);
-            if (!operationId) return;
 
             try {
-              const current = await this.mintOperations.getOperation(operationId);
-              if (!current || current.state !== 'pending') {
-                await this.stopWatching(key);
-                return;
-              }
-
-              const observedAt = Date.now();
-              const observedOperation: PendingMintOperation = {
-                ...current,
-                lastObservedRemoteState: payload.state,
-                lastObservedRemoteStateAt: observedAt,
-                updatedAt: observedAt,
-              };
-
-              await this.mintOperations.recordQuoteObservation(
-                observedOperation,
-                payload.state,
-                observedAt,
-              );
+              await this.mintOperations.recordMintQuoteSnapshot(mintUrl, 'bolt11', payload);
             } catch (err) {
-              this.logger?.error('Failed to persist pending mint quote update from remote update', {
-                operationId,
+              this.logger?.error('Failed to persist mint quote update from remote update', {
                 mintUrl,
                 quoteId,
                 state: payload.state,
@@ -286,20 +328,6 @@ export class MintOperationWatcherService {
             if (payload.state === 'ISSUED') {
               await this.stopWatching(key);
               return;
-            }
-
-            try {
-              const current = await this.mintOperations.getOperation(operationId);
-              if (!current || current.state !== 'pending') {
-                await this.stopWatching(key);
-              }
-            } catch (err) {
-              this.logger?.warn('Failed to inspect mint operation after remote update', {
-                operationId,
-                mintUrl,
-                quoteId,
-                err,
-              });
             }
           },
         );
@@ -312,26 +340,29 @@ export class MintOperationWatcherService {
           await unsubscribe();
         };
 
-        for (const operation of batch) {
-          const key = toKey(mintUrl, operation.method, operation.quoteId);
+        for (const quote of batch) {
+          const key = toKey(mintUrl, quote.method, quote.quoteId);
           const perKeyStop: UnsubscribeHandler = async () => {
-            if (remaining.has(operation.quoteId)) remaining.delete(operation.quoteId);
+            if (remaining.has(quote.quoteId)) remaining.delete(quote.quoteId);
             if (remaining.size === 0) {
               await groupUnsubscribeOnce();
             }
           };
           this.unsubscribeByKey.set(key, perKeyStop);
-          this.operationIdByKey.set(key, operation.id);
-          this.keyByOperationId.set(operation.id, key);
         }
 
-        this.logger?.debug('Watching mint operation batch', {
+        this.logger?.debug('Watching mint quote batch', {
           mintUrl,
           subId,
           count: batch.length,
         });
       }
     }
+  }
+
+  private linkOperationToQuote(operationId: string, key: QuoteKey): void {
+    this.operationIdByKey.set(key, operationId);
+    this.keyByOperationId.set(operationId, key);
   }
 
   private async stopWatching(key: QuoteKey): Promise<void> {

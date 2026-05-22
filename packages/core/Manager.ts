@@ -94,6 +94,7 @@ export interface CocoConfig {
     mintOperationWatcher?: {
       disabled?: boolean;
       watchExistingPendingOnStart?: boolean;
+      watchExistingPendingQuotesOnStart?: boolean;
     };
     /** Proof state watcher (enabled by default) */
     proofStateWatcher?: {
@@ -389,6 +390,7 @@ export class Manager {
 
   async enableMintOperationWatcher(options?: {
     watchExistingPendingOnStart?: boolean;
+    watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
     if (this.mintOperationWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
@@ -400,7 +402,10 @@ export class Manager {
       this.mintOperationService,
       this.eventBus,
       watcherLogger,
-      { watchExistingPendingOnStart: options?.watchExistingPendingOnStart ?? true },
+      {
+        watchExistingPendingOnStart: options?.watchExistingPendingOnStart ?? true,
+        watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
+      },
     );
     await this.mintOperationWatcher.start();
   }

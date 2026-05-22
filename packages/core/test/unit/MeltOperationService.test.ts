@@ -825,6 +825,22 @@ describe('MeltOperationService', () => {
       expect(handler.recoverExecuting).toHaveBeenCalled();
       expect(events.length).toBe(1);
     });
+
+    it('leaves stale prepared operations untouched during recovery', async () => {
+      const prepared = makePreparedOp('prepared-op');
+      await meltOperationRepository.create(prepared);
+
+      await service.recoverPendingOperations();
+
+      expect(await meltOperationRepository.getById(prepared.id)).toMatchObject({
+        id: prepared.id,
+        state: 'prepared',
+      });
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(handler.checkPending).not.toHaveBeenCalled();
+      expect(handler.finalize).not.toHaveBeenCalled();
+      expect(handler.recoverExecuting).not.toHaveBeenCalled();
+    });
   });
 
   describe('queries', () => {

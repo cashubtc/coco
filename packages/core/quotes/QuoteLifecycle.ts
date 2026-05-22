@@ -165,6 +165,12 @@ export class QuoteLifecycle {
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
     });
+    await this.eventBus.emit('mint-quote:updated', {
+      mintUrl: persistedQuote.mintUrl,
+      method: persistedQuote.method,
+      quoteId: persistedQuote.quoteId,
+      quote: persistedQuote,
+    });
     return persistedQuote;
   }
 
@@ -300,6 +306,21 @@ export class QuoteLifecycle {
         canonicalQuote.quoteId,
       )) ?? canonicalQuote
     );
+  }
+
+  async recordMintQuoteSnapshot(
+    mintUrl: string,
+    method: MintMethod,
+    snapshot: MintMethodQuoteSnapshot,
+  ): Promise<MintQuote> {
+    const quote = await this.importMintQuoteSnapshot(mintUrl, method, snapshot);
+    await this.eventBus.emit('mint-quote:updated', {
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      quote,
+    });
+    return quote;
   }
 
   async recordMintQuoteObservation(

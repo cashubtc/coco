@@ -532,10 +532,10 @@ execution inline or creating melt operations automatically.
 
 Deliverables:
 
-- [ ] Add or widen a quote-centric mint watcher path for canonical quotes without local operations. The
+- [x] Add or widen a quote-centric mint watcher path for canonical quotes without local operations. The
       current BOLT11 watcher is still operation-driven: it starts from `mint-op:pending`, subscribes by
       quote, and maps notifications back to an operation ID.
-- [ ] For methods without WebSocket support, rely on polling/explicit refresh.
+- [x] For methods without WebSocket support, rely on polling/explicit refresh.
 - [x] Keep watchers as observation code: they update canonical quote records and emit quote-level claim
       work, but they should not directly create operations or execute mint requests inline.
 - [x] Use the existing quote-level claim trigger,
@@ -549,7 +549,7 @@ Deliverables:
 - [x] Enable mint auto-claim by default when the mint quote watcher/processor is running, with an
       explicit manager/watcher opt-out.
 - [x] Keep auto-claim processors scoped to mint operations only.
-- [ ] Ensure any melt watcher/processor work only reconciles explicit operations already in `executing`
+- [x] Ensure any melt watcher/processor work only reconciles explicit operations already in `executing`
       or `pending`; it must not create melt operations or execute `prepared` melts.
 
 Validation:
@@ -560,8 +560,8 @@ Validation:
       operation for the full remaining amount and moves it to `executing`.
 - [x] A quote update with pending operations that only partially consume claimable balance creates one
       auto-claim operation for the remainder.
-- [ ] Mint auto-claim events do not create or execute melt operations.
-- [ ] A stale `prepared` melt operation is not executed by watcher startup, quote processing, polling,
+- [x] Mint auto-claim events do not create or execute melt operations.
+- [x] A stale `prepared` melt operation is not executed by watcher startup, quote processing, polling,
       or recovery.
 
 ### Phase 6: Public API, React, Docs, and Final Validation
