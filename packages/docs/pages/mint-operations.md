@@ -11,8 +11,8 @@ create history; history starts when an operation exists.
 
 The operation lifecycle API is exposed through `coco.ops.mint`:
 
-- `prepare({ mintUrl, amount, unit?, method, methodData? })` creates a remote
-  quote and persists a pending mint operation
+- `prepare({ mintUrl, method, quoteId, unit?, methodData? })` prepares a
+  pending mint operation from an existing canonical quote
 - `importQuote({ mintUrl, quote, method, methodData? })` tracks an existing
   quote as a mint operation
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
@@ -63,7 +63,7 @@ init -> pending -> executing -> finalized
 
 | Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
 | --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
-| `prepare(...)`              | none                                                    | `pending`                                       | You need a new quote and invoice request to show the payer.    |
+| `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
 | `importQuote(...)`          | none                                                    | `pending`                                       | You already have a remote quote and want Coco to track it.     |
 | `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
 | `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
@@ -78,9 +78,15 @@ targeted `checkPayment()` action.
 ## Prepare -> Pay -> Finalize Flow
 
 ```ts
-const pending = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: 100,
+  method: 'bolt11',
+});
+
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
   method: 'bolt11',
 });
 

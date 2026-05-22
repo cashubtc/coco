@@ -62,7 +62,7 @@ const SEND_PREPARE_INPUT: SendOperationPrepareInput = { mintUrl: MINT_URL, amoun
 const RECEIVE_PREPARE_INPUT: ReceiveOperationPrepareInput = { token: 'cashu-token' };
 const MINT_PREPARE_INPUT: MintOperationPrepareInput = {
   mintUrl: MINT_URL,
-  amount: 100,
+  quoteId: 'mint-quote-1',
   method: 'bolt11',
 };
 const MINT_IMPORT_QUOTE_INPUT: MintOperationImportQuoteInput = {
@@ -1022,7 +1022,7 @@ describe('useReceiveOperation', () => {
 });
 
 describe('useMintOperation', () => {
-  it('passes object-form custom-unit amount inputs through to mint prepare', async () => {
+  it('passes quote-id prepare inputs through to mint prepare', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation({
       amount: Amount.from(50),
@@ -1030,7 +1030,8 @@ describe('useMintOperation', () => {
     });
     const input: MintOperationPrepareInput = {
       mintUrl: MINT_URL,
-      amount: { amount: Amount.from(50), unit: 'USD' },
+      quoteId: 'mint-quote-usd',
+      unit: 'USD',
       method: 'bolt11',
     };
 

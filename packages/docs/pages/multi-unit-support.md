@@ -12,9 +12,16 @@ For a custom unit, pass the amount and unit together. Unit strings are trimmed
 and lowercased by Coco before validation and persistence.
 
 ```ts
-await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: { amount: 25, unit: 'usd' },
+  method: 'bolt11',
+});
+
+await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
+  unit: 'usd',
   method: 'bolt11',
 });
 

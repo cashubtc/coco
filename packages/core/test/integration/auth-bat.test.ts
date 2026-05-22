@@ -73,6 +73,21 @@ describe('Auth BAT (automated — password grant)', () => {
   let mgr: Manager;
   let repositories: MemoryRepositories;
 
+  async function prepareMintOperation(manager: Manager) {
+    const quote = await manager.quotes.mint.create({
+      mintUrl: mintUrl!,
+      amount: Amount.from(1),
+      method: 'bolt11',
+    });
+
+    return manager.ops.mint.prepare({
+      mintUrl: mintUrl!,
+      quoteId: quote.quoteId,
+      method: 'bolt11',
+      methodData: {},
+    });
+  }
+
   beforeAll(async () => {
     const tokens = await acquireTokens();
 
@@ -100,12 +115,7 @@ describe('Auth BAT (automated — password grant)', () => {
     expect(provider).toBeDefined();
     expect(mgr.auth.getPoolSize(mintUrl)).toBe(0);
 
-    const pendingMint = await mgr.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint = await prepareMintOperation(mgr);
     expect(pendingMint).toBeDefined();
     expect(pendingMint.quoteId).toBeDefined();
 
@@ -140,12 +150,7 @@ describe('Auth BAT (automated — password grant)', () => {
     const provider2 = mgr2.auth.getAuthProvider(mintUrl) as AuthProvider;
     expect(provider2).toBeDefined();
 
-    const pendingMint = await mgr2.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint = await prepareMintOperation(mgr2);
     expect(pendingMint).toBeDefined();
     expect(pendingMint.quoteId).toBeDefined();
 

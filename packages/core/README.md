@@ -76,10 +76,16 @@ const unsubscribe = manager.on('counter:updated', (c) => {
 // Register a mint
 await manager.mint.addMint('https://nofees.testnut.cashu.space');
 
-// Create a mint operation, pay externally, then redeem
-const pendingMint = await manager.ops.mint.prepare({
+// Create a mint quote, prepare an operation, pay externally, then redeem
+const quote = await manager.quotes.mint.create({
   mintUrl: 'https://nofees.testnut.cashu.space',
   amount: 100,
+  method: 'bolt11',
+});
+
+const pendingMint = await manager.ops.mint.prepare({
+  mintUrl: 'https://nofees.testnut.cashu.space',
+  quoteId: quote.quoteId,
   method: 'bolt11',
   methodData: {},
 });

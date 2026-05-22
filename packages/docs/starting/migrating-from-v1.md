@@ -1,13 +1,140 @@
 # Migrating from v1
 
-This release changes history from a separately written history table into an
-operation-first projection.
+This release changes two user-facing lifecycle boundaries:
+
+- History is now projected from operation repositories instead of being written
+  as a separate activity table.
+- Quote state is now durable, canonical state under `manager.quotes`, separate
+  from mint and melt operation lifecycle state.
 
 Operations are now the canonical source of wallet activity. History reads are
 derived from send, melt, mint, and receive operation repositories, with older
 `coco_cashu_history` rows retained as read-only compatibility entries.
 
-## History entry identity
+Quote rows are not value movements. Creating or refreshing a quote does not
+create history by itself; history starts when an operation exists.
+
+## Canonical quote APIs
+
+Use `manager.quotes` when you need to create, reload, list, or refresh quote
+payment requests without treating that quote as a wallet activity yet:
+
+- `manager.quotes.mint.create({ mintUrl, amount, unit?, method })`
+- `manager.quotes.mint.get({ mintUrl, method, quoteId })`
+- `manager.quotes.mint.listPending({ method? })`
+- `manager.quotes.mint.refresh({ mintUrl, method, quoteId })`
+- `manager.quotes.melt.create({ mintUrl, method, methodData, unit? })`
+- `manager.quotes.melt.get({ mintUrl, method, quoteId })`
+- `manager.quotes.melt.listPending({ method? })`
+- `manager.quotes.melt.refresh({ mintUrl, method, quoteId })`
+
+For BOLT11 quotes, the invoice is exposed as `quote.request`.
+
+Store quote identity as `mintUrl + method + quoteId`. `quoteId` is no longer a
+sufficient lookup key on its own, and it should not be treated as an operation
+id.
+
+## Mint quote migration
+
+`manager.ops.mint.prepare({ mintUrl, amount, unit?, method })` no longer creates
+a remote quote. Create the canonical quote first, then prepare the operation
+from that quote:
+
+```ts
+const quote = await manager.quotes.mint.create({
+  mintUrl,
+  amount: 100,
+  method: 'bolt11',
+});
+
+showInvoice(quote.request);
+
+const operation = await manager.ops.mint.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
+});
+```
+
+`manager.ops.mint.importQuote(...)` now imports the snapshot into canonical
+quote storage before creating or reusing the operation. Quote observations update
+the canonical quote first, then emit quote-level events.
+
+## Melt quote migration
+
+Melt quote creation moved out of `manager.ops.melt.prepare()`. Code that used to
+pass the invoice directly to `prepare()` must now create the canonical quote
+first:
+
+```ts
+// before
+const prepared = await manager.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  methodData: { invoice },
+});
+
+// after
+const quote = await manager.quotes.melt.create({
+  mintUrl,
+  method: 'bolt11',
+  methodData: { invoice },
+});
+
+const prepared = await manager.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
+});
+```
+
+`manager.ops.melt.prepare()` now reserves proofs and calculates fees from an
+existing canonical melt quote. Use `manager.ops.melt.getByQuote({ mintUrl,
+method, quoteId })` when resolving a melt operation by quote.
+
+## Quote events
+
+The old operation-shaped mint quote event was removed:
+
+```ts
+// before
+manager.on('mint-op:quote-state-changed', ({ operationId, state }) => {
+  console.log(operationId, state);
+});
+
+// after
+manager.on('mint-quote:updated', ({ mintUrl, method, quoteId, quote }) => {
+  console.log(mintUrl, method, quoteId, quote.state);
+});
+```
+
+Use `mint-quote:updated` only for quote state. Operation consumers should follow
+`mint-op:pending`, `mint-op:executing`, and `mint-op:finalized`.
+
+Because quote-only updates are separate from operation updates, `history:updated`
+is not emitted for bare quote creation or quote refresh. When a quote update
+affects a pending operation, the operation lifecycle emits the corresponding
+`mint-op:*` event.
+
+## Adapter and persistence migration
+
+The bundled adapters migrate existing data automatically:
+
+- canonical mint quote rows are backfilled from mint operations
+- old mint quote rows remain readable through the legacy reconciliation path
+- melt quote rows become method-aware canonical quote rows
+- operation quote lookups become method-aware
+
+Custom repository implementations must provide the current repository contract:
+
+- `MintQuoteRepository` keyed by `mintUrl + method + quoteId`
+- `MeltQuoteRepository` keyed by `mintUrl + method + quoteId`
+- `LegacyMintQuoteRepository` for startup reconciliation of old mint quote rows
+- method-aware `MintOperationRepository.getByQuoteId(...)`
+
+## Operation-backed history
+
+### History entry identity
 
 Operation-backed history entries now use deterministic ids:
 
@@ -21,7 +148,7 @@ Legacy rows from the old history table use `legacy:<oldHistoryId>`.
 If your app stores history entry ids, treat ids from the previous history table
 as legacy ids. New operation-backed entries should be linked by `operationId`.
 
-## Entry source
+### Entry source
 
 Every history entry includes `source`:
 
@@ -30,7 +157,7 @@ Every history entry includes `source`:
 
 Operation-backed entries always have `operationId`. Legacy entries may not.
 
-## State values
+### State values
 
 Operation-backed history uses operation state names:
 
@@ -44,14 +171,14 @@ Operation-backed history uses operation state names:
 Legacy entries preserve the old stored state strings, including protocol quote
 states such as `UNPAID`, `PENDING`, `PAID`, and `ISSUED`.
 
-## Ordering and freshness
+### Ordering and freshness
 
 History entries now expose both `createdAt` and `updatedAt`.
 
 Pagination is ordered by `createdAt DESC, id DESC`. Use `updatedAt` for
 replacement, freshness, and realtime reconciliation, not for primary ordering.
 
-## Legacy fallback rows
+### Legacy fallback rows
 
 The old `coco_cashu_history` table or store remains readable. New operation
 events no longer write to it.
@@ -66,7 +193,7 @@ activity:
 Remaining legacy rows are best-effort display data and should not be treated as
 operation lifecycle state.
 
-## Realtime updates
+### Realtime updates
 
 `history:updated` still exists, but it now carries the operation-backed
 projection for the changed operation. Consumers can update optimistically from

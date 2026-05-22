@@ -1,8 +1,9 @@
 # Minting Cashu Token
 
 The process of swapping value for a Cashu token is called "minting". To mint
-with Coco you prepare a mint operation, specifying a `mintUrl` and an `amount`.
-Bare amounts default to sats; for custom units pass `{ amount, unit }`.
+with Coco you first create a canonical mint quote, then prepare a mint operation
+from that quote. Bare amounts default to sats; for custom units pass
+`{ amount, unit }`.
 
 Before minting, ensure the mint is added and trusted (see [Adding a Mint](./adding-mints.md)):
 
@@ -10,30 +11,54 @@ Before minting, ensure the mint is added and trusted (see [Adding a Mint](./addi
 // Add and trust the mint first
 await coco.mint.addMint('https://minturl.com', { trusted: true });
 
-// Create a mint operation (this also creates the remote quote)
-const pendingMint = await coco.ops.mint.prepare({
+// Create a quote first
+const quote = await coco.quotes.mint.create({
   mintUrl: 'https://minturl.com',
   amount: 21,
+  method: 'bolt11',
+});
+
+// Prepare an operation from the quote
+const pendingMint = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  quoteId: quote.quoteId,
   method: 'bolt11',
   methodData: {},
 });
 ```
 
 ```ts
-const customUnitMint = await coco.ops.mint.prepare({
+const customUnitQuote = await coco.quotes.mint.create({
   mintUrl: 'https://minturl.com',
   amount: { amount: 10, unit: 'usd' },
   method: 'bolt11',
 });
+
+const customUnitMint = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  quoteId: customUnitQuote.quoteId,
+  unit: 'usd',
+  method: 'bolt11',
+});
 ```
 
-The returned pending mint operation has a `request` field containing the BOLT11 payment request that needs to be paid before minting can happen. When [Watchers and Processors](../pages/watchers-processors.md) are activated (they are by default) Coco will automatically check whether the quote has been paid and redeem it automatically.
+The canonical quote and returned pending mint operation both expose `request`,
+the BOLT11 payment request that needs to be paid before minting can happen. When
+[Watchers and Processors](../pages/watchers-processors.md) are activated (they
+are by default) Coco will automatically check whether the quote has been paid
+and redeem it automatically.
 You can also execute the pending operation yourself after payment.
 
 ```ts
-const pendingMint = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl: 'https://minturl.com',
   amount: 21,
+  method: 'bolt11',
+});
+
+const pendingMint = await coco.ops.mint.prepare({
+  mintUrl: 'https://minturl.com',
+  quoteId: quote.quoteId,
   method: 'bolt11',
   methodData: {},
 });

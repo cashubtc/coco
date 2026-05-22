@@ -98,8 +98,9 @@ Use this for quote-backed mint lifecycles, including imported quotes and remote
 payment checks.
 
 ```tsx
-import { useMintOperation } from '@cashu/coco-react';
+import { useManager, useMintOperation } from '@cashu/coco-react';
 
+const manager = useManager();
 const {
   prepare,
   importQuote,
@@ -112,14 +113,20 @@ const {
   listInFlight,
 } = useMintOperation();
 
-const pendingMint = await prepare({ mintUrl, amount: 100, method: 'bolt11' });
+const quote = await manager.quotes.mint.create({
+  mintUrl,
+  amount: 100,
+  method: 'bolt11',
+});
+
+const pendingMint = await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
 
 if (pendingMint.state === 'pending') {
   await checkPayment();
 }
 ```
 
-`prepare()` and `importQuote()` both create a pending mint operation.
+`prepare()` and `importQuote()` both bind the hook to a pending mint operation.
 
 ## useMeltOperation
 

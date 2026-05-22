@@ -184,23 +184,6 @@ export class MintOperationService {
     return operation;
   }
 
-  async prepareNewQuote(
-    mintUrl: string,
-    intent: UnitAmount,
-    method: MintMethod = 'bolt11',
-    methodData: MintMethodData = {},
-  ): Promise<PendingMintOperation> {
-    const quote = await this.quoteLifecycle.createMintQuote(mintUrl, intent, method);
-    const initOperation = await this.init(
-      quote.mintUrl,
-      { amount: quote.amount, unit: quote.unit },
-      method,
-      methodData,
-      { quoteId: quote.quoteId },
-    );
-    return this.prepare(initOperation.id);
-  }
-
   async prepareExistingQuote(
     mintUrl: string,
     method: MintMethod,

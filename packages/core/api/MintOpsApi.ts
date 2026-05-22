@@ -8,21 +8,9 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '@core/operations/mint';
-import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
-
-type MintQuoteAmountInputCommon = {
-  /** Mint that will execute the quote-backed mint operation. */
-  mintUrl: string;
-  /** Amount to request from the mint. Bare amounts use `sat` unless `unit` is set. */
-  amount: UnitAmountLike;
-  /** Unit to request from the mint. */
-  unit?: string;
-};
-
-type PrepareMintInputCommon = MintQuoteAmountInputCommon;
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -49,19 +37,12 @@ type MethodDataInput<M extends MintMethod> =
         methodData: MintMethodData<M>;
       };
 
-export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> =
-  | {
-      [M in TSupported]: PrepareMintInputCommon & {
-        /** Mint method to prepare, for example `bolt11`. */
-        method: M;
-      } & MethodDataInput<M>;
-    }[TSupported]
-  | {
-      [M in TSupported]: PrepareExistingQuoteInputCommon & {
-        /** Mint method to prepare, for example `bolt11`. */
-        method: M;
-      } & MethodDataInput<M>;
-    }[TSupported];
+export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
+  [M in TSupported]: PrepareExistingQuoteInputCommon & {
+    /** Mint method to prepare, for example `bolt11`. */
+    method: M;
+  } & MethodDataInput<M>;
+}[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: ImportMintQuoteInputCommon & {
@@ -87,8 +68,8 @@ export interface MintDiagnosticsApi {
 /**
  * Operation-oriented API for quote-backed mint workflows.
  *
- * This API makes the mint lifecycle explicit so callers can prepare a quote,
- * move it into a durable pending state, execute it, and inspect its progress.
+ * This API makes the mint lifecycle explicit so callers can move a canonical
+ * quote into a durable pending operation, execute it, and inspect its progress.
  */
 export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
   /** Recovery helpers for mint operations. */
@@ -105,27 +86,17 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   constructor(private readonly mintOperationService: MintOperationService) {}
 
   /**
-   * Creates a new remote quote, then persists a prepared mint operation without executing it.
+   * Prepares a mint operation against an existing canonical quote without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
-    if ('quoteId' in input) {
-      return this.mintOperationService.prepareExistingQuote(
-        input.mintUrl,
-        input.method,
-        input.quoteId,
-        methodData,
-        input.unit,
-      );
-    }
-
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-    return this.mintOperationService.prepareNewQuote(
+    return this.mintOperationService.prepareExistingQuote(
       input.mintUrl,
-      parsed,
       input.method,
+      input.quoteId,
       methodData,
+      input.unit,
     );
   }
 

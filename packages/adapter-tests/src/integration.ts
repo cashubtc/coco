@@ -279,9 +279,16 @@ async function prepareMintOperation(
   amount: number,
   unit = 'sat',
 ) {
-  return manager.ops.mint.prepare({
+  const quote = await manager.quotes.mint.create({
     mintUrl,
     amount,
+    unit,
+    method: 'bolt11',
+  });
+
+  return manager.ops.mint.prepare({
+    mintUrl,
+    quoteId: quote.quoteId,
     unit,
     method: 'bolt11',
     methodData: {},

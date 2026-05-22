@@ -261,52 +261,56 @@ describe('MintOperationService', () => {
     );
   });
 
-  it('prepareNewQuote persists a pending operation and emits mint-op:pending', async () => {
+  it('prepareExistingQuote persists a pending operation and emits mint-op:pending', async () => {
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     eventBus.on('mint-op:pending', (event) => {
       pendingEvents.push(event);
     });
 
-    (handler.prepare as Mock<any>).mockImplementationOnce(
-      async ({ operation }: { operation: InitMintOperation }) => ({
-        ...makePendingOp(operation.id),
-        quoteId: 'quote-created',
-        request: 'lnbc1created',
-        lastObservedRemoteState: 'UNPAID',
-      }),
-    );
-
-    const pending = await service.prepareNewQuote(mintUrl, {
+    const quote = await quoteLifecycle.createMintQuote(mintUrl, {
       amount: Amount.from(10),
       unit: 'sat',
     });
 
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: quote.quoteId,
+        request: quote.request,
+        lastObservedRemoteState: 'UNPAID',
+      }),
+    );
+
+    const pending = await service.prepareExistingQuote(mintUrl, 'bolt11', quote.quoteId);
+
     expect(pending.state).toBe('pending');
-    expect(pending.quoteId).toBe('quote-created');
+    expect(pending.quoteId).toBe(quote.quoteId);
     expect(pendingEvents).toHaveLength(1);
     expect(pendingEvents[0]?.operationId).toBe(pending.id);
     const createdOperation = pendingEvents[0]?.operation as PendingMintOperation | undefined;
-    expect(createdOperation?.quoteId).toBe('quote-created');
-    expect(createdOperation?.request).toBe('lnbc1created');
+    expect(createdOperation?.quoteId).toBe(quote.quoteId);
+    expect(createdOperation?.request).toBe(quote.request);
     expect(createdOperation?.lastObservedRemoteState).toBe('UNPAID');
   });
 
-  it('prepareNewQuote accepts normalized custom-unit amounts', async () => {
+  it('prepareExistingQuote accepts normalized custom-unit quotes', async () => {
+    const quote = await quoteLifecycle.createMintQuote(mintUrl, {
+      amount: Amount.from(10),
+      unit: 'USD',
+    });
+
     (handler.prepare as Mock<any>).mockImplementationOnce(
       async ({ operation }: { operation: InitMintOperation }) => ({
         ...makePendingOp(operation.id),
         amount: operation.amount,
         unit: operation.unit,
-        quoteId: 'quote-usd',
-        request: 'lnbc1usd',
+        quoteId: quote.quoteId,
+        request: quote.request,
         lastObservedRemoteState: 'UNPAID',
       }),
     );
 
-    const pending = await service.prepareNewQuote(mintUrl, {
-      amount: Amount.from(10),
-      unit: 'USD',
-    });
+    const pending = await service.prepareExistingQuote(mintUrl, 'bolt11', quote.quoteId, {}, 'USD');
 
     expect(pending.unit).toBe('usd');
     expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(mintUrl, 4, 'bolt11', {
