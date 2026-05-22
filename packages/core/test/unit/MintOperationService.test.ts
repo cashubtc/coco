@@ -6,6 +6,7 @@ import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
 import type {
   ExecutingMintOperation,
+  FinalizedMintOperation,
   InitMintOperation,
   PendingMintOperation,
 } from '../../operations/mint/MintOperation';
@@ -1196,6 +1197,50 @@ describe('MintOperationService', () => {
     expect(result.state).toBe('pending');
     expect(stored?.state).toBe('pending');
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('finalize treats finalized reusable onchain siblings as issued when quote data is stale', async () => {
+    const onchainQuoteId = 'onchain-quote-local-issued';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const finalized: FinalizedMintOperation<'onchain'> = {
+      ...makeExecutingOp('onchain-local-issued-finalized'),
+      method: 'onchain',
+      state: 'finalized',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(7),
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(finalized);
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-local-issued-pending'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      amount: Amount.from(5),
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const onchainHandler = {
+      ...handler,
+      execute: mock(
+        async (): Promise<MintExecutionResult> => ({
+          status: 'ISSUED',
+          proofs: [makeProof('out-1')],
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
+      method === 'onchain' ? onchainHandler : handler,
+    );
+
+    const result = await service.finalize(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(result.state).toBe('pending');
+    expect(stored?.state).toBe('pending');
+    expect(onchainHandler.execute).not.toHaveBeenCalled();
   });
 
   it('claimMintQuote executes the ordered funded prefix of reusable onchain siblings', async () => {

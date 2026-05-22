@@ -954,12 +954,29 @@ export class MintOperationService {
     quote: MintQuote,
     targetOperationId?: string,
   ): Promise<Amount> {
-    const remoteAvailable = getMintQuoteAvailableAmount(quote);
+    let remoteAvailable = getMintQuoteAvailableAmount(quote);
     const siblings = await this.mintOperationRepository.getByQuoteId(
       quote.mintUrl,
       quote.method,
       quote.quoteId,
     );
+    if (quote.method === 'onchain') {
+      const locallyIssued = siblings.reduce((total, operation) => {
+        if (operation.state !== 'finalized') {
+          return total;
+        }
+
+        return total.add(operation.amount);
+      }, Amount.zero());
+      const effectiveIssued = locallyIssued.greaterThan(quote.quoteData.amountIssued)
+        ? locallyIssued
+        : quote.quoteData.amountIssued;
+
+      remoteAvailable = quote.quoteData.amountPaid.lessThan(effectiveIssued)
+        ? Amount.zero()
+        : quote.quoteData.amountPaid.subtract(effectiveIssued);
+    }
+
     const locallyReserved = siblings.reduce((total, operation) => {
       if (operation.state !== 'executing' || operation.id === targetOperationId) {
         return total;
