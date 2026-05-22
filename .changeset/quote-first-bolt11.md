@@ -35,3 +35,7 @@ Mint quote records now store method-scoped `quoteData` so BOLT11 fixed amounts
 and NUT-30 onchain balance snapshots can share the same canonical quote
 repository without requiring universal top-level quote `amount` or `state`
 fields.
+
+Keyring persistence now tracks key purpose metadata so NUT-20 mint quote keys
+can use a separate deterministic derivation branch and stay hidden from
+user-facing P2PK key management APIs.

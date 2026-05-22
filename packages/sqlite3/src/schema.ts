@@ -1361,6 +1361,17 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_canonical_mint_quotes(method);
     `,
   },
+  {
+    id: '033_keypair_purpose',
+    sql: `
+      ALTER TABLE coco_cashu_keypairs ADD COLUMN purpose TEXT NOT NULL DEFAULT 'p2pk';
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_keypairs_purpose_createdAt
+        ON coco_cashu_keypairs(purpose, createdAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_keypairs_purpose_derivationIndex
+        ON coco_cashu_keypairs(purpose, derivationIndex DESC)
+        WHERE derivationIndex IS NOT NULL;
+    `,
+  },
 ];
 
 // Export for testing

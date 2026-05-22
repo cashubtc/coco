@@ -1,7 +1,7 @@
 import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
 import type { KeyRingRepository } from '@core/repositories';
-import type { Keypair } from '@core/models/Keypair';
+import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -9,6 +9,11 @@ import type { SeedService } from '@core/services/SeedService.ts';
 import { HDKey } from '@scure/bip32';
 
 export class KeyRingService {
+  private static readonly DERIVATION_PURPOSES: Record<KeypairPurpose, number> = {
+    p2pk: 10,
+    nut20_mint_quote: 20,
+  };
+
   private readonly logger?: Logger;
   private readonly keyRingRepository: KeyRingRepository;
   private readonly seedService: SeedService;
@@ -24,12 +29,28 @@ export class KeyRingService {
   async generateNewKeyPair(options?: {
     dumpSecretKey?: boolean;
   }): Promise<{ publicKeyHex: string } | Keypair> {
+    return this.generateKeyPairForPurpose('p2pk', options);
+  }
+
+  async generateMintQuoteKeyPair(): Promise<Keypair> {
+    return (await this.generateKeyPairForPurpose('nut20_mint_quote', {
+      dumpSecretKey: true,
+    })) as Keypair;
+  }
+
+  private async generateKeyPairForPurpose(
+    purpose: KeypairPurpose,
+    options?: {
+      dumpSecretKey?: boolean;
+    },
+  ): Promise<{ publicKeyHex: string } | Keypair> {
     this.logger?.debug('Generating new key pair');
-    const lastDerivationIndex = await this.keyRingRepository.getLastDerivationIndex();
+    const lastDerivationIndex = await this.keyRingRepository.getLastDerivationIndex(purpose);
     const nextDerivationIndex = lastDerivationIndex + 1;
     const seed = await this.seedService.getSeed();
     const hdKey = HDKey.fromMasterSeed(seed);
-    const derivationPath = `m/129373'/10'/0'/0'/${nextDerivationIndex}`;
+    const derivationPurpose = KeyRingService.DERIVATION_PURPOSES[purpose];
+    const derivationPath = `m/129373'/${derivationPurpose}'/0'/0'/${nextDerivationIndex}`;
     const { privateKey: secretKey } = hdKey.derive(derivationPath);
     if (!secretKey) {
       throw new Error('Failed to derive secret key');
@@ -39,10 +60,11 @@ export class KeyRingService {
       publicKeyHex,
       secretKey,
       derivationIndex: nextDerivationIndex,
+      purpose,
     });
     this.logger?.debug('New key pair generated', { publicKeyHex });
     if (options?.dumpSecretKey) {
-      return { publicKeyHex, secretKey };
+      return { publicKeyHex, secretKey, derivationIndex: nextDerivationIndex, purpose };
     }
     return { publicKeyHex };
   }
@@ -53,14 +75,18 @@ export class KeyRingService {
       throw new Error('Secret key must be exactly 32 bytes');
     }
     const publicKeyHex = this.getPublicKeyHex(secretKey);
-    await this.keyRingRepository.setPersistedKeyPair({ publicKeyHex, secretKey });
+    await this.keyRingRepository.setPersistedKeyPair({
+      publicKeyHex,
+      secretKey,
+      purpose: 'p2pk',
+    });
     this.logger?.debug('Key pair added', { publicKeyHex });
-    return { publicKeyHex, secretKey };
+    return { publicKeyHex, secretKey, purpose: 'p2pk' };
   }
 
   async removeKeyPair(publicKey: string): Promise<void> {
     this.logger?.debug('Removing key pair', { publicKey });
-    await this.keyRingRepository.deletePersistedKeyPair(publicKey);
+    await this.keyRingRepository.deletePersistedKeyPair(publicKey, 'p2pk');
     this.logger?.debug('Key pair removed', { publicKey });
   }
 
@@ -68,15 +94,22 @@ export class KeyRingService {
     if (!publicKey || typeof publicKey !== 'string') {
       throw new Error('Public key is required and must be a string');
     }
-    return this.keyRingRepository.getPersistedKeyPair(publicKey);
+    return this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+  }
+
+  async getMintQuoteKeyPair(publicKey: string): Promise<Keypair | null> {
+    if (!publicKey || typeof publicKey !== 'string') {
+      throw new Error('Public key is required and must be a string');
+    }
+    return this.keyRingRepository.getPersistedKeyPair(publicKey, 'nut20_mint_quote');
   }
 
   async getLatestKeyPair(): Promise<Keypair | null> {
-    return this.keyRingRepository.getLatestKeyPair();
+    return this.keyRingRepository.getLatestKeyPair('p2pk');
   }
 
   async getAllKeyPairs(): Promise<Keypair[]> {
-    return this.keyRingRepository.getAllPersistedKeyPairs();
+    return this.keyRingRepository.getAllPersistedKeyPairs('p2pk');
   }
 
   async signProof(proof: Proof, publicKey: string): Promise<Proof> {
@@ -84,7 +117,7 @@ export class KeyRingService {
     if (!proof.secret || typeof proof.secret !== 'string') {
       throw new Error('Proof secret is required and must be a string');
     }
-    const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey);
+    const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
     if (!keyPair) {
       const publicKeyPreview = publicKey.substring(0, 8);
       this.logger?.error('Key pair not found', { publicKey });

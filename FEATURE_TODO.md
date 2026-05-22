@@ -435,18 +435,18 @@ Validation:
 
 ### Phase 2: NUT-20 Quote Keys and Onchain Quote Creation
 
-Start here next.
+Status: in progress.
 
 Purpose: create NUT-30 mint quotes through `manager.quotes.mint.create()` with one fresh NUT-20 key per
 quote and persisted quote-scoped metadata.
 
 Deliverables:
 
-- [ ] Add a NUT-20 key purpose to keyring persistence, separate from user-facing/P2PK keys.
-- [ ] Migrate existing keyring rows to the default user-facing purpose, for example `p2pk`.
-- [ ] Filter user-facing keyring APIs so `nut20_mint_quote` keys are not returned or removed by generic
+- [x] Add a NUT-20 key purpose to keyring persistence, separate from user-facing/P2PK keys.
+- [x] Migrate existing keyring rows to the default user-facing purpose, for example `p2pk`.
+- [x] Filter user-facing keyring APIs so `nut20_mint_quote` keys are not returned or removed by generic
       user/P2PK key management flows.
-- [ ] Derive NUT-20 quote keys from `m/129373'/20'/0'/0'/{index}`.
+- [x] Derive NUT-20 quote keys from `m/129373'/20'/0'/0'/{index}`.
 - [ ] Generate and persist exactly one fresh NUT-20 quote key per new onchain quote; do not reuse keys
       across quotes.
 - [ ] Add the onchain mint quote handler path that sends `{ unit, pubkey }` and persists the returned
@@ -461,7 +461,7 @@ Validation:
 - [ ] Creating two onchain quotes derives two distinct NUT-20 public keys.
 - [ ] Onchain quote creation persists `pubkey`, `amountPaid`, and `amountIssued`.
 - [ ] Onchain quote refresh updates canonical `quoteData` before emitting/calling quote-level work.
-- [ ] Generic latest/all/remove keyring APIs do not expose or delete `nut20_mint_quote` keys.
+- [x] Generic latest/all/remove keyring APIs do not expose or delete `nut20_mint_quote` keys.
 
 ### Phase 3: Explicit Onchain Withdrawal Preparation
 
