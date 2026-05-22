@@ -60,18 +60,50 @@ export type ListPendingMeltQuotesInput<TSupported extends MeltMethod = DefaultSu
     method?: TSupported;
   };
 
-export interface MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
-  create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote>;
-  get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null>;
-  listPending(input?: ListPendingMintQuotesInput<TSupported>): Promise<MintQuote[]>;
-  refresh(input: RefreshMintQuoteInput<TSupported>): Promise<MintQuote>;
+export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
+  constructor(private readonly mintOperationService: MintOperationService) {}
+
+  async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
+    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+    return this.mintOperationService.createQuote(input.mintUrl, parsed, input.method);
+  }
+
+  get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {
+    return this.mintOperationService.getQuote(input.mintUrl, input.method, input.quoteId);
+  }
+
+  listPending(input: ListPendingMintQuotesInput<TSupported> = {}): Promise<MintQuote[]> {
+    return this.mintOperationService.getPendingQuotes(input.method);
+  }
+
+  refresh(input: RefreshMintQuoteInput<TSupported>): Promise<MintQuote> {
+    return this.mintOperationService.refreshQuote(input.mintUrl, input.method, input.quoteId);
+  }
 }
 
-export interface MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
-  create(input: CreateMeltQuoteInput<TSupported>): Promise<MeltQuote>;
-  get(input: GetMeltQuoteInput<TSupported>): Promise<MeltQuote | null>;
-  listPending(input?: ListPendingMeltQuotesInput<TSupported>): Promise<MeltQuote[]>;
-  refresh(input: RefreshMeltQuoteInput<TSupported>): Promise<MeltQuote>;
+export class MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
+  constructor(private readonly meltOperationService: MeltOperationService) {}
+
+  create(input: CreateMeltQuoteInput<TSupported>): Promise<MeltQuote> {
+    return this.meltOperationService.createQuote(
+      input.mintUrl,
+      input.method,
+      input.methodData,
+      input.unit,
+    );
+  }
+
+  get(input: GetMeltQuoteInput<TSupported>): Promise<MeltQuote | null> {
+    return this.meltOperationService.getQuote(input.mintUrl, input.method, input.quoteId);
+  }
+
+  listPending(input: ListPendingMeltQuotesInput<TSupported> = {}): Promise<MeltQuote[]> {
+    return this.meltOperationService.getPendingQuotes(input.method);
+  }
+
+  refresh(input: RefreshMeltQuoteInput<TSupported>): Promise<MeltQuote> {
+    return this.meltOperationService.refreshQuote(input.mintUrl, input.method, input.quoteId);
+  }
 }
 
 /**
@@ -87,34 +119,10 @@ export class QuoteApi<
   readonly melt: MeltQuoteApi<TMeltSupported>;
 
   constructor(
-    private readonly mintOperationService: MintOperationService,
-    private readonly meltOperationService: MeltOperationService,
+    mintOperationService: MintOperationService,
+    meltOperationService: MeltOperationService,
   ) {
-    this.mint = {
-      create: async (input) => {
-        const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-        return this.mintOperationService.createQuote(input.mintUrl, parsed, input.method);
-      },
-      get: (input) =>
-        this.mintOperationService.getQuote(input.mintUrl, input.method, input.quoteId),
-      listPending: (input = {}) => this.mintOperationService.getPendingQuotes(input.method),
-      refresh: (input) =>
-        this.mintOperationService.refreshQuote(input.mintUrl, input.method, input.quoteId),
-    };
-
-    this.melt = {
-      create: (input) =>
-        this.meltOperationService.createQuote(
-          input.mintUrl,
-          input.method,
-          input.methodData,
-          input.unit,
-        ),
-      get: (input) =>
-        this.meltOperationService.getQuote(input.mintUrl, input.method, input.quoteId),
-      listPending: (input = {}) => this.meltOperationService.getPendingQuotes(input.method),
-      refresh: (input) =>
-        this.meltOperationService.refreshQuote(input.mintUrl, input.method, input.quoteId),
-    };
+    this.mint = new MintQuoteApi(mintOperationService);
+    this.melt = new MeltQuoteApi(meltOperationService);
   }
 }
