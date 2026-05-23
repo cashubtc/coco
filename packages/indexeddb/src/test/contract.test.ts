@@ -186,23 +186,19 @@ describe('hydration corruption guard', () => {
   it('throws when receive operation has prepared state but null fee', async () => {
     const { repositories, dispose } = await createRepositories();
     try {
-      await repositories.db.runTransaction(
-        'rw',
-        ['coco_cashu_receive_operations'],
-        async (tx) => {
-          await tx.table('coco_cashu_receive_operations').put({
-            id: 'corrupt-receive',
-            mintUrl: 'https://mint.test',
-            amount: 100,
-            unit: 'sat',
-            state: 'prepared',
-            createdAt: 0,
-            updatedAt: 0,
-            fee: null,
-            inputProofsJson: '[]',
-          });
-        },
-      );
+      await repositories.db.runTransaction('rw', ['coco_cashu_receive_operations'], async (tx) => {
+        await tx.table('coco_cashu_receive_operations').put({
+          id: 'corrupt-receive',
+          mintUrl: 'https://mint.test',
+          amount: 100,
+          unit: 'sat',
+          state: 'prepared',
+          createdAt: 0,
+          updatedAt: 0,
+          fee: null,
+          inputProofsJson: '[]',
+        });
+      });
 
       let threw = false;
       try {
