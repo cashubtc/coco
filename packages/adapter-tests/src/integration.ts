@@ -4,6 +4,7 @@ import {
   getEncodedToken,
   ConsoleLogger,
   normalizeUnit,
+  parseUnitAmount,
   getMintQuoteAvailableAmount,
 } from '@cashu/coco-core';
 import {
@@ -233,9 +234,9 @@ async function waitForOnchainQuoteAvailable(
   manager: Manager,
   mintUrl: string,
   quoteId: string,
-  amount: AmountLike,
+  amount: UnitAmountLike,
 ): Promise<MintQuote<'onchain'>> {
-  const requested = Amount.from(amount);
+  const requested = parseUnitAmount(amount).amount;
   let latest: MintQuote | undefined;
 
   for (let attempt = 0; attempt < 30; attempt++) {
