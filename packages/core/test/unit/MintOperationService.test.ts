@@ -156,13 +156,11 @@ describe('MintOperationService', () => {
         pubkey: importedQuote.pubkey,
         outputData: makeSerializedOutputData(operation.id, operation.amount),
       })),
-      execute: mock(
-        async ({ operation }: any): Promise<MintExecutionResult> => {
-          lastExecutedAmount = operation.amount;
-          executedAmounts.push(operation.amount.toString());
-          return { status: 'ISSUED', proofs: [makeProof(operation.id)] };
-        },
-      ),
+      execute: mock(async ({ operation }: any): Promise<MintExecutionResult> => {
+        lastExecutedAmount = operation.amount;
+        executedAmounts.push(operation.amount.toString());
+        return { status: 'ISSUED', proofs: [makeProof(operation.id)] };
+      }),
       fetchRemoteQuote: mock(async ({ quote }) => {
         issued = issued.add(lastExecutedAmount);
         return mintQuoteFromOnchainResponse(quote.mintUrl, {

@@ -126,9 +126,7 @@ const refreshed = await coco.quotes.mint.refresh({
   quoteId: quote.quoteId,
 });
 
-const claimable = refreshed.quoteData.amountPaid.subtract(
-  refreshed.quoteData.amountIssued,
-);
+const claimable = refreshed.quoteData.amountPaid.subtract(refreshed.quoteData.amountIssued);
 ```
 
 To mint part of the available balance explicitly, prepare an operation with the

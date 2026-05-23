@@ -92,10 +92,7 @@ export class MintAdapter {
   }
 
   // Check current state of an onchain mint quote
-  async checkMintQuoteOnchain(
-    mintUrl: string,
-    quoteId: string,
-  ): Promise<MintQuoteOnchainResponse> {
+  async checkMintQuoteOnchain(mintUrl: string, quoteId: string): Promise<MintQuoteOnchainResponse> {
     const cashuMint = this.getCashuMint(mintUrl);
     return await cashuMint.checkMintQuoteOnchain(quoteId);
   }
