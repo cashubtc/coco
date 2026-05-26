@@ -19,7 +19,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId } from '../../utils';
+import { generateSubId, normalizeMintUrl } from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
@@ -130,26 +130,83 @@ export class MeltOperationService {
     }
 
     const id = generateSubId();
-    const operation = createMeltOperation(
-      id,
-      mintUrl,
-      {
-        method,
-        methodData: normalizedMethodData,
-      },
-      normalizedUnit,
-      options,
-    );
+    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
+      const operation = createMeltOperation(
+        id,
+        operationMintUrl,
+        {
+          method,
+          methodData: normalizedMethodData,
+        },
+        normalizedUnit,
+        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
+      );
 
-    await this.meltOperationRepository.create(operation);
+      await this.meltOperationRepository.create(operation);
+      return operation;
+    };
+
+    const operation = options?.quoteId
+      ? await this.createQuoteBoundInitOperation(
+          mintUrl,
+          method,
+          options.quoteId,
+          normalizedUnit,
+          createOperation,
+        )
+      : await createOperation(mintUrl);
+
     this.logger?.debug('Melt operation created', {
       operationId: id,
-      mintUrl,
+      mintUrl: operation.mintUrl,
       method,
       unit: normalizedUnit,
+      quoteId: operation.quoteId,
     });
 
     return operation;
+  }
+
+  private async createQuoteBoundInitOperation(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+    expectedUnit: string,
+    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMeltOperation>,
+  ): Promise<InitMeltOperation> {
+    const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
+    try {
+      const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
+        mintUrl,
+        method,
+        quoteId,
+        expectedUnit,
+      );
+      const existing = await this.getTrackedOperationForQuote(quote.mintUrl, method, quote.quoteId);
+      if (existing) {
+        throw new Error(
+          `Melt quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+        );
+      }
+
+      return createOperation(quote.mintUrl, quote.quoteId);
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async getTrackedOperationForQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+  ): Promise<MeltOperation | null> {
+    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
+    const matching = operations.filter((operation) => operation.method === method);
+    if (matching.length === 0) {
+      return null;
+    }
+
+    return matching.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
   }
 
   async prepareExistingQuote(

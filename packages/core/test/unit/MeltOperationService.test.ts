@@ -311,6 +311,22 @@ describe('MeltOperationService', () => {
       expect(stored?.methodData.amountSats?.toString()).toBe('1');
     });
 
+    it('rejects duplicate quote-bound operations', async () => {
+      const first = await service.init('https://MINT.test/', 'bolt11', { invoice }, 'sat', {
+        quoteId: 'quote-1',
+      });
+
+      await expect(
+        service.init(mintUrl, 'bolt11', { invoice }, 'sat', { quoteId: 'quote-1' }),
+      ).rejects.toThrow(
+        `Melt quote quote-1 is already tracked by operation ${first.id} in state init`,
+      );
+
+      const operations = await meltOperationRepository.getByQuoteId(mintUrl, 'quote-1');
+      expect(first.mintUrl).toBe(mintUrl);
+      expect(operations).toHaveLength(1);
+    });
+
     it('throws when mint is untrusted', async () => {
       (mintService.isTrustedMint as Mock<any>).mockResolvedValue(false);
 
@@ -376,6 +392,18 @@ describe('MeltOperationService', () => {
       expect(prepared.mintUrl).toBe(mintUrl);
       expect(stored?.mintUrl).toBe(mintUrl);
       expect(byQuote?.id).toBe(prepared.id);
+    });
+
+    it('rejects duplicate prepares for the same canonical quote', async () => {
+      const first = await service.prepareExistingQuote('https://MINT.test/', 'bolt11', 'quote-1');
+
+      await expect(service.prepareExistingQuote(mintUrl, 'bolt11', 'quote-1')).rejects.toThrow(
+        `Melt quote quote-1 is already tracked by operation ${first.id} in state prepared`,
+      );
+
+      const operations = await meltOperationRepository.getByQuoteId(mintUrl, 'quote-1');
+      expect(operations).toHaveLength(1);
+      expect(handler.prepare).toHaveBeenCalledTimes(1);
     });
 
     it('prepares operation and emits event', async () => {
