@@ -30,7 +30,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
@@ -160,28 +160,98 @@ export class MintOperationService {
     }
 
     const operationId = generateSubId();
-    const operation = createMintOperation(
-      operationId,
-      mintUrl,
-      {
-        method,
-        methodData,
-      } as MintMethodMeta,
-      parsed,
-      options,
-    );
+    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
+      const operation = createMintOperation(
+        operationId,
+        operationMintUrl,
+        {
+          method,
+          methodData,
+        } as MintMethodMeta,
+        parsed,
+        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
+      );
 
-    await this.mintOperationRepository.create(operation);
+      await this.mintOperationRepository.create(operation);
+      return operation;
+    };
+
+    const operation = options?.quoteId
+      ? await this.createQuoteBoundInitOperation(
+          mintUrl,
+          method,
+          options.quoteId,
+          parsed,
+          createOperation,
+        )
+      : await createOperation(mintUrl);
+
     this.logger?.debug('Mint operation created', {
       operationId,
-      mintUrl,
-      quoteId: options?.quoteId,
+      mintUrl: operation.mintUrl,
+      quoteId: operation.quoteId,
       method,
       amount: parsed.amount,
       unit: parsed.unit,
     });
 
     return operation;
+  }
+
+  private async createQuoteBoundInitOperation(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    intent: UnitAmount,
+    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMintOperation>,
+  ): Promise<InitMintOperation> {
+    const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
+    try {
+      const quote = await this.resolveMintQuoteForOperationCreation(
+        mintUrl,
+        method,
+        quoteId,
+        intent,
+      );
+      return createOperation(quote.mintUrl, quote.quoteId);
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async resolveMintQuoteForOperationCreation(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    intent: UnitAmount,
+  ): Promise<MintQuote> {
+    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+    if (!quote) {
+      throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
+    }
+
+    if (!quote.amount.equals(intent.amount)) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} amount ${quote.amount} does not match requested amount ${intent.amount}`,
+      );
+    }
+
+    if (quote.unit !== intent.unit) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${intent.unit}`,
+      );
+    }
+
+    if (!quote.reusable) {
+      const existing = await this.getOperationByQuote(quote.mintUrl, method, quote.quoteId);
+      if (existing) {
+        throw new Error(
+          `Mint quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+        );
+      }
+    }
+
+    return quote;
   }
 
   async prepareExistingQuote(

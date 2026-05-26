@@ -454,6 +454,89 @@ describe('MintOperationService', () => {
     expect(handler.prepare).not.toHaveBeenCalled();
   });
 
+  it('prepareExistingQuote rejects duplicate operations for non-reusable quotes', async () => {
+    const quote = await quoteLifecycle.createMintQuote(mintUrl, {
+      amount: Amount.from(10),
+      unit: 'sat',
+    });
+
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: quote.quoteId,
+        request: quote.request,
+        lastObservedRemoteState: 'UNPAID',
+      }),
+    );
+
+    const first = await service.prepareExistingQuote(mintUrl, 'bolt11', quote.quoteId);
+
+    await expect(service.prepareExistingQuote(mintUrl, 'bolt11', quote.quoteId)).rejects.toThrow(
+      `Mint quote ${quote.quoteId} is already tracked by operation ${first.id} in state pending`,
+    );
+
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quote.quoteId);
+    expect(operations).toHaveLength(1);
+    expect(handler.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it('init rejects duplicate operations for non-reusable quote-bound operations', async () => {
+    await persistQuote();
+    const variantMintUrl = 'https://MINT.test/';
+
+    const first = await service.init(
+      variantMintUrl,
+      { amount: Amount.from(10), unit: 'sat' },
+      'bolt11',
+      {},
+      { quoteId },
+    );
+
+    await expect(
+      service.init(mintUrl, { amount: Amount.from(10), unit: 'sat' }, 'bolt11', {}, { quoteId }),
+    ).rejects.toThrow(
+      `Mint quote ${quoteId} is already tracked by operation ${first.id} in state init`,
+    );
+
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
+    expect(first.mintUrl).toBe(mintUrl);
+    expect(operations).toHaveLength(1);
+  });
+
+  it('init allows repeated operations for reusable quote-bound operations', async () => {
+    const reusableQuote = {
+      ...mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-reusable',
+        request: 'lnbc1reusable',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+      reusable: true,
+    };
+    await quoteRepo.upsertMintQuote(reusableQuote);
+
+    const first = await service.init(
+      mintUrl,
+      { amount: Amount.from(10), unit: 'sat' },
+      'bolt11',
+      {},
+      { quoteId: reusableQuote.quoteId },
+    );
+    const second = await service.init(
+      mintUrl,
+      { amount: Amount.from(10), unit: 'sat' },
+      'bolt11',
+      {},
+      { quoteId: reusableQuote.quoteId },
+    );
+
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', reusableQuote.quoteId);
+    expect(first.id).not.toBe(second.id);
+    expect(operations).toHaveLength(2);
+  });
+
   it('importQuote persists a pending operation and emits mint-op:pending', async () => {
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     eventBus.on('mint-op:pending', (event) => {
