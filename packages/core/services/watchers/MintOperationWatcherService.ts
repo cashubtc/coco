@@ -220,7 +220,7 @@ export class MintOperationWatcherService {
 
       const uniqueByQuote = new Map<string, PendingMintOperation>();
       for (const operation of mintOperations) {
-        uniqueByQuote.set(`${operation.method}::${operation.quoteId}`, operation);
+        uniqueByQuote.set(toKey(mintUrl, operation.method, operation.quoteId), operation);
       }
 
       const toWatch = Array.from(uniqueByQuote.values()).filter(
