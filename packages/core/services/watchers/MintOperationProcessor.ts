@@ -116,7 +116,10 @@ export class MintOperationProcessor {
           quoteId,
         );
         for (const operation of operations) {
-          if (operation.state === 'pending') {
+          const operationReady =
+            operation.state === 'pending' &&
+            (quote.reusable === true ? operation.lastObservedRemoteState === 'PAID' : true);
+          if (operationReady) {
             this.enqueue(mintUrl, operation.id, operation.method);
           }
         }

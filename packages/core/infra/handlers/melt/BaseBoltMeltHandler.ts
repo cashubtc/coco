@@ -51,9 +51,9 @@ export interface BoltMeltQuoteResponse {
   payment_preimage?: string | null;
 }
 
-export abstract class BaseBoltMeltHandler<M extends 'bolt11' | 'bolt12'>
-  implements MeltMethodHandler<M>
-{
+export abstract class BaseBoltMeltHandler<
+  M extends 'bolt11' | 'bolt12',
+> implements MeltMethodHandler<M> {
   protected abstract readonly method: M;
 
   protected abstract executeMelt(

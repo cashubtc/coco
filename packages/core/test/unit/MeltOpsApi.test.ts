@@ -19,7 +19,17 @@ type _AssertDefaultBoltMethods = Assert<
   Exclude<PrepareMeltMethod, 'bolt11' | 'bolt12'> extends never ? true : false
 >;
 type CustomPrepareMeltInput = Parameters<MeltOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
+type ListMeltByQuoteInput = Parameters<MeltOpsApi['listByQuote']>[0];
 type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['method'] ? true : false>;
+type _AssertListByQuoteUsesObjectInput = Assert<
+  Extract<ListMeltByQuoteInput, { method: 'bolt12' }> extends {
+    mintUrl: string;
+    method: 'bolt12';
+    quoteId: string;
+  }
+    ? true
+    : false
+>;
 
 const supportedPrepareInput: PrepareMeltInput = {
   mintUrl,
@@ -71,6 +81,7 @@ describe('MeltOpsApi', () => {
       execute: mock(async () => pendingOperation),
       getOperation: mock(async () => preparedOperation),
       getOperationByQuote: mock(async () => preparedOperation),
+      getOperationsForQuote: mock(async () => [preparedOperation]),
       prepareExistingQuote: mock(async () => preparedOperation),
       getPreparedOperations: mock(async () => [preparedOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
@@ -135,6 +146,21 @@ describe('MeltOpsApi', () => {
       preparedOperation.quoteId,
     );
     expect(result).toBe(preparedOperation);
+  });
+
+  it('listByQuote forwards to the service', async () => {
+    const result = await api.listByQuote({
+      mintUrl,
+      method: 'bolt12',
+      quoteId: preparedOperation.quoteId,
+    });
+
+    expect(meltOperationService.getOperationsForQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt12',
+      preparedOperation.quoteId,
+    );
+    expect(result).toEqual([preparedOperation]);
   });
 
   it('listPrepared and listInFlight delegate to separate service methods', async () => {

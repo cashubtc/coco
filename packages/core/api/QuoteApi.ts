@@ -10,7 +10,11 @@ import type { MintQuote } from '../models/MintQuote';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
-export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain';
+export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain' | 'bolt12';
+type DefaultImportableMintQuoteMethod<TSupported extends MintMethod> = Extract<
+  TSupported,
+  'bolt11'
+>;
 
 type MintQuoteIdentityInput<M extends MintMethod> = {
   mintUrl: string;
@@ -35,6 +39,12 @@ export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
         ? {
             unit?: string;
           }
+        : M extends 'bolt12'
+          ? {
+              unit?: string;
+              amount?: UnitAmountLike;
+              description?: string;
+            }
         : never);
   }[TSupported];
 
@@ -43,16 +53,18 @@ export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMi
 }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
-  {
-    [M in TSupported]: {
-      /** Mint that issued the existing quote. */
-      mintUrl: string;
-      /** Existing quote snapshot to persist as canonical quote state. */
-      quote: MintMethodQuoteSnapshot<M>;
-      /** Mint method for the quote snapshot. */
-      method: M;
-    };
-  }[TSupported];
+  DefaultImportableMintQuoteMethod<TSupported> extends never
+    ? never
+    : {
+        [M in DefaultImportableMintQuoteMethod<TSupported>]: {
+          /** Mint that issued the existing quote. */
+          mintUrl: string;
+          /** Existing quote snapshot to persist as canonical quote state. */
+          quote: MintMethodQuoteSnapshot<M>;
+          /** Mint method for the quote snapshot. */
+          method: M;
+        };
+      }[DefaultImportableMintQuoteMethod<TSupported>];
 
 export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
   GetMintQuoteInput<TSupported>;
@@ -88,10 +100,24 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQu
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
-    if ('amount' in input) {
+    if (input.method === 'bolt11') {
       const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
       return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
         amount: parsed,
+      } as MintMethodCreateQuoteData<typeof input.method>);
+    }
+
+    if (input.method === 'bolt12') {
+      const parsed =
+        'amount' in input && input.amount !== undefined
+          ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
+          : undefined;
+      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+        unit:
+          parsed?.unit ??
+          normalizeUnit('unit' in input ? input.unit : undefined, { defaultUnit: DEFAULT_UNIT }),
+        amount: parsed,
+        description: input.description,
       } as MintMethodCreateQuoteData<typeof input.method>);
     }
 

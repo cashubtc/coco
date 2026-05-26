@@ -198,6 +198,4 @@ export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<ExecutionResult<M>>;
 }
 
-export type MeltMethodHandlerRegistry = {
-  [M in MeltMethod]: MeltMethodHandler<M>;
-};
+export type MeltMethodHandlerRegistry = Record<MeltMethod, MeltMethodHandler<any>>;

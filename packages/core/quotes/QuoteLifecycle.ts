@@ -1,4 +1,9 @@
-import { Amount, type AmountLike, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type AmountLike,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+} from '@cashu/cashu-ts';
 import type { UnitAmount } from '../amounts.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts';
 import type { EventBus } from '../events/EventBus';
@@ -11,6 +16,7 @@ import {
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   mintQuoteFromBolt11Response,
+  mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
   mintQuoteToMethodSnapshot,
   isStatefulMintQuote,
@@ -56,7 +62,10 @@ function maxAmount(left: Amount, right: Amount): Amount {
   return left.greaterThan(right) ? left : right;
 }
 
-function hasOnchainSettlementAmounts(snapshot: MintMethodQuoteSnapshot<'onchain'>): boolean {
+function hasReusableSettlementAmounts(snapshot: {
+  amount_paid?: unknown;
+  amount_issued?: unknown;
+}): boolean {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
 }
 
@@ -77,9 +86,11 @@ function getRemoteStateChange(
     return existing.state !== incoming.state;
   }
 
-  if (existing.method === 'onchain' && incoming.method === 'onchain') {
-    const snapshot = rawSnapshot as MintMethodQuoteSnapshot<'onchain'> | undefined;
-    if (!snapshot || hasOnchainSettlementAmounts(snapshot)) {
+  if (existing.reusable && incoming.reusable) {
+    const snapshot = rawSnapshot as
+      | (MintMethodQuoteSnapshot<'onchain'> | MintMethodQuoteSnapshot<'bolt12'>)
+      | undefined;
+    if (!snapshot || hasReusableSettlementAmounts(snapshot)) {
       return (
         !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
         !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
@@ -343,6 +354,13 @@ export class QuoteLifecycle {
         amount_paid: onchainQuote.amount_paid ?? Amount.zero(),
         amount_issued: onchainQuote.amount_issued ?? Amount.zero(),
       });
+    } else if (method === 'bolt12') {
+      const bolt12Quote = quote as MintMethodQuoteSnapshot<'bolt12'>;
+      canonicalQuote = mintQuoteFromBolt12Response(mintUrl, {
+        ...bolt12Quote,
+        amount_paid: bolt12Quote.amount_paid ?? Amount.zero(),
+        amount_issued: bolt12Quote.amount_issued ?? Amount.zero(),
+      } as MintQuoteBolt12Response);
     } else {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
@@ -364,7 +382,7 @@ export class QuoteLifecycle {
         remoteStateChanged: false,
       };
     }
-    if (existing?.method === 'onchain' && canonicalQuote.method === 'onchain') {
+    if (existing?.reusable && canonicalQuote.reusable) {
       canonicalQuote = {
         ...canonicalQuote,
         quoteData: {
@@ -562,6 +580,8 @@ export class QuoteLifecycle {
     switch (quote.method) {
       case 'bolt11':
         return { invoice: quote.request };
+      case 'bolt12':
+        return { offer: quote.request, amountSats: quote.amount };
       default:
         throw new Error(`Unsupported melt quote method ${String(quote.method)}`);
     }
@@ -595,24 +615,16 @@ export class QuoteLifecycle {
   }
 
   private async assertMintQuoteCapabilities(quote: MintQuote): Promise<void> {
+    const amount = getMintQuoteAmount(quote);
     await this.mintService.assertMethodUnitSupported(
       quote.mintUrl,
       4,
       quote.method,
-      quote.method === 'onchain'
-        ? quote.unit
-        : {
-            amount: quote.amount,
-            unit: quote.unit,
-          },
+      amount ? { amount, unit: quote.unit } : quote.unit,
     );
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (quote.reusable && quote.method !== 'onchain') {
-      throw new Error(`Cannot prepare ${context}: reusable quote is unsupported`);
-    }
-
     if (quote.expiry !== null && quote.expiry * 1000 <= Date.now()) {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
