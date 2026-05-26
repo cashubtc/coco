@@ -16,8 +16,10 @@ const quoteId = 'quote-1';
 
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
+type CustomPrepareMintInput = Parameters<MintOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
 type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
 type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
+type ListMintByQuoteInput = Parameters<MintOpsApi['listByQuote']>[0];
 type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
   Extract<PrepareMintInput, { method: 'bolt11' }> extends {
     methodData?: Record<string, never>;
@@ -33,10 +35,25 @@ type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
     : false
 >;
 type _AssertGetByQuoteUsesObjectInput = Assert<
-  GetMintByQuoteInput extends { mintUrl: string; method: 'bolt11'; quoteId: string } ? true : false
+  Extract<GetMintByQuoteInput, { method: 'bolt11' }> extends {
+    mintUrl: string;
+    method: 'bolt11';
+    quoteId: string;
+  }
+    ? true
+    : false
 >;
 type _AssertDefaultAllowsBolt12Mint = Assert<
-  'bolt12' extends PrepareMintInput['method'] ? true : false
+  'bolt12' extends CustomPrepareMintInput['method'] ? true : false
+>;
+type _AssertListByQuoteUsesObjectInput = Assert<
+  Extract<ListMintByQuoteInput, { method: 'bolt12' }> extends {
+    mintUrl: string;
+    method: 'bolt12';
+    quoteId: string;
+  }
+    ? true
+    : false
 >;
 
 const makePendingOperation = (): PendingMintOperation => ({
@@ -88,7 +105,7 @@ describe('MintOpsApi', () => {
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
       getOperationByQuote: mock(async () => pendingOperation),
-      listOperationsByQuote: mock(async () => [pendingOperation]),
+      getOperationsForQuote: mock(async () => [pendingOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
       getInFlightOperations: mock(async () => [pendingOperation, executingOperation]),
       checkPendingOperation: mock(async () => ({
@@ -119,6 +136,7 @@ describe('MintOpsApi', () => {
       quoteId,
       {},
       undefined,
+      undefined,
     );
     expect(result).toBe(pendingOperation);
   });
@@ -138,6 +156,27 @@ describe('MintOpsApi', () => {
       quoteId,
       {},
       'usd',
+      undefined,
+    );
+  });
+
+  it('prepare forwards explicit operation amounts for reusable mint quotes', async () => {
+    await api.prepare({
+      mintUrl,
+      quoteId,
+      unit: 'sat',
+      amount: Amount.from(7),
+      method: 'bolt12',
+      methodData: { amountless: true },
+    });
+
+    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt12',
+      quoteId,
+      { amountless: true },
+      'sat',
+      { amount: Amount.from(7), unit: 'sat' },
     );
   });
 
@@ -220,6 +259,21 @@ describe('MintOpsApi', () => {
       pendingOperation.quoteId,
     );
     expect(result).toBe(pendingOperation);
+  });
+
+  it('listByQuote returns all matching operations for a reusable quote', async () => {
+    const result = await api.listByQuote({
+      mintUrl,
+      method: 'bolt12',
+      quoteId: pendingOperation.quoteId,
+    });
+
+    expect(mintOperationService.getOperationsForQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt12',
+      pendingOperation.quoteId,
+    );
+    expect(result).toEqual([pendingOperation]);
   });
 
   it('refresh reconciles pending and executing operations', async () => {

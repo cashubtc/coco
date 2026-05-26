@@ -5,7 +5,9 @@ import { MintOperationError } from '@core/models';
 import type { KeyRingService } from '@core/services/KeyRingService';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import type {
+  CreateMintQuoteContext,
   ExecuteContext,
+  FetchRemoteMintQuoteContext,
   MintExecutionResult,
   MintMethodHandler,
   MintMethodMeta,
@@ -16,21 +18,38 @@ import type {
   RecoverExecutingContext,
   RecoverExecutingResult,
 } from '@core/operations/mint';
+import type { MintQuote } from '../../../models/MintQuote.ts';
+import { deriveBolt12MintQuoteState } from './Bolt12MintQuoteAccounting.ts';
 
 export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
+  async createQuote(ctx: CreateMintQuoteContext<'bolt12'>): Promise<MintQuote<'bolt12'>> {
+    const { amountless, description } = ctx.methodData;
+    const keypair = await this.requireKeyRing(ctx).generateNewKeyPair();
+    const remoteQuote = await ctx.wallet.createMintQuoteBolt12(keypair.publicKeyHex, {
+      amount: amountless ? undefined : ctx.intent.amount,
+      description,
+    });
+    return this.toCanonicalQuote(ctx.mintUrl, remoteQuote);
+  }
+
+  async fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<'bolt12'>): Promise<MintQuote<'bolt12'>> {
+    const remoteQuote = await ctx.mintAdapter.checkMintQuoteBolt12(
+      ctx.quote.mintUrl,
+      ctx.quote.quoteId,
+    );
+    return this.toCanonicalQuote(ctx.quote.mintUrl, remoteQuote);
+  }
+
   async prepare(
     ctx: PrepareContext<'bolt12'>,
   ): Promise<PendingMintOperation<'bolt12'> & MintMethodMeta<'bolt12'>> {
-    const { amountless, description } = ctx.operation.methodData;
-    const pubkey = await this.resolveQuotePubkey(ctx);
-    const quote =
-      ctx.importedQuote ??
-      (await ctx.wallet.createMintQuoteBolt12(pubkey, {
-        amount: amountless ? undefined : ctx.operation.amount,
-        description,
-      }));
+    const quote = ctx.importedQuote;
+    if (!quote) {
+      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
+    }
 
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
+    this.assertQuoteMatchesOperation(ctx.operation, quote);
     await this.assertQuoteKeyIsAvailable(ctx, quote.pubkey);
     this.assertQuoteAmount(ctx, quote);
 
@@ -55,10 +74,31 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      lastObservedRemoteState: this.deriveQuoteState(quote, ctx.operation.amount),
+      lastObservedRemoteState: deriveBolt12MintQuoteState(quote, ctx.operation.amount),
       lastObservedRemoteStateAt: Date.now(),
       outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
+    };
+  }
+
+  private toCanonicalQuote(mintUrl: string, quote: MintQuoteBolt12Response): MintQuote<'bolt12'> {
+    const now = Date.now();
+    return {
+      mintUrl,
+      method: 'bolt12',
+      quoteId: quote.quote,
+      quote: quote.quote,
+      request: quote.request,
+      amount: quote.amount ?? Amount.zero(),
+      unit: quote.unit,
+      expiry: quote.expiry,
+      pubkey: quote.pubkey,
+      state: deriveBolt12MintQuoteState(quote, quote.amount ?? Amount.zero()),
+      lastObservedRemoteState: deriveBolt12MintQuoteState(quote, quote.amount ?? Amount.zero()),
+      lastObservedRemoteStateAt: now,
+      reusable: true,
+      createdAt: now,
+      updatedAt: now,
     };
   }
 
@@ -67,6 +107,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       ctx.operation.mintUrl,
       ctx.operation.quoteId,
     );
+    this.assertQuotePubkeyMatchesOperation(ctx.operation, quote.pubkey);
     const outputData = deserializeOutputData(ctx.operation.outputData);
 
     try {
@@ -104,6 +145,14 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       return {
         status: 'PENDING',
         error: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    const pubkeyMismatch = this.getQuotePubkeyMismatchError(ctx.operation, remoteQuote.pubkey);
+    if (pubkeyMismatch) {
+      return {
+        status: 'TERMINAL',
+        error: pubkeyMismatch.message,
       };
     }
 
@@ -155,7 +204,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     ctx.logger?.info('Checking pending bolt12 mint operation', { mintUrl, quoteId });
 
     const quote = await ctx.mintAdapter.checkMintQuoteBolt12(mintUrl, quoteId);
-    const observedRemoteState = this.deriveQuoteState(quote, amount);
+    const observedRemoteState = deriveBolt12MintQuoteState(quote, amount);
     const observedRemoteStateAt = Date.now();
 
     return {
@@ -163,16 +212,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       observedRemoteStateAt,
       category: observedRemoteState === 'PAID' ? 'ready' : 'waiting',
     };
-  }
-
-  private async resolveQuotePubkey(ctx: PrepareContext<'bolt12'>): Promise<string> {
-    if (ctx.importedQuote) {
-      await this.assertQuoteKeyIsAvailable(ctx, ctx.importedQuote.pubkey);
-      return ctx.importedQuote.pubkey;
-    }
-
-    const keypair = await this.requireKeyRing(ctx).generateNewKeyPair();
-    return keypair.publicKeyHex;
   }
 
   private async assertQuoteKeyIsAvailable(
@@ -186,15 +225,51 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   private assertQuoteAmount(ctx: PrepareContext<'bolt12'>, quote: MintQuoteBolt12Response): void {
-    if (quote.amount && !quote.amount.equals(ctx.operation.amount)) {
+    if (!ctx.operation.methodData.amountless && (!quote.amount || quote.amount.isZero())) {
+      throw new Error(`Mint quote ${quote.quote} is amountless but a fixed quote was requested`);
+    }
+  }
+
+  private assertQuoteMatchesOperation(
+    operation: PrepareContext<'bolt12'>['operation'],
+    quote: MintQuoteBolt12Response,
+  ): void {
+    if (operation.quoteId && operation.quoteId !== quote.quote) {
       throw new Error(
-        `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${ctx.operation.amount}`,
+        `Mint quote ${quote.quote} does not match operation quote ${operation.quoteId}`,
+      );
+    }
+  }
+
+  private assertQuotePubkeyMatchesOperation(
+    operation:
+      | ExecuteContext<'bolt12'>['operation']
+      | RecoverExecutingContext<'bolt12'>['operation'],
+    pubkey: string,
+  ): void {
+    const mismatch = this.getQuotePubkeyMismatchError(operation, pubkey);
+    if (mismatch) {
+      throw mismatch;
+    }
+  }
+
+  private getQuotePubkeyMismatchError(
+    operation:
+      | ExecuteContext<'bolt12'>['operation']
+      | RecoverExecutingContext<'bolt12'>['operation'],
+    pubkey: string,
+  ): Error | null {
+    if (!operation.pubkey) {
+      return new Error(`BOLT12 mint operation ${operation.id} is missing quote pubkey`);
+    }
+
+    if (operation.pubkey !== pubkey) {
+      return new Error(
+        `BOLT12 mint quote ${operation.quoteId} pubkey changed from ${operation.pubkey} to ${pubkey}`,
       );
     }
 
-    if (!ctx.operation.methodData.amountless && !quote.amount) {
-      throw new Error(`Mint quote ${quote.quote} is amountless but a fixed quote was requested`);
-    }
+    return null;
   }
 
   private async getPrivateKeyHex(
@@ -213,18 +288,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       throw new Error('BOLT12 mint operations require a keyring service');
     }
     return ctx.keyRingService;
-  }
-
-  private deriveQuoteState(
-    quote: MintQuoteBolt12Response,
-    operationAmount: Amount,
-  ): 'UNPAID' | 'PAID' {
-    if (quote.amount_paid.lessThanOrEqual(quote.amount_issued)) {
-      return 'UNPAID';
-    }
-
-    const available = quote.amount_paid.subtract(quote.amount_issued);
-    return available.greaterThanOrEqual(operationAmount) ? 'PAID' : 'UNPAID';
   }
 
   private async recoverFromOutputs(

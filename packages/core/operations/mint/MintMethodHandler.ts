@@ -69,6 +69,7 @@ export interface BaseHandlerDeps {
 export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
   mintUrl: string;
   intent: UnitAmount;
+  methodData: MintMethodData<M>;
   wallet: Wallet;
 }
 

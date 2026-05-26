@@ -791,6 +791,7 @@ export class Manager {
       meltQuoteRepository: repositories.meltQuoteRepository,
       proofRepository: repositories.proofRepository,
       proofService,
+      keyRingService,
       mintService,
       walletService,
       mintAdapter: this.mintAdapter,

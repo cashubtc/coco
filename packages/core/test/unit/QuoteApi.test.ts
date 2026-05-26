@@ -80,10 +80,29 @@ describe('QuoteApi', () => {
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
+      {},
     );
     expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+  });
+
+  it('passes BOLT12 mint quote method data through the quote lifecycle', async () => {
+    await expect(
+      api.mint.create({
+        mintUrl,
+        method: 'bolt12',
+        unit: 'sat',
+        methodData: { amountless: true, description: 'pay any amount' },
+      }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(
+      mintUrl,
+      { amount: Amount.zero(), unit: 'sat' },
+      'bolt12',
+      { amountless: true, description: 'pay any amount' },
+    );
   });
 
   it('delegates melt quote methods', async () => {

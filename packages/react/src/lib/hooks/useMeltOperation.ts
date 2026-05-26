@@ -16,6 +16,8 @@ import {
 type MeltOps = Manager['ops']['melt'];
 
 export type MeltOperationPrepareInput = Parameters<MeltOps['prepare']>[0];
+export type MeltOperationGetByQuoteInput = Parameters<MeltOps['getByQuote']>[0];
+export type MeltOperationListByQuoteInput = Parameters<MeltOps['listByQuote']>[0];
 export type MeltOperationPrepareResult = Awaited<ReturnType<MeltOps['prepare']>>;
 export type MeltOperationExecuteResult = Awaited<ReturnType<MeltOps['execute']>>;
 export type MeltOperationByQuoteResult = Awaited<ReturnType<MeltOps['getByQuote']>>;
@@ -30,8 +32,8 @@ export interface UseMeltOperationResult extends OperationHookResult<
   cancel(): Promise<void>;
   reclaim(): Promise<void>;
   finalize(): Promise<void>;
-  getByQuote(mintUrl: string, quoteId: string): Promise<MeltOperationByQuoteResult>;
-  listByQuote(mintUrl: string, quoteId: string): Promise<MeltOperationListByQuoteResult>;
+  getByQuote(input: MeltOperationGetByQuoteInput): Promise<MeltOperationByQuoteResult>;
+  listByQuote(input: MeltOperationListByQuoteInput): Promise<MeltOperationListByQuoteResult>;
   listPrepared(): Promise<MeltOperationPrepareResult[]>;
   listInFlight(): Promise<MeltOperation[]>;
 }
@@ -219,15 +221,15 @@ export function useMeltOperation(
   }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
 
   const getByQuote = useCallback(
-    async (mintUrl: string, quoteId: string): Promise<MeltOperationByQuoteResult> => {
-      return manager.ops.melt.getByQuote(mintUrl, quoteId);
+    async (input: MeltOperationGetByQuoteInput): Promise<MeltOperationByQuoteResult> => {
+      return manager.ops.melt.getByQuote(input);
     },
     [manager],
   );
 
   const listByQuote = useCallback(
-    async (mintUrl: string, quoteId: string): Promise<MeltOperationListByQuoteResult> => {
-      return manager.ops.melt.listByQuote(mintUrl, quoteId);
+    async (input: MeltOperationListByQuoteInput): Promise<MeltOperationListByQuoteResult> => {
+      return manager.ops.melt.listByQuote(input);
     },
     [manager],
   );

@@ -7,6 +7,7 @@ import type { MintAdapter } from '../infra';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
+import type { KeyRingService } from '../services/KeyRingService';
 import {
   mintQuoteFromBolt11Response,
   mintQuoteToMethodSnapshot,
@@ -29,6 +30,7 @@ import { normalizeMeltMethodData } from '../operations/melt/MeltMethodHandler';
 import type { InitMintOperation, PendingOrLaterOperation } from '../operations/mint/MintOperation';
 import type {
   MintMethod,
+  MintMethodData,
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
@@ -53,6 +55,7 @@ export interface QuoteLifecycleDeps {
   meltQuoteRepository: MeltQuoteRepository;
   proofRepository: ProofRepository;
   proofService: ProofService;
+  keyRingService?: KeyRingService;
   mintService: MintService;
   walletService: WalletService;
   mintAdapter: MintAdapter;
@@ -67,6 +70,7 @@ export class QuoteLifecycle {
   private readonly meltQuoteRepository: MeltQuoteRepository;
   private readonly proofRepository: ProofRepository;
   private readonly proofService: ProofService;
+  private readonly keyRingService?: KeyRingService;
   private readonly mintService: MintService;
   private readonly walletService: WalletService;
   private readonly mintAdapter: MintAdapter;
@@ -80,6 +84,7 @@ export class QuoteLifecycle {
     this.meltQuoteRepository = deps.meltQuoteRepository;
     this.proofRepository = deps.proofRepository;
     this.proofService = deps.proofService;
+    this.keyRingService = deps.keyRingService;
     this.mintService = deps.mintService;
     this.walletService = deps.walletService;
     this.mintAdapter = deps.mintAdapter;
@@ -91,6 +96,7 @@ export class QuoteLifecycle {
     return {
       proofRepository: this.proofRepository,
       proofService: this.proofService,
+      keyRingService: this.keyRingService,
       walletService: this.walletService,
       mintService: this.mintService,
       mintAdapter: this.mintAdapter,
@@ -103,6 +109,7 @@ export class QuoteLifecycle {
     mintUrl: string,
     intent: UnitAmount,
     method: MintMethod = 'bolt11',
+    methodData: MintMethodData = {},
   ): Promise<MintQuote> {
     const parsed = normalizeUnitAmount(intent);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -110,11 +117,17 @@ export class QuoteLifecycle {
       throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
     }
 
-    if (parsed.amount.isZero()) {
+    const amountlessMintQuote = this.isAmountlessMintQuote(method, methodData);
+    if (parsed.amount.isZero() && !amountlessMintQuote) {
       throw new ProofValidationError('Amount must be a positive number');
     }
 
-    await this.mintService.assertMethodUnitSupported(mintUrl, 4, method, parsed);
+    await this.mintService.assertMethodUnitSupported(
+      mintUrl,
+      4,
+      method,
+      amountlessMintQuote ? parsed.unit : parsed,
+    );
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, parsed.unit);
 
     const handler = this.mintHandlerProvider.get(method);
@@ -122,6 +135,7 @@ export class QuoteLifecycle {
       ...this.buildDeps(),
       mintUrl,
       intent: parsed,
+      methodData,
       wallet,
     });
 
@@ -214,12 +228,6 @@ export class QuoteLifecycle {
     }
 
     this.assertMintQuoteCanPrepare(quote, `operation ${op.id} mint quote ${op.quoteId}`);
-
-    if (!quote.amount.equals(op.amount)) {
-      throw new Error(
-        `Cannot prepare operation ${op.id}: mint quote ${op.quoteId} amount ${quote.amount} does not match requested amount ${op.amount}`,
-      );
-    }
 
     if (quote.unit !== op.unit) {
       throw new Error(
@@ -424,16 +432,14 @@ export class QuoteLifecycle {
     switch (quote.method) {
       case 'bolt11':
         return { invoice: quote.request };
+      case 'bolt12':
+        return { offer: quote.request };
       default:
         throw new Error(`Unsupported melt quote method ${String(quote.method)}`);
     }
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (quote.reusable) {
-      throw new Error(`Cannot prepare ${context}: reusable quote is unsupported`);
-    }
-
     if (quote.expiry !== null && quote.expiry * 1000 <= Date.now()) {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
@@ -476,9 +482,13 @@ export class QuoteLifecycle {
       state: (operation.lastObservedRemoteState ?? 'UNPAID') as MintQuote['state'],
       lastObservedRemoteState: operation.lastObservedRemoteState,
       lastObservedRemoteStateAt: operation.lastObservedRemoteStateAt,
-      reusable: false,
+      reusable: operation.method === 'bolt12',
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
     });
+  }
+
+  private isAmountlessMintQuote(method: MintMethod, methodData: MintMethodData): boolean {
+    return method === 'bolt12' && 'amountless' in methodData && methodData.amountless === true;
   }
 }

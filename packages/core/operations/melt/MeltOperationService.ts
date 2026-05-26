@@ -848,10 +848,7 @@ export class MeltOperationService {
     method: MeltMethod,
     quoteId: string,
   ): Promise<MeltOperation | null> {
-    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
-    const matching = operations.filter(
-      (operation) => operation.method === method && hasPreparedData(operation),
-    );
+    const matching = await this.getOperationsForQuote(mintUrl, method, quoteId);
 
     if (matching.length === 0) {
       return null;
@@ -864,6 +861,17 @@ export class MeltOperationService {
     }
 
     return matching[0]!;
+  }
+
+  async getOperationsForQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+  ): Promise<MeltOperation[]> {
+    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
+    return operations.filter(
+      (operation) => operation.method === method && hasPreparedData(operation),
+    );
   }
 
   async getPendingOperations(): Promise<MeltOperation[]> {

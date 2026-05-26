@@ -11,7 +11,12 @@ import type { KeyRingService } from '../../services/KeyRingService';
 import type { MintService } from '../../services/MintService';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
-import type { ExecuteContext, PendingContext, PrepareContext } from '../../operations/mint';
+import type {
+  ExecuteContext,
+  PendingContext,
+  PrepareContext,
+  RecoverExecutingContext,
+} from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 
 describe('MintBolt12Handler', () => {
@@ -122,6 +127,11 @@ describe('MintBolt12Handler', () => {
     };
   };
 
+  const buildRecoverContext = (
+    remoteQuote: MintQuoteBolt12Response,
+  ): RecoverExecutingContext<'bolt12'> =>
+    buildExecuteContext(remoteQuote) as RecoverExecutingContext<'bolt12'>;
+
   beforeEach(() => {
     handler = new MintBolt12Handler();
     wallet = {
@@ -148,24 +158,43 @@ describe('MintBolt12Handler', () => {
   });
 
   it('creates a fixed-amount quote with a fresh keypair', async () => {
-    const result = await handler.prepare(buildPrepareContext());
+    const result = await handler.createQuote({
+      ...buildPrepareContext(),
+      mintUrl,
+      intent: { amount: Amount.from(10), unit: 'sat' },
+      methodData: {},
+    });
 
     expect(keyRingService.generateNewKeyPair).toHaveBeenCalled();
     expect(wallet.createMintQuoteBolt12).toHaveBeenCalledWith(pubkey, {
       amount: Amount.from(10),
-      description: 'mint me',
+      description: undefined,
     });
     expect(result.quoteId).toBe(quoteId);
     expect(result.pubkey).toBe(pubkey);
-    expect(result.lastObservedRemoteState).toBe('UNPAID');
+    expect(result.state).toBe('UNPAID');
   });
 
-  it('omits the remote amount for amountless offers while preserving operation amount', async () => {
+  it('creates amountless quotes with method-specific description data', async () => {
+    await handler.createQuote({
+      ...buildPrepareContext(),
+      mintUrl,
+      intent: { amount: Amount.zero(), unit: 'sat' },
+      methodData: { amountless: true, description: 'pay any amount' },
+    });
+
+    expect(wallet.createMintQuoteBolt12).toHaveBeenCalledWith(pubkey, {
+      amount: undefined,
+      description: 'pay any amount',
+    });
+  });
+
+  it('prepares amountless imported quotes while preserving operation amount', async () => {
     const amountlessQuote = quote({ amount: undefined });
-    (wallet.createMintQuoteBolt12 as Mock<any>).mockImplementation(async () => amountlessQuote);
 
     const result = await handler.prepare(
       buildPrepareContext({
+        importedQuote: amountlessQuote,
         operation: {
           ...operation,
           methodData: { amountless: true, description: 'pay any amount' },
@@ -173,11 +202,24 @@ describe('MintBolt12Handler', () => {
       }),
     );
 
-    expect(wallet.createMintQuoteBolt12).toHaveBeenCalledWith(pubkey, {
-      amount: undefined,
-      description: 'pay any amount',
-    });
+    expect(wallet.createMintQuoteBolt12).not.toHaveBeenCalled();
     expect(result.amount).toEqual(Amount.from(10));
+  });
+
+  it('rejects imported quotes that do not match the bound operation quote id', async () => {
+    await expect(
+      handler.prepare(
+        buildPrepareContext({
+          importedQuote: quote({ quote: 'quote-other' }),
+          operation: {
+            ...operation,
+            quoteId,
+          },
+        }),
+      ),
+    ).rejects.toThrow(`Mint quote quote-other does not match operation quote ${quoteId}`);
+
+    expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
   });
 
   it('requires the imported quote pubkey to exist in the keyring', async () => {
@@ -220,5 +262,42 @@ describe('MintBolt12Handler', () => {
     expect(call[4].type).toBe('custom');
     expect(call[4].data).toHaveLength(1);
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
+  });
+
+  it('rejects execution when the remote quote pubkey changes', async () => {
+    const changedPubkey = '02' + '22'.repeat(32);
+
+    await expect(
+      handler.execute(
+        buildExecuteContext(
+          quote({
+            amount_paid: Amount.from(10),
+            pubkey: changedPubkey,
+          }),
+        ),
+      ),
+    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} pubkey changed from ${pubkey}`);
+
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+  });
+
+  it('recovers remote pubkey changes as terminal failures without signing', async () => {
+    const changedPubkey = '02' + '33'.repeat(32);
+
+    const result = await handler.recoverExecuting(
+      buildRecoverContext(
+        quote({
+          amount_paid: Amount.from(10),
+          pubkey: changedPubkey,
+        }),
+      ),
+    );
+
+    expect(result.status).toBe('TERMINAL');
+    if (result.status !== 'TERMINAL') {
+      throw new Error('Expected terminal recovery result');
+    }
+    expect(result.error).toContain(`BOLT12 mint quote ${quoteId} pubkey changed from ${pubkey}`);
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });

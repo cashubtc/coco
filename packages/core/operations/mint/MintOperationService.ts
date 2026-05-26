@@ -19,6 +19,7 @@ import {
 import type {
   MintMethod,
   MintMethodData,
+  MintMethodHandler,
   MintMethodMeta,
   PendingMintCheckResult,
   MintMethodQuoteSnapshot,
@@ -31,6 +32,7 @@ import type { KeyRingService } from '../../services/KeyRingService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
+import { allocateBolt12PaidMintOperationIds } from '../../infra/handlers/mint/Bolt12MintQuoteAccounting.ts';
 import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
@@ -94,6 +96,8 @@ export class MintOperationService {
     this.keyRingService = keyRingService;
 
     this.eventBus.on('mint-quote:updated', async ({ mintUrl, method, quoteId, quote }) => {
+      if (quote.reusable) return;
+
       const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
       await Promise.all(
         operations
@@ -235,7 +239,7 @@ export class MintOperationService {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    if (!quote.amount.equals(intent.amount)) {
+    if (!quote.reusable && !quote.amount.equals(intent.amount)) {
       throw new Error(
         `Mint quote ${quote.quoteId} amount ${quote.amount} does not match requested amount ${intent.amount}`,
       );
@@ -265,6 +269,7 @@ export class MintOperationService {
     quoteId: string,
     methodData: MintMethodData = {},
     expectedUnit?: string,
+    amountIntent?: UnitAmount,
   ): Promise<PendingMintOperation> {
     const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
       mintUrl,
@@ -272,12 +277,29 @@ export class MintOperationService {
       quoteId,
       expectedUnit,
     );
+    const operationIntent = amountIntent
+      ? normalizeUnitAmount(amountIntent)
+      : { amount: quote.amount, unit: quote.unit };
+
+    if (operationIntent.unit !== quote.unit) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${operationIntent.unit}`,
+      );
+    }
+
+    if (operationIntent.amount.isZero()) {
+      throw new ProofValidationError(
+        `Mint quote ${quote.quoteId} requires a positive operation amount`,
+      );
+    }
+
+    const operationMethodData = this.methodDataForPreparedQuote(method, methodData, quote);
 
     const initOperation = await this.init(
       quote.mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      operationIntent,
       method,
-      methodData,
+      operationMethodData,
       { quoteId: quote.quoteId },
     );
 
@@ -778,7 +800,26 @@ export class MintOperationService {
     state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<MintQuote> {
+    if (operation.state === 'pending') {
+      await this.recordPendingObservation(operation.id, state, observedAt);
+    }
+
     return this.quoteLifecycle.recordMintQuoteObservation(operation, state, observedAt);
+  }
+
+  private methodDataForPreparedQuote(
+    method: MintMethod,
+    methodData: MintMethodData,
+    quote: MintQuote,
+  ): MintMethodData {
+    if (method === 'bolt12' && quote.amount.isZero()) {
+      return {
+        ...methodData,
+        amountless: true,
+      } as MintMethodData;
+    }
+
+    return methodData;
   }
 
   private async tryRecoverInitOperation(op: InitMintOperation): Promise<void> {
@@ -855,11 +896,33 @@ export class MintOperationService {
     }
 
     const observedRemoteStateAt = Date.now();
-    await this.recordQuoteObservation(
-      current as PendingOrLaterOperation,
-      'ISSUED',
-      observedRemoteStateAt,
+    const currentQuote = await this.quoteLifecycle.getMintQuote(
+      current.mintUrl,
+      current.method,
+      current.quoteId,
     );
+    if (currentQuote?.reusable) {
+      try {
+        await this.quoteLifecycle.refreshMintQuote(
+          current.mintUrl,
+          current.method,
+          current.quoteId,
+        );
+      } catch (error) {
+        this.logger?.warn('Failed to refresh reusable mint quote after finalization', {
+          operationId: current.id,
+          mintUrl: current.mintUrl,
+          quoteId: current.quoteId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      await this.recordQuoteObservation(
+        current as PendingOrLaterOperation,
+        'ISSUED',
+        observedRemoteStateAt,
+      );
+    }
 
     const finalized: FinalizedMintOperation = {
       ...(current as PendingOrLaterOperation),
@@ -974,17 +1037,31 @@ export class MintOperationService {
         }'`,
       );
     }
-    const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
+
+    if (op.method === 'bolt12') {
+      return this.observeReusableBolt12PendingOperation(op as PendingMintOperation<'bolt12'>);
+    }
+
+    return this.observeSinglePendingOperation(op as PendingMintOperation);
+  }
+
+  private async observeSinglePendingOperation<M extends MintMethod>(
+    operation: PendingMintOperation<M>,
+  ): Promise<PendingMintCheckResult<M>> {
+    const handler = this.handlerProvider.get(operation.method) as MintMethodHandler<M>;
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
 
     const result = await handler.checkPending({
       ...this.buildDeps(),
-      operation: op as PendingMintOperation,
+      operation,
       wallet,
     });
 
-    const observedPending: PendingMintOperation = {
-      ...op,
+    const observedPending: PendingMintOperation<M> = {
+      ...operation,
       lastObservedRemoteState: result.observedRemoteState,
       lastObservedRemoteStateAt: result.observedRemoteStateAt,
       updatedAt: Date.now(),
@@ -997,10 +1074,104 @@ export class MintOperationService {
     );
 
     if (result.category === 'terminal' && result.terminalFailure) {
-      await this.failPendingOperation(op, result.terminalFailure);
+      await this.failPendingOperation(operation, result.terminalFailure);
     }
 
     return result;
+  }
+
+  private async observeReusableBolt12PendingOperation(
+    requestedOperation: PendingMintOperation<'bolt12'>,
+  ): Promise<PendingMintCheckResult<'bolt12'>> {
+    const releaseMintLock = await this.mintScopedLock.acquire(
+      normalizeMintUrl(requestedOperation.mintUrl),
+    );
+    try {
+      const current = await this.getOperation(requestedOperation.id);
+      if (!current || current.state !== 'pending' || current.method !== 'bolt12') {
+        throw new Error(
+          `Cannot check operation ${requestedOperation.id}: expected pending bolt12 operation but found '${
+            current?.state ?? 'not found'
+          }'`,
+        );
+      }
+
+      const operation = current as PendingMintOperation<'bolt12'>;
+      const remoteQuote = await this.mintAdapter.checkMintQuoteBolt12(
+        operation.mintUrl,
+        operation.quoteId,
+      );
+      const operations = await this.getOperationsForQuote(
+        operation.mintUrl,
+        'bolt12',
+        operation.quoteId,
+      );
+      const pendingOperations = operations.filter(
+        (candidate): candidate is PendingMintOperation<'bolt12'> =>
+          candidate.state === 'pending' && candidate.method === 'bolt12',
+      );
+      const paidOperationIds = allocateBolt12PaidMintOperationIds(remoteQuote, pendingOperations);
+      const observedAt = Date.now();
+
+      await this.recordReusableBolt12Observations(
+        pendingOperations,
+        paidOperationIds,
+        observedAt,
+        operation.id,
+      );
+
+      const paid = paidOperationIds.has(operation.id);
+      return {
+        observedRemoteState: paid ? 'PAID' : 'UNPAID',
+        observedRemoteStateAt: observedAt,
+        category: paid ? 'ready' : 'waiting',
+      };
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async recordReusableBolt12Observations(
+    operations: PendingMintOperation<'bolt12'>[],
+    paidOperationIds: Set<string>,
+    observedAt: number,
+    requestedOperationId: string,
+  ): Promise<void> {
+    for (const operation of operations) {
+      const paid = paidOperationIds.has(operation.id);
+      const shouldRecordUnpaid =
+        !paid &&
+        (operation.id === requestedOperationId || operation.lastObservedRemoteState === 'PAID');
+      if (!paid && !shouldRecordUnpaid) continue;
+
+      try {
+        if (paid) {
+          await this.recordQuoteObservation(
+            {
+              ...operation,
+              lastObservedRemoteState: 'PAID',
+              lastObservedRemoteStateAt: observedAt,
+              updatedAt: observedAt,
+            },
+            'PAID',
+            observedAt,
+          );
+        } else {
+          await this.recordPendingObservation(operation.id, 'UNPAID', observedAt);
+        }
+      } catch (error) {
+        if (operation.id === requestedOperationId) {
+          throw error;
+        }
+
+        this.logger?.debug('Skipped stale reusable BOLT12 mint operation observation', {
+          operationId: operation.id,
+          mintUrl: operation.mintUrl,
+          quoteId: operation.quoteId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   async recordPendingObservation(

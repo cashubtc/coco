@@ -11,10 +11,10 @@ create history; history starts when an operation exists.
 
 The operation lifecycle API is exposed through `coco.ops.mint`:
 
-- `prepare({ mintUrl, method, quoteId, unit?, methodData? })` prepares a
+- `prepare({ mintUrl, method, quoteId, amount?, unit?, methodData? })` prepares a
   pending mint operation from an existing canonical quote
-- `importQuote({ mintUrl, quote, method, methodData? })` tracks an existing
-  quote as a mint operation
+- `importQuote({ mintUrl, quote, method: 'bolt11', methodData? })` tracks an
+  existing BOLT11 quote as a mint operation
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
 - `checkPayment(operationId)` checks the remote quote state for a pending
   operation
@@ -31,11 +31,13 @@ method.
 
 ## Quote Resurfacing (`coco.quotes.mint`)
 
-Use `coco.quotes.mint` when an app needs to show a quote payment request again
-after reload without creating or loading a mint operation:
+Use `coco.quotes.mint` to create or resurface a canonical quote before preparing
+a mint operation. This lets an app show a quote payment request again after
+reload without creating or loading an operation:
 
-- `create({ mintUrl, amount, unit?, method })` creates and persists a canonical
-  quote row only
+- `create({ mintUrl, amount?, unit?, method, methodData? })` creates and
+  persists a canonical quote row only. `amount` is required for BOLT11 and
+  optional for amountless BOLT12 offers.
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached
   `ISSUED`
@@ -107,9 +109,9 @@ if (check.category === 'ready' || check.category === 'completed') {
 ### BOLT12 Mint Offers
 
 ```ts
-const pending = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
-  amount: 100,
+  unit: 'sat',
   method: 'bolt12',
   methodData: {
     description: 'Coffee refill',
@@ -117,12 +119,24 @@ const pending = await coco.ops.mint.prepare({
   },
 });
 
-showOffer(pending.request);
+showOffer(quote.request);
+
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
+  amount: 100,
+  unit: 'sat',
+  method: 'bolt12',
+  methodData: {
+    amountless: true,
+  },
+});
 ```
 
 BOLT12 mint quotes are locked to a fresh Coco keyring key. For `amountless:
-true`, Coco omits the quote amount sent to the mint but still records
-`amount` as the ecash amount the operation should issue.
+true`, Coco omits the quote amount when creating the canonical quote. The later
+`prepare()` call supplies the ecash amount the local operation should issue from
+that reusable quote.
 
 ## Recovery
 

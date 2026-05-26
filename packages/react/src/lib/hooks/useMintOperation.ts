@@ -18,6 +18,8 @@ type MintOperation = NonNullable<Awaited<ReturnType<MintOps['get']>>>;
 
 export type MintOperationPrepareInput = Parameters<MintOps['prepare']>[0];
 export type MintOperationImportQuoteInput = Parameters<MintOps['importQuote']>[0];
+export type MintOperationGetByQuoteInput = Parameters<MintOps['getByQuote']>[0];
+export type MintOperationListByQuoteInput = Parameters<MintOps['listByQuote']>[0];
 export type MintOperationPrepareResult = Awaited<ReturnType<MintOps['prepare']>>;
 export type MintOperationExecuteResult = Awaited<ReturnType<MintOps['execute']>>;
 export type MintOperationCheckPaymentResult = Awaited<ReturnType<MintOps['checkPayment']>>;
@@ -35,8 +37,8 @@ export interface UseMintOperationResult extends OperationHookResult<
   execute(): Promise<MintOperationExecuteResult>;
   checkPayment(): Promise<MintOperationCheckPaymentResult>;
   finalize(): Promise<MintOperationFinalizeResult>;
-  getByQuote(mintUrl: string, quoteId: string): Promise<MintOperationByQuoteResult>;
-  listByQuote(mintUrl: string, quoteId: string): Promise<MintOperationListByQuoteResult>;
+  getByQuote(input: MintOperationGetByQuoteInput): Promise<MintOperationByQuoteResult>;
+  listByQuote(input: MintOperationListByQuoteInput): Promise<MintOperationListByQuoteResult>;
   listPending(): Promise<MintOperationPendingList>;
   listInFlight(): Promise<MintOperation[]>;
 }
@@ -217,15 +219,15 @@ export function useMintOperation(
   }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
 
   const getByQuote = useCallback(
-    async (mintUrl: string, quoteId: string): Promise<MintOperationByQuoteResult> => {
-      return manager.ops.mint.getByQuote(mintUrl, quoteId);
+    async (input: MintOperationGetByQuoteInput): Promise<MintOperationByQuoteResult> => {
+      return manager.ops.mint.getByQuote(input);
     },
     [manager],
   );
 
   const listByQuote = useCallback(
-    async (mintUrl: string, quoteId: string): Promise<MintOperationListByQuoteResult> => {
-      return manager.ops.mint.listByQuote(mintUrl, quoteId);
+    async (input: MintOperationListByQuoteInput): Promise<MintOperationListByQuoteResult> => {
+      return manager.ops.mint.listByQuote(input);
     },
     [manager],
   );

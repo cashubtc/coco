@@ -1,6 +1,7 @@
+import { Amount } from '@cashu/cashu-ts';
 import type { MeltMethod, MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethod } from '@core/operations/mint';
-import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+import type { MintMethod, MintMethodData } from '@core/operations/mint';
+import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
@@ -19,13 +20,31 @@ type MeltQuoteIdentityInput<M extends MeltMethod> = {
   quoteId: string;
 };
 
+type MintQuoteMethodDataInput<M extends MintMethod> = {
+  /** Method-specific quote payload for the selected mint method. */
+  methodData?: MintMethodData<M>;
+};
+
+type CreateMintQuoteAmountInput<M extends MintMethod> = M extends 'bolt12'
+  ? {
+      /**
+       * Requested quote amount. Omit for BOLT12 amountless offers; the operation
+       * amount is supplied later when preparing against the reusable quote.
+       */
+      amount?: UnitAmountLike;
+    }
+  : {
+      /** Requested quote amount. */
+      amount: UnitAmountLike;
+    };
+
 export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: {
     mintUrl: string;
-    amount: UnitAmountLike;
     unit?: string;
     method: M;
-  };
+  } & CreateMintQuoteAmountInput<M> &
+    MintQuoteMethodDataInput<M>;
 }[TSupported];
 
 export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
@@ -65,8 +84,16 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintMe
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-    return this.quoteLifecycle.createMintQuote(input.mintUrl, parsed, input.method);
+    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
+    const parsed =
+      'amount' in input && input.amount !== undefined
+        ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
+        : {
+            amount: Amount.zero(),
+            unit: normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT }),
+          };
+
+    return this.quoteLifecycle.createMintQuote(input.mintUrl, parsed, input.method, methodData);
   }
 
   get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {

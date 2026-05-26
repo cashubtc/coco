@@ -8,15 +8,22 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '@core/operations/mint';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'bolt12';
+type ImportableMintMethod<TSupported extends MintMethod> = Extract<TSupported, 'bolt11'>;
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
   mintUrl: string;
   /** Existing canonical mint quote ID to prepare against. */
   quoteId: string;
+  /**
+   * Operation amount to mint from the quote. Optional for fixed one-shot quotes;
+   * required when preparing amountless BOLT12 offers.
+   */
+  amount?: UnitAmountLike;
   /** Optional expected unit for the quote. */
   unit?: string;
 };
@@ -45,13 +52,13 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
 }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: ImportMintQuoteInputCommon & {
+  [M in ImportableMintMethod<TSupported>]: ImportMintQuoteInputCommon & {
     /** Existing quote snapshot to track as an operation. */
     quote: MintMethodQuoteSnapshot<M>;
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
   } & MethodDataInput<M>;
-}[TSupported];
+}[ImportableMintMethod<TSupported>];
 
 export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: {
@@ -63,6 +70,9 @@ export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupported
     quoteId: string;
   };
 }[TSupported];
+
+export type ListMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> =
+  GetMintByQuoteInput<TSupported>;
 
 export interface MintRecoveryApi {
   /** Runs the startup-style recovery sweep for mint operations. */
@@ -108,11 +118,17 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
       input.quoteId,
       methodData,
       input.unit,
+      input.amount === undefined
+        ? undefined
+        : parseUnitAmount(input.amount, { explicitUnit: input.unit }),
     );
   }
 
   /**
-   * Imports an existing quote snapshot into a prepared mint operation without executing it.
+   * Imports an existing BOLT11 quote snapshot into a prepared mint operation without executing it.
+   *
+   * BOLT12 quotes are reusable canonical quotes; create them through `coco.quotes.mint.create()`
+   * and prepare operations with `prepare({ method: 'bolt12', quoteId, amount, ... })`.
    */
   async importQuote(input: ImportMintQuoteInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
@@ -147,6 +163,15 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   /** Returns a mint operation by mint URL, method, and quote ID, or `null` if not found. */
   async getByQuote(input: GetMintByQuoteInput<TSupported>): Promise<MintOperation | null> {
     return this.mintOperationService.getOperationByQuote(
+      input.mintUrl,
+      input.method,
+      input.quoteId,
+    );
+  }
+
+  /** Lists all mint operations that reference the same canonical quote. */
+  async listByQuote(input: ListMintByQuoteInput<TSupported>): Promise<MintOperation[]> {
+    return this.mintOperationService.getOperationsForQuote(
       input.mintUrl,
       input.method,
       input.quoteId,

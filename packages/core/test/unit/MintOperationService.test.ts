@@ -1,6 +1,11 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { OutputData, type MintQuoteBolt11Response, type Proof } from '@cashu/cashu-ts';
+import {
+  OutputData,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+  type Proof,
+} from '@cashu/cashu-ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
@@ -32,6 +37,8 @@ import type { CoreProof } from '../../types';
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
   const quoteId = 'quote-1';
+  const bolt12QuoteId = 'quote-bolt12';
+  const bolt12Pubkey = '02' + '11'.repeat(32);
   const keysetId = 'keyset-1';
 
   let operationRepo: MemoryMintOperationRepository;
@@ -135,6 +142,70 @@ describe('MintOperationService', () => {
     state: 'executing',
   });
 
+  const makeBolt12RemoteQuote = (
+    overrides: Partial<MintQuoteBolt12Response> = {},
+  ): MintQuoteBolt12Response => ({
+    quote: bolt12QuoteId,
+    request: 'lno1reusable',
+    amount: undefined,
+    unit: 'sat',
+    expiry: Math.floor(Date.now() / 1000) + 3600,
+    pubkey: bolt12Pubkey,
+    amount_paid: Amount.zero(),
+    amount_issued: Amount.zero(),
+    ...overrides,
+  });
+
+  const makeBolt12StoredQuote = (quote = bolt12QuoteId) => {
+    const now = Date.now();
+    return {
+      mintUrl,
+      method: 'bolt12' as const,
+      quoteId: quote,
+      quote,
+      request: 'lno1reusable',
+      amount: Amount.zero(),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: bolt12Pubkey,
+      state: 'UNPAID' as const,
+      lastObservedRemoteState: 'UNPAID' as const,
+      lastObservedRemoteStateAt: now,
+      reusable: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
+
+  const makeBolt12PendingOp = (
+    id: string,
+    options: {
+      createdAt?: number;
+      lastObservedRemoteState?: 'UNPAID' | 'PAID';
+      secret?: string;
+    } = {},
+  ): PendingMintOperation<'bolt12'> => {
+    const now = Date.now();
+    return {
+      id,
+      state: 'pending',
+      mintUrl,
+      method: 'bolt12',
+      methodData: { amountless: true },
+      amount: Amount.from(10),
+      unit: 'sat',
+      quoteId: bolt12QuoteId,
+      request: 'lno1reusable',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: bolt12Pubkey,
+      lastObservedRemoteState: options.lastObservedRemoteState ?? 'UNPAID',
+      lastObservedRemoteStateAt: now,
+      outputData: makeSerializedOutputData(options.secret ?? id),
+      createdAt: options.createdAt ?? now,
+      updatedAt: now,
+    };
+  };
+
   beforeEach(async () => {
     operationRepo = new MemoryMintOperationRepository();
     quoteRepo = new MemoryMintQuoteRepository();
@@ -234,6 +305,7 @@ describe('MintOperationService', () => {
         expiry: Math.floor(Date.now() / 1000) + 3600,
         state: 'PAID',
       })),
+      checkMintQuoteBolt12: mock(async () => makeBolt12RemoteQuote()),
     } as unknown as MintAdapter;
 
     quoteLifecycle = new QuoteLifecycle({
@@ -538,6 +610,69 @@ describe('MintOperationService', () => {
     expect(operations).toHaveLength(2);
   });
 
+  it('prepareExistingQuote prepares amountless reusable BOLT12 quotes with caller amounts', async () => {
+    const amountlessQuote = {
+      mintUrl,
+      method: 'bolt12' as const,
+      quoteId: 'quote-bolt12-amountless',
+      quote: 'quote-bolt12-amountless',
+      request: 'lno1amountless',
+      amount: Amount.zero(),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02' + '11'.repeat(32),
+      state: 'UNPAID' as const,
+      lastObservedRemoteState: 'UNPAID' as const,
+      lastObservedRemoteStateAt: Date.now(),
+      reusable: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await quoteRepo.upsertMintQuote(amountlessQuote);
+
+    (handler.prepare as Mock<any>).mockImplementation(
+      async ({ operation, importedQuote }: PrepareContext) => ({
+        ...operation,
+        state: 'pending',
+        quoteId: importedQuote?.quote ?? operation.quoteId,
+        request: importedQuote?.request ?? 'lno1amountless',
+        expiry: importedQuote?.expiry ?? amountlessQuote.expiry,
+        pubkey: importedQuote?.pubkey,
+        lastObservedRemoteState: 'UNPAID',
+        lastObservedRemoteStateAt: Date.now(),
+        outputData: makeSerializedOutputData(operation.id),
+      }),
+    );
+
+    const first = await service.prepareExistingQuote(
+      mintUrl,
+      'bolt12',
+      amountlessQuote.quoteId,
+      { description: 'pay any amount' },
+      undefined,
+      { amount: Amount.from(7), unit: 'sat' },
+    );
+    const second = await service.prepareExistingQuote(
+      mintUrl,
+      'bolt12',
+      amountlessQuote.quoteId,
+      {},
+      undefined,
+      { amount: Amount.from(5), unit: 'sat' },
+    );
+
+    expect(first.amount).toEqual(Amount.from(7));
+    expect(first.method).toBe('bolt12');
+    expect(first.methodData).toEqual({ description: 'pay any amount', amountless: true });
+    expect(second.amount).toEqual(Amount.from(5));
+    expect(second.methodData).toEqual({ amountless: true });
+
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt12', amountlessQuote.quoteId);
+    expect(operations.map((operation) => operation.id).sort()).toEqual(
+      [first.id, second.id].sort(),
+    );
+  });
+
   it('importQuote persists a pending operation and emits mint-op:pending', async () => {
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     eventBus.on('mint-op:pending', (event) => {
@@ -671,6 +806,88 @@ describe('MintOperationService', () => {
     expect(storedQuote?.state).toBe('PAID');
     expect(storedQuote?.lastObservedRemoteState).toBe('PAID');
     expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('allocates reusable BOLT12 paid amount to only one pending sibling operation', async () => {
+    await quoteRepo.upsertMintQuote(makeBolt12StoredQuote());
+    const first = makeBolt12PendingOp('bolt12-first', {
+      createdAt: 1,
+      secret: 'bolt12-out-1',
+    });
+    const second = makeBolt12PendingOp('bolt12-second', {
+      createdAt: 2,
+      secret: 'bolt12-out-2',
+    });
+    await operationRepo.create(first);
+    await operationRepo.create(second);
+
+    (mintAdapter.checkMintQuoteBolt12 as Mock<any>).mockResolvedValueOnce(
+      makeBolt12RemoteQuote({
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      }),
+    );
+
+    const result = await service.observePendingOperation(second.id);
+    const storedFirst = await operationRepo.getById(first.id);
+    const storedSecond = await operationRepo.getById(second.id);
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt12', bolt12QuoteId);
+
+    expect(result.category).toBe('waiting');
+    expect(result.observedRemoteState).toBe('UNPAID');
+    expect(storedFirst?.state).toBe('pending');
+    expect(storedSecond?.state).toBe('pending');
+    if (!storedFirst || storedFirst.state !== 'pending') {
+      throw new Error('Expected first BOLT12 operation to remain pending');
+    }
+    if (!storedSecond || storedSecond.state !== 'pending') {
+      throw new Error('Expected second BOLT12 operation to remain pending');
+    }
+    expect(storedFirst.lastObservedRemoteState).toBe('PAID');
+    expect(storedSecond.lastObservedRemoteState).toBe('UNPAID');
+    expect(storedQuote?.state).toBe('PAID');
+    expect(handler.checkPending).not.toHaveBeenCalled();
+  });
+
+  it('clears stale reusable BOLT12 paid observations when issued amount consumes capacity', async () => {
+    await quoteRepo.upsertMintQuote(makeBolt12StoredQuote());
+    const stale = makeBolt12PendingOp('bolt12-stale-paid', {
+      createdAt: 1,
+      lastObservedRemoteState: 'PAID',
+      secret: 'bolt12-stale-out',
+    });
+    const current = makeBolt12PendingOp('bolt12-current', {
+      createdAt: 2,
+      secret: 'bolt12-current-out',
+    });
+    await operationRepo.create(stale);
+    await operationRepo.create(current);
+
+    (mintAdapter.checkMintQuoteBolt12 as Mock<any>).mockResolvedValueOnce(
+      makeBolt12RemoteQuote({
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.from(10),
+      }),
+    );
+
+    const result = await service.observePendingOperation(current.id);
+    const storedStale = await operationRepo.getById(stale.id);
+    const storedCurrent = await operationRepo.getById(current.id);
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt12', bolt12QuoteId);
+
+    expect(result.category).toBe('waiting');
+    expect(storedStale?.state).toBe('pending');
+    expect(storedCurrent?.state).toBe('pending');
+    if (!storedStale || storedStale.state !== 'pending') {
+      throw new Error('Expected stale BOLT12 operation to remain pending');
+    }
+    if (!storedCurrent || storedCurrent.state !== 'pending') {
+      throw new Error('Expected current BOLT12 operation to remain pending');
+    }
+    expect(storedStale.lastObservedRemoteState).toBe('UNPAID');
+    expect(storedCurrent.lastObservedRemoteState).toBe('UNPAID');
+    expect(storedQuote?.state).toBe('UNPAID');
+    expect(handler.checkPending).not.toHaveBeenCalled();
   });
 
   it('importQuote prepares an already tracked init operation from an upgraded canonical quote', async () => {

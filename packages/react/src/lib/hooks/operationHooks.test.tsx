@@ -1069,6 +1069,7 @@ describe('useMintOperation', () => {
     const input: MintOperationPrepareInput = {
       mintUrl: MINT_URL,
       amount: 100,
+      quoteId: prepared.quoteId,
       method: 'bolt12',
       methodData: { description: 'Membership', amountless: true },
     };
@@ -1085,12 +1086,13 @@ describe('useMintOperation', () => {
       await result.current.prepare(input);
     });
 
-    const byQuote = await result.current.getByQuote(MINT_URL, prepared.quoteId);
-    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
+    const lookup = { mintUrl: MINT_URL, method: 'bolt12' as const, quoteId: prepared.quoteId };
+    const byQuote = await result.current.getByQuote(lookup);
+    const listByQuote = await result.current.listByQuote(lookup);
 
     expect(mint.prepare).toHaveBeenCalledWith(input);
-    expect(mint.getByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
-    expect(mint.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(mint.getByQuote).toHaveBeenCalledWith(lookup);
+    expect(mint.listByQuote).toHaveBeenCalledWith(lookup);
     expect(byQuote).toEqual(latest);
     expect(listByQuote).toEqual([prepared, latest]);
     expect(result.current.currentOperation).toEqual(prepared);
@@ -1391,7 +1393,7 @@ describe('useMeltOperation', () => {
     const input: MeltOperationPrepareInput = {
       mintUrl: MINT_URL,
       method: 'bolt12',
-      methodData: { offer: 'lno1amountlessoffer', amountSats: 100 },
+      quoteId: prepared.quoteId,
     };
 
     melt.prepare.mockResolvedValue(prepared);
@@ -1406,12 +1408,13 @@ describe('useMeltOperation', () => {
       await result.current.prepare(input);
     });
 
-    const byQuote = await result.current.getByQuote(MINT_URL, prepared.quoteId);
-    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
+    const lookup = { mintUrl: MINT_URL, method: 'bolt12' as const, quoteId: prepared.quoteId };
+    const byQuote = await result.current.getByQuote(lookup);
+    const listByQuote = await result.current.listByQuote(lookup);
 
     expect(melt.prepare).toHaveBeenCalledWith(input);
-    expect(melt.getByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
-    expect(melt.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(melt.getByQuote).toHaveBeenCalledWith(lookup);
+    expect(melt.listByQuote).toHaveBeenCalledWith(lookup);
     expect(byQuote).toEqual(latest);
     expect(listByQuote).toEqual([prepared, latest]);
     expect(result.current.currentOperation).toEqual(prepared);

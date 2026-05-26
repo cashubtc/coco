@@ -132,6 +132,59 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
   });
 
+  it('only processes reusable quote operations that are individually observed as paid', async () => {
+    mockMintOperationService = {
+      async getOperationsForQuote() {
+        return [
+          {
+            id: 'mint-op-ready',
+            state: 'pending',
+            mintUrl: 'https://mint.test',
+            method: 'bolt12',
+            lastObservedRemoteState: 'PAID',
+          },
+          {
+            id: 'mint-op-waiting',
+            state: 'pending',
+            mintUrl: 'https://mint.test',
+            method: 'bolt12',
+            lastObservedRemoteState: 'UNPAID',
+          },
+        ];
+      },
+      async finalize(operationId: string) {
+        finalizeCalls.push(operationId);
+      },
+    } as unknown as MintOperationService;
+
+    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
+      processIntervalMs: TEST_PROCESS_INTERVAL,
+      baseRetryDelayMs: TEST_RETRY_DELAY,
+      maxRetries: 3,
+      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+    });
+
+    await processor.start();
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'bolt12',
+      quoteId: 'shared-bolt12-quote',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'bolt12',
+        quoteId: 'shared-bolt12-quote',
+        quote: 'shared-bolt12-quote',
+        state: 'PAID',
+        reusable: true,
+      } as any,
+    });
+
+    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
+
+    expect(finalizeCalls).toEqual(['mint-op-ready']);
+  });
+
   it('processes already-paid pending operations from mint-op:pending', async () => {
     await processor.start();
 

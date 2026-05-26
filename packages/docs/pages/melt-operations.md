@@ -23,9 +23,11 @@ The canonical API is exposed through `coco.ops.melt`:
 - `cancel(operationId)` cancels a prepared melt
 - `reclaim(operationId)` reclaims a pending melt when rollback is allowed
 
-Create and resurface quote payment requests through `coco.quotes.melt`:
+Create and resurface quote payment requests through `coco.quotes.melt` before
+preparing a melt operation:
 
 - `create({ mintUrl, method: 'bolt11', methodData: { invoice }, unit? })` creates and persists a canonical quote row only
+- `create({ mintUrl, method: 'bolt12', methodData: { offer, amountSats }, unit? })` creates and persists a canonical quote row only
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, method, quoteId })` checks the remote quote state and persists the canonical quote update
@@ -84,10 +86,16 @@ console.log('Needs swap:', prepared.needsSwap);
 For BOLT12 offers:
 
 ```ts
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt12',
   methodData: { offer, amountSats: 1000 },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt12',
+  quoteId: quote.quoteId,
 });
 ```
 

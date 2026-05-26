@@ -78,6 +78,16 @@ describe('MeltBolt12Handler', () => {
 
   const prepareContext = (operation = initOperation()): BasePrepareContext<'bolt12'> => ({
     operation,
+    quote: {
+      quote: quoteId,
+      request: offer,
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      payment_preimage: null,
+    },
     wallet,
     proofRepository,
     proofService,
@@ -132,14 +142,17 @@ describe('MeltBolt12Handler', () => {
   });
 
   it('creates a BOLT12 melt quote using offer and optional amount in millisats', async () => {
-    const prepared = await handler.prepare(
-      prepareContext(initOperation({ methodData: { offer, amountSats: Amount.from(123) } })),
-    );
+    const created = await handler.createQuote({
+      ...prepareContext(initOperation({ methodData: { offer, amountSats: Amount.from(123) } })),
+      mintUrl,
+      methodData: { offer, amountSats: Amount.from(123) },
+      unit: 'sat',
+    });
 
     expect(wallet.createMeltQuoteBolt12).toHaveBeenCalledWith(offer, Amount.from(123000));
-    expect(prepared.method).toBe('bolt12');
-    expect(prepared.quoteId).toBe(quoteId);
-    expect(prepared.amount).toEqual(Amount.from(100));
+    expect(created.method).toBe('bolt12');
+    expect(created.quoteId).toBe(quoteId);
+    expect(created.amount).toEqual(Amount.from(100));
   });
 
   it('uses customMeltBolt12 and records the returned preimage', async () => {

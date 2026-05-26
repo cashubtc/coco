@@ -33,6 +33,9 @@ export type GetMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupported
   };
 }[TSupported];
 
+export type ListMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> =
+  GetMeltByQuoteInput<TSupported>;
+
 export interface MeltRecoveryApi {
   /** Runs the startup-style recovery sweep for melt operations. */
   run(): Promise<void>;
@@ -108,6 +111,15 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
   /** Returns a melt operation by mint URL, method, and quote ID, or `null` if not found. */
   async getByQuote(input: GetMeltByQuoteInput<TSupported>): Promise<MeltOperation | null> {
     return this.meltOperationService.getOperationByQuote(
+      input.mintUrl,
+      input.method,
+      input.quoteId,
+    );
+  }
+
+  /** Lists all melt operations that reference the same canonical quote. */
+  async listByQuote(input: ListMeltByQuoteInput<TSupported>): Promise<MeltOperation[]> {
+    return this.meltOperationService.getOperationsForQuote(
       input.mintUrl,
       input.method,
       input.quoteId,
