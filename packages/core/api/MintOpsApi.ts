@@ -53,6 +53,17 @@ export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
   } & MethodDataInput<M>;
 }[TSupported];
 
+export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
+  [M in TSupported]: {
+    /** Mint that owns the mint operation. */
+    mintUrl: string;
+    /** Mint method to resolve, for example `bolt11`. */
+    method: M;
+    /** Canonical mint quote ID. */
+    quoteId: string;
+  };
+}[TSupported];
+
 export interface MintRecoveryApi {
   /** Runs the startup-style recovery sweep for mint operations. */
   run(): Promise<void>;
@@ -133,13 +144,13 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     return this.mintOperationService.getOperation(operationId);
   }
 
-  /** Returns a mint operation by mint URL and quote ID, or `null` if not found. */
-  async getByQuote(
-    mintUrl: string,
-    quoteId: string,
-    method: TSupported = 'bolt11' as TSupported,
-  ): Promise<MintOperation | null> {
-    return this.mintOperationService.getOperationByQuote(mintUrl, method, quoteId);
+  /** Returns a mint operation by mint URL, method, and quote ID, or `null` if not found. */
+  async getByQuote(input: GetMintByQuoteInput<TSupported>): Promise<MintOperation | null> {
+    return this.mintOperationService.getOperationByQuote(
+      input.mintUrl,
+      input.method,
+      input.quoteId,
+    );
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */

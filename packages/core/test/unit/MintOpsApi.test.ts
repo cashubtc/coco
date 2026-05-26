@@ -17,6 +17,7 @@ const quoteId = 'quote-1';
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
 type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
+type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
 type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
   Extract<PrepareMintInput, { method: 'bolt11' }> extends {
     methodData?: Record<string, never>;
@@ -28,6 +29,11 @@ type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
   Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
     methodData?: Record<string, never>;
   }
+    ? true
+    : false
+>;
+type _AssertGetByQuoteUsesObjectInput = Assert<
+  GetMintByQuoteInput extends { mintUrl: string; method: 'bolt11'; quoteId: string }
     ? true
     : false
 >;
@@ -197,6 +203,21 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.getInFlightOperations).toHaveBeenCalledWith();
     expect(pending).toEqual([pendingOperation]);
     expect(inFlight).toHaveLength(2);
+  });
+
+  it('getByQuote forwards object input to the service', async () => {
+    const result = await api.getByQuote({
+      mintUrl,
+      method: 'bolt11',
+      quoteId: pendingOperation.quoteId,
+    });
+
+    expect(mintOperationService.getOperationByQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      pendingOperation.quoteId,
+    );
+    expect(result).toBe(pendingOperation);
   });
 
   it('refresh reconciles pending and executing operations', async () => {
