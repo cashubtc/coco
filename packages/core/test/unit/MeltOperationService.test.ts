@@ -2,6 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
+import { MemoryMeltQuoteRepository } from '../../repositories/memory/MemoryMeltQuoteRepository.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -12,6 +13,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { CoreProof } from '../../types.ts';
+import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type {
   InitMeltOperation,
   PreparedMeltOperation,
@@ -25,6 +27,7 @@ import type {
   PendingCheckResult,
   FinalizeResult,
 } from '../../operations/melt/MeltMethodHandler.ts';
+import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -37,6 +40,7 @@ describe('MeltOperationService', () => {
   const invoice = 'lnbc1000n1...';
 
   let meltOperationRepository: MemoryMeltOperationRepository;
+  let meltQuoteRepository: MemoryMeltQuoteRepository;
   let proofRepository: MemoryProofRepository;
   let proofService: ProofService;
   let mintService: MintService;
@@ -46,6 +50,7 @@ describe('MeltOperationService', () => {
   let logger: Logger;
   let handlerProvider: MeltHandlerProvider;
   let handler: MeltMethodHandler;
+  let quoteLifecycle: QuoteLifecycle;
   let service: MeltOperationService;
 
   const makeProof = (secret: string, overrides?: Partial<CoreProof>): CoreProof =>
@@ -66,11 +71,31 @@ describe('MeltOperationService', () => {
     mintUrl,
     method: 'bolt11',
     methodData: { invoice },
+    quoteId: 'quote-1',
     createdAt: Date.now() - 1000,
     updatedAt: Date.now() - 1000,
     ...overrides,
     unit: overrides?.unit ?? 'sat',
   });
+
+  const persistMeltQuote = async (
+    quote = 'quote-1',
+    state: 'UNPAID' | 'PENDING' | 'PAID' = 'UNPAID',
+    unit = 'sat',
+  ) => {
+    await meltQuoteRepository.upsertMeltQuote(
+      meltQuoteFromBolt11Response(mintUrl, {
+        quote,
+        request: invoice,
+        amount: Amount.from(100),
+        unit,
+        fee_reserve: Amount.from(1),
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state,
+        payment_preimage: state === 'PAID' ? 'preimage-123' : null,
+      }),
+    );
+  };
 
   const makePreparedOp = (
     id: string,
@@ -139,12 +164,37 @@ describe('MeltOperationService', () => {
     unit: overrides?.unit ?? 'sat',
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     meltOperationRepository = new MemoryMeltOperationRepository();
+    meltQuoteRepository = new MemoryMeltQuoteRepository();
     proofRepository = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
 
     handler = {
+      createQuote: mock(async ({ mintUrl: quoteMintUrl, methodData, unit }) =>
+        meltQuoteFromBolt11Response(quoteMintUrl, {
+          quote: 'quote-created',
+          request: methodData.invoice,
+          amount: Amount.from(100),
+          unit,
+          fee_reserve: Amount.from(1),
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+          payment_preimage: null,
+        }),
+      ),
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        meltQuoteFromBolt11Response(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          amount: quote.amount,
+          unit: quote.unit,
+          fee_reserve: quote.fee_reserve,
+          expiry: quote.expiry,
+          state: 'PENDING',
+          payment_preimage: null,
+        }),
+      ),
       prepare: mock(async ({ operation }) =>
         makePreparedOp(operation.id, {
           mintUrl: operation.mintUrl,
@@ -207,9 +257,24 @@ describe('MeltOperationService', () => {
       error: mock(() => {}),
     } as Logger;
 
+    quoteLifecycle = new QuoteLifecycle({
+      mintHandlerProvider: {} as any,
+      meltHandlerProvider: handlerProvider,
+      mintQuoteRepository: {} as any,
+      meltQuoteRepository,
+      proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      eventBus,
+      logger,
+    });
+
     service = new MeltOperationService(
       handlerProvider,
       meltOperationRepository,
+      quoteLifecycle,
       proofRepository,
       proofService,
       mintService,
@@ -218,6 +283,7 @@ describe('MeltOperationService', () => {
       eventBus,
       logger,
     );
+    await persistMeltQuote();
   });
 
   describe('init', () => {
@@ -245,6 +311,22 @@ describe('MeltOperationService', () => {
       expect(stored?.methodData.amountSats?.toString()).toBe('1');
     });
 
+    it('rejects duplicate quote-bound operations', async () => {
+      const first = await service.init('https://MINT.test/', 'bolt11', { invoice }, 'sat', {
+        quoteId: 'quote-1',
+      });
+
+      await expect(
+        service.init(mintUrl, 'bolt11', { invoice }, 'sat', { quoteId: 'quote-1' }),
+      ).rejects.toThrow(
+        `Melt quote quote-1 is already tracked by operation ${first.id} in state init`,
+      );
+
+      const operations = await meltOperationRepository.getByQuoteId(mintUrl, 'quote-1');
+      expect(first.mintUrl).toBe(mintUrl);
+      expect(operations).toHaveLength(1);
+    });
+
     it('throws when mint is untrusted', async () => {
       (mintService.isTrustedMint as Mock<any>).mockResolvedValue(false);
 
@@ -258,7 +340,72 @@ describe('MeltOperationService', () => {
     });
   });
 
+  describe('quotes', () => {
+    it('creates and persists a canonical melt quote without creating an operation', async () => {
+      const quote = await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', { invoice });
+
+      expect(quote.quoteId).toBe('quote-created');
+      expect(handler.createQuote).toHaveBeenCalled();
+      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
+      expect(await meltOperationRepository.getAll()).toHaveLength(0);
+    });
+
+    it('normalizes amountSats before passing method data to the handler', async () => {
+      await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', {
+        invoice,
+        amountSats: Amount.from(1000),
+      });
+
+      const ctx = (handler.createQuote as Mock<any>).mock.calls.at(-1)?.[0] as any;
+      expect(ctx.methodData.amountSats?.toString()).toBe('1000');
+    });
+
+    it('lists active canonical melt quotes', async () => {
+      await persistMeltQuote('quote-pending', 'PENDING');
+      await persistMeltQuote('quote-paid', 'PAID');
+
+      const quotes = await quoteLifecycle.getPendingMeltQuotes('bolt11');
+
+      expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
+    });
+
+    it('refreshMeltQuote persists a canonical melt quote after fetching remote state', async () => {
+      const quote = await quoteLifecycle.refreshMeltQuote(mintUrl, 'bolt11', 'quote-1');
+
+      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
+      expect(quote.state).toBe('PENDING');
+      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
+    });
+  });
+
   describe('prepare', () => {
+    it('prepares existing quotes using the canonical quote mint URL', async () => {
+      const prepared = await service.prepareExistingQuote(
+        'https://MINT.test/',
+        'bolt11',
+        'quote-1',
+      );
+
+      const stored = await meltOperationRepository.getById(prepared.id);
+      const byQuote = await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-1');
+
+      expect(prepared.mintUrl).toBe(mintUrl);
+      expect(stored?.mintUrl).toBe(mintUrl);
+      expect(byQuote?.id).toBe(prepared.id);
+    });
+
+    it('rejects duplicate prepares for the same canonical quote', async () => {
+      const first = await service.prepareExistingQuote('https://MINT.test/', 'bolt11', 'quote-1');
+
+      await expect(service.prepareExistingQuote(mintUrl, 'bolt11', 'quote-1')).rejects.toThrow(
+        `Melt quote quote-1 is already tracked by operation ${first.id} in state prepared`,
+      );
+
+      const operations = await meltOperationRepository.getByQuoteId(mintUrl, 'quote-1');
+      expect(operations).toHaveLength(1);
+      expect(handler.prepare).toHaveBeenCalledTimes(1);
+    });
+
     it('prepares operation and emits event', async () => {
       const initOp = makeInitOp('op-1');
       await meltOperationRepository.create(initOp);
@@ -276,6 +423,7 @@ describe('MeltOperationService', () => {
 
     it('validates NUT-05 support and uses the operation unit wallet', async () => {
       const initOp = makeInitOp('op-usd', { unit: 'usd' });
+      await persistMeltQuote('quote-1', 'UNPAID', 'usd');
       await meltOperationRepository.create(initOp);
 
       const prepared = await service.prepare('op-usd');
@@ -693,7 +841,7 @@ describe('MeltOperationService', () => {
       const prepared = makePreparedOp('op-quote', { quoteId: 'quote-123' });
       await meltOperationRepository.create(prepared);
 
-      const operation = await service.getOperationByQuote(mintUrl, 'quote-123');
+      const operation = await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-123');
 
       expect(operation?.id).toBe('op-quote');
     });
@@ -701,7 +849,7 @@ describe('MeltOperationService', () => {
     it('returns null when quote id is not found', async () => {
       await meltOperationRepository.create(makePreparedOp('op-quote', { quoteId: 'quote-456' }));
 
-      const operation = await service.getOperationByQuote(mintUrl, 'missing-quote');
+      const operation = await service.getOperationByQuote(mintUrl, 'bolt11', 'missing-quote');
 
       expect(operation).toBeNull();
     });
@@ -710,7 +858,9 @@ describe('MeltOperationService', () => {
       await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
       await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
 
-      expect(service.getOperationByQuote(mintUrl, 'quote-dupe')).rejects.toThrow('melt operations');
+      expect(service.getOperationByQuote(mintUrl, 'bolt11', 'quote-dupe')).rejects.toThrow(
+        'melt operations',
+      );
     });
   });
 });

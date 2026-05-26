@@ -1,6 +1,6 @@
 import type {
   Repositories,
-  MintQuoteRepository,
+  LegacyMintQuoteRepository,
   MintOperationRepository,
   SendOperationRepository,
   MeltOperationRepository,
@@ -59,11 +59,13 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  QuoteApi,
   PaymentRequestsApi,
 } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
+import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -199,6 +201,7 @@ export class Manager {
   readonly history: HistoryApi;
   readonly auth: AuthApi;
   readonly ops: OpsApi;
+  readonly quotes: QuoteApi;
   readonly paymentRequests: PaymentRequestsApi;
   readonly ext: PluginExtensions;
   private mintService: MintService;
@@ -211,7 +214,8 @@ export class Manager {
   readonly subscriptions: SubscriptionManager;
   private mintOperationWatcher?: MintOperationWatcherService;
   private mintOperationProcessor?: MintOperationProcessor;
-  private mintQuoteRepository: MintQuoteRepository;
+  private legacyMintQuoteRepository: LegacyMintQuoteRepository;
+  private quoteLifecycle: QuoteLifecycle;
   private proofStateWatcher?: ProofStateWatcherService;
   private historyService: HistoryService;
   private seedService: SeedService;
@@ -274,7 +278,7 @@ export class Manager {
     this.keyRingService = core.keyRingService;
     this.seedService = core.seedService;
     this.counterService = core.counterService;
-    this.mintQuoteRepository = core.mintQuoteRepository;
+    this.legacyMintQuoteRepository = core.legacyMintQuoteRepository;
     this.historyService = core.historyService;
     this.paymentRequestService = core.paymentRequestService;
     this.sendOperationService = core.sendOperationService;
@@ -287,6 +291,7 @@ export class Manager {
     this.paymentRequestReceiveAttemptRepository = core.paymentRequestReceiveAttemptRepository;
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
+    this.quoteLifecycle = core.quoteLifecycle;
     this.authSessionService = core.authSessionService;
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
@@ -299,6 +304,7 @@ export class Manager {
     this.subscription = apis.subscription;
     this.history = apis.history;
     this.ops = apis.ops;
+    this.quotes = apis.quotes;
     this.auth = apis.auth;
     this.paymentRequests = apis.paymentRequests;
 
@@ -472,10 +478,9 @@ export class Manager {
   ): Promise<{ reconciled: string[]; skipped: string[] }> {
     const reconciled: string[] = [];
     const skipped: string[] = [];
-    const quotes = await this.mintQuoteRepository.getPendingMintQuotes();
+    const quotes = await this.legacyMintQuoteRepository.getPendingLegacyMintQuotes(mintUrl);
 
     for (const quote of quotes) {
-      if (mintUrl && quote.mintUrl !== mintUrl) continue;
       if (quote.state === 'ISSUED') {
         skipped.push(quote.quote);
         continue;
@@ -493,7 +498,8 @@ export class Manager {
 
       const existing = await this.mintOperationService.getOperationByQuote(
         quote.mintUrl,
-        quote.quote,
+        quote.method,
+        quote.quoteId,
       );
       if (existing && existing.state !== 'init') {
         skipped.push(quote.quote);
@@ -657,7 +663,8 @@ export class Manager {
     tokenService: TokenService;
     walletRestoreService: WalletRestoreService;
     keyRingService: KeyRingService;
-    mintQuoteRepository: MintQuoteRepository;
+    legacyMintQuoteRepository: LegacyMintQuoteRepository;
+    quoteLifecycle: QuoteLifecycle;
     historyService: HistoryService;
     paymentRequestService: PaymentRequestService;
     sendOperationService: SendOperationService;
@@ -766,12 +773,30 @@ export class Manager {
       repositories.paymentRequestReceiveAttemptRepository;
 
     const meltOperationLogger = this.getChildLogger('MeltOperationService');
+    const quoteLifecycleLogger = this.getChildLogger('QuoteLifecycle');
     const meltHandlerProvider = new MeltHandlerProvider({
       bolt11: new MeltBolt11Handler(),
+    });
+    const mintHandlerProvider = new MintHandlerProvider({
+      bolt11: new MintBolt11Handler(),
+    });
+    const quoteLifecycle = new QuoteLifecycle({
+      mintHandlerProvider,
+      meltHandlerProvider,
+      mintQuoteRepository: repositories.mintQuoteRepository,
+      meltQuoteRepository: repositories.meltQuoteRepository,
+      proofRepository: repositories.proofRepository,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: quoteLifecycleLogger,
     });
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,
       repositories.meltOperationRepository,
+      quoteLifecycle,
       repositories.proofRepository,
       proofService,
       mintService,
@@ -784,12 +809,10 @@ export class Manager {
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
-    const mintHandlerProvider = new MintHandlerProvider({
-      bolt11: new MintBolt11Handler(),
-    });
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,
       repositories.mintOperationRepository,
+      quoteLifecycle,
       repositories.proofRepository,
       proofService,
       mintService,
@@ -807,7 +830,7 @@ export class Manager {
       historyLogger,
     );
 
-    const mintQuoteRepository = repositories.mintQuoteRepository;
+    const legacyMintQuoteRepository = repositories.legacyMintQuoteRepository;
 
     const paymentRequestLogger = this.getChildLogger('PaymentRequestService');
     const paymentRequestService = new PaymentRequestService(
@@ -847,7 +870,8 @@ export class Manager {
       tokenService,
       walletRestoreService,
       keyRingService,
-      mintQuoteRepository,
+      legacyMintQuoteRepository,
+      quoteLifecycle,
       historyService,
       paymentRequestService,
       sendOperationService,
@@ -873,6 +897,7 @@ export class Manager {
     subscription: SubscriptionApi;
     history: HistoryApi;
     ops: OpsApi;
+    quotes: QuoteApi;
     auth: AuthApi;
     paymentRequests: PaymentRequestsApi;
   } {
@@ -896,6 +921,7 @@ export class Manager {
     const mintOps = new MintOpsApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
     const ops = new OpsApi(send, receive, mintOps, melt);
+    const quotes = new QuoteApi(this.quoteLifecycle);
     const auth = new AuthApi(this.authService);
     const paymentRequests = new PaymentRequestsApi(
       this.paymentRequestService,
@@ -908,6 +934,7 @@ export class Manager {
       subscription,
       history,
       ops,
+      quotes,
       auth,
       paymentRequests,
     };

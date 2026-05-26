@@ -246,10 +246,12 @@ export class ExpoMintOperationRepository implements MintOperationRepository {
     return rows.map(rowToOperation);
   }
 
-  async getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+  async getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]> {
     const rows = await this.db.all<MintOperationRow>(
-      'SELECT * FROM coco_cashu_mint_operations WHERE mintUrl = ? AND quoteId = ? ORDER BY updatedAt DESC',
-      [mintUrl, quoteId],
+      `SELECT * FROM coco_cashu_mint_operations
+       WHERE mintUrl = ? AND method = ? AND quoteId = ?
+       ORDER BY createdAt ASC, id ASC`,
+      [mintUrl, method, quoteId],
     );
     return rows.map(rowToOperation);
   }

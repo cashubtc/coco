@@ -27,9 +27,15 @@ console.log('Mint description:', mintInfo.description);
 await coco.mint.trustMint(mintUrl);
 
 // Now you can perform wallet operations
-const pendingMint = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: 21,
+  method: 'bolt11',
+});
+
+const pendingMint = await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
   method: 'bolt11',
   methodData: {},
 });
@@ -46,9 +52,15 @@ const mintUrl = 'https://trustworthy-mint.com';
 await coco.mint.addMint(mintUrl, { trusted: true });
 
 // Ready for wallet operations
-const pendingMint = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: 21,
+  method: 'bolt11',
+});
+
+const pendingMint = await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
   method: 'bolt11',
   methodData: {},
 });

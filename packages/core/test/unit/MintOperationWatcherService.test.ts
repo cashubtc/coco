@@ -59,11 +59,23 @@ describe('MintOperationWatcherService', () => {
     const observePendingOperation = mock(async () => {
       throw new Error('should not re-check');
     });
+    const recordQuoteObservation = mock(
+      async (_operation: PendingMintOperation, _state: 'UNPAID' | 'PAID' | 'ISSUED') => ({
+        mintUrl,
+        method: 'bolt11',
+        quoteId,
+        quote: quoteId,
+        request: operation.request,
+        amount: operation.amount,
+        unit: operation.unit,
+        expiry: operation.expiry,
+        state: 'PAID',
+        reusable: false,
+        createdAt: operation.createdAt,
+        updatedAt: Date.now(),
+      }),
+    );
     const getOperation = mock(async () => operation);
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
-    bus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
-    });
 
     const watcher = new MintOperationWatcherService(
       { subscribe } as unknown as SubscriptionManager,
@@ -71,6 +83,7 @@ describe('MintOperationWatcherService', () => {
       {
         observePendingOperation,
         getOperation,
+        recordQuoteObservation,
       } as unknown as MintOperationService,
       bus,
       new NullLogger(),
@@ -100,12 +113,11 @@ describe('MintOperationWatcherService', () => {
 
     expect(getOperation).toHaveBeenCalledWith(operation.id);
     expect(observePendingOperation).not.toHaveBeenCalled();
-    expect(quoteStateEvents).toHaveLength(1);
-    expect(quoteStateEvents[0]?.operationId).toBe(operation.id);
-    expect(quoteStateEvents[0]?.state).toBe('PAID');
-    const paidOperation = quoteStateEvents[0]?.operation;
+    expect(recordQuoteObservation).toHaveBeenCalledTimes(1);
+    const [paidOperation, state] = recordQuoteObservation.mock.calls[0] ?? [];
+    expect(state).toBe('PAID');
     if (!paidOperation || paidOperation.state !== 'pending') {
-      throw new Error('Expected pending operation in PAID event');
+      throw new Error('Expected pending operation in PAID observation');
     }
     expect(paidOperation.lastObservedRemoteState).toBe('PAID');
     expect(unsubscribe).not.toHaveBeenCalled();
@@ -115,16 +127,29 @@ describe('MintOperationWatcherService', () => {
 
   it('records ISSUED subscription updates and stops watching the operation', async () => {
     const operation = makePendingOperation();
-    const quoteStateEvents: Array<CoreEvents['mint-op:quote-state-changed']> = [];
-    bus.on('mint-op:quote-state-changed', (event) => {
-      quoteStateEvents.push(event);
-    });
+    const recordQuoteObservation = mock(
+      async (_operation: PendingMintOperation, _state: 'UNPAID' | 'PAID' | 'ISSUED') => ({
+        mintUrl,
+        method: 'bolt11',
+        quoteId,
+        quote: quoteId,
+        request: operation.request,
+        amount: operation.amount,
+        unit: operation.unit,
+        expiry: operation.expiry,
+        state: 'ISSUED',
+        reusable: false,
+        createdAt: operation.createdAt,
+        updatedAt: Date.now(),
+      }),
+    );
 
     const watcher = new MintOperationWatcherService(
       { subscribe } as unknown as SubscriptionManager,
       { isTrustedMint: mock(async () => true) } as unknown as MintService,
       {
         getOperation: mock(async () => operation),
+        recordQuoteObservation,
       } as unknown as MintOperationService,
       bus,
       new NullLogger(),
@@ -151,11 +176,11 @@ describe('MintOperationWatcherService', () => {
       state: 'ISSUED',
     });
 
-    expect(quoteStateEvents).toHaveLength(1);
-    expect(quoteStateEvents[0]?.state).toBe('ISSUED');
-    const issuedOperation = quoteStateEvents[0]?.operation;
+    expect(recordQuoteObservation).toHaveBeenCalledTimes(1);
+    const [issuedOperation, state] = recordQuoteObservation.mock.calls[0] ?? [];
+    expect(state).toBe('ISSUED');
     if (!issuedOperation || issuedOperation.state !== 'pending') {
-      throw new Error('Expected pending operation in ISSUED event');
+      throw new Error('Expected pending operation in ISSUED observation');
     }
     expect(issuedOperation.lastObservedRemoteState).toBe('ISSUED');
     expect(unsubscribe).toHaveBeenCalledTimes(1);

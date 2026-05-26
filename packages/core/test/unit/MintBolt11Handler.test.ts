@@ -6,9 +6,11 @@ import { MintOperationError } from '../../models/Error';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type {
+  CreateMintQuoteContext,
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
+  FetchRemoteMintQuoteContext,
 } from '../../operations/mint';
 import { serializeOutputData } from '../../utils';
 import type { ProofService } from '../../services/ProofService';
@@ -92,6 +94,45 @@ describe('MintBolt11Handler', () => {
     logger,
   });
 
+  const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
+    mintUrl,
+    intent: { amount: Amount.from(10), unit: 'sat' },
+    wallet,
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt11'> => ({
+    quote: {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: quoteId,
+      request: quote.request,
+      unit: quote.unit,
+      amount: quote.amount,
+      expiry: quote.expiry,
+      state: quote.state,
+      lastObservedRemoteState: quote.state,
+      lastObservedRemoteStateAt: Date.now(),
+      reusable: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
@@ -146,6 +187,24 @@ describe('MintBolt11Handler', () => {
     logger = { info: mock(() => {}) } as unknown as Logger;
   });
 
+  describe('quotes', () => {
+    it('creates a BOLT11 mint quote through the wallet', async () => {
+      const result = await handler.createQuote(buildCreateQuoteContext());
+
+      expect(wallet.createMintQuoteBolt11).toHaveBeenCalledWith(Amount.from(10));
+      expect(result.quoteId).toBe(quoteId);
+      expect(result.method).toBe('bolt11');
+    });
+
+    it('fetches a remote BOLT11 mint quote through the mint adapter', async () => {
+      const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
+
+      expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+      expect(result.quoteId).toBe(quoteId);
+      expect(result.method).toBe('bolt11');
+    });
+  });
+
   describe('recoverExecuting', () => {
     it('returns a terminal result when the mint quote expired during execution', async () => {
       const result = await handler.recoverExecuting(buildRecoverContext());
@@ -160,17 +219,11 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('prepare', () => {
-    it('creates a remote quote when no imported quote is provided', async () => {
-      const result = await handler.prepare(buildPrepareContext());
-
-      expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(1);
-      expect(result.quoteId).toBe(quoteId);
-      expect(result.amount).toEqual(quote.amount);
-      expect(result.request).toBe(quote.request);
-      expect(result.outputData.keep).toHaveLength(1);
-      expect(result.outputData.send).toEqual([]);
-      expect(result.outputData.keep[0]?.blindedMessage).toEqual(outputData.keep[0]?.blindedMessage);
-      expect(result.lastObservedRemoteState).toBe('PAID');
+    it('requires the service to provide an existing quote snapshot', async () => {
+      await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
+        'Mint quote (missing) was not provided',
+      );
+      expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
 
     it('uses the imported quote snapshot without creating a new remote quote', async () => {
@@ -198,6 +251,7 @@ describe('MintBolt11Handler', () => {
       const result = await handler.prepare({
         ...buildPrepareContext(),
         operation: usdOperation,
+        importedQuote: usdQuote,
       });
 
       expect(result.unit).toBe('usd');

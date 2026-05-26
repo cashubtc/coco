@@ -12,9 +12,16 @@ For a custom unit, pass the amount and unit together. Unit strings are trimmed
 and lowercased by Coco before validation and persistence.
 
 ```ts
-await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: { amount: 25, unit: 'usd' },
+  method: 'bolt11',
+});
+
+await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
+  unit: 'usd',
   method: 'bolt11',
 });
 
@@ -70,10 +77,16 @@ Melt operation preparation uses the invoice/request unit and continues to defaul
 bare amounts to sats.
 
 ```ts
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
 });
 
 console.log(prepared.amount, prepared.unit, prepared.fee_reserve);

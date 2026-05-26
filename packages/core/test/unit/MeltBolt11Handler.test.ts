@@ -13,11 +13,13 @@ import type { Logger } from '../../logging/Logger';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import type {
   BasePrepareContext,
+  CreateMeltQuoteContext,
   ExecuteContext,
   FinalizeContext,
   MeltMethodMeta,
   PendingContext,
   RecoverExecutingContext,
+  FetchRemoteMeltQuoteContext,
   RollbackContext,
 } from '../../operations/melt/MeltMethodHandler';
 import type {
@@ -46,6 +48,7 @@ describe('MeltBolt11Handler', () => {
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
   let mockWallet: Wallet;
+  type QuoteSnapshot = BasePrepareContext<'bolt11'>['quote'];
 
   // ============================================================================
   // Test Helpers
@@ -143,6 +146,17 @@ describe('MeltBolt11Handler', () => {
     unit: overrides?.unit ?? 'sat',
   });
 
+  const makeQuoteSnapshot = (overrides?: Partial<QuoteSnapshot>): QuoteSnapshot => ({
+    quote: overrides?.quote ?? 'quote-123',
+    request: invoice,
+    amount: overrides?.amount ?? Amount.from(100),
+    unit: overrides?.unit ?? 'sat',
+    fee_reserve: overrides?.fee_reserve ?? Amount.from(10),
+    expiry: overrides?.expiry ?? Date.now() + 60000,
+    state: overrides?.state ?? ('UNPAID' as const),
+    payment_preimage: overrides?.payment_preimage ?? null,
+  });
+
   const makeExecutingOp = (
     id: string,
     overrides?: Partial<ExecutingMeltOperation & MeltMethodMeta<'bolt11'>>,
@@ -176,9 +190,13 @@ describe('MeltBolt11Handler', () => {
       createMeltQuoteBolt11: mock(() =>
         Promise.resolve({
           quote: 'quote-123',
+          request: invoice,
           amount: Amount.from(100),
           fee_reserve: Amount.from(10),
           unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID' as const,
+          payment_preimage: null,
         }),
       ),
       getFeesForProofs: mock(() => Amount.from(1)),
@@ -247,6 +265,12 @@ describe('MeltBolt11Handler', () => {
       ),
       checkMeltQuote: mock(() =>
         Promise.resolve({
+          quote: 'quote-123',
+          request: invoice,
+          amount: Amount.from(100),
+          unit: 'sat',
+          fee_reserve: Amount.from(10),
+          expiry: Math.floor(Date.now() / 1000) + 3600,
           state: 'PAID' as const,
           change: [],
           payment_preimage: 'preimage-123',
@@ -271,9 +295,54 @@ describe('MeltBolt11Handler', () => {
 
   const buildPrepareContext = (
     operation: InitMeltOperation & MeltMethodMeta<'bolt11'>,
+    quote?: Partial<QuoteSnapshot>,
   ): BasePrepareContext<'bolt11'> => ({
     operation,
+    quote: makeQuoteSnapshot(quote),
     wallet: mockWallet,
+    proofRepository,
+    proofService,
+    walletService,
+    mintService,
+    mintAdapter,
+    eventBus,
+    logger,
+  });
+
+  const buildCreateQuoteContext = (
+    methodData: { invoice: string; amountSats?: Amount } = { invoice },
+  ): CreateMeltQuoteContext<'bolt11'> => ({
+    mintUrl,
+    methodData,
+    unit: 'sat',
+    wallet: mockWallet,
+    proofRepository,
+    proofService,
+    walletService,
+    mintService,
+    mintAdapter,
+    eventBus,
+    logger,
+  });
+
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMeltQuoteContext<'bolt11'> => ({
+    quote: {
+      mintUrl,
+      method: 'bolt11',
+      quoteId: 'quote-123',
+      quote: 'quote-123',
+      request: invoice,
+      amount: Amount.from(100),
+      unit: 'sat',
+      fee_reserve: Amount.from(10),
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      payment_preimage: null,
+      lastObservedRemoteState: 'UNPAID',
+      lastObservedRemoteStateAt: Date.now(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
     proofRepository,
     proofService,
     walletService,
@@ -352,6 +421,39 @@ describe('MeltBolt11Handler', () => {
     mintAdapter,
     eventBus,
     logger,
+  });
+
+  // ============================================================================
+  // Quote Tests
+  // ============================================================================
+
+  describe('quotes', () => {
+    it('creates amountless BOLT11 melt quotes through the wallet', async () => {
+      const quote = await handler.createQuote(buildCreateQuoteContext());
+
+      expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(invoice, undefined);
+      expect(quote.quoteId).toBe('quote-123');
+      expect(quote.method).toBe('bolt11');
+    });
+
+    it('converts BOLT11 melt quote amounts from sats to millisats', async () => {
+      await handler.createQuote(
+        buildCreateQuoteContext({ invoice, amountSats: Amount.from(1000) }),
+      );
+
+      expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(
+        invoice,
+        Amount.from(1_000_000),
+      );
+    });
+
+    it('fetches remote BOLT11 melt quotes through the mint adapter', async () => {
+      const quote = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
+
+      expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, 'quote-123');
+      expect(quote.quoteId).toBe('quote-123');
+      expect(quote.method).toBe('bolt11');
+    });
   });
 
   // ============================================================================
@@ -452,11 +554,8 @@ describe('MeltBolt11Handler', () => {
 
       it('prepares custom-unit direct melts with unit-scoped selection and change outputs', async () => {
         const operation = makeInitOp('op-usd', { unit: 'usd' });
-        const ctx = buildPrepareContext(operation);
-        (mockWallet.createMeltQuoteBolt11 as Mock<any>).mockResolvedValueOnce({
+        const ctx = buildPrepareContext(operation, {
           quote: 'quote-usd',
-          amount: Amount.from(100),
-          fee_reserve: Amount.from(10),
           unit: 'USD',
         });
         (proofService.selectProofsToSend as Mock<any>).mockResolvedValueOnce([
@@ -487,11 +586,8 @@ describe('MeltBolt11Handler', () => {
 
       it('rejects melt quote unit mismatches before selecting proofs', async () => {
         const operation = makeInitOp('op-usd', { unit: 'usd' });
-        const ctx = buildPrepareContext(operation);
-        (mockWallet.createMeltQuoteBolt11 as Mock<any>).mockResolvedValueOnce({
+        const ctx = buildPrepareContext(operation, {
           quote: 'quote-sat',
-          amount: Amount.from(100),
-          fee_reserve: Amount.from(10),
           unit: 'sat',
         });
 
@@ -499,7 +595,7 @@ describe('MeltBolt11Handler', () => {
         expect(proofService.selectProofsToSend).not.toHaveBeenCalled();
       });
 
-      it('should pass amountless invoice amount to cashu-ts in millisatoshis', async () => {
+      it('uses the pre-created canonical quote without creating a remote quote', async () => {
         const operation = makeInitOp('op-1', {
           methodData: { invoice, amountSats: Amount.from(1000) },
         });
@@ -511,10 +607,7 @@ describe('MeltBolt11Handler', () => {
 
         await handler.prepare(ctx);
 
-        expect(mockWallet.createMeltQuoteBolt11).toHaveBeenCalledWith(
-          invoice,
-          Amount.from(1_000_000),
-        );
+        expect(mockWallet.createMeltQuoteBolt11).not.toHaveBeenCalled();
       });
     });
 

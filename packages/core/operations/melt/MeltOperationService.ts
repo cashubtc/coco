@@ -19,7 +19,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId } from '../../utils';
+import { generateSubId, normalizeMintUrl } from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
@@ -27,6 +27,7 @@ import type { FinalizeResult } from './MeltMethodHandler';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -35,6 +36,7 @@ import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 export class MeltOperationService {
   private readonly handlerProvider: MeltHandlerProvider;
   private readonly meltOperationRepository: MeltOperationRepository;
+  private readonly quoteLifecycle: QuoteLifecycle;
   private readonly proofRepository: ProofRepository;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
@@ -50,6 +52,7 @@ export class MeltOperationService {
   constructor(
     handlerProvider: MeltHandlerProvider,
     meltOperationRepository: MeltOperationRepository,
+    quoteLifecycle: QuoteLifecycle,
     proofRepository: ProofRepository,
     proofService: ProofService,
     mintService: MintService,
@@ -61,6 +64,7 @@ export class MeltOperationService {
   ) {
     this.handlerProvider = handlerProvider;
     this.meltOperationRepository = meltOperationRepository;
+    this.quoteLifecycle = quoteLifecycle;
     this.proofRepository = proofRepository;
     this.proofService = proofService;
     this.mintService = mintService;
@@ -100,6 +104,7 @@ export class MeltOperationService {
     method: MeltMethod,
     methodData: MeltMethodInputData,
     unit = DEFAULT_UNIT,
+    options?: { quoteId?: string },
   ): Promise<InitMeltOperation> {
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -125,25 +130,102 @@ export class MeltOperationService {
     }
 
     const id = generateSubId();
-    const operation = createMeltOperation(
-      id,
-      mintUrl,
-      {
-        method,
-        methodData: normalizedMethodData,
-      },
-      normalizedUnit,
-    );
+    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
+      const operation = createMeltOperation(
+        id,
+        operationMintUrl,
+        {
+          method,
+          methodData: normalizedMethodData,
+        },
+        normalizedUnit,
+        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
+      );
 
-    await this.meltOperationRepository.create(operation);
+      await this.meltOperationRepository.create(operation);
+      return operation;
+    };
+
+    const operation = options?.quoteId
+      ? await this.createQuoteBoundInitOperation(
+          mintUrl,
+          method,
+          options.quoteId,
+          normalizedUnit,
+          createOperation,
+        )
+      : await createOperation(mintUrl);
+
     this.logger?.debug('Melt operation created', {
       operationId: id,
-      mintUrl,
+      mintUrl: operation.mintUrl,
       method,
       unit: normalizedUnit,
+      quoteId: operation.quoteId,
     });
 
     return operation;
+  }
+
+  private async createQuoteBoundInitOperation(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+    expectedUnit: string,
+    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMeltOperation>,
+  ): Promise<InitMeltOperation> {
+    const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
+    try {
+      const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
+        mintUrl,
+        method,
+        quoteId,
+        expectedUnit,
+      );
+      const existing = await this.getTrackedOperationForQuote(quote.mintUrl, method, quote.quoteId);
+      if (existing) {
+        throw new Error(
+          `Melt quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+        );
+      }
+
+      return createOperation(quote.mintUrl, quote.quoteId);
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async getTrackedOperationForQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+  ): Promise<MeltOperation | null> {
+    const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
+    const matching = operations.filter((operation) => operation.method === method);
+    if (matching.length === 0) {
+      return null;
+    }
+
+    return matching.sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+  }
+
+  async prepareExistingQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+    expectedUnit?: string,
+  ): Promise<PreparedMeltOperation> {
+    const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
+      mintUrl,
+      method,
+      quoteId,
+      expectedUnit,
+    );
+    const methodData = this.quoteLifecycle.methodDataFromMeltQuote(quote);
+    const initOperation = await this.init(quote.mintUrl, method, methodData, quote.unit, {
+      quoteId: quote.quoteId,
+    });
+    return this.prepare(initOperation.id);
   }
 
   /**
@@ -180,10 +262,12 @@ export class MeltOperationService {
           initOp.mintUrl,
           initOp.unit,
         );
+        const quote = await this.quoteLifecycle.loadMeltQuoteSnapshotForOperation(initOp);
         const prepared = await handler.prepare({
           ...this.buildDeps(),
           operation: initOp,
           wallet,
+          quote,
         });
 
         const preparedOp: PreparedMeltOperation = {
@@ -759,9 +843,15 @@ export class MeltOperationService {
     return this.meltOperationRepository.getById(operationId);
   }
 
-  async getOperationByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation | null> {
+  async getOperationByQuote(
+    mintUrl: string,
+    method: MeltMethod,
+    quoteId: string,
+  ): Promise<MeltOperation | null> {
     const operations = await this.meltOperationRepository.getByQuoteId(mintUrl, quoteId);
-    const matching = operations.filter((operation) => hasPreparedData(operation));
+    const matching = operations.filter(
+      (operation) => operation.method === method && hasPreparedData(operation),
+    );
 
     if (matching.length === 0) {
       return null;
@@ -769,7 +859,7 @@ export class MeltOperationService {
 
     if (matching.length > 1) {
       throw new Error(
-        `Found ${matching.length} melt operations for mint ${mintUrl} and quote ${quoteId}`,
+        `Found ${matching.length} melt operations for mint ${mintUrl}, method ${method}, and quote ${quoteId}`,
       );
     }
 

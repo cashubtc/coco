@@ -5,7 +5,9 @@ import type {
   KeyRingRepository,
   CounterRepository,
   ProofRepository,
+  MeltQuoteRepository,
   MintQuoteRepository,
+  LegacyMintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
   AuthSessionRepository,
@@ -22,7 +24,9 @@ import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
 import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { ExpoCounterRepository } from './repositories/CounterRepository.ts';
 import { ExpoProofRepository } from './repositories/ProofRepository.ts';
+import { ExpoMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { ExpoLegacyMintQuoteRepository } from './repositories/LegacyMintQuoteRepository.ts';
 import { ExpoHistoryRepository } from './repositories/HistoryRepository.ts';
 import { ExpoSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { ExpoMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
@@ -42,7 +46,9 @@ export class ExpoSqliteRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
+  readonly legacyMintQuoteRepository: LegacyMintQuoteRepository;
   readonly historyRepository: ExpoHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
@@ -60,7 +66,9 @@ export class ExpoSqliteRepositories implements Repositories {
     this.counterRepository = new ExpoCounterRepository(this.db);
     this.keysetRepository = new ExpoKeysetRepository(this.db);
     this.proofRepository = new ExpoProofRepository(this.db);
+    this.meltQuoteRepository = new ExpoMeltQuoteRepository(this.db);
     this.mintQuoteRepository = new ExpoMintQuoteRepository(this.db);
+    this.legacyMintQuoteRepository = new ExpoLegacyMintQuoteRepository(this.db);
     this.historyRepository = new ExpoHistoryRepository(this.db);
     this.sendOperationRepository = new ExpoSendOperationRepository(this.db);
     this.meltOperationRepository = new ExpoMeltOperationRepository(this.db);
@@ -86,7 +94,9 @@ export class ExpoSqliteRepositories implements Repositories {
         counterRepository: new ExpoCounterRepository(txDb),
         keysetRepository: new ExpoKeysetRepository(txDb),
         proofRepository: new ExpoProofRepository(txDb),
+        meltQuoteRepository: new ExpoMeltQuoteRepository(txDb),
         mintQuoteRepository: new ExpoMintQuoteRepository(txDb),
+        legacyMintQuoteRepository: new ExpoLegacyMintQuoteRepository(txDb),
         historyRepository: new ExpoHistoryRepository(txDb),
         sendOperationRepository: new ExpoSendOperationRepository(txDb),
         meltOperationRepository: new ExpoMeltOperationRepository(txDb),
@@ -116,7 +126,9 @@ export {
   ExpoKeysetRepository,
   ExpoCounterRepository,
   ExpoProofRepository,
+  ExpoMeltQuoteRepository,
   ExpoMintQuoteRepository,
+  ExpoLegacyMintQuoteRepository,
   ExpoHistoryRepository,
   ExpoSendOperationRepository,
   ExpoMeltOperationRepository,

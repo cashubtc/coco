@@ -1,4 +1,5 @@
 import type {
+  CreateMintQuoteContext,
   ExecuteContext,
   MintMethodMeta,
   PrepareContext,
@@ -9,21 +10,44 @@ import type {
   RecoverExecutingContext,
   PendingContext,
   PendingMintCheckResult,
+  FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
 import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
+  async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
+    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.intent.amount);
+    return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
+  }
+
+  async fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
+    const remoteQuote = await ctx.mintAdapter.checkMintQuoteState(
+      ctx.quote.mintUrl,
+      ctx.quote.quoteId,
+    );
+    return mintQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
+  }
+
   async prepare(
     ctx: PrepareContext<'bolt11'>,
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
-    const quote =
-      ctx.importedQuote ?? (await ctx.wallet.createMintQuoteBolt11(ctx.operation.amount));
+    const quote = ctx.importedQuote;
+    if (!quote) {
+      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
+    }
 
     if (!quote.amount || quote.amount.isZero()) {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
+    }
+
+    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+      throw new Error(
+        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
+      );
     }
 
     if (!quote.amount.equals(ctx.operation.amount)) {

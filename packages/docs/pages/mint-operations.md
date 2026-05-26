@@ -1,15 +1,18 @@
 # Mint Operations
 
-Mint operations track quote-backed issuance from quote creation through proof
-redemption. They are durable so apps can show an invoice, wait for remote
-payment, recover after crashes, and avoid losing issued proofs.
+Mint operations track quote-backed issuance from operation preparation through
+proof redemption. They are durable so apps can wait for remote payment, recover
+after crashes, and avoid losing issued proofs.
+
+Bare quote creation is durable quote state, not a value movement. It does not
+create history; history starts when an operation exists.
 
 ## API Surface (`coco.ops.mint`)
 
-The canonical API is exposed through `coco.ops.mint`:
+The operation lifecycle API is exposed through `coco.ops.mint`:
 
-- `prepare({ mintUrl, amount, unit?, method, methodData? })` creates a remote
-  quote and persists a pending mint operation
+- `prepare({ mintUrl, method, quoteId, unit?, methodData? })` prepares a
+  pending mint operation from an existing canonical quote
 - `importQuote({ mintUrl, quote, method, methodData? })` tracks an existing
   quote as a mint operation
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
@@ -19,8 +22,24 @@ The canonical API is exposed through `coco.ops.mint`:
   stored state
 - `finalize(operationId)` executes or recovers the operation until it reaches a
   terminal state when possible
-- `get(operationId)`, `getByQuote(mintUrl, quoteId)`, `listPending()`, and
+- `get(operationId)`, `getByQuote({ mintUrl, method, quoteId })`, `listPending()`, and
   `listInFlight()` load persisted operation state
+
+## Quote Resurfacing (`coco.quotes.mint`)
+
+Use `coco.quotes.mint` when an app needs to show a quote payment request again
+after reload without creating or loading a mint operation:
+
+- `create({ mintUrl, amount, unit?, method })` creates and persists a canonical
+  quote row only
+- `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
+- `listPending({ method? })` lists canonical quote rows that have not reached
+  `ISSUED`
+- `refresh({ mintUrl, method, quoteId })` checks the remote quote state and
+  persists the canonical quote update before emitting `mint-quote:updated`
+
+For BOLT11 quotes, the invoice is available at `quote.request`. Future onchain
+address/payment request support should use this same canonical quote surface.
 
 ## Operation States
 
@@ -44,7 +63,7 @@ init -> pending -> executing -> finalized
 
 | Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
 | --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
-| `prepare(...)`              | none                                                    | `pending`                                       | You need a new quote and invoice request to show the payer.    |
+| `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
 | `importQuote(...)`          | none                                                    | `pending`                                       | You already have a remote quote and want Coco to track it.     |
 | `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
 | `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
@@ -59,9 +78,15 @@ targeted `checkPayment()` action.
 ## Prepare -> Pay -> Finalize Flow
 
 ```ts
-const pending = await coco.ops.mint.prepare({
+const quote = await coco.quotes.mint.create({
   mintUrl,
   amount: 100,
+  method: 'bolt11',
+});
+
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  quoteId: quote.quoteId,
   method: 'bolt11',
 });
 
@@ -102,8 +127,8 @@ coco.on('mint-op:pending', ({ operationId, operation }) => {
   console.log('Mint pending', operationId, operation.request);
 });
 
-coco.on('mint-op:quote-state-changed', ({ operationId, state }) => {
-  console.log('Quote state changed', operationId, state);
+coco.on('mint-quote:updated', ({ quoteId, quote }) => {
+  console.log('Quote updated', quoteId, quote.state);
 });
 
 coco.on('mint-op:executing', ({ operationId }) => {

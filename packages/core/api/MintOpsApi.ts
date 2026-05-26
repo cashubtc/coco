@@ -8,17 +8,16 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '@core/operations/mint';
-import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11';
 
-type PrepareMintInputCommon = {
-  /** Mint that will execute the quote-backed mint operation. */
+type PrepareExistingQuoteInputCommon = {
+  /** Mint that issued the canonical quote. */
   mintUrl: string;
-  /** Amount to request from the mint. Bare amounts use `sat` unless `unit` is set. */
-  amount: UnitAmountLike;
-  /** Unit to request from the mint. */
+  /** Existing canonical mint quote ID to prepare against. */
+  quoteId: string;
+  /** Optional expected unit for the quote. */
   unit?: string;
 };
 
@@ -39,7 +38,7 @@ type MethodDataInput<M extends MintMethod> =
       };
 
 export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: PrepareMintInputCommon & {
+  [M in TSupported]: PrepareExistingQuoteInputCommon & {
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
   } & MethodDataInput<M>;
@@ -52,6 +51,17 @@ export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
   } & MethodDataInput<M>;
+}[TSupported];
+
+export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
+  [M in TSupported]: {
+    /** Mint that owns the mint operation. */
+    mintUrl: string;
+    /** Mint method to resolve, for example `bolt11`. */
+    method: M;
+    /** Canonical mint quote ID. */
+    quoteId: string;
+  };
 }[TSupported];
 
 export interface MintRecoveryApi {
@@ -69,8 +79,8 @@ export interface MintDiagnosticsApi {
 /**
  * Operation-oriented API for quote-backed mint workflows.
  *
- * This API makes the mint lifecycle explicit so callers can prepare a quote,
- * move it into a durable pending state, execute it, and inspect its progress.
+ * This API makes the mint lifecycle explicit so callers can move a canonical
+ * quote into a durable pending operation, execute it, and inspect its progress.
  */
 export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
   /** Recovery helpers for mint operations. */
@@ -87,17 +97,17 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   constructor(private readonly mintOperationService: MintOperationService) {}
 
   /**
-   * Creates a new remote quote, then persists a prepared mint operation without executing it.
+   * Prepares a mint operation against an existing canonical quote without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
-    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
 
-    return this.mintOperationService.prepareNewQuote(
+    return this.mintOperationService.prepareExistingQuote(
       input.mintUrl,
-      parsed,
       input.method,
+      input.quoteId,
       methodData,
+      input.unit,
     );
   }
 
@@ -134,9 +144,13 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     return this.mintOperationService.getOperation(operationId);
   }
 
-  /** Returns a mint operation by mint URL and quote ID, or `null` if not found. */
-  async getByQuote(mintUrl: string, quoteId: string): Promise<MintOperation | null> {
-    return this.mintOperationService.getOperationByQuote(mintUrl, quoteId);
+  /** Returns a mint operation by mint URL, method, and quote ID, or `null` if not found. */
+  async getByQuote(input: GetMintByQuoteInput<TSupported>): Promise<MintOperation | null> {
+    return this.mintOperationService.getOperationByQuote(
+      input.mintUrl,
+      input.method,
+      input.quoteId,
+    );
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */

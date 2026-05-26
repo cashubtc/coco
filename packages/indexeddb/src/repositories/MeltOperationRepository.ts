@@ -45,7 +45,11 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   };
 
   if (!isPreparedState(row.state)) {
-    return { ...base, state: 'init' };
+    return {
+      ...base,
+      state: 'init',
+      ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+    };
   }
 
   const preparedData = {
@@ -106,7 +110,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       method: operation.method,
       methodDataJson,
       unit: operation.unit,
-      quoteId: null,
+      quoteId: operation.quoteId ?? null,
       amount: null,
       fee_reserve: null,
       swap_fee: null,

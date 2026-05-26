@@ -13,6 +13,8 @@ import type {
   PendingMintOperation,
 } from './MintOperation';
 import type { MintAdapter } from '../../infra/MintAdapter';
+import type { UnitAmount } from '../../amounts.ts';
+import type { MintQuote } from '../../models/MintQuote';
 
 /**
  * Registry of supported mint methods and payload shapes.
@@ -47,6 +49,18 @@ export interface BaseHandlerDeps {
   mintAdapter: MintAdapter;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
+}
+
+export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+  mintUrl: string;
+  intent: UnitAmount;
+  wallet: Wallet;
+}
+
+export interface FetchRemoteMintQuoteContext<
+  M extends MintMethod = MintMethod,
+> extends BaseHandlerDeps {
+  quote: MintQuote<M>;
 }
 
 export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
@@ -100,6 +114,8 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
 }
 
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
+  createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
+  fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;

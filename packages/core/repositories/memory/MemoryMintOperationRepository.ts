@@ -53,18 +53,19 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results;
   }
 
-  async getByQuoteId(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+  async getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]> {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (
         operation.mintUrl === mintUrl &&
+        operation.method === method &&
         'quoteId' in operation &&
         operation.quoteId === quoteId
       ) {
         results.push({ ...operation });
       }
     }
-    return results;
+    return results.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
   async getAll(): Promise<MintOperation[]> {

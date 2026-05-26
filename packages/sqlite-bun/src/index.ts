@@ -5,7 +5,9 @@ import type {
   KeyRingRepository,
   CounterRepository,
   ProofRepository,
+  MeltQuoteRepository,
   MintQuoteRepository,
+  LegacyMintQuoteRepository,
   SendOperationRepository,
   MeltOperationRepository,
   AuthSessionRepository,
@@ -22,7 +24,9 @@ import { SqliteKeysetRepository } from './repositories/KeysetRepository.ts';
 import { SqliteKeyRingRepository } from './repositories/KeyRingRepository.ts';
 import { SqliteCounterRepository } from './repositories/CounterRepository.ts';
 import { SqliteProofRepository } from './repositories/ProofRepository.ts';
+import { SqliteMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
 import { SqliteMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
+import { SqliteLegacyMintQuoteRepository } from './repositories/LegacyMintQuoteRepository.ts';
 import { SqliteHistoryRepository } from './repositories/HistoryRepository.ts';
 import { SqliteSendOperationRepository } from './repositories/SendOperationRepository.ts';
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
@@ -42,7 +46,9 @@ export class SqliteRepositories implements Repositories {
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
+  readonly meltQuoteRepository: MeltQuoteRepository;
   readonly mintQuoteRepository: MintQuoteRepository;
+  readonly legacyMintQuoteRepository: LegacyMintQuoteRepository;
   readonly historyRepository: SqliteHistoryRepository;
   readonly sendOperationRepository: SendOperationRepository;
   readonly meltOperationRepository: MeltOperationRepository;
@@ -60,7 +66,9 @@ export class SqliteRepositories implements Repositories {
     this.counterRepository = new SqliteCounterRepository(this.db);
     this.keysetRepository = new SqliteKeysetRepository(this.db);
     this.proofRepository = new SqliteProofRepository(this.db);
+    this.meltQuoteRepository = new SqliteMeltQuoteRepository(this.db);
     this.mintQuoteRepository = new SqliteMintQuoteRepository(this.db);
+    this.legacyMintQuoteRepository = new SqliteLegacyMintQuoteRepository(this.db);
     this.historyRepository = new SqliteHistoryRepository(this.db);
     this.sendOperationRepository = new SqliteSendOperationRepository(this.db);
     this.meltOperationRepository = new SqliteMeltOperationRepository(this.db);
@@ -86,7 +94,9 @@ export class SqliteRepositories implements Repositories {
         counterRepository: new SqliteCounterRepository(txDb),
         keysetRepository: new SqliteKeysetRepository(txDb),
         proofRepository: new SqliteProofRepository(txDb),
+        meltQuoteRepository: new SqliteMeltQuoteRepository(txDb),
         mintQuoteRepository: new SqliteMintQuoteRepository(txDb),
+        legacyMintQuoteRepository: new SqliteLegacyMintQuoteRepository(txDb),
         historyRepository: new SqliteHistoryRepository(txDb),
         sendOperationRepository: new SqliteSendOperationRepository(txDb),
         meltOperationRepository: new SqliteMeltOperationRepository(txDb),
@@ -115,7 +125,9 @@ export {
   SqliteKeysetRepository,
   SqliteCounterRepository,
   SqliteProofRepository,
+  SqliteMeltQuoteRepository,
   SqliteMintQuoteRepository,
+  SqliteLegacyMintQuoteRepository,
   SqliteHistoryRepository,
   SqliteSendOperationRepository,
   SqliteMeltOperationRepository,

@@ -17,6 +17,7 @@ const quoteId = 'quote-1';
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
 type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
+type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
 type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
   Extract<PrepareMintInput, { method: 'bolt11' }> extends {
     methodData?: Record<string, never>;
@@ -30,6 +31,9 @@ type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
   }
     ? true
     : false
+>;
+type _AssertGetByQuoteUsesObjectInput = Assert<
+  GetMintByQuoteInput extends { mintUrl: string; method: 'bolt11'; quoteId: string } ? true : false
 >;
 
 const makePendingOperation = (): PendingMintOperation => ({
@@ -76,7 +80,7 @@ describe('MintOpsApi', () => {
     };
 
     mintOperationService = {
-      prepareNewQuote: mock(async () => pendingOperation),
+      prepareExistingQuote: mock(async () => pendingOperation),
       importQuote: mock(async () => pendingOperation),
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
@@ -98,53 +102,38 @@ describe('MintOpsApi', () => {
     api = new MintOpsApi(mintOperationService);
   });
 
-  it('prepare creates a new quote-backed operation and returns a pending mint operation', async () => {
+  it('prepare targets an existing canonical quote and returns a pending mint operation', async () => {
     const result = await api.prepare({
       mintUrl,
-      amount: Amount.from(10),
+      quoteId,
       method: 'bolt11',
-      methodData: {},
     });
 
-    expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
+    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
       mintUrl,
-      { amount: Amount.from(10), unit: 'sat' },
       'bolt11',
+      quoteId,
       {},
+      undefined,
     );
     expect(result).toBe(pendingOperation);
   });
 
-  it('prepare defaults empty methodData for bolt11', async () => {
-    const result = await api.prepare({
-      mintUrl,
-      amount: Amount.from(10),
-      method: 'bolt11',
-    });
-
-    expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
-      mintUrl,
-      { amount: Amount.from(10), unit: 'sat' },
-      'bolt11',
-      {},
-    );
-    expect(result).toBe(pendingOperation);
-  });
-
-  it('prepare passes non-sat units to the service', async () => {
+  it('prepare passes methodData and expected units to the service', async () => {
     await api.prepare({
       mintUrl,
-      amount: Amount.from(10),
+      quoteId,
       unit: 'usd',
       method: 'bolt11',
       methodData: {},
     });
 
-    expect(mintOperationService.prepareNewQuote).toHaveBeenCalledWith(
+    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
       mintUrl,
-      { amount: Amount.from(10), unit: 'usd' },
       'bolt11',
+      quoteId,
       {},
+      'usd',
     );
   });
 
@@ -212,6 +201,21 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.getInFlightOperations).toHaveBeenCalledWith();
     expect(pending).toEqual([pendingOperation]);
     expect(inFlight).toHaveLength(2);
+  });
+
+  it('getByQuote forwards object input to the service', async () => {
+    const result = await api.getByQuote({
+      mintUrl,
+      method: 'bolt11',
+      quoteId: pendingOperation.quoteId,
+    });
+
+    expect(mintOperationService.getOperationByQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      pendingOperation.quoteId,
+    );
+    expect(result).toBe(pendingOperation);
   });
 
   it('refresh reconciles pending and executing operations', async () => {

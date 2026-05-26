@@ -30,7 +30,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof } from '../../utils';
+import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
   NetworkError,
@@ -42,6 +42,8 @@ import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
+import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 /**
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
@@ -49,6 +51,7 @@ import { OperationIdLock } from '../OperationIdLock';
 export class MintOperationService {
   private readonly handlerProvider: MintHandlerProvider;
   private readonly mintOperationRepository: MintOperationRepository;
+  private readonly quoteLifecycle: QuoteLifecycle;
   private readonly proofRepository: ProofRepository;
   private readonly proofService: ProofService;
   private readonly mintService: MintService;
@@ -64,6 +67,7 @@ export class MintOperationService {
   constructor(
     handlerProvider: MintHandlerProvider,
     mintOperationRepository: MintOperationRepository,
+    quoteLifecycle: QuoteLifecycle,
     proofRepository: ProofRepository,
     proofService: ProofService,
     mintService: MintService,
@@ -75,6 +79,7 @@ export class MintOperationService {
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
+    this.quoteLifecycle = quoteLifecycle;
     this.proofRepository = proofRepository;
     this.proofService = proofService;
     this.mintService = mintService;
@@ -84,15 +89,18 @@ export class MintOperationService {
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
 
-    this.eventBus.on('mint-op:quote-state-changed', async ({ operationId, operation, state }) => {
-      if (operation.state !== 'pending') {
-        return;
-      }
-
-      await this.recordPendingObservation(
-        operationId,
-        state,
-        operation.lastObservedRemoteStateAt ?? Date.now(),
+    this.eventBus.on('mint-quote:updated', async ({ mintUrl, method, quoteId, quote }) => {
+      const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
+      await Promise.all(
+        operations
+          .filter((operation): operation is PendingMintOperation => operation.state === 'pending')
+          .map((operation) =>
+            this.recordPendingObservation(
+              operation.id,
+              quote.state,
+              quote.lastObservedRemoteStateAt ?? Date.now(),
+            ),
+          ),
       );
     });
   }
@@ -111,6 +119,19 @@ export class MintOperationService {
 
   private async acquireOperationLock(operationId: string): Promise<() => void> {
     return this.operationIdLock.acquire(operationId);
+  }
+
+  private async acquireOperationLockAfterWait(operationId: string): Promise<() => void> {
+    try {
+      return await this.acquireOperationLock(operationId);
+    } catch (error) {
+      if (!(error instanceof OperationInProgressError)) {
+        throw error;
+      }
+
+      await this.operationIdLock.waitForUnlock(operationId);
+      return this.acquireOperationLock(operationId);
+    }
   }
 
   isOperationLocked(operationId: string): boolean {
@@ -139,22 +160,36 @@ export class MintOperationService {
     }
 
     const operationId = generateSubId();
-    const operation = createMintOperation(
-      operationId,
-      mintUrl,
-      {
-        method,
-        methodData,
-      } as MintMethodMeta,
-      parsed,
-      options,
-    );
+    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
+      const operation = createMintOperation(
+        operationId,
+        operationMintUrl,
+        {
+          method,
+          methodData,
+        } as MintMethodMeta,
+        parsed,
+        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
+      );
 
-    await this.mintOperationRepository.create(operation);
+      await this.mintOperationRepository.create(operation);
+      return operation;
+    };
+
+    const operation = options?.quoteId
+      ? await this.createQuoteBoundInitOperation(
+          mintUrl,
+          method,
+          options.quoteId,
+          parsed,
+          createOperation,
+        )
+      : await createOperation(mintUrl);
+
     this.logger?.debug('Mint operation created', {
       operationId,
-      mintUrl,
-      quoteId: options?.quoteId,
+      mintUrl: operation.mintUrl,
+      quoteId: operation.quoteId,
       method,
       amount: parsed.amount,
       unit: parsed.unit,
@@ -163,13 +198,84 @@ export class MintOperationService {
     return operation;
   }
 
-  async prepareNewQuote(
+  private async createQuoteBoundInitOperation(
     mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
     intent: UnitAmount,
-    method: MintMethod = 'bolt11',
+    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMintOperation>,
+  ): Promise<InitMintOperation> {
+    const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
+    try {
+      const quote = await this.resolveMintQuoteForOperationCreation(
+        mintUrl,
+        method,
+        quoteId,
+        intent,
+      );
+      return createOperation(quote.mintUrl, quote.quoteId);
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async resolveMintQuoteForOperationCreation(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    intent: UnitAmount,
+  ): Promise<MintQuote> {
+    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+    if (!quote) {
+      throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
+    }
+
+    if (!quote.amount.equals(intent.amount)) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} amount ${quote.amount} does not match requested amount ${intent.amount}`,
+      );
+    }
+
+    if (quote.unit !== intent.unit) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} unit ${quote.unit} does not match requested unit ${intent.unit}`,
+      );
+    }
+
+    if (!quote.reusable) {
+      const existing = await this.getOperationByQuote(quote.mintUrl, method, quote.quoteId);
+      if (existing) {
+        throw new Error(
+          `Mint quote ${quote.quoteId} is already tracked by operation ${existing.id} in state ${existing.state}`,
+        );
+      }
+    }
+
+    return quote;
+  }
+
+  async prepareExistingQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
     methodData: MintMethodData = {},
+    expectedUnit?: string,
   ): Promise<PendingMintOperation> {
-    const initOperation = await this.init(mintUrl, normalizeUnitAmount(intent), method, methodData);
+    const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
+      mintUrl,
+      method,
+      quoteId,
+      expectedUnit,
+    );
+
+    const initOperation = await this.init(
+      quote.mintUrl,
+      { amount: quote.amount, unit: quote.unit },
+      method,
+      methodData,
+      { quoteId: quote.quoteId },
+    );
+
     return this.prepare(initOperation.id);
   }
 
@@ -184,13 +290,20 @@ export class MintOperationService {
       throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    const existing = await this.getOperationByQuote(mintUrl, quote.quote);
+    if (method !== 'bolt11') {
+      throw new Error(`Unsupported mint quote import method ${String(method)}`);
+    }
+
+    const imported = await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
+    const importedSnapshot = mintQuoteToMethodSnapshot(imported);
+
+    const existing = await this.getOperationByQuote(imported.mintUrl, method, imported.quoteId);
     if (existing?.state === 'pending') {
       return existing;
     }
     if (existing?.state === 'init') {
       return this.prepare(existing.id, {
-        importedQuote: quote,
+        importedQuote: importedSnapshot,
         skipMintLock: options?.skipMintLock,
       });
     }
@@ -201,15 +314,15 @@ export class MintOperationService {
     }
 
     const initOperation = await this.init(
-      mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      imported.mintUrl,
+      { amount: imported.amount, unit: imported.unit },
       method,
       methodData,
-      { quoteId: quote.quote },
+      { quoteId: imported.quoteId },
     );
 
     return this.prepare(initOperation.id, {
-      importedQuote: quote,
+      importedQuote: importedSnapshot,
       skipMintLock: options?.skipMintLock,
     });
   }
@@ -240,6 +353,9 @@ export class MintOperationService {
         releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
       }
       try {
+        const importedQuote =
+          options?.importedQuote ??
+          (await this.quoteLifecycle.loadMintQuoteSnapshotForOperation(initOp));
         const handler = this.handlerProvider.get(initOp.method);
         await this.mintService.assertMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
           amount: initOp.amount,
@@ -253,7 +369,7 @@ export class MintOperationService {
           ...this.buildDeps(),
           operation: initOp as any,
           wallet,
-          importedQuote: options?.importedQuote as any,
+          importedQuote: importedQuote as any,
         });
 
         const pendingOp: PendingMintOperation = {
@@ -295,7 +411,7 @@ export class MintOperationService {
   }
 
   async execute(operationId: string): Promise<TerminalMintOperation> {
-    const releaseLock = await this.acquireOperationLock(operationId);
+    const releaseLock = await this.acquireOperationLockAfterWait(operationId);
     try {
       const operation = await this.mintOperationRepository.getById(operationId);
       if (!operation || operation.state !== 'pending') {
@@ -587,8 +703,12 @@ export class MintOperationService {
     return this.mintOperationRepository.getById(operationId);
   }
 
-  async getOperationByQuote(mintUrl: string, quoteId: string): Promise<MintOperation | null> {
-    const operations = await this.mintOperationRepository.getByQuoteId(mintUrl, quoteId);
+  async getOperationByQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintOperation | null> {
+    const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
     if (operations.length === 0) {
       return null;
     }
@@ -606,6 +726,14 @@ export class MintOperationService {
     }
 
     return sorted[0] ?? null;
+  }
+
+  async getOperationsForQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintOperation[]> {
+    return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
   }
 
   async getInFlightOperations(): Promise<MintOperation[]> {
@@ -630,6 +758,14 @@ export class MintOperationService {
   async getPendingOperations(): Promise<PendingMintOperation[]> {
     const ops = await this.mintOperationRepository.getByState('pending');
     return ops.filter((op): op is PendingMintOperation => op.state === 'pending');
+  }
+
+  async recordQuoteObservation(
+    operation: PendingOrLaterOperation,
+    state: MintMethodRemoteState,
+    observedAt = Date.now(),
+  ): Promise<MintQuote> {
+    return this.quoteLifecycle.recordMintQuoteObservation(operation, state, observedAt);
   }
 
   private async tryRecoverInitOperation(op: InitMintOperation): Promise<void> {
@@ -706,14 +842,11 @@ export class MintOperationService {
     }
 
     const observedRemoteStateAt = Date.now();
-
-    await this.eventBus.emit('mint-op:quote-state-changed', {
-      mintUrl: current.mintUrl,
-      operationId: current.id,
-      operation: current,
-      quoteId: current.quoteId,
-      state: 'ISSUED',
-    });
+    await this.recordQuoteObservation(
+      current as PendingOrLaterOperation,
+      'ISSUED',
+      observedRemoteStateAt,
+    );
 
     const finalized: FinalizedMintOperation = {
       ...(current as PendingOrLaterOperation),
@@ -844,13 +977,11 @@ export class MintOperationService {
       updatedAt: Date.now(),
     };
 
-    await this.eventBus.emit('mint-op:quote-state-changed', {
-      mintUrl: observedPending.mintUrl,
-      operationId: observedPending.id,
-      operation: observedPending,
-      quoteId: observedPending.quoteId,
-      state: result.observedRemoteState,
-    });
+    await this.recordQuoteObservation(
+      observedPending,
+      result.observedRemoteState,
+      result.observedRemoteStateAt,
+    );
 
     if (result.category === 'terminal' && result.terminalFailure) {
       await this.failPendingOperation(op, result.terminalFailure);
@@ -864,24 +995,34 @@ export class MintOperationService {
     observedRemoteState: MintMethodRemoteState,
     observedRemoteStateAt = Date.now(),
   ): Promise<PendingMintOperation> {
-    const op = await this.getOperation(operationId);
-    if (!op || op.state !== 'pending') {
-      throw new Error(
-        `Cannot record observation for operation ${operationId}: expected state 'pending' but found '${
-          op?.state ?? 'not found'
-        }'`,
-      );
+    const releaseLock = await this.acquireOperationLock(operationId);
+    try {
+      const op = await this.getOperation(operationId);
+      if (!op || op.state !== 'pending') {
+        throw new Error(
+          `Cannot record observation for operation ${operationId}: expected state 'pending' but found '${
+            op?.state ?? 'not found'
+          }'`,
+        );
+      }
+
+      const observedPending: PendingMintOperation = {
+        ...op,
+        lastObservedRemoteState: observedRemoteState,
+        lastObservedRemoteStateAt: observedRemoteStateAt,
+        updatedAt: Date.now(),
+      };
+      await this.mintOperationRepository.update(observedPending);
+      await this.eventBus.emit('mint-op:pending', {
+        mintUrl: observedPending.mintUrl,
+        operationId: observedPending.id,
+        operation: observedPending,
+      });
+
+      return observedPending;
+    } finally {
+      releaseLock();
     }
-
-    const observedPending: PendingMintOperation = {
-      ...op,
-      lastObservedRemoteState: observedRemoteState,
-      lastObservedRemoteStateAt: observedRemoteStateAt,
-      updatedAt: Date.now(),
-    };
-    await this.mintOperationRepository.update(observedPending);
-
-    return observedPending;
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingMintCheckResult> {

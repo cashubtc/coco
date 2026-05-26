@@ -22,6 +22,16 @@ describe('MintOperationProcessor', () => {
     finalizeCalls = [];
 
     mockMintOperationService = {
+      async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
+        return [
+          {
+            id: quoteId.replace('quote', 'mint-op'),
+            state: 'pending',
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+        ];
+      },
       async finalize(operationId: string) {
         finalizeCalls.push(operationId);
       },
@@ -51,24 +61,75 @@ describe('MintOperationProcessor', () => {
     expect(processor.isRunning()).toBe(false);
   });
 
-  it('processes PAID operations from mint-op:quote-state-changed', async () => {
+  it('processes PAID operations from mint-quote:updated', async () => {
     await processor.start();
 
-    await bus.emit('mint-op:quote-state-changed', {
+    await bus.emit('mint-quote:updated', {
       mintUrl: 'https://mint.test',
-      operationId: 'mint-op-1',
-      operation: {
-        id: 'mint-op-1',
+      method: 'bolt11',
+      quoteId: 'quote-1',
+      quote: {
         mintUrl: 'https://mint.test',
         method: 'bolt11',
+        quoteId: 'quote-1',
+        quote: 'quote-1',
+        state: 'PAID',
       } as any,
-      quoteId: 'quote-1',
-      state: 'PAID',
     });
 
-    await sleep(TEST_PROCESS_INTERVAL + 20);
+    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
 
     expect(finalizeCalls).toEqual(['mint-op-1']);
+  });
+
+  it('processes all pending operations that share a paid quote', async () => {
+    mockMintOperationService = {
+      async getOperationsForQuote() {
+        return [
+          {
+            id: 'mint-op-a',
+            state: 'pending',
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+          {
+            id: 'mint-op-b',
+            state: 'pending',
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+        ];
+      },
+      async finalize(operationId: string) {
+        finalizeCalls.push(operationId);
+      },
+    } as unknown as MintOperationService;
+
+    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
+      processIntervalMs: TEST_PROCESS_INTERVAL,
+      baseRetryDelayMs: TEST_RETRY_DELAY,
+      maxRetries: 3,
+      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+    });
+
+    await processor.start();
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'bolt11',
+      quoteId: 'shared-quote',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'shared-quote',
+        quote: 'shared-quote',
+        state: 'PAID',
+      } as any,
+    });
+
+    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
+
+    expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
   });
 
   it('processes already-paid pending operations from mint-op:pending', async () => {
@@ -109,19 +170,20 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-3']);
   });
 
-  it('ignores non-PAID quote-state changes', async () => {
+  it('ignores non-PAID quote updates', async () => {
     await processor.start();
 
-    await bus.emit('mint-op:quote-state-changed', {
+    await bus.emit('mint-quote:updated', {
       mintUrl: 'https://mint.test',
-      operationId: 'mint-op-4',
-      operation: {
-        id: 'mint-op-4',
+      method: 'bolt11',
+      quoteId: 'quote-4',
+      quote: {
         mintUrl: 'https://mint.test',
         method: 'bolt11',
+        quoteId: 'quote-4',
+        quote: 'quote-4',
+        state: 'UNPAID',
       } as any,
-      quoteId: 'quote-4',
-      state: 'UNPAID',
     });
 
     await sleep(TEST_PROCESS_INTERVAL + 20);
@@ -133,16 +195,17 @@ describe('MintOperationProcessor', () => {
     await processor.start();
 
     for (let i = 0; i < 3; i++) {
-      await bus.emit('mint-op:quote-state-changed', {
+      await bus.emit('mint-quote:updated', {
         mintUrl: 'https://mint.test',
-        operationId: 'mint-op-5',
-        operation: {
-          id: 'mint-op-5',
+        method: 'bolt11',
+        quoteId: 'quote-5',
+        quote: {
           mintUrl: 'https://mint.test',
           method: 'bolt11',
+          quoteId: 'quote-5',
+          quote: 'quote-5',
+          state: 'PAID',
         } as any,
-        quoteId: 'quote-5',
-        state: 'PAID',
       });
     }
 

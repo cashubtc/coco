@@ -15,12 +15,19 @@ The melt operation saga provides:
 
 The canonical API is exposed through `coco.ops.melt`:
 
-- `prepare({ mintUrl, method: 'bolt11', methodData: { invoice } })` creates a melt quote and prepares the operation
+- `prepare({ mintUrl, method: 'bolt11', quoteId })` prepares an operation from a canonical melt quote
 - `execute(operationOrId)` executes the prepared operation
-- `getByQuote(mintUrl, quoteId)` resolves an operation from a persisted quote id
+- `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
 - `cancel(operationId)` cancels a prepared melt
 - `reclaim(operationId)` reclaims a pending melt when rollback is allowed
+
+Create and resurface quote payment requests through `coco.quotes.melt`:
+
+- `create({ mintUrl, method: 'bolt11', methodData: { invoice }, unit? })` creates and persists a canonical quote row only
+- `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
+- `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
+- `refresh({ mintUrl, method, quoteId })` checks the remote quote state and persists the canonical quote update
 
 ## Operation States
 
@@ -50,13 +57,20 @@ init ──► prepared ──► executing ──► pending ──► finalize
 
 ### Prepare
 
-Preparation creates the quote and reserves proofs before any funds move:
+Quote creation is separate from operation preparation. Create the quote first,
+then prepare the operation once the user is ready to reserve proofs:
 
 ```ts
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt11',
+  quoteId: quote.quoteId,
 });
 
 console.log('Quote:', prepared.quoteId);
@@ -68,7 +82,7 @@ console.log('Needs swap:', prepared.needsSwap);
 
 Internally, the service:
 
-1. Creates a melt quote at the mint
+1. Loads the canonical quote row
 2. Selects proofs to cover the quote amount + fee reserve
 3. Determines if a pre-swap is needed (`needsSwap`)
 4. Reserves the input proofs and builds change outputs

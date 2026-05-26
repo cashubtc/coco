@@ -64,9 +64,14 @@ describe('ReceiveOperationService integration', () => {
     await sender.mint.addMint(mintUrl, { trusted: true });
     await receiver.mint.addMint(mintUrl, { trusted: true });
 
-    const pendingMint = await sender.ops.mint.prepare({
+    const quote = await sender.quotes.mint.create({
       mintUrl,
       amount: Amount.from(50),
+      method: 'bolt11',
+    });
+    const pendingMint = await sender.ops.mint.prepare({
+      mintUrl,
+      quoteId: quote.quoteId,
       method: 'bolt11',
       methodData: {},
     });

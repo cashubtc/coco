@@ -1,4 +1,10 @@
-import { Amount, type AmountLike, type Wallet, type Proof } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type AmountLike,
+  type MeltQuoteBolt11Response,
+  type Wallet,
+  type Proof,
+} from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -17,6 +23,7 @@ import type {
   PreparedOrLaterOperation,
 } from './MeltOperation';
 import type { MintAdapter } from '@core/infra';
+import type { MeltQuote } from '../../models/MeltQuote';
 
 /**
  * Registry of supported melt methods and their public input payload shapes.
@@ -42,8 +49,20 @@ export type MeltMethod = keyof MeltMethodDefinitions;
 
 export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefinitions[M];
 
+export interface MeltMethodQuoteDefinitions {
+  bolt11: MeltQuoteBolt11Response;
+  bolt12: MeltQuoteBolt11Response;
+  onchain: never;
+}
+
 export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =
   M extends keyof MeltMethodInputDefinitions ? MeltMethodInputDefinitions[M] : never;
+
+export type MeltMethodRemoteState<M extends MeltMethod = MeltMethod> =
+  MeltMethodQuoteDefinitions[M]['state'];
+
+export type MeltMethodQuoteSnapshot<M extends MeltMethod = MeltMethod> =
+  MeltMethodQuoteDefinitions[M];
 
 export interface MeltMethodMeta<M extends MeltMethod = MeltMethod> {
   method: M;
@@ -82,9 +101,23 @@ export interface BaseHandlerDeps {
   logger?: Logger;
 }
 
+export interface CreateMeltQuoteContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
+  mintUrl: string;
+  methodData: MeltMethodData<M>;
+  unit: string;
+  wallet: Wallet;
+}
+
+export interface FetchRemoteMeltQuoteContext<
+  M extends MeltMethod = MeltMethod,
+> extends BaseHandlerDeps {
+  quote: MeltQuote<M>;
+}
+
 export interface BasePrepareContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: InitMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
+  quote: MeltMethodQuoteSnapshot<M>;
 }
 
 export interface PreparedContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
@@ -151,6 +184,8 @@ export type ExecutionResult<M extends MeltMethod = MeltMethod> =
 export type PendingCheckResult = 'finalize' | 'stay_pending' | 'rollback';
 
 export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
+  createQuote(ctx: CreateMeltQuoteContext<M>): Promise<MeltQuote<M>>;
+  fetchRemoteQuote(ctx: FetchRemoteMeltQuoteContext<M>): Promise<MeltQuote<M>>;
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
   finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult<M>>;

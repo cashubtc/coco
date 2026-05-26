@@ -1,15 +1,15 @@
 import type { Token } from '@cashu/cashu-ts';
 import type { MeltOperation } from '@core/operations/melt';
+import type { MintOperation, MintMethod } from '@core/operations/mint';
+import type { MintQuote } from '../models/MintQuote';
 import type { UnitAmount } from '../amounts.ts';
 import type { Counter } from '../models/Counter';
 import type { HistoryEntry } from '../models/History';
 import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
-import type { MintQuoteState } from '../models/MintQuoteState';
 import type { ReceiveOperation } from '../operations/receive/ReceiveOperation';
 import type { SendOperation } from '../operations/send/SendOperation';
 import type { CoreProof, ProofState } from '../types';
-import type { MintOperation } from '@core/operations/mint';
 
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
@@ -66,12 +66,11 @@ export interface CoreEvents {
   'melt-op:finalized': { mintUrl: string; operationId: string; operation: MeltOperation };
   'melt-op:rolled-back': { mintUrl: string; operationId: string; operation: MeltOperation };
   'mint-op:pending': { mintUrl: string; operationId: string; operation: MintOperation };
-  'mint-op:quote-state-changed': {
+  'mint-quote:updated': {
     mintUrl: string;
-    operationId: string;
-    operation: MintOperation;
+    method: MintMethod;
     quoteId: string;
-    state: MintQuoteState;
+    quote: MintQuote;
   };
   'mint-op:requeue': { mintUrl: string; operationId: string; operation: MintOperation };
   'mint-op:executing': { mintUrl: string; operationId: string; operation: MintOperation };

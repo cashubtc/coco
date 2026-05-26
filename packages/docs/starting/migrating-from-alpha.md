@@ -111,7 +111,8 @@ Removed manager aliases:
 
 - `manager.send` -> `manager.ops.send`
 - `manager.receive` -> `manager.ops.receive`
-- `manager.quotes` -> use `manager.ops.mint` and `manager.ops.melt`
+- alpha-era `manager.quotes` wrappers -> use `manager.quotes.mint`,
+  `manager.quotes.melt`, and then `manager.ops.*` for operation lifecycles
 - `manager.recoverPendingSendOperations()` -> `manager.ops.send.recovery.run()`
 - `manager.recoverPendingReceiveOperations()` -> `manager.ops.receive.recovery.run()`
 - `manager.recoverPendingMeltOperations()` -> `manager.ops.melt.recovery.run()`
@@ -170,12 +171,18 @@ Use these forms after migrating:
 // preferred
 await manager.ops.send.prepare({ mintUrl, amount: 100 });
 await manager.ops.receive.prepare({ token });
-await manager.ops.mint.prepare({ mintUrl, amount: 100, method: 'bolt11' });
-await manager.ops.melt.prepare({
+const mintQuote = await manager.quotes.mint.create({
+  mintUrl,
+  amount: 100,
+  method: 'bolt11',
+});
+await manager.ops.mint.prepare({ mintUrl, method: 'bolt11', quoteId: mintQuote.quoteId });
+const meltQuote = await manager.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
   methodData: { invoice },
 });
+await manager.ops.melt.prepare({ mintUrl, method: 'bolt11', quoteId: meltQuote.quoteId });
 
 const balancesByMint = await manager.wallet.balances.byMint();
 const trustedBalancesByMint = await manager.wallet.balances.byMint({ trustedOnly: true });
@@ -274,7 +281,8 @@ await rollback(prepared.id);
 const { prepare, execute, cancel, currentOperation, executeResult, status, error } =
   useSendOperation();
 
-await prepare({ mintUrl, amount });
+const quote = await manager.quotes.mint.create({ mintUrl, amount, method: 'bolt11' });
+await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
 if (userCanceled) {
   await cancel();
 } else {

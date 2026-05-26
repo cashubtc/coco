@@ -22,7 +22,7 @@ type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['metho
 const supportedPrepareInput: PrepareMeltInput = {
   mintUrl,
   method: 'bolt11',
-  methodData: { invoice: 'lnbc1test' },
+  quoteId: 'quote-1',
 };
 void supportedPrepareInput;
 
@@ -69,6 +69,7 @@ describe('MeltOpsApi', () => {
       execute: mock(async () => pendingOperation),
       getOperation: mock(async () => preparedOperation),
       getOperationByQuote: mock(async () => preparedOperation),
+      prepareExistingQuote: mock(async () => preparedOperation),
       getPreparedOperations: mock(async () => [preparedOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
       rollback: mock(async () => {}),
@@ -86,15 +87,12 @@ describe('MeltOpsApi', () => {
   it('prepare creates and prepares a melt operation', async () => {
     const result = await api.prepare(supportedPrepareInput);
 
-    expect(meltOperationService.init).toHaveBeenCalledWith(
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
-      {
-        invoice: 'lnbc1test',
-      },
+      'quote-1',
       undefined,
     );
-    expect(meltOperationService.prepare).toHaveBeenCalledWith('op-1');
     expect(result).toBe(preparedOperation);
   });
 
@@ -102,16 +100,14 @@ describe('MeltOpsApi', () => {
     await api.prepare({
       mintUrl,
       method: 'bolt11',
-      methodData: { invoice: 'lnbc1test' },
+      quoteId: 'quote-1',
       unit: 'USD',
     });
 
-    expect(meltOperationService.init).toHaveBeenCalledWith(
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
-      {
-        invoice: 'lnbc1test',
-      },
+      'quote-1',
       'USD',
     );
   });
@@ -125,10 +121,15 @@ describe('MeltOpsApi', () => {
   });
 
   it('getByQuote forwards to the service', async () => {
-    const result = await api.getByQuote(mintUrl, preparedOperation.quoteId);
+    const result = await api.getByQuote({
+      mintUrl,
+      method: 'bolt11',
+      quoteId: preparedOperation.quoteId,
+    });
 
     expect(meltOperationService.getOperationByQuote).toHaveBeenCalledWith(
       mintUrl,
+      'bolt11',
       preparedOperation.quoteId,
     );
     expect(result).toBe(preparedOperation);

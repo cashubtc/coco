@@ -1,38 +1,58 @@
 import type { MintQuote } from '@core/models/MintQuote';
 import type { MintQuoteRepository } from '..';
+import { normalizeMintUrl } from '../../utils';
 
 export class MemoryMintQuoteRepository implements MintQuoteRepository {
   private readonly quotes = new Map<string, MintQuote>();
 
-  private makeKey(mintUrl: string, quoteId: string): string {
-    return `${mintUrl}::${quoteId}`;
+  private makeKey(mintUrl: string, method: string, quoteId: string): string {
+    return `${normalizeMintUrl(mintUrl)}::${method}::${quoteId}`;
   }
 
-  async getMintQuote(mintUrl: string, quoteId: string): Promise<MintQuote | null> {
-    const key = this.makeKey(mintUrl, quoteId);
-    return this.quotes.get(key) ?? null;
+  async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
+    const key = this.makeKey(mintUrl, method, quoteId);
+    const quote = this.quotes.get(key);
+    return quote ? { ...quote } : null;
   }
 
-  async addMintQuote(quote: MintQuote): Promise<void> {
-    const key = this.makeKey(quote.mintUrl, quote.quote);
-    this.quotes.set(key, quote);
+  async upsertMintQuote(quote: MintQuote): Promise<void> {
+    const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
+    const now = Date.now();
+    const existing = await this.getMintQuote(normalizedMintUrl, quote.method, quote.quoteId);
+    const key = this.makeKey(normalizedMintUrl, quote.method, quote.quoteId);
+    this.quotes.set(key, {
+      ...quote,
+      mintUrl: normalizedMintUrl,
+      quote: quote.quoteId,
+      createdAt: existing?.createdAt ?? quote.createdAt,
+      updatedAt: now,
+    });
   }
 
   async setMintQuoteState(
     mintUrl: string,
+    method: string,
     quoteId: string,
     state: MintQuote['state'],
+    observedAt = Date.now(),
   ): Promise<void> {
-    const key = this.makeKey(mintUrl, quoteId);
+    const key = this.makeKey(mintUrl, method, quoteId);
     const existing = this.quotes.get(key);
     if (!existing) return;
-    this.quotes.set(key, { ...existing, state });
+    this.quotes.set(key, {
+      ...existing,
+      state,
+      lastObservedRemoteState: state,
+      lastObservedRemoteStateAt: observedAt,
+      updatedAt: observedAt,
+    });
   }
 
-  async getPendingMintQuotes(): Promise<MintQuote[]> {
+  async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {
     const result: MintQuote[] = [];
     for (const q of this.quotes.values()) {
-      if (q.state !== 'ISSUED') result.push(q);
+      if (method && q.method !== method) continue;
+      if (q.state !== 'ISSUED') result.push({ ...q });
     }
     return result;
   }

@@ -11,6 +11,21 @@ async function getMintTotalBalance(manager: Manager, mintUrl: string): Promise<n
   return balances[mintUrl]?.total.toNumber() ?? 0;
 }
 
+async function prepareMintOperation(manager: Manager, mintUrl: string) {
+  const quote = await manager.quotes.mint.create({
+    mintUrl,
+    amount: Amount.from(1),
+    method: 'bolt11',
+  });
+
+  return manager.ops.mint.prepare({
+    mintUrl,
+    quoteId: quote.quoteId,
+    method: 'bolt11',
+    methodData: {},
+  });
+}
+
 describe('Pause/Resume Integration Test', () => {
   let manager: Manager;
   const mintUrl = 'https://testnut.cashu.space';
@@ -56,12 +71,7 @@ describe('Pause/Resume Integration Test', () => {
     await manager.mint.addMint(mintUrl, { trusted: true });
 
     // Create a mint quote
-    const pendingMint1 = await manager.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint1 = await prepareMintOperation(manager, mintUrl);
     expect(pendingMint1.quoteId).toBeDefined();
     console.log('Created quote 1:', pendingMint1.quoteId);
 
@@ -78,12 +88,7 @@ describe('Pause/Resume Integration Test', () => {
     expect(manager['mintOperationProcessor']).toBeUndefined();
 
     // Create another quote while paused (this should still work - just creating locally)
-    const pendingMint2 = await manager.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint2 = await prepareMintOperation(manager, mintUrl);
     expect(pendingMint2.quoteId).toBeDefined();
     console.log('Created quote 2 while paused:', pendingMint2.quoteId);
 
@@ -115,12 +120,7 @@ describe('Pause/Resume Integration Test', () => {
     expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
 
     // Create a quote after multiple cycles
-    const pendingMint = await manager.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint = await prepareMintOperation(manager, mintUrl);
     expect(pendingMint.quoteId).toBeDefined();
 
     // Wait for it to potentially be redeemed
@@ -135,12 +135,7 @@ describe('Pause/Resume Integration Test', () => {
     await manager.mint.addMint(mintUrl, { trusted: true });
 
     // Create a quote with subscriptions active
-    const pendingMint = await manager.ops.mint.prepare({
-      mintUrl,
-      amount: Amount.from(1),
-      method: 'bolt11',
-      methodData: {},
-    });
+    const pendingMint = await prepareMintOperation(manager, mintUrl);
     expect(pendingMint.quoteId).toBeDefined();
 
     // Simulate OS tearing down connections without explicit pause

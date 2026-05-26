@@ -1140,6 +1140,183 @@ const MIGRATIONS: readonly Migration[] = [
     id: '029_backfill_send_operation_tokens',
     run: backfillSendOperationTokensFromHistory,
   },
+  {
+    id: '030_method_aware_mint_quotes',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_canonical_mint_quotes (
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('UNPAID','PAID','ISSUED')),
+        request TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        expiry INTEGER,
+        pubkey TEXT,
+        lastObservedRemoteState TEXT,
+        lastObservedRemoteStateAt INTEGER,
+        reusable INTEGER NOT NULL DEFAULT 0,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (mintUrl, method, quoteId)
+      );
+
+      INSERT INTO coco_cashu_canonical_mint_quotes (
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
+        lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt
+      )
+      SELECT
+        mintUrl,
+        method,
+        quoteId,
+        CASE
+          WHEN lastObservedRemoteState IN ('UNPAID','PAID','ISSUED') THEN lastObservedRemoteState
+          WHEN state = 'finalized' THEN 'ISSUED'
+          ELSE 'UNPAID'
+        END,
+        request,
+        amount,
+        unit,
+        expiry,
+        pubkey,
+        CASE
+          WHEN lastObservedRemoteState IN ('UNPAID','PAID','ISSUED') THEN lastObservedRemoteState
+          WHEN state = 'finalized' THEN 'ISSUED'
+          ELSE 'UNPAID'
+        END,
+        COALESCE(lastObservedRemoteStateAt, updatedAt * 1000),
+        0,
+        createdAt * 1000,
+        updatedAt * 1000
+      FROM coco_cashu_mint_operations
+      WHERE quoteId IS NOT NULL
+        AND request IS NOT NULL
+        AND amount IS NOT NULL
+        AND unit IS NOT NULL
+      ON CONFLICT(mintUrl, method, quoteId) DO UPDATE SET
+        state = excluded.state,
+        request = excluded.request,
+        amount = excluded.amount,
+        unit = excluded.unit,
+        expiry = excluded.expiry,
+        pubkey = excluded.pubkey,
+        lastObservedRemoteState = excluded.lastObservedRemoteState,
+        lastObservedRemoteStateAt = excluded.lastObservedRemoteStateAt,
+        updatedAt = excluded.updatedAt;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_state
+        ON coco_cashu_canonical_mint_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_mint
+        ON coco_cashu_canonical_mint_quotes(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_method
+        ON coco_cashu_canonical_mint_quotes(method);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_mint_method_quote
+        ON coco_cashu_mint_operations(mintUrl, method, quoteId)
+        WHERE quoteId IS NOT NULL;
+    `,
+  },
+  {
+    id: '031_method_aware_melt_quotes',
+    sql: `
+      ALTER TABLE coco_cashu_melt_quotes RENAME TO coco_cashu_melt_quotes_legacy;
+
+      CREATE TABLE coco_cashu_melt_quotes (
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('UNPAID','PENDING','PAID')),
+        request TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        expiry INTEGER NOT NULL,
+        fee_reserve TEXT NOT NULL,
+        payment_preimage TEXT,
+        changeJson TEXT,
+        lastObservedRemoteState TEXT,
+        lastObservedRemoteStateAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (mintUrl, method, quoteId)
+      );
+
+      INSERT INTO coco_cashu_melt_quotes (
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
+        payment_preimage, changeJson, lastObservedRemoteState, lastObservedRemoteStateAt,
+        createdAt, updatedAt
+      )
+      SELECT
+        mintUrl,
+        'bolt11',
+        quote,
+        state,
+        request,
+        amount,
+        unit,
+        expiry,
+        fee_reserve,
+        payment_preimage,
+        NULL,
+        state,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      FROM coco_cashu_melt_quotes_legacy;
+
+      INSERT INTO coco_cashu_melt_quotes (
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
+        payment_preimage, changeJson, lastObservedRemoteState, lastObservedRemoteStateAt,
+        createdAt, updatedAt
+      )
+      SELECT
+        mintUrl,
+        method,
+        quoteId,
+        CASE
+          WHEN state = 'finalized' THEN 'PAID'
+          WHEN state IN ('pending','executing') THEN 'PENDING'
+          ELSE 'UNPAID'
+        END,
+        COALESCE(json_extract(methodDataJson, '$.invoice'), quoteId),
+        amount,
+        unit,
+        0,
+        fee_reserve,
+        json_extract(finalizedDataJson, '$.preimage'),
+        NULL,
+        CASE
+          WHEN state = 'finalized' THEN 'PAID'
+          WHEN state IN ('pending','executing') THEN 'PENDING'
+          ELSE 'UNPAID'
+        END,
+        updatedAt * 1000,
+        createdAt * 1000,
+        updatedAt * 1000
+      FROM coco_cashu_melt_operations
+      WHERE quoteId IS NOT NULL
+        AND amount IS NOT NULL
+        AND fee_reserve IS NOT NULL
+        AND unit IS NOT NULL
+      ON CONFLICT(mintUrl, method, quoteId) DO UPDATE SET
+        state = excluded.state,
+        request = excluded.request,
+        amount = excluded.amount,
+        unit = excluded.unit,
+        fee_reserve = excluded.fee_reserve,
+        payment_preimage = excluded.payment_preimage,
+        lastObservedRemoteState = excluded.lastObservedRemoteState,
+        lastObservedRemoteStateAt = excluded.lastObservedRemoteStateAt,
+        updatedAt = excluded.updatedAt;
+
+      DROP TABLE coco_cashu_melt_quotes_legacy;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_state
+        ON coco_cashu_melt_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint
+        ON coco_cashu_melt_quotes(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_method
+        ON coco_cashu_melt_quotes(method);
+    `,
+  },
 ];
 
 // Export for testing
