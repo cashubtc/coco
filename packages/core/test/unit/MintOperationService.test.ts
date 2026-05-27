@@ -761,35 +761,33 @@ describe('MintOperationService', () => {
   });
 
   it('init allows repeated operations for reusable quote-bound operations', async () => {
-    const reusableQuote = {
-      ...mintQuoteFromBolt11Response(mintUrl, {
-        quote: 'quote-reusable',
-        request: 'lnbc1reusable',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) + 3600,
-        state: 'UNPAID',
-      }),
-      reusable: true,
-    };
+    const reusableQuote = mintQuoteFromOnchainResponse(mintUrl, {
+      quote: 'quote-reusable',
+      request: 'bc1qreusable',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.zero(),
+      amount_issued: Amount.zero(),
+    });
     await quoteRepo.upsertMintQuote(reusableQuote);
 
     const first = await service.init(
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
-      'bolt11',
+      'onchain',
       {},
       { quoteId: reusableQuote.quoteId },
     );
     const second = await service.init(
       mintUrl,
       { amount: Amount.from(10), unit: 'sat' },
-      'bolt11',
+      'onchain',
       {},
       { quoteId: reusableQuote.quoteId },
     );
 
-    const operations = await operationRepo.getByQuoteId(mintUrl, 'bolt11', reusableQuote.quoteId);
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'onchain', reusableQuote.quoteId);
     expect(first.id).not.toBe(second.id);
     expect(operations).toHaveLength(2);
   });

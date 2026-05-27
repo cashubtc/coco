@@ -40,7 +40,13 @@ type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
     : false
 >;
 type _AssertGetByQuoteUsesObjectInput = Assert<
-  GetMintByQuoteInput extends { mintUrl: string; method: 'bolt11'; quoteId: string } ? true : false
+  GetMintByQuoteInput extends {
+    mintUrl: string;
+    method: 'bolt11' | 'onchain';
+    quoteId: string;
+  }
+    ? true
+    : false
 >;
 
 const makePendingOperation = (): PendingMintOperation => ({

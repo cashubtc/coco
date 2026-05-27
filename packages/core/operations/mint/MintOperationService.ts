@@ -243,9 +243,15 @@ export class MintOperationService {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    if (!quote.amount.equals(intent.amount)) {
+    const fixedAmount = getMintQuoteAmount(quote);
+    if (fixedAmount && !fixedAmount.equals(intent.amount)) {
       throw new Error(
-        `Mint quote ${quote.quoteId} amount ${quote.amount} does not match requested amount ${intent.amount}`,
+        `Mint quote ${quote.quoteId} amount ${fixedAmount} does not match requested amount ${intent.amount}`,
+      );
+    }
+    if (!fixedAmount && !quote.reusable) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} for ${method} at ${mintUrl} does not have a fixed amount`,
       );
     }
 
