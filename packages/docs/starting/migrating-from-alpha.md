@@ -212,8 +212,8 @@ calling convention also changed:
 - The old callback-style action options were removed. Methods now return
   promises and expose hook-managed `status`, `error`, `isLoading`, and
   `isError` state.
-- Each hook binds to one operation after `prepare(...)`, `importQuote(...)`, or
-  initial mount-time hydration from `useXOperation(operationId)`.
+- Each hook binds to one operation after `prepare(...)` or initial mount-time
+  hydration from `useXOperation(operationId)`.
 - Follow-up methods such as `execute()`, `refresh()`, `cancel()`, `reclaim()`,
   `finalize()`, and `checkPayment()` act on the currently bound operation, so
   you do not pass the operation id to those methods anymore.

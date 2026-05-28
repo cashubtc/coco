@@ -56,9 +56,29 @@ const operation = await manager.ops.mint.prepare({
 });
 ```
 
-`manager.ops.mint.importQuote(...)` now imports the snapshot into canonical
-quote storage before creating or reusing the operation. Quote observations update
-the canonical quote first, then emit quote-level events.
+`manager.ops.mint.importQuote(...)` was removed. Import existing mint quotes
+through the quote API, then prepare an operation explicitly when you want history
+and redemption tracking:
+
+```ts
+const quote = await manager.quotes.mint.import({
+  mintUrl,
+  method: 'bolt11',
+  quote: quoteSnapshot,
+});
+
+const operation = await manager.ops.mint.prepare({
+  mintUrl: quote.mintUrl,
+  method: quote.method,
+  quoteId: quote.quoteId,
+});
+```
+
+Importing a quote only updates canonical quote state. It can start quote
+watching through `mint-quote:updated`, but it does not create a mint operation or
+history entry. Mint operations no longer mirror quote remote state; listen for
+`mint-quote:updated` or call `manager.quotes.mint.get(...)` when you need quote
+payment state.
 
 ## Melt quote migration
 

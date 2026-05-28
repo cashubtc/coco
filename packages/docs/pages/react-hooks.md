@@ -12,8 +12,8 @@ separate React-only workflow model. One hook instance owns one active operation.
 - `currentOperation` is the authoritative operation record to render from.
 - `executeResult` is only for execute-specific returned data, such as the token
   returned by `useSendOperation().execute()`.
-- Creation methods such as `prepare(...)` and `importQuote(...)` bind the hook to
-  the operation they create.
+- Creation methods such as `prepare(...)` bind the hook to the operation they
+  create.
 - Follow-up methods such as `execute()`, `checkPayment()`, `finalize()`,
   `cancel()`, `reclaim()`, and `refresh()` operate on the currently bound
   operation, so app code should not pass an `operationId` to those methods.
@@ -94,10 +94,10 @@ if (preparedReceive.state === 'prepared') {
 
 ## useMintOperation
 
-Use this for quote-backed mint lifecycles, including imported quotes and remote
-payment checks. Quote creation, lookup, listing, and refresh stay on
+Use this for quote-backed mint lifecycles and remote payment checks. Quote
+creation, import, lookup, listing, and refresh stay on
 `manager.quotes.mint`; the hook binds only to a local mint operation after
-`prepare()` or `importQuote()`.
+`prepare()`.
 
 ```tsx
 import { useManager, useMintOperation } from '@cashu/coco-react';
@@ -105,7 +105,6 @@ import { useManager, useMintOperation } from '@cashu/coco-react';
 const manager = useManager();
 const {
   prepare,
-  importQuote,
   execute,
   checkPayment,
   finalize,
@@ -128,11 +127,11 @@ if (pendingMint.state === 'pending') {
 }
 ```
 
-`prepare()` and `importQuote()` both bind the hook to a pending mint operation.
-Keep using `manager.quotes.mint.refresh(...)` when a component only needs to
-track quote-level state, such as an onchain quote receiving more funds. Use the
-operation hook once the UI is ready to prepare or follow a specific local
-operation ID.
+`prepare()` binds the hook to a pending mint operation. Import existing quotes
+with `manager.quotes.mint.import(...)`, then call `prepare(...)` if the UI is
+ready to track redemption as an operation. Keep using
+`manager.quotes.mint.refresh(...)` when a component only needs quote-level
+state, such as an onchain quote receiving more funds.
 
 ## useMeltOperation
 

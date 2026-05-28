@@ -14,8 +14,6 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 - `prepare({ mintUrl, method, quoteId, unit?, methodData?, amount? })` prepares
   a pending mint operation from an existing canonical quote. Reusable onchain
   quotes require `amount` because one quote can fund multiple operations.
-- `importQuote({ mintUrl, quote, method, methodData? })` tracks an existing
-  quote as a mint operation
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
 - `checkPayment(operationId)` checks the remote quote state for a pending
   operation
@@ -35,11 +33,18 @@ after reload without creating or loading a mint operation:
 
 - `create({ mintUrl, amount, unit?, method })` creates and persists a canonical
   quote row only
+- `import({ mintUrl, method, quote })` imports an existing remote quote snapshot
+  into canonical quote storage only
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached
   `ISSUED`
 - `refresh({ mintUrl, method, quoteId })` checks the remote quote state and
   persists the canonical quote update before emitting `mint-quote:updated`
+
+`mint-quote:updated` is emitted when a quote is created/imported or remote
+settlement state changes. Stable metadata-only updates do not emit. Importing a
+quote can therefore start watcher interest, but it does not create history or a
+mint operation; call `coco.ops.mint.prepare(...)` when you want to redeem it.
 
 For BOLT11 quotes, the invoice is available at `quote.request`. For reusable
 onchain quotes, the address/payment request is also available at `quote.request`
@@ -69,7 +74,6 @@ init -> pending -> executing -> finalized
 | Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
 | --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
 | `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
-| `importQuote(...)`          | none                                                    | `pending`                                       | You already have a remote quote and want Coco to track it.     |
 | `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
 | `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
 | `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                             | You are showing stale persisted state or a recovery screen.    |

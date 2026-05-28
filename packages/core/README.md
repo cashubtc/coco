@@ -201,9 +201,9 @@ In-memory reference implementations are provided under `repositories/memory/` fo
   `refresh`, `cancel`, `reclaim`, plus `recovery` and `diagnostics`
 - `receive`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
   `refresh`, `cancel`, plus `recovery` and `diagnostics`
-- `mint`: `prepare`, `importQuote`, `execute`, `get`, `getByQuote`,
-  `listPending`, `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus
-  `recovery` and `diagnostics`
+- `mint`: `prepare`, `execute`, `get`, `getByQuote`, `listPending`,
+  `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus `recovery` and
+  `diagnostics`
 - `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listPrepared`,
   `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`, plus `recovery`
   and `diagnostics`
