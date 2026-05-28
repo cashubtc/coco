@@ -108,6 +108,8 @@ export class MintOperationService {
       if (!remoteState) return;
 
       const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
+      //CODEX: Do we need to update remoteState in operations?
+      // Can't they use the canoncial mint quote row to check remote state when required?
       await Promise.all(
         operations
           .filter((operation): operation is PendingMintOperation => operation.state === 'pending')
@@ -162,9 +164,9 @@ export class MintOperationService {
   async init(
     mintUrl: string,
     intent: UnitAmount,
-    method: MintMethod = 'bolt11',
-    methodData: MintMethodData = {},
-    options?: { quoteId?: string },
+    method: MintMethod,
+    methodData: MintMethodData,
+    options: { quoteId: string },
   ): Promise<InitMintOperation> {
     const parsed = normalizeUnitAmount(intent);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -177,60 +179,36 @@ export class MintOperationService {
     }
 
     const operationId = generateSubId();
-    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
-      const operation = createMintOperation(
-        operationId,
-        operationMintUrl,
-        {
-          method,
-          methodData,
-        } as MintMethodMeta,
-        parsed,
-        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
-      );
-
-      await this.mintOperationRepository.create(operation);
-      return operation;
-    };
-
-    const operation = options?.quoteId
-      ? await this.createQuoteBoundInitOperation(
-          mintUrl,
-          method,
-          options.quoteId,
-          parsed,
-          createOperation,
-        )
-      : await createOperation(mintUrl);
-
-    this.logger?.debug('Mint operation created', {
-      operationId,
-      mintUrl: operation.mintUrl,
-      quoteId: operation.quoteId,
-      method,
-      amount: parsed.amount,
-      unit: parsed.unit,
-    });
-
-    return operation;
-  }
-
-  private async createQuoteBoundInitOperation(
-    mintUrl: string,
-    method: MintMethod,
-    quoteId: string,
-    intent: UnitAmount,
-    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMintOperation>,
-  ): Promise<InitMintOperation> {
     const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
     try {
       const quote = await this.resolveMintQuoteForOperationCreation(
         mintUrl,
         method,
-        quoteId,
-        intent,
+        options.quoteId,
+        parsed,
       );
-      return createOperation(quote.mintUrl, quote.quoteId);
+      const operation = createMintOperation(
+        operationId,
+        quote.mintUrl,
+        {
+          method,
+          methodData,
+        } as MintMethodMeta,
+        parsed,
+        { quoteId: quote.quoteId },
+      );
+
+      await this.mintOperationRepository.create(operation);
+      this.logger?.debug('Mint operation created', {
+        operationId,
+        mintUrl: operation.mintUrl,
+        quoteId: operation.quoteId,
+        method,
+        amount: parsed.amount,
+        unit: parsed.unit,
+      });
+
+      return operation;
     } finally {
       releaseMintLock();
     }
@@ -319,6 +297,7 @@ export class MintOperationService {
     return this.prepare(initOperation.id);
   }
 
+  //CODEX: Why is this limited to bolt11?
   async importQuote(
     mintUrl: string,
     quote: MintMethodQuoteSnapshot,
@@ -376,6 +355,7 @@ export class MintOperationService {
     operationId: string,
     options?: {
       skipMintLock?: boolean;
+      //CODEX: Do we need this when we have importQuote? Whats the difference?
       importedQuote?: MintMethodQuoteSnapshot;
     },
   ): Promise<PendingMintOperation> {
@@ -402,6 +382,7 @@ export class MintOperationService {
           options?.importedQuote ??
           (await this.quoteLifecycle.loadMintQuoteSnapshotForOperation(initOp));
         const handler = this.handlerProvider.get(initOp.method);
+        //CODEX: This should probably refactore or extracted to a helper
         await this.mintService.assertMethodUnitSupported(
           initOp.mintUrl,
           4,
@@ -464,6 +445,7 @@ export class MintOperationService {
 
   async execute(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationRepository.getById(operationId);
+    //CODEX: Instead of checking for the operation method wouldnt it be better to load the quote and check if it is reusable?
     if (operation?.state === 'pending' && operation.method === 'onchain') {
       return this.claimReusableQuoteOperation(operation as PendingMintOperation);
     }
@@ -515,9 +497,12 @@ export class MintOperationService {
             if (!(await this.ensureOutputsSaved(executing, result.proofs))) {
               throw new Error(`Failed to persist output proofs for operation ${executing.id}`);
             }
+            //CODEX: This assertion is unnecesarry. First of all the operation only cares about whether the proofs are saved,
+            //secondly our quote watcher should keep the canonical quote row updated
             await this.ensureReusableQuoteIssuanceObserved(executing);
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
+            //CODEX: Where does recovery actually happen?
             const proofsRecovered = await this.ensureOutputsSaved(executing);
             const error = proofsRecovered
               ? undefined

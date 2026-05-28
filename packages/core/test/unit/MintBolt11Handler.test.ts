@@ -58,6 +58,7 @@ describe('MintBolt11Handler', () => {
     unit: 'sat',
     method: 'bolt11' as const,
     methodData: {},
+    quoteId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -224,7 +225,7 @@ describe('MintBolt11Handler', () => {
   describe('prepare', () => {
     it('requires the service to provide an existing quote snapshot', async () => {
       await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
-        'Mint quote (missing) was not provided',
+        'Mint quote quote-1 was not provided',
       );
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
@@ -238,6 +239,7 @@ describe('MintBolt11Handler', () => {
 
       const result = await handler.prepare({
         ...buildPrepareContext(),
+        operation: { ...operation, quoteId: importedQuote.quote },
         importedQuote,
       });
 
