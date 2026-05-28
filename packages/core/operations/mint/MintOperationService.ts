@@ -1022,7 +1022,19 @@ export class MintOperationService {
       );
     }
 
-    const requiredIssued = before.quoteData.amountIssued.add(operation.amount);
+    const siblings = await this.mintOperationRepository.getByQuoteId(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    const finalizedSiblingAmount = siblings.reduce((total, sibling) => {
+      if (sibling.id === operation.id || sibling.state !== 'finalized') {
+        return total;
+      }
+
+      return total.add(sibling.amount);
+    }, Amount.zero());
+    const requiredIssued = finalizedSiblingAmount.add(operation.amount);
     if (refreshed.quoteData.amountIssued.lessThan(requiredIssued)) {
       throw new Error(
         `Cannot finalize operation ${operation.id}: onchain quote ${operation.quoteId} amount_issued ${refreshed.quoteData.amountIssued} does not include redeemed amount ${operation.amount}`,

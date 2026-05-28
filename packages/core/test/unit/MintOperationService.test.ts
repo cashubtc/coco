@@ -1467,6 +1467,7 @@ describe('MintOperationService', () => {
 
   it('recoverExecutingOperation finalizes one reusable quote sibling without touching another', async () => {
     const onchainQuoteId = 'onchain-quote-recover-sibling';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.from(10) });
     const executing: ExecutingMintOperation<'onchain'> = {
       ...makeExecutingOp('onchain-recover-executing'),
       method: 'onchain',
@@ -1489,6 +1490,17 @@ describe('MintOperationService', () => {
       recoverExecuting: mock(
         async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED' }),
       ),
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.from(10),
+        }),
+      ),
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
@@ -1496,6 +1508,35 @@ describe('MintOperationService', () => {
 
     expect((await operationRepo.getById(executing.id))?.state).toBe('finalized');
     expect((await operationRepo.getById(pending.id))?.state).toBe('pending');
+  });
+
+  it('recoverExecutingOperation finalizes recovered reusable outputs without quote refresh', async () => {
+    const onchainQuoteId = 'onchain-quote-recover-offline';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
+    const executing: ExecutingMintOperation<'onchain'> = {
+      ...makeExecutingOp('onchain-recover-offline'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(executing);
+
+    const onchainHandler = {
+      ...handler,
+      recoverExecuting: mock(
+        async (): Promise<RecoverExecutingResult> => ({ status: 'FINALIZED' }),
+      ),
+      fetchRemoteQuote: mock(async () => {
+        throw new Error('mint offline');
+      }),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
+
+    await service.recoverExecutingOperation(executing);
+
+    expect((await operationRepo.getById(executing.id))?.state).toBe('finalized');
+    expect(onchainHandler.fetchRemoteQuote).not.toHaveBeenCalled();
   });
 
   it('recoverExecutingOperation finalizes when handler marks FINALIZED', async () => {
