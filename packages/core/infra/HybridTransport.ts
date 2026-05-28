@@ -1,3 +1,4 @@
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
@@ -213,8 +214,13 @@ export class HybridTransport implements RealTimeTransport {
           return;
         }
 
-        const key = this.getStateKey(mintUrl, parsed);
         const signature = this.getNotificationSignature(parsed.params?.payload);
+        if (signature === undefined) {
+          originalHandler(evt);
+          return;
+        }
+
+        const key = this.getStateKey(mintUrl, parsed);
 
         const lastSignature = this.lastNotificationSignatureByKey.get(key);
         if (lastSignature === signature) {
@@ -248,7 +254,42 @@ export class HybridTransport implements RealTimeTransport {
     return `${mintUrl}::${subId}::${identifier}`;
   }
 
-  private getNotificationSignature(payload: { state?: unknown } | undefined): string {
-    return JSON.stringify(payload?.state);
+  private getNotificationSignature(
+    payload:
+      | {
+          state?: unknown;
+          amount_paid?: unknown;
+          amount_issued?: unknown;
+          expiry?: unknown;
+        }
+      | undefined,
+  ): string | undefined {
+    if (!payload) return undefined;
+
+    const expirySignature = this.getExpirySignature(payload);
+    if (payload.amount_paid !== undefined && payload.amount_issued !== undefined) {
+      try {
+        return `${Amount.from(payload.amount_paid as AmountLike).toString()}:${Amount.from(
+          payload.amount_issued as AmountLike,
+        ).toString()}:${expirySignature}`;
+      } catch {
+        return undefined;
+      }
+    }
+
+    if (payload.state !== undefined) {
+      return `${JSON.stringify(payload.state)}:${expirySignature}`;
+    }
+
+    return undefined;
+  }
+
+  private getExpirySignature(payload: { expiry?: unknown }): string {
+    if (typeof payload.expiry !== 'number') {
+      return 'no-expiry';
+    }
+
+    const status = payload.expiry * 1000 <= Date.now() ? 'expired' : 'active';
+    return `${payload.expiry}:${status}`;
   }
 }

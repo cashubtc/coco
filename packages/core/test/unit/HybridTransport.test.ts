@@ -8,6 +8,7 @@ import { NullLogger } from '../../logging';
 const createMockMintAdapter = (): MintAdapter =>
   ({
     checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMintQuoteOnchain: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -268,6 +269,143 @@ describe('HybridTransport', () => {
 
       mockSocket.triggerMessage(notification2);
       // Different proof (Y) should pass through even with same state
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
+    it('should dedupe onchain quote notifications by normalized amount counters', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification1 = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0 },
+        },
+      });
+
+      const notification2 = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: '10', amount_issued: 0 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification1);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification2);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
+    });
+
+    it('should not dedupe changed onchain quote counters', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      mockSocket.triggerMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: {
+            subId: 'sub1',
+            payload: { quote: 'q1', amount_paid: 10, amount_issued: 0 },
+          },
+        }),
+      );
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: {
+            subId: 'sub1',
+            payload: { quote: 'q1', amount_paid: 11, amount_issued: 0 },
+          },
+        }),
+      );
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
+    it('should not dedupe unchanged onchain quote counters when expiry status changes', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const originalNow = Date.now;
+      const nowSeconds = Math.floor(originalNow() / 1000);
+      const expiry = nowSeconds + 60;
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry },
+        },
+      });
+
+      try {
+        Date.now = () => nowSeconds * 1000;
+        mockSocket.triggerMessage(notification);
+        const countAfterFirst = messageHandler.mock.calls.length;
+
+        Date.now = () => (expiry + 1) * 1000;
+        mockSocket.triggerMessage(notification);
+        expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+
+    it('should bypass dedupe when no state or complete amount counters are present', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
+    it('should bypass dedupe when amount normalization fails', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 'invalid', amount_issued: 0 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification);
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
     });
 

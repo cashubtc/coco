@@ -76,9 +76,11 @@ init -> pending -> executing -> finalized
 | `finalize(operationId)`     | `pending`, `executing`, or terminal                     | terminal state when possible                    | You want one explicit call to settle or recover the operation. |
 
 With the default mint watcher and processor enabled, apps usually do not need to
-poll `refresh()` in the happy path. Show the payment request from the pending
-operation, then render the latest operation state from events, hook state, or a
-targeted `checkPayment()` action.
+poll `refresh()` in the happy path. BOLT11 mint quotes and reusable onchain mint
+quotes are watched automatically by WebSocket when available and by polling as a
+fallback. Show the payment request from the pending operation, then render the
+latest operation state from events, hook state, or a targeted `checkPayment()`
+action.
 
 ## Prepare -> Pay -> Finalize Flow
 
@@ -151,9 +153,11 @@ await coco.ops.mint.finalize(first.id);
 await coco.ops.mint.finalize(second.id);
 ```
 
-When the mint processor is enabled, funded reusable onchain quotes are claimed
-automatically. If existing pending operations do not consume all currently
-claimable balance, Coco creates one additional mint operation for the remainder.
+When the mint watcher and processor are enabled, reusable onchain quotes continue
+to be watched after one claim finalizes so later deposits to the same address can
+be detected. Funded reusable onchain quotes are claimed automatically. If
+existing pending operations do not consume all currently claimable balance, Coco
+creates one additional mint operation for the remainder.
 
 ## Recovery
 

@@ -4,6 +4,7 @@ import type {
   WsResponse,
   WsNotification,
   SubscribeParams,
+  SubscriptionKind,
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
@@ -21,6 +22,13 @@ type MintScheduler = {
   running: boolean;
   hasProofBatchTask: boolean;
 };
+
+const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
+  'bolt11_mint_quote',
+  'onchain_mint_quote',
+  'bolt11_melt_quote',
+  'proof_state',
+]);
 
 export interface PollingOptions {
   intervalMs?: number; // minimum interval between requests per mint
@@ -89,6 +97,25 @@ export class PollingTransport implements RealTimeTransport {
     if (req.method === 'subscribe') {
       const params = req.params as SubscribeParams;
       const subId = params.subId;
+
+      if (!this.isSupportedPollingKind(params.kind)) {
+        this.logger?.error('PollingTransport: unsupported subscription kind', {
+          mintUrl,
+          kind: params.kind,
+          req,
+        });
+        const resp: WsResponse = {
+          jsonrpc: '2.0',
+          error: {
+            code: -32602,
+            message: `Unsupported subscription kind: ${String(params.kind)}`,
+          },
+          id: req.id,
+        };
+        this.emit(mintUrl, 'message', { data: JSON.stringify(resp) });
+        return;
+      }
+
       const scheduler = this.ensureScheduler(mintUrl);
 
       if (params.kind === 'proof_state') {
@@ -259,6 +286,10 @@ export class PollingTransport implements RealTimeTransport {
     return this.intervalByMint.get(mintUrl) ?? this.options.intervalMs;
   }
 
+  private isSupportedPollingKind(kind: unknown): kind is SubscriptionKind {
+    return typeof kind === 'string' && SUPPORTED_POLLING_KINDS.has(kind as SubscriptionKind);
+  }
+
   private ensureScheduler(mintUrl: string): MintScheduler {
     let s = this.schedByMint.get(mintUrl);
     if (!s) {
@@ -367,11 +398,14 @@ export class PollingTransport implements RealTimeTransport {
       case 'bolt11_mint_quote':
         payload = await this.mintAdapter.checkMintQuoteState(mintUrl, task.filter!);
         break;
+      case 'onchain_mint_quote':
+        payload = await this.mintAdapter.checkMintQuoteOnchain(mintUrl, task.filter!);
+        break;
       case 'bolt11_melt_quote':
         payload = await this.mintAdapter.checkMeltQuoteState(mintUrl, task.filter!);
         break;
       default:
-        return;
+        throw new Error(`Unsupported polling task kind: ${String(task.kind)}`);
     }
     const notification: WsNotification<unknown> = {
       jsonrpc: '2.0',

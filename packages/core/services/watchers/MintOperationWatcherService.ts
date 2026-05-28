@@ -42,6 +42,13 @@ const mintQuoteWatchPolicies: {
     shouldStopWatching: (payload) =>
       payload.state === 'ISSUED' || isExpiredMintQuoteSnapshot(payload),
   },
+  onchain: {
+    subscriptionKind: 'onchain_mint_quote',
+    getPayloadQuoteId: (payload) => payload.quote,
+    shouldRecordPayload: (payload) =>
+      payload.amount_paid !== undefined && payload.amount_issued !== undefined,
+    shouldStopWatching: (payload) => isExpiredMintQuoteSnapshot(payload),
+  },
 };
 
 export interface MintOperationWatcherOptions {
@@ -560,9 +567,17 @@ export class MintOperationWatcherService {
     if (!record) return;
 
     record.operationIds.delete(operationId);
-    if (!record.canonical && record.operationIds.size === 0) {
+    if (this.shouldStopWatchingWithoutInterest(record)) {
       await this.stopWatching(key);
     }
+  }
+
+  private shouldStopWatchingWithoutInterest(record: QuoteWatchRecord): boolean {
+    if (record.canonical || record.operationIds.size > 0) {
+      return false;
+    }
+
+    return record.method !== 'onchain';
   }
 
   private removeWatchRecord(key: QuoteKey): void {

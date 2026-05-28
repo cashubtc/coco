@@ -9,7 +9,7 @@ import type { MintOperationService } from '../../operations/mint/MintOperationSe
 import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response, MintQuoteOnchainResponse } from '@cashu/cashu-ts';
 
 describe('MintOperationWatcherService', () => {
   const mintUrl = 'https://mint.test';
@@ -18,7 +18,9 @@ describe('MintOperationWatcherService', () => {
   let bus: EventBus<CoreEvents>;
   let subscribe: Mock<any>;
   let unsubscribe: Mock<any>;
-  let callback: ((payload: MintQuoteBolt11Response) => Promise<void>) | undefined;
+  let callback:
+    | ((payload: MintQuoteBolt11Response | MintQuoteOnchainResponse | any) => Promise<void>)
+    | undefined;
 
   const makePendingOperation = (): PendingMintOperation => ({
     id: 'mint-op-1',
@@ -103,7 +105,7 @@ describe('MintOperationWatcherService', () => {
         _mintUrl: string,
         _kind: string,
         _filters: string[],
-        next: (payload: MintQuoteBolt11Response) => Promise<void>,
+        next: (payload: MintQuoteBolt11Response | MintQuoteOnchainResponse | any) => Promise<void>,
       ) => {
         callback = next;
         return { subId: 'sub-1', unsubscribe };
@@ -135,11 +137,17 @@ describe('MintOperationWatcherService', () => {
       [quoteId],
       expect.any(Function),
     );
+    expect(subscribe).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain_mint_quote',
+      [quoteId],
+      expect.any(Function),
+    );
 
     await watcher.stop();
   });
 
-  it('does not watch pending canonical mint quotes without a policy', async () => {
+  it('watches pending canonical onchain mint quotes', async () => {
     const watcher = new MintOperationWatcherService(
       { subscribe } as unknown as SubscriptionManager,
       { isTrustedMint: mock(async () => true) } as unknown as MintService,
@@ -153,7 +161,12 @@ describe('MintOperationWatcherService', () => {
 
     await watcher.start();
 
-    expect(subscribe).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain_mint_quote',
+      [quoteId],
+      expect.any(Function),
+    );
 
     await watcher.stop();
   });
@@ -181,7 +194,7 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('does not watch pending mint operations without a policy', async () => {
+  it('watches pending onchain mint operations', async () => {
     const watcher = new MintOperationWatcherService(
       { subscribe } as unknown as SubscriptionManager,
       { isTrustedMint: mock(async () => true) } as unknown as MintService,
@@ -195,7 +208,12 @@ describe('MintOperationWatcherService', () => {
 
     await watcher.start();
 
-    expect(subscribe).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain_mint_quote',
+      [quoteId],
+      expect.any(Function),
+    );
 
     await watcher.stop();
   });
@@ -431,6 +449,206 @@ describe('MintOperationWatcherService', () => {
     expect(subscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
+  });
+
+  it('records complete onchain subscription payloads', async () => {
+    const operation = makeOnchainOperation();
+    const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        recordMintQuoteSnapshot,
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+
+    if (!callback) {
+      throw new Error('Expected watcher subscription callback');
+    }
+
+    await callback({
+      quote: quoteId,
+      request: operation.request,
+      unit: operation.unit,
+      expiry: operation.expiry,
+      pubkey: 'pubkey-1',
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.zero(),
+    });
+
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain',
+      expect.objectContaining({
+        quote: quoteId,
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      }),
+    );
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('drops incomplete onchain payloads without stopping the watch', async () => {
+    const operation = makeOnchainOperation();
+    const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        recordMintQuoteSnapshot,
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+
+    if (!callback) {
+      throw new Error('Expected watcher subscription callback');
+    }
+
+    await callback({
+      quote: quoteId,
+      request: operation.request,
+      unit: operation.unit,
+      expiry: operation.expiry,
+      amount_paid: Amount.from(10),
+    });
+
+    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('stops onchain quote watching when an incomplete payload is expired', async () => {
+    const operation = makeOnchainOperation();
+    const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        recordMintQuoteSnapshot,
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+
+    if (!callback) {
+      throw new Error('Expected watcher subscription callback');
+    }
+
+    await callback({
+      quote: quoteId,
+      request: operation.request,
+      unit: operation.unit,
+      expiry: Math.floor(Date.now() / 1000) - 1,
+    });
+
+    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
+  it('does not stop onchain quote watching when amount_paid equals amount_issued', async () => {
+    const operation = makeOnchainOperation();
+    const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        recordMintQuoteSnapshot,
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+
+    if (!callback) {
+      throw new Error('Expected watcher subscription callback');
+    }
+
+    await callback({
+      quote: quoteId,
+      request: operation.request,
+      unit: operation.unit,
+      expiry: operation.expiry,
+      pubkey: 'pubkey-1',
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.from(10),
+    });
+
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('keeps reusable onchain quote watches after operation finalization', async () => {
+    const operation = makeOnchainOperation();
+
+    const watcher = new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      {
+        getPendingOperations: mock(async () => [operation]),
+      } as unknown as MintOperationService,
+      bus,
+      new NullLogger(),
+      { watchExistingPendingQuotesOnStart: false },
+    );
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint-op:finalized', {
+      mintUrl,
+      operationId: operation.id,
+      operation: { ...operation, state: 'finalized' },
+    });
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it('does not unsubscribe while canonical interest remains after an operation finalizes', async () => {

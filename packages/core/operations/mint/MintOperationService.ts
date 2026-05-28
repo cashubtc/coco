@@ -55,6 +55,10 @@ export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
 }
 
+function isExpiredMintQuote(quote: Pick<MintQuote, 'expiry'>): boolean {
+  return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
+}
+
 /**
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
  */
@@ -898,6 +902,20 @@ export class MintOperationService {
     return claimed;
   }
 
+  /** @internal Used by the mint operation processor to suppress no-op reusable quote claims. */
+  async hasLocallyClaimableMintQuoteBalance(
+    mintUrl: string,
+    method: 'onchain',
+    quoteId: string,
+  ): Promise<boolean> {
+    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+    if (!quote || quote.method !== 'onchain') {
+      return false;
+    }
+
+    return !(await this.getLocallyClaimableQuoteAmount(quote)).isZero();
+  }
+
   private async claimReusableQuoteOperation(
     operation: PendingMintOperation,
   ): Promise<MintOperation> {
@@ -960,6 +978,10 @@ export class MintOperationService {
     quote: MintQuote,
     targetOperationId?: string,
   ): Promise<Amount> {
+    if (isExpiredMintQuote(quote)) {
+      return Amount.zero();
+    }
+
     let remoteAvailable = getMintQuoteAvailableAmount(quote);
     const siblings = await this.mintOperationRepository.getByQuoteId(
       quote.mintUrl,

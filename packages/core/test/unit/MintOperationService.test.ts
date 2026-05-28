@@ -124,14 +124,14 @@ describe('MintOperationService', () => {
 
   const persistOnchainQuote = async (
     quote = 'onchain-quote-1',
-    amounts: { paid?: Amount; issued?: Amount } = {},
+    amounts: { paid?: Amount; issued?: Amount; expiry?: number } = {},
   ): Promise<void> => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromOnchainResponse(mintUrl, {
         quote,
         request: 'bc1qtest',
         unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) + 3600,
+        expiry: amounts.expiry ?? Math.floor(Date.now() / 1000) + 3600,
         pubkey: '02'.padEnd(66, '1'),
         amount_paid: amounts.paid ?? Amount.zero(),
         amount_issued: amounts.issued ?? Amount.zero(),
@@ -1433,6 +1433,29 @@ describe('MintOperationService', () => {
     expect(operations).toHaveLength(1);
     expect(operations[0]?.state).toBe('finalized');
     expect(operations[0]?.amount.equals(Amount.from(10))).toBe(true);
+  });
+
+  it('claimMintQuote treats expired reusable onchain quotes as unclaimable', async () => {
+    const onchainQuoteId = 'onchain-quote-expired';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.zero(),
+      expiry: Math.floor(Date.now() / 1000) - 1,
+    });
+    const { onchainHandler } = useAutoClaimOnchainHandler(Amount.from(10));
+
+    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
+      mintUrl,
+      'onchain',
+      onchainQuoteId,
+    );
+    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const operations = await operationRepo.getByQuoteId(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(hasClaimableBalance).toBe(false);
+    expect(claimed).toEqual([]);
+    expect(operations).toEqual([]);
+    expect(onchainHandler.execute).not.toHaveBeenCalled();
   });
 
   it('claimMintQuote auto-claims the remaining reusable quote balance after pending siblings', async () => {

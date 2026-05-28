@@ -43,6 +43,9 @@ describe('MintOperationProcessor', () => {
         claimCalls.push({ mintUrl, method, quoteId });
         return [];
       },
+      async hasLocallyClaimableMintQuoteBalance() {
+        return true;
+      },
       async claimPendingMintQuotes() {
         startupClaimCalls++;
         return [];
@@ -144,7 +147,7 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
   });
 
-  it('claims reusable onchain quotes directly from mint-quote:updated', async () => {
+  it('claims reusable onchain quotes with locally claimable balance from mint-quote:updated', async () => {
     await processor.start();
 
     await bus.emit('mint-quote:updated', {
@@ -174,6 +177,58 @@ describe('MintOperationProcessor', () => {
       { mintUrl: 'https://mint.test', method: 'onchain', quoteId: 'onchain-quote-1' },
     ]);
     expect(finalizeCalls).toEqual([]);
+  });
+
+  it('skips reusable onchain quote claims with no locally claimable balance', async () => {
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async hasLocallyClaimableMintQuoteBalance() {
+        return false;
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
+      processIntervalMs: TEST_PROCESS_INTERVAL,
+      baseRetryDelayMs: TEST_RETRY_DELAY,
+      maxRetries: 3,
+      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+    });
+
+    await processor.start();
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'onchain',
+      quoteId: 'onchain-quote-empty',
+      quote: { method: 'onchain', quoteId: 'onchain-quote-empty' } as any,
+    });
+    await processor.waitForCompletion();
+
+    expect(claimCalls).toEqual([]);
+  });
+
+  it('logs and skips reusable onchain quote claims when claimability check fails', async () => {
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async hasLocallyClaimableMintQuoteBalance() {
+        throw new Error('claimability check failed');
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
+      processIntervalMs: TEST_PROCESS_INTERVAL,
+      baseRetryDelayMs: TEST_RETRY_DELAY,
+      maxRetries: 3,
+      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+    });
+
+    await processor.start();
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'onchain',
+      quoteId: 'onchain-quote-error',
+      quote: { method: 'onchain', quoteId: 'onchain-quote-error' } as any,
+    });
+    await processor.waitForCompletion();
+
+    expect(claimCalls).toEqual([]);
   });
 
   it('claims pending reusable mint quotes on startup', async () => {

@@ -297,11 +297,26 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
+        const hasClaimableBalance =
+          await this.mintOperations.hasLocallyClaimableMintQuoteBalance(
+            mintUrl,
+            method as 'onchain',
+            quoteId,
+          );
+        if (!hasClaimableBalance) {
+          this.logger?.debug('Reusable mint quote has no locally claimable balance', {
+            mintUrl,
+            method,
+            quoteId,
+          });
+          return;
+        }
+
         await this.mintOperations.claimMintQuote(mintUrl, method as 'onchain', quoteId, {
           autoClaimRemaining: true,
         });
       } catch (error) {
-        this.logger?.warn('Failed to claim reusable mint quote', {
+        this.logger?.warn('Failed to check or claim reusable mint quote', {
           mintUrl,
           method,
           quoteId,
