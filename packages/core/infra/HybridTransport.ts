@@ -33,8 +33,8 @@ export class HybridTransport implements RealTimeTransport {
   // Track whether we've registered internal WS handlers for a mint
   private readonly hasInternalHandlersByMint = new Set<string>();
 
-  // Deduplication: track last known state per (mintUrl, subId, identifier)
-  private readonly lastStateByKey = new Map<string, string>();
+  // Deduplication: track last notification signature per (mintUrl, subId, identifier)
+  private readonly lastNotificationSignatureByKey = new Map<string, string>();
 
   // Track 'open' events to dedupe (PollingTransport emits synthetic open immediately)
   private readonly hasEmittedOpenByMint = new Set<string>();
@@ -91,7 +91,7 @@ export class HybridTransport implements RealTimeTransport {
     this.wsFailedByMint.clear();
     this.wsConnectedByMint.clear();
     this.hasInternalHandlersByMint.clear();
-    this.lastStateByKey.clear();
+    this.lastNotificationSignatureByKey.clear();
     this.hasEmittedOpenByMint.clear();
   }
 
@@ -106,9 +106,9 @@ export class HybridTransport implements RealTimeTransport {
     this.hasEmittedOpenByMint.delete(mintUrl);
 
     // Clear deduplication state for this mint (keys start with mintUrl::)
-    for (const key of this.lastStateByKey.keys()) {
+    for (const key of this.lastNotificationSignatureByKey.keys()) {
       if (key.startsWith(`${mintUrl}::`)) {
-        this.lastStateByKey.delete(key);
+        this.lastNotificationSignatureByKey.delete(key);
       }
     }
   }
@@ -126,7 +126,7 @@ export class HybridTransport implements RealTimeTransport {
     this.wsConnectedByMint.clear();
     this.hasEmittedOpenByMint.clear();
     // Keep hasInternalHandlersByMint - handlers are still registered
-    // Keep lastStateByKey - we want to dedupe across pause/resume
+    // Keep lastNotificationSignatureByKey - we want to dedupe across pause/resume
   }
 
   resume(): void {
@@ -214,16 +214,15 @@ export class HybridTransport implements RealTimeTransport {
         }
 
         const key = this.getStateKey(mintUrl, parsed);
-        // Only compare 'state' field - that's all we care about
-        const stateJson = JSON.stringify(parsed.params?.payload?.state);
+        const signature = this.getNotificationSignature(parsed.params?.payload);
 
-        const lastState = this.lastStateByKey.get(key);
-        if (lastState === stateJson) {
-          // Duplicate state, skip
+        const lastSignature = this.lastNotificationSignatureByKey.get(key);
+        if (lastSignature === signature) {
+          // Duplicate notification signature, skip
           return;
         }
 
-        this.lastStateByKey.set(key, stateJson);
+        this.lastNotificationSignatureByKey.set(key, signature);
         originalHandler(evt);
       } catch {
         // Parse failed, pass through
@@ -247,5 +246,9 @@ export class HybridTransport implements RealTimeTransport {
     // - For quotes: quote field identifies the specific quote
     const identifier = payload?.Y ?? payload?.quote ?? '';
     return `${mintUrl}::${subId}::${identifier}`;
+  }
+
+  private getNotificationSignature(payload: { state?: unknown } | undefined): string {
+    return JSON.stringify(payload?.state);
   }
 }

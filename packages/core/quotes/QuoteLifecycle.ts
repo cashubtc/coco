@@ -10,6 +10,7 @@ import type { Logger } from '../logging/Logger';
 import {
   getMintQuoteAmount,
   mintQuoteFromBolt11Response,
+  mintQuoteFromOnchainResponse,
   mintQuoteToMethodSnapshot,
   isStatefulMintQuote,
   type MintQuote,
@@ -47,6 +48,10 @@ function isMintQuoteStateDowngrade(
   incoming: MintMethodRemoteState,
 ): boolean {
   return (MINT_QUOTE_STATE_RANK[incoming] ?? 0) < (MINT_QUOTE_STATE_RANK[existing] ?? 0);
+}
+
+function maxAmount(left: Amount, right: Amount): Amount {
+  return left.greaterThan(right) ? left : right;
 }
 
 export interface QuoteLifecycleDeps {
@@ -267,25 +272,33 @@ export class QuoteLifecycle {
     method: MintMethod,
     quote: MintMethodQuoteSnapshot,
   ): Promise<MintQuote> {
-    if (method !== 'bolt11') {
+    let canonicalQuote: MintQuote;
+
+    if (method === 'bolt11') {
+      const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
+      const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
+      if (rawAmount === undefined || rawAmount === null) {
+        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+      }
+
+      const amount = Amount.from(rawAmount as AmountLike);
+      if (amount.isZero()) {
+        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+      }
+
+      canonicalQuote = mintQuoteFromBolt11Response(mintUrl, {
+        ...bolt11Quote,
+        amount,
+      } as MintQuoteBolt11Response);
+    } else if (method === 'onchain') {
+      canonicalQuote = mintQuoteFromOnchainResponse(
+        mintUrl,
+        quote as MintMethodQuoteSnapshot<'onchain'>,
+      );
+    } else {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
 
-    const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
-    const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
-    if (rawAmount === undefined || rawAmount === null) {
-      throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
-    }
-
-    const amount = Amount.from(rawAmount as AmountLike);
-    if (amount.isZero()) {
-      throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
-    }
-
-    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, {
-      ...bolt11Quote,
-      amount,
-    } as MintQuoteBolt11Response);
     const existing = await this.mintQuoteRepository.getMintQuote(
       canonicalQuote.mintUrl,
       canonicalQuote.method,
@@ -294,9 +307,23 @@ export class QuoteLifecycle {
     if (
       existing &&
       isStatefulMintQuote(existing) &&
+      isStatefulMintQuote(canonicalQuote) &&
       isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)
     ) {
       return existing;
+    }
+    if (existing?.method === 'onchain' && canonicalQuote.method === 'onchain') {
+      canonicalQuote = {
+        ...canonicalQuote,
+        quoteData: {
+          ...canonicalQuote.quoteData,
+          amountPaid: maxAmount(existing.quoteData.amountPaid, canonicalQuote.quoteData.amountPaid),
+          amountIssued: maxAmount(
+            existing.quoteData.amountIssued,
+            canonicalQuote.quoteData.amountIssued,
+          ),
+        },
+      };
     }
 
     await this.mintQuoteRepository.upsertMintQuote(canonicalQuote);

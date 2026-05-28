@@ -1274,18 +1274,28 @@ export class MintOperationService {
       wallet,
     });
 
-    const observedPending: PendingMintOperation = {
-      ...op,
-      lastObservedRemoteState: result.observedRemoteState,
-      lastObservedRemoteStateAt: result.observedRemoteStateAt,
-      updatedAt: Date.now(),
-    };
+    if (result.quoteSnapshot) {
+      await this.quoteLifecycle.recordMintQuoteSnapshot(
+        op.mintUrl,
+        op.method,
+        result.quoteSnapshot as MintMethodQuoteSnapshot,
+      );
+    }
 
-    await this.recordQuoteObservation(
-      observedPending,
-      result.observedRemoteState,
-      result.observedRemoteStateAt,
-    );
+    if (result.observedRemoteState !== undefined) {
+      const observedPending: PendingMintOperation = {
+        ...op,
+        lastObservedRemoteState: result.observedRemoteState,
+        lastObservedRemoteStateAt: result.observedRemoteStateAt,
+        updatedAt: Date.now(),
+      };
+
+      await this.recordQuoteObservation(
+        observedPending,
+        result.observedRemoteState,
+        result.observedRemoteStateAt,
+      );
+    }
 
     if (result.category === 'terminal' && result.terminalFailure) {
       await this.failPendingOperation(op, result.terminalFailure);

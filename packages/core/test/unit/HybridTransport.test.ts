@@ -362,8 +362,9 @@ describe('HybridTransport', () => {
       mockSocket.triggerMessage(notification);
 
       // Verify dedup state exists
-      const lastStateByKey = (transport as any).lastStateByKey as Map<string, string>;
-      const hasKeyForMint = Array.from(lastStateByKey.keys()).some((k) =>
+      const lastNotificationSignatureByKey = (transport as any)
+        .lastNotificationSignatureByKey as Map<string, string>;
+      const hasKeyForMint = Array.from(lastNotificationSignatureByKey.keys()).some((k) =>
         k.startsWith(`${mintUrl}::`),
       );
       expect(hasKeyForMint).toBe(true);
@@ -372,7 +373,7 @@ describe('HybridTransport', () => {
       transport.closeMint(mintUrl);
 
       // Verify dedup state is cleared
-      const hasKeyAfterClose = Array.from(lastStateByKey.keys()).some((k) =>
+      const hasKeyAfterClose = Array.from(lastNotificationSignatureByKey.keys()).some((k) =>
         k.startsWith(`${mintUrl}::`),
       );
       expect(hasKeyAfterClose).toBe(false);
@@ -389,10 +390,11 @@ describe('HybridTransport', () => {
       transport.closeAll();
 
       const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      const lastStateByKey = (transport as any).lastStateByKey as Map<string, string>;
+      const lastNotificationSignatureByKey = (transport as any)
+        .lastNotificationSignatureByKey as Map<string, string>;
 
       expect(wsFailedByMint.size).toBe(0);
-      expect(lastStateByKey.size).toBe(0);
+      expect(lastNotificationSignatureByKey.size).toBe(0);
     });
   });
 

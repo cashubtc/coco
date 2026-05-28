@@ -1646,6 +1646,95 @@ describe('MintOperationService', () => {
     expect(stored.lastObservedRemoteStateAt).toEqual(expect.any(Number));
   });
 
+  it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {
+    const onchainQuoteId = 'onchain-quote-pending-check';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.zero(), issued: Amount.zero() });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-pending-check'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const onchainHandler = {
+      ...handler,
+      checkPending: mock(
+        async (): Promise<PendingMintCheckResult<'onchain'>> => ({
+          observedRemoteStateAt: Date.now(),
+          quoteSnapshot: {
+            quote: onchainQuoteId,
+            request: 'bc1qtest',
+            unit: 'sat',
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+            pubkey: '02'.padEnd(66, '1'),
+            amount_paid: Amount.from(7),
+            amount_issued: Amount.zero(),
+          },
+          category: 'waiting',
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
+      method === 'onchain' ? onchainHandler : handler,
+    );
+
+    await service.checkPendingOperation(pendingOp.id);
+
+    const stored = await operationRepo.getById(pendingOp.id);
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(stored?.state).toBe('pending');
+    expect(quote?.method).toBe('onchain');
+    if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(quote.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
+  });
+
+  it('checkPendingOperation preserves monotonic onchain quote counters', async () => {
+    const onchainQuoteId = 'onchain-quote-stale-check';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.from(8) });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-stale-check'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+      lastObservedRemoteState: undefined as never,
+    };
+    await operationRepo.create(pendingOp);
+
+    const onchainHandler = {
+      ...handler,
+      checkPending: mock(
+        async (): Promise<PendingMintCheckResult<'onchain'>> => ({
+          observedRemoteStateAt: Date.now(),
+          quoteSnapshot: {
+            quote: onchainQuoteId,
+            request: 'bc1qtest',
+            unit: 'sat',
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+            pubkey: '02'.padEnd(66, '1'),
+            amount_paid: Amount.from(7),
+            amount_issued: Amount.from(5),
+          },
+          category: 'waiting',
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
+      method === 'onchain' ? onchainHandler : handler,
+    );
+
+    await service.checkPendingOperation(pendingOp.id);
+
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(quote?.method).toBe('onchain');
+    if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(quote.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(quote.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+  });
+
   it('recordPendingObservation updates the stored remote state and emits pending operation update', async () => {
     const pendingOp = makePendingOp('pending-4');
     const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];

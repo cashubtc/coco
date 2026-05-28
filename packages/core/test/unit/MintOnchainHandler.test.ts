@@ -5,17 +5,24 @@ import type { CoreEvents } from '../../events/types';
 import { MintOnchainHandler } from '../../infra/handlers/mint/MintOnchainHandler';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
+import { MintOperationError } from '../../models/Error';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
   FetchRemoteMintQuoteContext,
+  PendingContext,
   PrepareContext,
+  RecoverExecutingContext,
 } from '../../operations/mint';
 import { getMintQuoteAvailableAmount, type MintQuoteOnchainResponse } from '../../models/MintQuote';
-import type { InitMintOperation } from '../../operations/mint/MintOperation';
+import type {
+  ExecutingMintOperation,
+  InitMintOperation,
+  PendingMintOperation,
+} from '../../operations/mint/MintOperation';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService, MintService, ProofService, WalletService } from '../../services';
-import { deserializeOutputData } from '../../utils';
+import { deserializeOutputData, serializeOutputData } from '../../utils';
 
 describe('MintOnchainHandler', () => {
   const mintUrl = 'https://mint.test';
@@ -117,6 +124,29 @@ describe('MintOnchainHandler', () => {
     logger,
   });
 
+  const buildExecutingOperation = (): ExecutingMintOperation<'onchain'> => ({
+    ...buildPrepareContext().operation,
+    state: 'executing',
+    quoteId,
+    request: remoteQuote.request,
+    expiry: remoteQuote.expiry,
+    pubkey,
+    outputData: serializeOutputData({ keep: [output], send: [] }),
+  });
+
+  const buildRecoverContext = (): RecoverExecutingContext<'onchain'> => ({
+    ...buildPrepareContext(),
+    operation: buildExecutingOperation(),
+  });
+
+  const buildPendingContext = (): PendingContext<'onchain'> => ({
+    ...buildPrepareContext(),
+    operation: {
+      ...buildExecutingOperation(),
+      state: 'pending',
+    } satisfies PendingMintOperation<'onchain'>,
+  });
+
   beforeEach(() => {
     keyRingService = {
       generateMintQuoteKeyPair: mock(async () => ({
@@ -153,12 +183,14 @@ describe('MintOnchainHandler', () => {
 
     proofService = {
       createOutputsAndIncrementCounters: mock(async () => ({ keep: [output], send: [] })),
+      saveProofs: mock(async () => {}),
+      recoverProofsFromOutputData: mock(async () => []),
     } as unknown as ProofService;
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
     mintService = {} as MintService;
     eventBus = new EventBus<CoreEvents>();
-    logger = { info: mock(() => {}) } as unknown as Logger;
+    logger = { info: mock(() => {}), warn: mock(() => {}) } as unknown as Logger;
   });
 
   it('creates an onchain quote with a fresh NUT-20 public key', async () => {
@@ -277,5 +309,117 @@ describe('MintOnchainHandler', () => {
       undefined,
       { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
     );
+  });
+
+  it('recovers signed onchain outputs before retrying the mint', async () => {
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([
+      {
+        id: 'keyset-1',
+        amount: Amount.from(10),
+        secret: 'out-1',
+        C: 'C_out_1',
+      },
+    ]);
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
+  it('retries onchain minting from persisted output data when the quote is still available', async () => {
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalled();
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledWith(
+      Amount.from(10),
+      remoteQuote,
+      ''.padEnd(64, '0'),
+      undefined,
+      { type: 'custom', data: [output] },
+    );
+    expect(proofService.saveProofs).toHaveBeenCalled();
+  });
+
+  it('returns pending during recovery when output restore is empty and balance is unavailable', async () => {
+    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(8),
+      amount_issued: Amount.from(8),
+    });
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
+  it('attempts restore again after an already-issued retry result', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockImplementationOnce(async () => {
+      throw new MintOperationError(20002, 'already issued');
+    });
+    (proofService.recoverProofsFromOutputData as Mock<any>)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'keyset-1',
+          amount: Amount.from(10),
+          secret: 'out-1',
+          C: 'C_out_1',
+        },
+      ]);
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks expired onchain executing recovery as terminal after restore misses', async () => {
+    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      expiry: Math.floor(Date.now() / 1000) - 1,
+    });
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: onchain quote ${quoteId} expired while executing mint`,
+    });
+  });
+
+  it('checks pending onchain operations as ready when the quote can cover the amount', async () => {
+    const result = await handler.checkPending(buildPendingContext());
+
+    expect(result.category).toBe('ready');
+    expect(result.quoteSnapshot).toBe(remoteQuote);
+  });
+
+  it('checks pending onchain operations as waiting when the quote cannot cover the amount', async () => {
+    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(8),
+      amount_issued: Amount.from(0),
+    });
+
+    const result = await handler.checkPending(buildPendingContext());
+
+    expect(result.category).toBe('waiting');
+    expect(result.quoteSnapshot?.amount_paid.equals(Amount.from(8))).toBe(true);
+  });
+
+  it('checks expired pending onchain operations as terminal', async () => {
+    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      expiry: Math.floor(Date.now() / 1000) - 1,
+    });
+
+    const result = await handler.checkPending(buildPendingContext());
+
+    expect(result.category).toBe('terminal');
+    expect(result.terminalFailure?.code).toBe('quote_expired');
   });
 });

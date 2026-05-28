@@ -134,8 +134,9 @@ export type RecoverExecutingResult =
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
 export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
-  observedRemoteState: MintMethodRemoteState<M>;
+  observedRemoteState?: MintMethodRemoteState<M>;
   observedRemoteStateAt: number;
+  quoteSnapshot?: MintMethodQuoteSnapshot<M>;
   category: PendingMintCheckCategory;
   terminalFailure?: MintOperationFailure;
 }
