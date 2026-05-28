@@ -41,8 +41,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   async fetchRemoteQuote(
     ctx: FetchRemoteMintQuoteContext<'onchain'>,
   ): Promise<MintQuote<'onchain'>> {
-    const remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
+    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       ctx.quote.mintUrl,
+      'onchain',
       ctx.quote.quoteId,
     );
 
@@ -103,8 +104,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
 
     const outputData = deserializeOutputData(ctx.operation.outputData);
-    const remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
+    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       ctx.operation.mintUrl,
+      'onchain',
       ctx.operation.quoteId,
     );
     this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
@@ -137,8 +139,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     let remoteQuote: MintQuoteOnchainResponse;
     try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
+      remoteQuote = await ctx.mintAdapter.checkMintQuote(
         operation.mintUrl,
+        'onchain',
         operation.quoteId,
       );
     } catch (error) {
@@ -235,8 +238,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   async checkPending(ctx: PendingContext<'onchain'>): Promise<PendingMintCheckResult<'onchain'>> {
     const { operation } = ctx;
     const observedRemoteStateAt = Date.now();
-    const remoteQuote = await ctx.mintAdapter.checkMintQuoteOnchain(
+    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       operation.mintUrl,
+      'onchain',
       operation.quoteId,
     );
     const expectedPubkey = operation.pubkey;

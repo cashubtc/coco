@@ -171,7 +171,7 @@ describe('MintBolt11Handler', () => {
     } as unknown as Wallet;
 
     mintAdapter = {
-      checkMintQuoteState: mock(async (): Promise<MintQuoteBolt11Response> => quote),
+      checkMintQuote: mock(async (): Promise<MintQuoteBolt11Response> => quote),
     } as unknown as MintAdapter;
 
     proofService = {
@@ -199,7 +199,7 @@ describe('MintBolt11Handler', () => {
     it('fetches a remote BOLT11 mint quote through the mint adapter', async () => {
       const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
-      expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+      expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
       expect(result.quoteId).toBe(quoteId);
       expect(result.method).toBe('bolt11');
     });

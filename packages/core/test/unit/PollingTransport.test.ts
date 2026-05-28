@@ -6,8 +6,7 @@ import { NullLogger } from '../../logging';
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
   ({
-    checkMintQuoteState: mock(() => Promise.resolve({})),
-    checkMintQuoteOnchain: mock(() => Promise.resolve({})),
+    checkMintQuote: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -15,10 +14,9 @@ const createMockMintAdapter = (): MintAdapter =>
 // Helper to create a delayed mock adapter
 const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
   ({
-    checkMintQuoteState: mock(
+    checkMintQuote: mock(
       () => new Promise((resolve) => setTimeout(() => resolve({ state: 'PAID' }), delayMs)),
     ),
-    checkMintQuoteOnchain: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -94,8 +92,8 @@ describe('PollingTransport per-mint intervals', () => {
 describe('PollingTransport subscription kinds', () => {
   const mintUrl = 'https://mint.example.com';
 
-  it('polls onchain mint quotes with checkMintQuoteOnchain', async () => {
-    const checkMintQuoteOnchain = mock(() =>
+  it('polls onchain mint quotes with checkMintQuote', async () => {
+    const checkMintQuote = mock(() =>
       Promise.resolve({
         quote: 'onchain-quote-1',
         request: 'bc1ptest',
@@ -107,8 +105,7 @@ describe('PollingTransport subscription kinds', () => {
       }),
     );
     const adapter = {
-      checkMintQuoteState: mock(() => Promise.resolve({})),
-      checkMintQuoteOnchain,
+      checkMintQuote,
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;
@@ -127,7 +124,7 @@ describe('PollingTransport subscription kinds', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(checkMintQuoteOnchain).toHaveBeenCalledWith(mintUrl, 'quote1');
+    expect(checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', 'quote1');
     expect(messages.some((message) => message.params?.payload?.quote === 'onchain-quote-1')).toBe(
       true,
     );
@@ -160,7 +157,7 @@ describe('PollingTransport subscription kinds', () => {
     ]);
     const scheduler = (transport as any).schedByMint.get(mintUrl);
     expect(scheduler?.queue ?? []).toHaveLength(0);
-    expect((adapter.checkMintQuoteState as any).mock.calls.length).toBe(0);
+    expect((adapter.checkMintQuote as any).mock.calls.length).toBe(0);
 
     transport.closeAll();
   });
@@ -174,8 +171,7 @@ describe('PollingTransport proof state batching', () => {
       Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
     );
     const adapter = {
-      checkMintQuoteState: mock(() => Promise.resolve({})),
-      checkMintQuoteOnchain: mock(() => Promise.resolve({})),
+      checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
@@ -202,8 +198,7 @@ describe('PollingTransport proof state batching', () => {
       Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
     );
     const adapter = {
-      checkMintQuoteState: mock(() => Promise.resolve({})),
-      checkMintQuoteOnchain: mock(() => Promise.resolve({})),
+      checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
@@ -275,14 +270,13 @@ describe('PollingTransport unsubscribe during processing', () => {
   });
 
   it('should still re-enqueue task if not unsubscribed', async () => {
-    // Track how many times checkMintQuoteState is called
+    // Track how many times checkMintQuote is called
     let callCount = 0;
     const countingAdapter: MintAdapter = {
-      checkMintQuoteState: mock(() => {
+      checkMintQuote: mock(() => {
         callCount++;
         return Promise.resolve({ state: 'UNPAID' });
       }),
-      checkMintQuoteOnchain: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;

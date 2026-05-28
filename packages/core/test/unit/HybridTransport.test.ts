@@ -7,8 +7,7 @@ import { NullLogger } from '../../logging';
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
   ({
-    checkMintQuoteState: mock(() => Promise.resolve({})),
-    checkMintQuoteOnchain: mock(() => Promise.resolve({})),
+    checkMintQuote: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;

@@ -288,7 +288,7 @@ describe('MintOperationService', () => {
     } as unknown as WalletService;
 
     mintAdapter = {
-      checkMintQuoteState: mock(async () => ({
+      checkMintQuote: mock(async () => ({
         quote: quoteId,
         request: 'lnbc1test',
         amount: Amount.from(10),

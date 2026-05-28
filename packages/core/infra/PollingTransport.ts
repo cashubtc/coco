@@ -396,10 +396,10 @@ export class PollingTransport implements RealTimeTransport {
     let payload: unknown;
     switch (task.kind) {
       case 'bolt11_mint_quote':
-        payload = await this.mintAdapter.checkMintQuoteState(mintUrl, task.filter!);
+        payload = await this.mintAdapter.checkMintQuote(mintUrl, 'bolt11', task.filter!);
         break;
       case 'onchain_mint_quote':
-        payload = await this.mintAdapter.checkMintQuoteOnchain(mintUrl, task.filter!);
+        payload = await this.mintAdapter.checkMintQuote(mintUrl, 'onchain', task.filter!);
         break;
       case 'bolt11_melt_quote':
         payload = await this.mintAdapter.checkMeltQuoteState(mintUrl, task.filter!);

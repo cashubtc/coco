@@ -60,7 +60,7 @@ describe('MintService', () => {
       fetchMintInfo: mock(() => Promise.resolve(mockMintInfo)),
       fetchKeysets: mock(() => Promise.resolve({ keysets: mockKeysets })),
       fetchKeysForId: mock(() => Promise.resolve(mockKeys)),
-      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates: mock(() => Promise.resolve([])),
     } as unknown as MintAdapter;

@@ -178,7 +178,7 @@ describe('MintOnchainHandler', () => {
     } as unknown as Wallet;
 
     mintAdapter = {
-      checkMintQuoteOnchain: mock(async () => remoteQuote),
+      checkMintQuote: mock(async () => remoteQuote),
     } as unknown as MintAdapter;
 
     proofService = {
@@ -251,7 +251,7 @@ describe('MintOnchainHandler', () => {
   it('fetches the latest onchain quote through the mint adapter', async () => {
     const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
-    expect(mintAdapter.checkMintQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', quoteId);
     expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
     expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
   });
@@ -301,7 +301,7 @@ describe('MintOnchainHandler', () => {
     const result = await handler.execute(context);
 
     expect(result.status).toBe('ISSUED');
-    expect(mintAdapter.checkMintQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', quoteId);
     expect(wallet.mintProofsOnchain).toHaveBeenCalledWith(
       Amount.from(10),
       remoteQuote,
@@ -344,7 +344,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('returns pending during recovery when output restore is empty and balance is unavailable', async () => {
-    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       amount_paid: Amount.from(8),
       amount_issued: Amount.from(8),
@@ -378,7 +378,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('marks expired onchain executing recovery as terminal after restore misses', async () => {
-    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       expiry: Math.floor(Date.now() / 1000) - 1,
     });
@@ -399,7 +399,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('checks pending onchain operations as waiting when the quote cannot cover the amount', async () => {
-    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       amount_paid: Amount.from(8),
       amount_issued: Amount.from(0),
@@ -412,7 +412,7 @@ describe('MintOnchainHandler', () => {
   });
 
   it('checks expired pending onchain operations as terminal', async () => {
-    (mintAdapter.checkMintQuoteOnchain as Mock<any>).mockResolvedValueOnce({
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       expiry: Math.floor(Date.now() / 1000) - 1,
     });
