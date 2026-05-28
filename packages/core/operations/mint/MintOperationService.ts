@@ -414,9 +414,6 @@ export class MintOperationService {
             if (!(await this.ensureOutputsSaved(executing, result.proofs))) {
               throw new Error(`Failed to persist output proofs for operation ${executing.id}`);
             }
-            //CODEX: This assertion is unnecesarry. First of all the operation only cares about whether the proofs are saved,
-            //secondly our quote watcher should keep the canonical quote row updated
-            await this.ensureReusableQuoteIssuanceObserved(executing);
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
             //CODEX: Where does recovery actually happen?
@@ -908,50 +905,6 @@ export class MintOperationService {
     }
 
     return remoteAvailable.subtract(locallyReserved);
-  }
-
-  private async ensureReusableQuoteIssuanceObserved(
-    operation: ExecutingMintOperation,
-  ): Promise<void> {
-    if (operation.method !== 'onchain') {
-      return;
-    }
-
-    const before = await this.quoteLifecycle.getMintQuote(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-    const refreshed = await this.quoteLifecycle.refreshMintQuote(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-
-    if (before?.method !== 'onchain' || refreshed.method !== 'onchain') {
-      throw new Error(
-        `Cannot verify onchain quote issuance for operation ${operation.id}: quote is not onchain`,
-      );
-    }
-
-    const siblings = await this.mintOperationRepository.getByQuoteId(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-    const finalizedSiblingAmount = siblings.reduce((total, sibling) => {
-      if (sibling.id === operation.id || sibling.state !== 'finalized') {
-        return total;
-      }
-
-      return total.add(sibling.amount);
-    }, Amount.zero());
-    const requiredIssued = finalizedSiblingAmount.add(operation.amount);
-    if (refreshed.quoteData.amountIssued.lessThan(requiredIssued)) {
-      throw new Error(
-        `Cannot finalize operation ${operation.id}: onchain quote ${operation.quoteId} amount_issued ${refreshed.quoteData.amountIssued} does not include redeemed amount ${operation.amount}`,
-      );
-    }
   }
 
   private quoteLockKey(mintUrl: string, method: MintMethod, quoteId: string): string {

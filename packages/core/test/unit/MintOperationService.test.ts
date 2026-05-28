@@ -906,7 +906,7 @@ describe('MintOperationService', () => {
     expect(handler.execute).not.toHaveBeenCalled();
   });
 
-  it('finalize executes funded reusable onchain withdrawals and refreshes quote issuance first', async () => {
+  it('finalize executes funded reusable onchain withdrawals without refreshing quote issuance', async () => {
     const onchainQuoteId = 'onchain-quote-funded';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10), issued: Amount.zero() });
     const pendingOp: PendingMintOperation<'onchain'> = {
@@ -947,10 +947,10 @@ describe('MintOperationService', () => {
     expect(result.state).toBe('finalized');
     expect(stored?.state).toBe('finalized');
     expect(onchainHandler.execute).toHaveBeenCalled();
-    expect(onchainHandler.fetchRemoteQuote).toHaveBeenCalled();
+    expect(onchainHandler.fetchRemoteQuote).not.toHaveBeenCalled();
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(quote.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
+    expect(quote.quoteData.amountIssued.equals(Amount.zero())).toBe(true);
   });
 
   it('finalize subtracts executing reusable onchain siblings from claimable balance', async () => {
