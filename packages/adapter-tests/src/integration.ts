@@ -376,10 +376,23 @@ async function executeMintOperation(manager: Manager, operationId: string) {
   return manager.ops.mint.execute(operationId);
 }
 
-function isMintQuoteReady(
-  state: PreparedMintOperation['lastObservedRemoteState'] | undefined,
-): boolean {
-  return state === 'PAID' || state === 'ISSUED';
+function isMintQuoteReady(quote: MintQuote | null | undefined): boolean {
+  if (quote?.method !== 'bolt11') {
+    return false;
+  }
+
+  return quote.state === 'PAID' || quote.state === 'ISSUED';
+}
+
+async function getMintQuoteForOperation(
+  manager: Manager,
+  operation: PreparedMintOperation,
+): Promise<MintQuote | null> {
+  return manager.quotes.mint.get({
+    mintUrl: operation.mintUrl,
+    method: operation.method,
+    quoteId: operation.quoteId,
+  });
 }
 
 async function getLatestPendingMintOperation(
@@ -397,45 +410,49 @@ async function getLatestPendingMintOperation(
 async function awaitMintQuotePaid(
   manager: Manager,
   pendingMint: PreparedMintOperation,
-): Promise<PreparedMintOperation | null> {
-  if (isMintQuoteReady(pendingMint.lastObservedRemoteState)) {
-    return pendingMint;
+): Promise<MintQuote | null> {
+  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
+  if (isMintQuoteReady(initialQuote)) {
+    return initialQuote;
   }
 
   let cancelWait: (() => void) | undefined;
-  const paidEventPromise = new Promise<void>((resolve) => {
+  const paidEventPromise = new Promise<MintQuote | null>((resolve) => {
     const off = manager.on('mint-quote:updated', (payload) => {
       if (payload.quoteId !== pendingMint.quoteId || payload.quote.state !== 'PAID') {
         return;
       }
 
       off();
-      resolve();
+      resolve(payload.quote);
     });
 
     cancelWait = () => {
       off();
-      resolve();
+      resolve(null);
     };
   });
 
   const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  if (isMintQuoteReady(latestPendingMint?.lastObservedRemoteState)) {
+  const latestQuote = latestPendingMint
+    ? await getMintQuoteForOperation(manager, latestPendingMint)
+    : null;
+  if (isMintQuoteReady(latestQuote)) {
     cancelWait?.();
-    return latestPendingMint;
+    return latestQuote;
   }
 
-  await paidEventPromise;
-  return getLatestPendingMintOperation(manager, pendingMint.id);
+  return paidEventPromise;
 }
 
 async function awaitMintQuotePaidWithSubscription(
   manager: Manager,
   mintUrl: string,
   pendingMint: PreparedMintOperation,
-): Promise<PreparedMintOperation | null> {
-  if (isMintQuoteReady(pendingMint.lastObservedRemoteState)) {
-    return pendingMint;
+): Promise<MintQuote | null> {
+  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
+  if (isMintQuoteReady(initialQuote)) {
+    return initialQuote;
   }
 
   const paidNotificationPromise = manager.subscription.awaitMintQuotePaid(
@@ -444,12 +461,15 @@ async function awaitMintQuotePaidWithSubscription(
   );
 
   const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  if (isMintQuoteReady(latestPendingMint?.lastObservedRemoteState)) {
-    return latestPendingMint;
+  const latestQuote = latestPendingMint
+    ? await getMintQuoteForOperation(manager, latestPendingMint)
+    : null;
+  if (isMintQuoteReady(latestQuote)) {
+    return latestQuote;
   }
 
   await paidNotificationPromise;
-  return (await getLatestPendingMintOperation(manager, pendingMint.id)) ?? pendingMint;
+  return getMintQuoteForOperation(manager, pendingMint);
 }
 
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
@@ -644,9 +664,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(pendingEvent.mintUrl).toBe(mintUrl);
           expect(pendingEvent.operation.quoteId).toBe(pendingMint.quoteId);
 
-          const paidMint = await awaitMintQuotePaid(mgr!, pendingMint);
-          expect(paidMint?.quoteId).toBe(pendingMint.quoteId);
-          expect(paidMint?.lastObservedRemoteState).toBe('PAID');
+          const paidQuote = await awaitMintQuotePaid(mgr!, pendingMint);
+          expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
+          expect(paidQuote?.state).toBe('PAID');
 
           const finalizedEventPromise = waitForEvent<{
             mintUrl: string;
@@ -689,8 +709,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 50, testUnit);
 
-          const paidMint = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
-          expect(paidMint?.quoteId).toBe(pendingMint.quoteId);
+          const paidQuote = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
+          expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           await executeMintOperation(mgr!, pendingMint.id);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(50);

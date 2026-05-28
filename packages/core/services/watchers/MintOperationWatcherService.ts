@@ -10,6 +10,7 @@ import type {
 } from '@core/operations/mint';
 import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
@@ -84,6 +85,7 @@ export class MintOperationWatcherService {
   private readonly subs: SubscriptionManager;
   private readonly mintService: MintService;
   private readonly mintOperations: MintOperationService;
+  private readonly quoteLifecycle: QuoteLifecycle;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: MintOperationWatcherOptions;
@@ -101,21 +103,20 @@ export class MintOperationWatcherService {
     subs: SubscriptionManager,
     mintService: MintService,
     mintOperations: MintOperationService,
+    quoteLifecycle: QuoteLifecycle,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
-    options: MintOperationWatcherOptions = {
-      watchExistingPendingOnStart: true,
-      watchExistingPendingQuotesOnStart: true,
-    },
+    options?: MintOperationWatcherOptions,
   ) {
     this.subs = subs;
     this.mintService = mintService;
     this.mintOperations = mintOperations;
+    this.quoteLifecycle = quoteLifecycle;
     this.bus = bus;
     this.logger = logger;
     this.options = {
-      watchExistingPendingOnStart: options.watchExistingPendingOnStart ?? true,
-      watchExistingPendingQuotesOnStart: options.watchExistingPendingQuotesOnStart ?? true,
+      watchExistingPendingOnStart: options?.watchExistingPendingOnStart ?? true,
+      watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
     };
   }
 
@@ -238,7 +239,7 @@ export class MintOperationWatcherService {
 
     if (this.options.watchExistingPendingQuotesOnStart) {
       try {
-        const quotes = await this.mintOperations.getPendingMintQuotes();
+        const quotes = await this.quoteLifecycle.getPendingMintQuotes();
         await this.watchMintQuotes(
           quotes.map((quote) => ({
             mintUrl: quote.mintUrl,
@@ -509,7 +510,7 @@ export class MintOperationWatcherService {
     const key = toKey(mintUrl, record.method, quoteId);
     if (policy.shouldRecordPayload(methodPayload)) {
       try {
-        await this.mintOperations.recordMintQuoteSnapshot(mintUrl, record.method, methodPayload);
+        await this.quoteLifecycle.recordMintQuoteSnapshot(mintUrl, record.method, methodPayload);
       } catch (err) {
         this.logger?.error('Failed to persist mint quote update from remote update', {
           mintUrl,

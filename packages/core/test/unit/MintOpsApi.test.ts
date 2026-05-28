@@ -9,14 +9,12 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '../../operations/mint/MintOperation.ts';
-import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
 
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
-type ImportMintQuoteInput = Parameters<MintOpsApi['importQuote']>[0];
 type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
 type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
   Extract<PrepareMintInput, { method: 'bolt11' }> extends {
@@ -28,13 +26,6 @@ type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
 type _AssertOnchainPrepareRequiresAmount = Assert<
   Extract<PrepareMintInput, { method: 'onchain' }> extends {
     amount: unknown;
-  }
-    ? true
-    : false
->;
-type _AssertBolt11ImportAllowsOmittedMethodData = Assert<
-  Extract<ImportMintQuoteInput, { method: 'bolt11' }> extends {
-    methodData?: Record<string, never>;
   }
     ? true
     : false
@@ -62,8 +53,6 @@ const makePendingOperation = (): PendingMintOperation => ({
   unit: 'sat',
   request: 'lnbc1test',
   expiry: Math.floor(Date.now() / 1000) + 3600,
-  lastObservedRemoteState: 'PAID',
-  lastObservedRemoteStateAt: Date.now(),
   outputData: { keep: [], send: [] },
 });
 
@@ -71,18 +60,9 @@ describe('MintOpsApi', () => {
   let api: MintOpsApi;
   let mintOperationService: MintOperationService;
   let pendingOperation: PendingMintOperation;
-  let quote: MintQuoteBolt11Response;
 
   beforeEach(() => {
     pendingOperation = makePendingOperation();
-    quote = {
-      quote: quoteId,
-      request: 'lnbc1test',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      state: 'PAID',
-    };
     const executingOperation: ExecutingMintOperation = {
       ...pendingOperation,
       state: 'executing',
@@ -93,8 +73,7 @@ describe('MintOpsApi', () => {
     };
 
     mintOperationService = {
-      prepareExistingQuote: mock(async () => pendingOperation),
-      importQuote: mock(async () => pendingOperation),
+      prepare: mock(async () => pendingOperation),
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
       getOperationByQuote: mock(async () => pendingOperation),
@@ -122,7 +101,7 @@ describe('MintOpsApi', () => {
       method: 'bolt11',
     });
 
-    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
       quoteId,
@@ -142,7 +121,7 @@ describe('MintOpsApi', () => {
       methodData: {},
     });
 
-    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
       quoteId,
@@ -161,7 +140,7 @@ describe('MintOpsApi', () => {
       unit: 'sat',
     });
 
-    expect(mintOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(
       mintUrl,
       'onchain',
       quoteId,
@@ -169,45 +148,6 @@ describe('MintOpsApi', () => {
       'sat',
       { amount: Amount.from(10), unit: 'sat' },
     );
-  });
-
-  it('importQuote delegates to the mint operation service', async () => {
-    const result = await api.importQuote({
-      mintUrl,
-      quote,
-      method: 'bolt11',
-      methodData: {},
-    });
-
-    expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, quote, 'bolt11', {});
-    expect(result).toBe(pendingOperation);
-  });
-
-  it('importQuote defaults empty methodData for bolt11', async () => {
-    const result = await api.importQuote({
-      mintUrl,
-      quote,
-      method: 'bolt11',
-    });
-
-    expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, quote, 'bolt11', {});
-    expect(result).toBe(pendingOperation);
-  });
-
-  it('importQuote passes non-sat quote units to the service', async () => {
-    const usdQuote = {
-      ...quote,
-      unit: 'usd',
-    } as MintQuoteBolt11Response;
-
-    await api.importQuote({
-      mintUrl,
-      quote: usdQuote,
-      method: 'bolt11',
-      methodData: {},
-    });
-
-    expect(mintOperationService.importQuote).toHaveBeenCalledWith(mintUrl, usdQuote, 'bolt11', {});
   });
 
   it('execute only allows pending operations', async () => {

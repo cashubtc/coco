@@ -56,8 +56,6 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     request: row.request ?? '',
     expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : { keep: [], send: [] },
   } as MintOperation;
 };
@@ -102,8 +100,8 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     request: operation.request,
     expiry: operation.expiry,
     pubkey: operation.pubkey ?? null,
-    lastObservedRemoteState: operation.lastObservedRemoteState ?? null,
-    lastObservedRemoteStateAt: operation.lastObservedRemoteStateAt ?? null,
+    lastObservedRemoteState: null,
+    lastObservedRemoteStateAt: null,
     terminalFailureJson: operation.terminalFailure
       ? JSON.stringify(operation.terminalFailure)
       : null,

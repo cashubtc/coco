@@ -57,6 +57,7 @@ describe('QuoteApi', () => {
     meltQuote = makeMeltQuote();
     quoteLifecycle = {
       createMintQuote: mock(async () => mintQuote),
+      importMintQuote: mock(async () => mintQuote),
       getMintQuote: mock(async () => mintQuote),
       getPendingMintQuotes: mock(async () => [mintQuote]),
       refreshMintQuote: mock(async () => ({ ...mintQuote, state: 'PAID' })),
@@ -74,6 +75,20 @@ describe('QuoteApi', () => {
       api.mint.create({ mintUrl, amount: Amount.from(10), method: 'bolt11' }),
     ).resolves.toBe(mintQuote);
     await expect(api.mint.get({ mintUrl, method: 'bolt11', quoteId })).resolves.toBe(mintQuote);
+    await expect(
+      api.mint.import({
+        mintUrl,
+        method: 'bolt11',
+        quote: {
+          quote: quoteId,
+          request: 'lnbc1mint',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: mintQuote.expiry,
+          state: 'UNPAID',
+        },
+      }),
+    ).resolves.toBe(mintQuote);
     await expect(api.mint.listPending({ method: 'bolt11' })).resolves.toEqual([mintQuote]);
     await expect(api.mint.refresh({ mintUrl, method: 'bolt11', quoteId })).resolves.toMatchObject({
       state: 'PAID',
@@ -81,6 +96,14 @@ describe('QuoteApi', () => {
 
     expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
       amount: { amount: Amount.from(10), unit: 'sat' },
+    });
+    expect(quoteLifecycle.importMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
+      quote: quoteId,
+      request: 'lnbc1mint',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: mintQuote.expiry,
+      state: 'UNPAID',
     });
     expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');

@@ -17,7 +17,6 @@ type MintOps = Manager['ops']['mint'];
 type MintOperation = NonNullable<Awaited<ReturnType<MintOps['get']>>>;
 
 export type MintOperationPrepareInput = Parameters<MintOps['prepare']>[0];
-export type MintOperationImportQuoteInput = Parameters<MintOps['importQuote']>[0];
 export type MintOperationPrepareResult = Awaited<ReturnType<MintOps['prepare']>>;
 export type MintOperationExecuteResult = Awaited<ReturnType<MintOps['execute']>>;
 export type MintOperationCheckPaymentResult = Awaited<ReturnType<MintOps['checkPayment']>>;
@@ -29,7 +28,6 @@ export interface UseMintOperationResult extends OperationHookResult<
   MintOperationExecuteResult
 > {
   prepare(input: MintOperationPrepareInput): Promise<MintOperationPrepareResult>;
-  importQuote(input: MintOperationImportQuoteInput): Promise<MintOperationPrepareResult>;
   execute(): Promise<MintOperationExecuteResult>;
   checkPayment(): Promise<MintOperationCheckPaymentResult>;
   finalize(): Promise<MintOperationFinalizeResult>;
@@ -149,20 +147,6 @@ export function useMintOperation(
     [bindOperation, manager, runStatefulAction],
   );
 
-  const importQuote = useCallback(
-    async (input: MintOperationImportQuoteInput): Promise<MintOperationPrepareResult> => {
-      requireUnboundOperationCreation(boundOperationIdRef.current, 'importQuote');
-
-      return runStatefulAction(
-        async () => manager.ops.mint.importQuote(input),
-        async (operation) => {
-          bindOperation(operation, { clearExecuteResult: true });
-        },
-      );
-    },
-    [bindOperation, manager, runStatefulAction],
-  );
-
   const refresh = useCallback(async (): Promise<MintOperation> => {
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'refresh');
 
@@ -233,7 +217,6 @@ export function useMintOperation(
     isLoading,
     isError,
     prepare,
-    importQuote,
     refresh,
     execute,
     checkPayment,

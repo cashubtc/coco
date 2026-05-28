@@ -1,15 +1,22 @@
-import { Amount } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type MintQuoteBolt11Response,
+  type MintQuoteOnchainResponse,
+} from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
-import { MintOperationWatcherService } from '../../services/watchers/MintOperationWatcherService.ts';
+import {
+  MintOperationWatcherService,
+  type MintOperationWatcherOptions,
+} from '../../services/watchers/MintOperationWatcherService.ts';
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
-import type { MintQuoteBolt11Response, MintQuoteOnchainResponse } from '@cashu/cashu-ts';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 describe('MintOperationWatcherService', () => {
   const mintUrl = 'https://mint.test';
@@ -34,8 +41,6 @@ describe('MintOperationWatcherService', () => {
     request: 'lnbc1test',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     outputData: '{"keep":[],"send":[]}' as unknown as PendingMintOperation['outputData'],
-    lastObservedRemoteState: 'UNPAID',
-    lastObservedRemoteStateAt: Date.now(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
@@ -67,8 +72,6 @@ describe('MintOperationWatcherService', () => {
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     state: 'UNPAID',
-    lastObservedRemoteState: 'UNPAID',
-    lastObservedRemoteStateAt: Date.now(),
     reusable: false,
     quoteData: {
       amount: Amount.from(10),
@@ -91,10 +94,41 @@ describe('MintOperationWatcherService', () => {
       amountPaid: Amount.zero(),
       amountIssued: Amount.zero(),
     },
-    lastObservedRemoteStateAt: Date.now(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
+
+  const makeQuoteLifecycle = (
+    overrides: Partial<
+      Pick<QuoteLifecycle, 'getPendingMintQuotes' | 'recordMintQuoteSnapshot'>
+    > = {},
+  ): QuoteLifecycle =>
+    ({
+      getPendingMintQuotes: mock(async () => []),
+      recordMintQuoteSnapshot: mock(async () => makeBolt11Quote()),
+      ...overrides,
+    }) as unknown as QuoteLifecycle;
+
+  const makeWatcher = ({
+    mintService = { isTrustedMint: mock(async () => true) } as unknown as MintService,
+    mintOperations = {} as unknown as MintOperationService,
+    quoteLifecycle = makeQuoteLifecycle(),
+    options,
+  }: {
+    mintService?: MintService;
+    mintOperations?: MintOperationService;
+    quoteLifecycle?: QuoteLifecycle;
+    options?: MintOperationWatcherOptions;
+  } = {}): MintOperationWatcherService =>
+    new MintOperationWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      mintService,
+      mintOperations,
+      quoteLifecycle,
+      bus,
+      new NullLogger(),
+      options,
+    );
 
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
@@ -117,16 +151,12 @@ describe('MintOperationWatcherService', () => {
     const quote = makeBolt11Quote();
     const onchainQuote = makeOnchainQuote();
     const getPendingMintQuotes = mock(async () => [quote, onchainQuote]);
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         getPendingMintQuotes,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false },
+    });
 
     await watcher.start();
 
@@ -148,16 +178,12 @@ describe('MintOperationWatcherService', () => {
   });
 
   it('watches pending canonical onchain mint quotes', async () => {
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         getPendingMintQuotes: mock(async () => [makeOnchainQuote()]),
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false },
+    });
 
     await watcher.start();
 
@@ -176,16 +202,12 @@ describe('MintOperationWatcherService', () => {
       ...makeBolt11Quote(),
       expiry: Math.floor(Date.now() / 1000) - 1,
     };
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         getPendingMintQuotes: mock(async () => [expiredQuote]),
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false },
+    });
 
     await watcher.start();
 
@@ -195,16 +217,12 @@ describe('MintOperationWatcherService', () => {
   });
 
   it('watches pending onchain mint operations', async () => {
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      mintOperations: {
         getPendingOperations: mock(async () => [makeOnchainOperation()]),
       } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingQuotesOnStart: false },
-    );
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
 
@@ -220,14 +238,9 @@ describe('MintOperationWatcherService', () => {
 
   it('watches canonical mint quotes created after startup', async () => {
     const quote = makeBolt11Quote();
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {} as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-quote:updated', {
@@ -255,7 +268,7 @@ describe('MintOperationWatcherService', () => {
     const recordMintQuoteSnapshot = mock(
       async (_mintUrl: string, _method: string, quote: MintQuoteBolt11Response) => ({
         mintUrl,
-        method: 'bolt11',
+        method: 'bolt11' as const,
         quoteId: quote.quote,
         quote: quote.quote,
         request: quote.request,
@@ -263,7 +276,10 @@ describe('MintOperationWatcherService', () => {
         unit: quote.unit,
         expiry: quote.expiry,
         state: quote.state,
-        reusable: false,
+        reusable: false as const,
+        quoteData: {
+          amount: quote.amount,
+        },
         createdAt: operation.createdAt,
         updatedAt: Date.now(),
       }),
@@ -272,18 +288,16 @@ describe('MintOperationWatcherService', () => {
       throw new Error('should not need an operation');
     });
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      mintOperations: {
         observePendingOperation,
         getOperation,
-        recordMintQuoteSnapshot,
       } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      quoteLifecycle: makeQuoteLifecycle({
+        recordMintQuoteSnapshot,
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -322,16 +336,12 @@ describe('MintOperationWatcherService', () => {
     const operation = makePendingOperation();
     const recordMintQuoteSnapshot = mock(async () => makeBolt11Quote());
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         recordMintQuoteSnapshot,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -364,7 +374,7 @@ describe('MintOperationWatcherService', () => {
     const recordMintQuoteSnapshot = mock(
       async (_mintUrl: string, _method: string, quote: MintQuoteBolt11Response) => ({
         mintUrl,
-        method: 'bolt11',
+        method: 'bolt11' as const,
         quoteId: quote.quote,
         quote: quote.quote,
         request: quote.request,
@@ -372,23 +382,24 @@ describe('MintOperationWatcherService', () => {
         unit: quote.unit,
         expiry: quote.expiry,
         state: quote.state,
-        reusable: false,
+        reusable: false as const,
+        quoteData: {
+          amount: quote.amount,
+        },
         createdAt: operation.createdAt,
         updatedAt: Date.now(),
       }),
     );
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      mintOperations: {
         getOperation: mock(async () => operation),
-        recordMintQuoteSnapshot,
       } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      quoteLifecycle: makeQuoteLifecycle({
+        recordMintQuoteSnapshot,
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -424,14 +435,9 @@ describe('MintOperationWatcherService', () => {
     const quote = makeBolt11Quote();
     const operation = makePendingOperation();
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {} as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -455,16 +461,12 @@ describe('MintOperationWatcherService', () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         recordMintQuoteSnapshot,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -505,16 +507,12 @@ describe('MintOperationWatcherService', () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         recordMintQuoteSnapshot,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -545,16 +543,12 @@ describe('MintOperationWatcherService', () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         recordMintQuoteSnapshot,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -584,16 +578,12 @@ describe('MintOperationWatcherService', () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
         recordMintQuoteSnapshot,
-      } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-op:pending', {
@@ -625,16 +615,12 @@ describe('MintOperationWatcherService', () => {
   it('keeps reusable onchain quote watches after operation finalization', async () => {
     const operation = makeOnchainOperation();
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      mintOperations: {
         getPendingOperations: mock(async () => [operation]),
       } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingQuotesOnStart: false },
-    );
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     expect(subscribe).toHaveBeenCalledTimes(1);
@@ -655,14 +641,9 @@ describe('MintOperationWatcherService', () => {
     const quote = makeBolt11Quote();
     const operation = makePendingOperation();
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {} as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
-    );
+    const watcher = makeWatcher({
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
     await bus.emit('mint-quote:updated', {
@@ -693,16 +674,12 @@ describe('MintOperationWatcherService', () => {
     const first = makePendingOperation();
     const second = { ...makePendingOperation(), id: 'mint-op-2' };
 
-    const watcher = new MintOperationWatcherService(
-      { subscribe } as unknown as SubscriptionManager,
-      { isTrustedMint: mock(async () => true) } as unknown as MintService,
-      {
+    const watcher = makeWatcher({
+      mintOperations: {
         getPendingOperations: mock(async () => [first, second]),
       } as unknown as MintOperationService,
-      bus,
-      new NullLogger(),
-      { watchExistingPendingQuotesOnStart: false },
-    );
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
 
     await watcher.start();
 

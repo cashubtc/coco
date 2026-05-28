@@ -9,6 +9,7 @@ import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
 import {
   getMintQuoteAmount,
+  getMintQuoteRemoteState,
   mintQuoteFromBolt11Response,
   mintQuoteFromOnchainResponse,
   mintQuoteToMethodSnapshot,
@@ -22,6 +23,7 @@ import type { MintService } from '../services/MintService';
 import type { ProofService } from '../services/ProofService';
 import type { WalletService } from '../services/WalletService';
 import type { InitMeltOperation } from '../operations/melt/MeltOperation';
+import { normalizeMintUrl } from '../utils';
 import type {
   MeltMethod,
   MeltMethodData,
@@ -52,6 +54,44 @@ function isMintQuoteStateDowngrade(
 
 function maxAmount(left: Amount, right: Amount): Amount {
   return left.greaterThan(right) ? left : right;
+}
+
+function hasOnchainSettlementAmounts(snapshot: MintMethodQuoteSnapshot<'onchain'>): boolean {
+  return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
+}
+
+function getRemoteStateChange(
+  existing: MintQuote | null,
+  incoming: MintQuote,
+  rawSnapshot?: MintMethodQuoteSnapshot,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  if (existing.method !== incoming.method || existing.quoteId !== incoming.quoteId) {
+    return true;
+  }
+
+  if (existing.method === 'bolt11' && incoming.method === 'bolt11') {
+    return existing.state !== incoming.state;
+  }
+
+  if (existing.method === 'onchain' && incoming.method === 'onchain') {
+    const snapshot = rawSnapshot as MintMethodQuoteSnapshot<'onchain'> | undefined;
+    if (!snapshot || hasOnchainSettlementAmounts(snapshot)) {
+      return (
+        !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
+        !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
+      );
+    }
+
+    const existingState = (existing as { state?: unknown }).state;
+    const incomingState = (rawSnapshot as { state?: unknown }).state;
+    return incomingState !== undefined && existingState !== incomingState;
+  }
+
+  return false;
 }
 
 export interface QuoteLifecycleDeps {
@@ -194,25 +234,9 @@ export class QuoteLifecycle {
       quote: existingQuote,
     });
 
-    await this.mintQuoteRepository.upsertMintQuote(refreshed);
-    const quote = await this.mintQuoteRepository.getMintQuote(
-      existingQuote.mintUrl,
-      method,
-      quoteId,
-    );
-    if (!quote) {
-      throw new Error(
-        `Cannot refresh quote: mint quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
-      );
-    }
-
-    await this.eventBus.emit('mint-quote:updated', {
-      mintUrl: quote.mintUrl,
-      method: quote.method,
-      quoteId: quote.quoteId,
-      quote,
-    });
-
+    const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
+    const quote = await this.persistCanonicalMintQuote(refreshed);
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
 
@@ -267,11 +291,33 @@ export class QuoteLifecycle {
     return mintQuoteToMethodSnapshot(quote);
   }
 
-  async importMintQuoteSnapshot(
+  async importMintQuote<M extends MintMethod>(
+    mintUrl: string,
+    method: M,
+    quote: MintMethodQuoteSnapshot<M>,
+  ): Promise<MintQuote<M>> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const trusted = await this.mintService.isTrustedMint(normalizedMintUrl);
+    if (!trusted) {
+      throw new UnknownMintError(`Mint ${normalizedMintUrl} is not trusted`);
+    }
+
+    const { quote: imported, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
+      normalizedMintUrl,
+      method,
+      quote,
+      (resolvedQuote) => this.assertMintQuoteCapabilities(resolvedQuote),
+    );
+    await this.emitMintQuoteUpdatedIfNeeded(imported, remoteStateChanged);
+    return imported as MintQuote<M>;
+  }
+
+  private async resolveAndPersistMintQuoteSnapshot(
     mintUrl: string,
     method: MintMethod,
     quote: MintMethodQuoteSnapshot,
-  ): Promise<MintQuote> {
+    beforePersist?: (quote: MintQuote) => Promise<void>,
+  ): Promise<{ quote: MintQuote; remoteStateChanged: boolean }> {
     let canonicalQuote: MintQuote;
 
     if (method === 'bolt11') {
@@ -291,10 +337,12 @@ export class QuoteLifecycle {
         amount,
       } as MintQuoteBolt11Response);
     } else if (method === 'onchain') {
-      canonicalQuote = mintQuoteFromOnchainResponse(
-        mintUrl,
-        quote as MintMethodQuoteSnapshot<'onchain'>,
-      );
+      const onchainQuote = quote as MintMethodQuoteSnapshot<'onchain'>;
+      canonicalQuote = mintQuoteFromOnchainResponse(mintUrl, {
+        ...onchainQuote,
+        amount_paid: onchainQuote.amount_paid ?? Amount.zero(),
+        amount_issued: onchainQuote.amount_issued ?? Amount.zero(),
+      });
     } else {
       throw new Error(`Unsupported mint quote import method ${String(method)}`);
     }
@@ -310,7 +358,11 @@ export class QuoteLifecycle {
       isStatefulMintQuote(canonicalQuote) &&
       isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)
     ) {
-      return existing;
+      await beforePersist?.(existing);
+      return {
+        quote: existing,
+        remoteStateChanged: false,
+      };
     }
     if (existing?.method === 'onchain' && canonicalQuote.method === 'onchain') {
       canonicalQuote = {
@@ -326,14 +378,10 @@ export class QuoteLifecycle {
       };
     }
 
-    await this.mintQuoteRepository.upsertMintQuote(canonicalQuote);
-    return (
-      (await this.mintQuoteRepository.getMintQuote(
-        canonicalQuote.mintUrl,
-        canonicalQuote.method,
-        canonicalQuote.quoteId,
-      )) ?? canonicalQuote
-    );
+    const remoteStateChanged = getRemoteStateChange(existing, canonicalQuote, quote);
+    await beforePersist?.(canonicalQuote);
+    const persisted = await this.persistCanonicalMintQuote(canonicalQuote);
+    return { quote: persisted, remoteStateChanged };
   }
 
   async recordMintQuoteSnapshot(
@@ -341,13 +389,12 @@ export class QuoteLifecycle {
     method: MintMethod,
     snapshot: MintMethodQuoteSnapshot,
   ): Promise<MintQuote> {
-    const quote = await this.importMintQuoteSnapshot(mintUrl, method, snapshot);
-    await this.eventBus.emit('mint-quote:updated', {
-      mintUrl: quote.mintUrl,
-      method: quote.method,
-      quoteId: quote.quoteId,
-      quote,
-    });
+    const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
+      mintUrl,
+      method,
+      snapshot,
+    );
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
 
@@ -357,6 +404,11 @@ export class QuoteLifecycle {
     observedAt = Date.now(),
   ): Promise<MintQuote> {
     await this.ensureMintQuoteRecordForOperation(operation);
+    const existing = await this.mintQuoteRepository.getMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
     await this.mintQuoteRepository.setMintQuoteState(
       operation.mintUrl,
       operation.method,
@@ -375,12 +427,10 @@ export class QuoteLifecycle {
       );
     }
 
-    await this.eventBus.emit('mint-quote:updated', {
-      mintUrl: quote.mintUrl,
-      method: quote.method,
-      quoteId: quote.quoteId,
+    await this.emitMintQuoteUpdatedIfNeeded(
       quote,
-    });
+      !existing || getMintQuoteRemoteState(existing) !== getMintQuoteRemoteState(quote),
+    );
 
     return quote;
   }
@@ -517,6 +567,47 @@ export class QuoteLifecycle {
     }
   }
 
+  private async persistCanonicalMintQuote(canonicalQuote: MintQuote): Promise<MintQuote> {
+    await this.mintQuoteRepository.upsertMintQuote(canonicalQuote);
+    return (
+      (await this.mintQuoteRepository.getMintQuote(
+        canonicalQuote.mintUrl,
+        canonicalQuote.method,
+        canonicalQuote.quoteId,
+      )) ?? canonicalQuote
+    );
+  }
+
+  private async emitMintQuoteUpdatedIfNeeded(
+    quote: MintQuote,
+    remoteStateChanged: boolean,
+  ): Promise<void> {
+    if (!remoteStateChanged) {
+      return;
+    }
+
+    await this.eventBus.emit('mint-quote:updated', {
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      quote,
+    });
+  }
+
+  private async assertMintQuoteCapabilities(quote: MintQuote): Promise<void> {
+    await this.mintService.assertMethodUnitSupported(
+      quote.mintUrl,
+      4,
+      quote.method,
+      quote.method === 'onchain'
+        ? quote.unit
+        : {
+            amount: quote.amount,
+            unit: quote.unit,
+          },
+    );
+  }
+
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
     if (quote.reusable && quote.method !== 'onchain') {
       throw new Error(`Cannot prepare ${context}: reusable quote is unsupported`);
@@ -566,9 +657,7 @@ export class QuoteLifecycle {
       amount: operation.amount,
       expiry: operation.expiry,
       pubkey: operation.pubkey,
-      state: operation.lastObservedRemoteState ?? 'UNPAID',
-      lastObservedRemoteState: operation.lastObservedRemoteState,
-      lastObservedRemoteStateAt: operation.lastObservedRemoteStateAt,
+      state: 'UNPAID',
       reusable: false,
       quoteData: {
         amount: operation.amount,

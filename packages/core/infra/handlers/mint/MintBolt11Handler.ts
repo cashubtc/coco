@@ -79,8 +79,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: Date.now(),
       outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
     };

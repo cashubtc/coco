@@ -77,8 +77,6 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     request: row.request ?? '',
     expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : { keep: [], send: [] },
   } as MintOperation;
 };
@@ -126,8 +124,8 @@ const operationToParams = (operation: MintOperation): unknown[] => {
     operation.request,
     operation.expiry,
     operation.pubkey ?? null,
-    operation.lastObservedRemoteState ?? null,
-    operation.lastObservedRemoteStateAt ?? null,
+    null,
+    null,
     operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
     JSON.stringify(operation.outputData),
   ];
@@ -206,8 +204,8 @@ export class ExpoMintOperationRepository implements MintOperationRepository {
         operation.request,
         operation.expiry,
         operation.pubkey ?? null,
-        operation.lastObservedRemoteState ?? null,
-        operation.lastObservedRemoteStateAt ?? null,
+        null,
+        null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
         operation.id,

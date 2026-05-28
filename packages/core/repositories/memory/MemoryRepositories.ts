@@ -77,6 +77,7 @@ export class MemoryRepositories implements Repositories {
       sendOperationRepository,
       meltOperationRepository,
       mintOperationRepository,
+      mintQuoteRepository: this.mintQuoteRepository,
       receiveOperationRepository,
     });
     this.authSessionRepository = new MemoryAuthSessionRepository();

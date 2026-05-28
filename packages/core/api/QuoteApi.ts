@@ -1,5 +1,9 @@
 import type { MeltMethod, MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethod, MintMethodCreateQuoteData } from '@core/operations/mint';
+import type {
+  MintMethod,
+  MintMethodCreateQuoteData,
+  MintMethodQuoteSnapshot,
+} from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
@@ -37,6 +41,18 @@ export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
 export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> = {
   [M in TSupported]: MintQuoteIdentityInput<M>;
 }[TSupported];
+
+export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
+  {
+    [M in TSupported]: {
+      /** Mint that issued the existing quote. */
+      mintUrl: string;
+      /** Existing quote snapshot to persist as canonical quote state. */
+      quote: MintMethodQuoteSnapshot<M>;
+      /** Mint method for the quote snapshot. */
+      method: M;
+    };
+  }[TSupported];
 
 export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
   GetMintQuoteInput<TSupported>;
@@ -86,6 +102,10 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQu
 
   get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {
     return this.quoteLifecycle.getMintQuote(input.mintUrl, input.method, input.quoteId);
+  }
+
+  import(input: ImportMintQuoteInput<TSupported>): Promise<MintQuote> {
+    return this.quoteLifecycle.importMintQuote(input.mintUrl, input.method, input.quote);
   }
 
   listPending(input: ListPendingMintQuotesInput<TSupported> = {}): Promise<MintQuote[]> {

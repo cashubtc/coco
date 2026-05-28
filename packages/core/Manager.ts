@@ -65,6 +65,7 @@ import {
 } from './api';
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
+import type { MintMethodQuoteSnapshot } from './operations/mint';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 import { isStatefulMintQuote, mintQuoteToMethodSnapshot } from './models/MintQuote.ts';
@@ -400,6 +401,7 @@ export class Manager {
       this.subscriptions,
       this.mintService,
       this.mintOperationService,
+      this.quoteLifecycle,
       this.eventBus,
       watcherLogger,
       {
@@ -429,6 +431,7 @@ export class Manager {
       : this.logger;
     this.mintOperationProcessor = new MintOperationProcessor(
       this.mintOperationService,
+      this.quoteLifecycle,
       this.eventBus,
       processorLogger,
       options,
@@ -521,10 +524,15 @@ export class Manager {
       }
 
       try {
-        const operation = await this.mintOperationService.importQuote(
+        const imported = await this.quoteLifecycle.importMintQuote(
           quote.mintUrl,
-          mintQuoteToMethodSnapshot(quote),
           'bolt11',
+          mintQuoteToMethodSnapshot(quote) as MintMethodQuoteSnapshot<'bolt11'>,
+        );
+        const operation = await this.mintOperationService.prepare(
+          imported.mintUrl,
+          imported.method,
+          imported.quoteId,
           {},
         );
         reconciled.push(operation.quoteId);
@@ -609,7 +617,13 @@ export class Manager {
 
     for (const operation of pendingOperations) {
       if (mintUrl && operation.mintUrl !== mintUrl) continue;
-      if (operation.lastObservedRemoteState !== 'PAID') continue;
+
+      const quote = await this.quoteLifecycle.getMintQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
+      );
+      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
 
       const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
       if (!trusted) {

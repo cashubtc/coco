@@ -4,6 +4,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -11,6 +12,7 @@ describe('MintOperationProcessor', () => {
   let bus: EventBus<CoreEvents>;
   let processor: MintOperationProcessor;
   let mockMintOperationService: MintOperationService;
+  let mockQuoteLifecycle: QuoteLifecycle;
   let finalizeCalls: string[];
   let claimCalls: Array<{ mintUrl: string; method: string; quoteId: string }>;
   let startupClaimCalls: number;
@@ -52,12 +54,36 @@ describe('MintOperationProcessor', () => {
       },
     } as unknown as MintOperationService;
 
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    mockQuoteLifecycle = {
+      async getMintQuote() {
+        return {
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+          quoteId: 'quote-2',
+          quote: 'quote-2',
+          request: 'lnbc1test',
+          amount: 10,
+          unit: 'sat',
+          expiry: null,
+          state: 'PAID',
+          reusable: false,
+          quoteData: { amount: 10 },
+        } as any;
+      },
+    } as unknown as QuoteLifecycle;
+
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
   });
 
   afterEach(async () => {
@@ -120,12 +146,18 @@ describe('MintOperationProcessor', () => {
       },
     } as unknown as MintOperationService;
 
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
 
     await processor.start();
 
@@ -186,12 +218,18 @@ describe('MintOperationProcessor', () => {
         return false;
       },
     } as unknown as MintOperationService;
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
 
     await processor.start();
     await bus.emit('mint-quote:updated', {
@@ -212,12 +250,18 @@ describe('MintOperationProcessor', () => {
         throw new Error('claimability check failed');
       },
     } as unknown as MintOperationService;
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
 
     await processor.start();
     await bus.emit('mint-quote:updated', {
@@ -239,13 +283,19 @@ describe('MintOperationProcessor', () => {
   });
 
   it('can disable reusable mint quote auto-claiming', async () => {
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-      autoClaimMintQuotes: false,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+        autoClaimMintQuotes: false,
+      },
+    );
 
     await processor.start();
     await bus.emit('mint-quote:updated', {
@@ -285,7 +335,7 @@ describe('MintOperationProcessor', () => {
         state: 'pending',
         mintUrl: 'https://mint.test',
         method: 'bolt11',
-        lastObservedRemoteState: 'PAID',
+        quoteId: 'quote-2',
       } as any,
     });
 
@@ -371,12 +421,18 @@ describe('MintOperationProcessor', () => {
       },
     } as unknown as MintOperationService;
 
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
 
     await processor.start();
 
@@ -423,12 +479,18 @@ describe('MintOperationProcessor', () => {
       },
     } as unknown as MintOperationService;
 
-    processor = new MintOperationProcessor(mockMintOperationService, bus, undefined, {
-      processIntervalMs: TEST_PROCESS_INTERVAL,
-      baseRetryDelayMs: TEST_RETRY_DELAY,
-      maxRetries: 3,
-      initialEnqueueDelayMs: TEST_INITIAL_DELAY,
-    });
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
 
     await processor.start();
 

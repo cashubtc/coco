@@ -16,7 +16,7 @@ export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' 
 import type { Amount } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
-import type { MintMethod, MintMethodMeta, MintMethodRemoteState } from './MintMethodHandler';
+import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
@@ -47,11 +47,6 @@ interface MintQuoteSnapshot {
   pubkey?: string;
 }
 
-interface MintRemoteObservation<M extends MintMethod = MintMethod> {
-  lastObservedRemoteState?: MintMethodRemoteState<M>;
-  lastObservedRemoteStateAt?: number;
-}
-
 interface PendingData {
   outputData: SerializedOutputData;
 }
@@ -63,42 +58,22 @@ export interface InitMintOperation<M extends MintMethod = MintMethod>
 }
 
 export interface PendingMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'pending';
 }
 
 export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'executing';
 }
 
 export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'finalized';
 }
 
 export interface FailedMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'failed';
 }
 

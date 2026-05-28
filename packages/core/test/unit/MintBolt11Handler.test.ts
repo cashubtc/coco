@@ -78,8 +78,6 @@ describe('MintBolt11Handler', () => {
     quoteId,
     request: quote.request,
     expiry: quote.expiry,
-    lastObservedRemoteState: 'PAID' as const,
-    lastObservedRemoteStateAt: Date.now(),
     outputData,
   };
 
@@ -119,8 +117,6 @@ describe('MintBolt11Handler', () => {
       amount: quote.amount,
       expiry: quote.expiry,
       state: quote.state,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: Date.now(),
       reusable: false,
       quoteData: {
         amount: quote.amount,
@@ -245,7 +241,6 @@ describe('MintBolt11Handler', () => {
 
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
       expect(result.quoteId).toBe(importedQuote.quote);
-      expect(result.lastObservedRemoteState).toBe('UNPAID');
     });
 
     it('normalizes quote unit comparison and persists the operation unit', async () => {

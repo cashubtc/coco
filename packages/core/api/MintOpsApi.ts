@@ -1,7 +1,6 @@
 import type {
   MintMethod,
   MintMethodData,
-  MintMethodQuoteSnapshot,
   MintOperation,
   MintOperationService,
   PendingMintCheckResult,
@@ -19,11 +18,6 @@ type PrepareExistingQuoteInputCommon = {
   quoteId: string;
   /** Optional expected unit for the quote. */
   unit?: string;
-};
-
-type ImportMintQuoteInputCommon = {
-  /** Mint that issued the existing quote. */
-  mintUrl: string;
 };
 
 type MethodDataInput<M extends MintMethod> =
@@ -49,15 +43,6 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
       : {}) &
     MethodDataInput<M>;
 }[TSupported];
-
-export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in Extract<TSupported, 'bolt11'>]: ImportMintQuoteInputCommon & {
-    /** Existing quote snapshot to track as an operation. */
-    quote: MintMethodQuoteSnapshot<M>;
-    /** Mint method to prepare, for example `bolt11`. */
-    method: M;
-  } & MethodDataInput<M>;
-}[Extract<TSupported, 'bolt11'>];
 
 export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: {
@@ -110,27 +95,13 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     const explicitAmount =
       'amount' in input ? parseUnitAmount(input.amount, { explicitUnit: input.unit }) : undefined;
 
-    return this.mintOperationService.prepareExistingQuote(
+    return this.mintOperationService.prepare(
       input.mintUrl,
       input.method,
       input.quoteId,
       methodData,
       input.unit,
       explicitAmount,
-    );
-  }
-
-  /**
-   * Imports an existing quote snapshot into a prepared mint operation without executing it.
-   */
-  async importQuote(input: ImportMintQuoteInput<TSupported>): Promise<PendingMintOperation> {
-    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
-
-    return this.mintOperationService.importQuote(
-      input.mintUrl,
-      input.quote,
-      input.method,
-      methodData,
     );
   }
 

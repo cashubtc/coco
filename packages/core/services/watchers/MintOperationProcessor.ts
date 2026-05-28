@@ -3,6 +3,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
 import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
+import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 interface QueueItem {
   mintUrl: string;
@@ -37,6 +38,7 @@ export interface MintOperationProcessorOptions {
 
 export class MintOperationProcessor {
   private readonly mintOperations: MintOperationService;
+  private readonly quoteLifecycle: QuoteLifecycle;
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
 
@@ -60,11 +62,13 @@ export class MintOperationProcessor {
 
   constructor(
     mintOperations: MintOperationService,
+    quoteLifecycle: QuoteLifecycle,
     bus: EventBus<CoreEvents>,
     logger?: Logger,
     options?: MintOperationProcessorOptions,
   ) {
     this.mintOperations = mintOperations;
+    this.quoteLifecycle = quoteLifecycle;
     this.bus = bus;
     this.logger = logger;
 
@@ -76,7 +80,7 @@ export class MintOperationProcessor {
     this.autoClaimMintQuotes = options?.autoClaimMintQuotes ?? true;
 
     // Register default handler for bolt11 mint operations
-    this.registerHandler('bolt11', new Bolt11MintOperationHandler(mintOperations, logger));
+    this.registerHandler('bolt11', new Bolt11MintOperationHandler(mintOperations, this.logger));
   }
 
   registerHandler(method: string, handler: OperationHandler): void {
@@ -119,9 +123,18 @@ export class MintOperationProcessor {
       },
     );
 
-    // Subscribe to pending operations so imported PAID operations enqueue immediately
+    // Subscribe to pending operations so operations created after a PAID quote enqueue immediately
     this.offPending = this.bus.on('mint-op:pending', async ({ mintUrl, operation }) => {
-      if (operation.state === 'pending' && operation.lastObservedRemoteState === 'PAID') {
+      if (operation.state !== 'pending') {
+        return;
+      }
+
+      const quote = await this.quoteLifecycle.getMintQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
+      );
+      if (quote && getMintQuoteRemoteState(quote) === 'PAID') {
         this.enqueue(mintUrl, operation.id, operation.method);
       }
     });
@@ -297,12 +310,11 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
-        const hasClaimableBalance =
-          await this.mintOperations.hasLocallyClaimableMintQuoteBalance(
-            mintUrl,
-            method as 'onchain',
-            quoteId,
-          );
+        const hasClaimableBalance = await this.mintOperations.hasLocallyClaimableMintQuoteBalance(
+          mintUrl,
+          method as 'onchain',
+          quoteId,
+        );
         if (!hasClaimableBalance) {
           this.logger?.debug('Reusable mint quote has no locally claimable balance', {
             mintUrl,
