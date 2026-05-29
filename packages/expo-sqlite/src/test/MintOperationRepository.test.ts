@@ -65,12 +65,12 @@ function makePendingMintOperation(): PendingMintOperation {
     methodData: {},
     createdAt: 1_000,
     updatedAt: 2_000,
+    error: undefined,
     amount: Amount.from(100),
     unit: 'sat',
     request: 'lnbc1test',
     expiry: 1_730_000_000,
-    lastObservedRemoteState: 'PAID',
-    lastObservedRemoteStateAt: 2_500,
+    pubkey: undefined,
     outputData: { keep: [], send: [] },
   };
 }

@@ -159,8 +159,6 @@ describe('sqlite-bun schema migrations', () => {
       request: 'lnbc1test',
       expiry: 1_730_000_000,
       pubkey: undefined,
-      lastObservedRemoteState: undefined,
-      lastObservedRemoteStateAt: undefined,
       outputData: { keep: [], send: [] },
     });
   });

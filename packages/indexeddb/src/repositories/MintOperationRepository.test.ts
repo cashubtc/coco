@@ -128,8 +128,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: null,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 5,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -147,8 +146,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: 7,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -166,8 +164,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 9,
+      pubkey: undefined,
       terminalFailure: {
         reason: 'quote expired',
         observedAt: 10,

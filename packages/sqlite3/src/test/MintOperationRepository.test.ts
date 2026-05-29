@@ -50,8 +50,6 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 4500,
       outputData: { keep: [], send: [] },
     });
 
@@ -69,8 +67,6 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: 6500,
       outputData: { keep: [], send: [] },
     });
 
@@ -88,8 +84,6 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 8500,
       terminalFailure: {
         reason: 'quote expired',
         observedAt: 9000,
@@ -124,8 +118,7 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: quoteExpiry,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 4500,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -143,8 +136,7 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: 6500,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -162,8 +154,7 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 8500,
+      pubkey: undefined,
       terminalFailure: {
         reason: 'quote expired',
         observedAt: 9000,
