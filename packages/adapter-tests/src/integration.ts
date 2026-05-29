@@ -799,7 +799,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           if (storedQuote?.method !== 'onchain') {
             throw new Error('Expected stored onchain quote');
           }
-          expect(storedQuote.quoteData.amountIssued.greaterThanOrEqual(Amount.from(12))).toBe(true);
+          expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
@@ -880,7 +880,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           if (storedQuote?.method !== 'onchain') {
             throw new Error('Expected stored onchain quote');
           }
-          expect(storedQuote.quoteData.amountIssued.greaterThanOrEqual(Amount.from(12))).toBe(true);
+          expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
