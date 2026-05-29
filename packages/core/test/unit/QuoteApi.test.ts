@@ -120,6 +120,40 @@ describe('QuoteApi', () => {
     });
   });
 
+  it('delegates BOLT12 mint quote creation with optional amount data', async () => {
+    await expect(
+      api.mint.create({
+        mintUrl,
+        method: 'bolt12',
+        unit: 'sat',
+        amount: Amount.from(10),
+        description: 'coffee',
+      }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt12', {
+      unit: 'sat',
+      amount: { amount: Amount.from(10), unit: 'sat' },
+      description: 'coffee',
+    });
+  });
+
+  it('delegates amountless BOLT12 mint quote creation without undefined amount', async () => {
+    await expect(
+      api.mint.create({
+        mintUrl,
+        method: 'bolt12',
+        unit: 'sat',
+        description: 'coffee',
+      }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt12', {
+      unit: 'sat',
+      description: 'coffee',
+    });
+  });
+
   it('delegates melt quote methods', async () => {
     await expect(
       api.melt.create({

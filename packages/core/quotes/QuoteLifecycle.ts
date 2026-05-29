@@ -180,7 +180,9 @@ export class QuoteLifecycle {
         ? (createQuoteDataOrMethod as MintMethodCreateQuoteData)
         : ({ amount: normalizeUnitAmount(methodOrIntent) } as MintMethodCreateQuoteData);
     const parsed =
-      'amount' in createQuoteData ? normalizeUnitAmount(createQuoteData.amount) : undefined;
+      'amount' in createQuoteData && createQuoteData.amount !== undefined
+        ? normalizeUnitAmount(createQuoteData.amount)
+        : undefined;
     const unit =
       parsed?.unit ??
       normalizeUnit('unit' in createQuoteData ? createQuoteData.unit : undefined, {

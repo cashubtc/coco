@@ -33,7 +33,7 @@ type _AssertOnchainPrepareRequiresAmount = Assert<
 type _AssertGetByQuoteUsesObjectInput = Assert<
   GetMintByQuoteInput extends {
     mintUrl: string;
-    method: 'bolt11' | 'onchain';
+    method: 'bolt11' | 'onchain' | 'bolt12';
     quoteId: string;
   }
     ? true

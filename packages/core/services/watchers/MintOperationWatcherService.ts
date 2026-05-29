@@ -31,6 +31,7 @@ interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
   getPayloadQuoteId(payload: MintMethodQuoteSnapshot<M>): string | undefined;
   shouldRecordPayload(payload: MintMethodQuoteSnapshot<M>): boolean;
   shouldStopWatching(payload: MintMethodQuoteSnapshot<M>): boolean;
+  keepWatchingWithoutOperationInterest?: boolean;
 }
 
 const mintQuoteWatchPolicies: {
@@ -49,6 +50,7 @@ const mintQuoteWatchPolicies: {
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
     shouldStopWatching: (payload) => isExpiredMintQuoteSnapshot(payload),
+    keepWatchingWithoutOperationInterest: true,
   },
   bolt12: {
     subscriptionKind: 'bolt12_mint_quote',
@@ -56,6 +58,7 @@ const mintQuoteWatchPolicies: {
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
     shouldStopWatching: (payload) => isExpiredMintQuoteSnapshot(payload),
+    keepWatchingWithoutOperationInterest: true,
   },
 };
 
@@ -585,7 +588,7 @@ export class MintOperationWatcherService {
       return false;
     }
 
-    return record.method !== 'onchain' && record.method !== 'bolt12';
+    return this.getPolicy(record.method)?.keepWatchingWithoutOperationInterest !== true;
   }
 
   private removeWatchRecord(key: QuoteKey): void {

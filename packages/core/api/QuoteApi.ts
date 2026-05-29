@@ -45,7 +45,7 @@ export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
               amount?: UnitAmountLike;
               description?: string;
             }
-        : never);
+          : never);
   }[TSupported];
 
 export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> = {
@@ -101,29 +101,33 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQu
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
     if (input.method === 'bolt11') {
-      const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+      const bolt11Input = input as CreateMintQuoteInput<'bolt11'>;
+      const parsed = parseUnitAmount(bolt11Input.amount, { explicitUnit: bolt11Input.unit });
+      return this.quoteLifecycle.createMintQuote(bolt11Input.mintUrl, bolt11Input.method, {
         amount: parsed,
-      } as MintMethodCreateQuoteData<typeof input.method>);
+      } as MintMethodCreateQuoteData<typeof bolt11Input.method>);
     }
 
     if (input.method === 'bolt12') {
+      const bolt12Input = input as CreateMintQuoteInput<'bolt12'>;
       const parsed =
-        'amount' in input && input.amount !== undefined
-          ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
+        bolt12Input.amount !== undefined
+          ? parseUnitAmount(bolt12Input.amount, { explicitUnit: bolt12Input.unit })
           : undefined;
-      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
-        unit:
-          parsed?.unit ??
-          normalizeUnit('unit' in input ? input.unit : undefined, { defaultUnit: DEFAULT_UNIT }),
-        amount: parsed,
-        description: input.description,
-      } as MintMethodCreateQuoteData<typeof input.method>);
+      const unit = parsed?.unit ?? normalizeUnit(bolt12Input.unit, { defaultUnit: DEFAULT_UNIT });
+      const createQuoteData =
+        parsed === undefined
+          ? { unit, description: bolt12Input.description }
+          : { unit, amount: parsed, description: bolt12Input.description };
+      return this.quoteLifecycle.createMintQuote(bolt12Input.mintUrl, bolt12Input.method, {
+        ...createQuoteData,
+      } as MintMethodCreateQuoteData<typeof bolt12Input.method>);
     }
 
-    return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
-      unit: normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT }),
-    } as MintMethodCreateQuoteData<typeof input.method>);
+    const onchainInput = input as CreateMintQuoteInput<'onchain'>;
+    return this.quoteLifecycle.createMintQuote(onchainInput.mintUrl, onchainInput.method, {
+      unit: normalizeUnit(onchainInput.unit, { defaultUnit: DEFAULT_UNIT }),
+    } as MintMethodCreateQuoteData<typeof onchainInput.method>);
   }
 
   get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {

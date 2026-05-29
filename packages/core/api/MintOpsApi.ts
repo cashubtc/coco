@@ -45,7 +45,7 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
             /** Amount to withdraw from an amountless reusable BOLT12 quote. */
             amount?: UnitAmountLike;
           }
-      : {}) &
+        : {}) &
     MethodDataInput<M>;
 }[TSupported];
 
@@ -98,7 +98,9 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
     const explicitAmount =
-      'amount' in input ? parseUnitAmount(input.amount, { explicitUnit: input.unit }) : undefined;
+      'amount' in input && input.amount !== undefined
+        ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
+        : undefined;
 
     return this.mintOperationService.prepare(
       input.mintUrl,

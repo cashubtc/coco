@@ -58,7 +58,8 @@ describe('MintBolt12Handler', () => {
     amount: Amount.from(10),
     unit: 'sat',
     method: 'bolt12' as const,
-    methodData: { description: 'mint me' },
+    methodData: {},
+    quoteId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -85,14 +86,13 @@ describe('MintBolt12Handler', () => {
     proofRepository,
     walletService,
     mintService,
-    keyRingService,
     eventBus,
     logger,
     ...overrides,
   });
 
   const buildPendingContext = (remoteQuote: MintQuoteBolt12Response): PendingContext<'bolt12'> => {
-    (mintAdapter.checkMintQuoteBolt12 as Mock<any>).mockImplementation(async () => remoteQuote);
+    (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
     return {
       ...buildPrepareContext(),
       operation: {
@@ -102,15 +102,13 @@ describe('MintBolt12Handler', () => {
         request: remoteQuote.request,
         expiry: remoteQuote.expiry,
         pubkey,
-        lastObservedRemoteState: 'UNPAID',
-        lastObservedRemoteStateAt: Date.now(),
         outputData,
       },
     };
   };
 
   const buildExecuteContext = (remoteQuote: MintQuoteBolt12Response): ExecuteContext<'bolt12'> => {
-    (mintAdapter.checkMintQuoteBolt12 as Mock<any>).mockImplementation(async () => remoteQuote);
+    (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
     return {
       ...buildPrepareContext(),
       operation: {
@@ -120,8 +118,6 @@ describe('MintBolt12Handler', () => {
         request: remoteQuote.request,
         expiry: remoteQuote.expiry,
         pubkey,
-        lastObservedRemoteState: 'PAID',
-        lastObservedRemoteStateAt: Date.now(),
         outputData,
       },
     };
@@ -133,13 +129,12 @@ describe('MintBolt12Handler', () => {
     buildExecuteContext(remoteQuote) as RecoverExecutingContext<'bolt12'>;
 
   beforeEach(() => {
-    handler = new MintBolt12Handler();
     wallet = {
       createMintQuoteBolt12: mock(async () => quote()),
       mintProofsBolt12: mock(async () => []),
     } as unknown as Wallet;
     mintAdapter = {
-      checkMintQuoteBolt12: mock(async () => quote()),
+      checkMintQuote: mock(async () => quote()),
     } as unknown as MintAdapter;
     proofService = {
       createOutputsAndIncrementCounters: mock(async () => ({ keep: outputData.keep, send: [] })),
@@ -147,9 +142,10 @@ describe('MintBolt12Handler', () => {
       recoverProofsFromOutputData: mock(async () => []),
     } as unknown as ProofService;
     keyRingService = {
-      generateNewKeyPair: mock(async () => ({ publicKeyHex: pubkey })),
-      getKeyPair: mock(async () => ({ publicKeyHex: pubkey, secretKey })),
+      generateMintQuoteKeyPair: mock(async () => ({ publicKeyHex: pubkey, secretKey })),
+      getMintQuoteKeyPair: mock(async () => ({ publicKeyHex: pubkey, secretKey })),
     } as unknown as KeyRingService;
+    handler = new MintBolt12Handler(keyRingService);
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
     mintService = {} as MintService;
@@ -161,26 +157,30 @@ describe('MintBolt12Handler', () => {
     const result = await handler.createQuote({
       ...buildPrepareContext(),
       mintUrl,
-      intent: { amount: Amount.from(10), unit: 'sat' },
-      methodData: {},
+      createQuoteData: {
+        unit: 'sat',
+        amount: { amount: Amount.from(10), unit: 'sat' },
+      },
     });
 
-    expect(keyRingService.generateNewKeyPair).toHaveBeenCalled();
+    expect(keyRingService.generateMintQuoteKeyPair).toHaveBeenCalled();
     expect(wallet.createMintQuoteBolt12).toHaveBeenCalledWith(pubkey, {
       amount: Amount.from(10),
       description: undefined,
     });
     expect(result.quoteId).toBe(quoteId);
     expect(result.pubkey).toBe(pubkey);
-    expect(result.state).toBe('UNPAID');
+    expect(result.reusable).toBe(true);
   });
 
   it('creates amountless quotes with method-specific description data', async () => {
     await handler.createQuote({
       ...buildPrepareContext(),
       mintUrl,
-      intent: { amount: Amount.zero(), unit: 'sat' },
-      methodData: { amountless: true, description: 'pay any amount' },
+      createQuoteData: {
+        unit: 'sat',
+        description: 'pay any amount',
+      },
     });
 
     expect(wallet.createMintQuoteBolt12).toHaveBeenCalledWith(pubkey, {
@@ -197,7 +197,6 @@ describe('MintBolt12Handler', () => {
         importedQuote: amountlessQuote,
         operation: {
           ...operation,
-          methodData: { amountless: true, description: 'pay any amount' },
         },
       }),
     );
@@ -223,10 +222,10 @@ describe('MintBolt12Handler', () => {
   });
 
   it('requires the imported quote pubkey to exist in the keyring', async () => {
-    (keyRingService.getKeyPair as Mock<any>).mockImplementation(async () => null);
+    (keyRingService.getMintQuoteKeyPair as Mock<any>).mockImplementation(async () => null);
 
     await expect(handler.prepare(buildPrepareContext({ importedQuote: quote() }))).rejects.toThrow(
-      'is not available in keyring',
+      'Missing NUT-20 mint quote key',
     );
   });
 
@@ -241,7 +240,7 @@ describe('MintBolt12Handler', () => {
       ),
     );
 
-    expect(result.observedRemoteState).toBe('PAID');
+    expect(result.quoteSnapshot?.quote).toBe(quoteId);
     expect(result.category).toBe('ready');
   });
 
@@ -276,7 +275,7 @@ describe('MintBolt12Handler', () => {
           }),
         ),
       ),
-    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} pubkey changed from ${pubkey}`);
+    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
 
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
@@ -297,7 +296,7 @@ describe('MintBolt12Handler', () => {
     if (result.status !== 'TERMINAL') {
       throw new Error('Expected terminal recovery result');
     }
-    expect(result.error).toContain(`BOLT12 mint quote ${quoteId} pubkey changed from ${pubkey}`);
+    expect(result.error).toContain(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });

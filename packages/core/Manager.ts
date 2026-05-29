@@ -820,7 +820,6 @@ export class Manager {
       meltQuoteRepository: repositories.meltQuoteRepository,
       proofRepository: repositories.proofRepository,
       proofService,
-      keyRingService,
       mintService,
       walletService,
       mintAdapter: this.mintAdapter,
@@ -855,7 +854,6 @@ export class Manager {
       this.eventBus,
       mintOperationLogger,
       mintScopedLock,
-      keyRingService,
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 
