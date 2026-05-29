@@ -21,7 +21,7 @@ const MINT_REFRESH_TTL_S = 60 * 5;
 export interface MethodUnitCapability {
   supported: boolean;
   disabled: boolean;
-  nut: 4 | 5 | 30;
+  nut: 4 | 5;
   method: string;
   unit: string;
   minAmount?: Amount | null;
@@ -187,16 +187,22 @@ export class MintService {
 
   async getMintMethodUnitCapability(
     mintUrl: string,
-    nut: 4 | 5 | 30,
+    nut: 4 | 5,
     method: string,
     unit: string,
   ): Promise<MethodUnitCapability> {
+    this.assertMethodCapabilityNut(nut);
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const mintInfo = await this.getMintInfo(normalizedMintUrl);
     const settings = this.getNutMethodSettings(mintInfo, nut);
 
-    if (settings?.disabled === true) {
+    if (
+      !settings ||
+      !settings.methods ||
+      !Array.isArray(settings.methods) ||
+      settings.disabled === true
+    ) {
       return {
         supported: false,
         disabled: true,
@@ -204,29 +210,6 @@ export class MintService {
         method,
         unit: normalizedUnit,
         reason: `NUT-${nut} is disabled`,
-      };
-    }
-
-    if (!settings || !Array.isArray(settings.methods)) {
-      if (method === 'bolt11' && normalizedUnit === DEFAULT_UNIT) {
-        return {
-          supported: true,
-          disabled: false,
-          nut,
-          method,
-          unit: normalizedUnit,
-          legacySatAllowed: true,
-          reason: `NUT-${nut} method-unit metadata is missing; allowing legacy sat flow`,
-        };
-      }
-
-      return {
-        supported: false,
-        disabled: false,
-        nut,
-        method,
-        unit: normalizedUnit,
-        reason: `NUT-${nut} method-unit metadata is missing for unit ${normalizedUnit}`,
       };
     }
 
@@ -263,7 +246,7 @@ export class MintService {
 
   async assertMethodUnitSupported(
     mintUrl: string,
-    nut: 4 | 5 | 30,
+    nut: 4 | 5,
     method: string,
     scope: string | UnitAmount,
   ): Promise<void> {
@@ -323,9 +306,17 @@ export class MintService {
     await this.eventBus?.emit('mint:updated', await this.ensureUpdatedMint(mintUrl));
   }
 
-  private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5 | 30): NutMethodSettings | undefined {
+  private getNutMethodSettings(mintInfo: MintInfo, nut: 4 | 5): NutMethodSettings | undefined {
     const nuts = mintInfo.nuts as Record<string, unknown> | undefined;
     return nuts?.[String(nut)] as NutMethodSettings | undefined;
+  }
+
+  private assertMethodCapabilityNut(nut: number): asserts nut is 4 | 5 {
+    if (nut !== 4 && nut !== 5) {
+      throw new ProofValidationError(
+        `NUT-${nut} does not define method-unit capabilities; use NUT-04 or NUT-05 method metadata`,
+      );
+    }
   }
 
   private parseOptionalAmount(amount: AmountLike | null | undefined): Amount | null {
