@@ -15,6 +15,7 @@ describe('IdbMintOperationRepository', () => {
         {
           id: 'mint-op-init',
           mintUrl: 'https://mint.test',
+          quoteId: 'quote-init',
           state: 'init',
           createdAt: 1,
           updatedAt: 2,
@@ -104,6 +105,7 @@ describe('IdbMintOperationRepository', () => {
     await expect(repository.getById('mint-op-init')).resolves.toEqual({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
+      quoteId: 'quote-init',
       state: 'init',
       createdAt: 1000,
       updatedAt: 2000,

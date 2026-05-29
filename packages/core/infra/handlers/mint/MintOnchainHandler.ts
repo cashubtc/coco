@@ -62,7 +62,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
     }
 
-    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+    if (ctx.operation.quoteId !== quote.quote) {
       throw new Error(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );

@@ -1372,6 +1372,13 @@ const MIGRATIONS: readonly Migration[] = [
         WHERE derivationIndex IS NOT NULL;
     `,
   },
+  {
+    id: '034_clean_unquoted_mint_operations',
+    sql: `
+      DELETE FROM coco_cashu_mint_operations
+      WHERE quoteId IS NULL OR TRIM(quoteId) = '';
+    `,
+  },
 ];
 
 // Export for testing

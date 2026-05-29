@@ -45,7 +45,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+    if (ctx.operation.quoteId !== quote.quote) {
       throw new Error(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );

@@ -26,6 +26,7 @@ describe('SqliteMintOperationRepository', () => {
     await repositories.mintOperationRepository.create({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
+      quoteId: 'quote-init',
       state: 'init',
       createdAt: 1000,
       updatedAt: 2000,
@@ -94,6 +95,7 @@ describe('SqliteMintOperationRepository', () => {
     expect(await repositories.mintOperationRepository.getById('mint-op-init')).toEqual({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
+      quoteId: 'quote-init',
       state: 'init',
       createdAt: 1000,
       updatedAt: 2000,
