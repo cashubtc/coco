@@ -381,35 +381,13 @@ describe('sqlite-bun schema migrations', () => {
       `INSERT INTO coco_cashu_mint_operations
         (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'mint-op-quoted',
-        'https://mint.test',
-        'quote-1',
-        'init',
-        1,
-        2,
-        'bolt11',
-        '{}',
-        '21',
-        'sat',
-      ],
+      ['mint-op-quoted', 'https://mint.test', 'quote-1', 'init', 1, 2, 'bolt11', '{}', '21', 'sat'],
     );
     await db.run(
       `INSERT INTO coco_cashu_mint_operations
         (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'mint-op-unquoted',
-        'https://mint.test',
-        null,
-        'init',
-        1,
-        2,
-        'bolt11',
-        '{}',
-        '21',
-        'sat',
-      ],
+      ['mint-op-unquoted', 'https://mint.test', null, 'init', 1, 2, 'bolt11', '{}', '21', 'sat'],
     );
 
     await ensureSchemaUpTo(db);
