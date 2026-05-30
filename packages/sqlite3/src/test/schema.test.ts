@@ -35,6 +35,15 @@ async function getColumnNames(db: SqliteDb, tableName: string): Promise<string[]
   return rows.map((row) => row.name);
 }
 
+async function insertMeltOperationRow(db: SqliteDb, id: string, quoteId: string): Promise<void> {
+  await db.run(
+    `INSERT INTO coco_cashu_melt_operations
+      (id, mintUrl, state, createdAt, updatedAt, method, methodDataJson, quoteId, unit)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, 'https://mint.test', 'init', 1, 1, 'bolt11', '{}', quoteId, 'sat'],
+  );
+}
+
 const LEGACY_SEND_TOKEN = {
   mint: 'https://mint.test',
   proofs: [{ id: 'keyset-1', amount: '100', secret: 'send-secret', C: 'C_send' }],
@@ -331,5 +340,31 @@ describe('sqlite3 schema migrations', () => {
     );
 
     expect(rows).toEqual([{ id: 'mint-op-quoted' }]);
+  });
+
+  it('preserves quote-bound melt operation uniqueness after duplicate quote migration', async () => {
+    await ensureSchemaUpTo(db);
+
+    const indexes = await db.all<{ name: string; unique: number; partial: number }>(
+      'PRAGMA index_list(coco_cashu_melt_operations)',
+    );
+    expect(indexes).toContainEqual(
+      expect.objectContaining({
+        name: 'ux_coco_cashu_melt_operations_mint_quote',
+        unique: 1,
+        partial: 1,
+      }),
+    );
+
+    await insertMeltOperationRow(db, 'melt-op-1', 'shared-melt-quote');
+
+    let rejection: unknown;
+    try {
+      await insertMeltOperationRow(db, 'melt-op-2', 'shared-melt-quote');
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(String(rejection).toLowerCase()).toContain('unique');
   });
 });
