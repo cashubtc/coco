@@ -1,6 +1,6 @@
 # Melting Tokens
 
-Melting converts Cashu proofs back into sats by paying a Lightning invoice through the mint. Coco wraps this as a melt operation (saga) so fees are known up front and operations can be recovered if your app restarts.
+Melting converts Cashu proofs back into sats by paying through the mint. Coco wraps this as a melt operation (saga) so fees are known up front and operations can be recovered if your app restarts.
 
 ## Pay a BOLT11 invoice
 
@@ -56,10 +56,16 @@ Use this when you only persisted the quote id (for example after a restart).
 ## Pay a BOLT12 offer
 
 ```ts
-const prepared = await coco.ops.melt.prepare({
+const quote = await coco.quotes.melt.create({
   mintUrl,
   method: 'bolt12',
   methodData: { offer, amountSats: 1000 },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt12',
+  quoteId: quote.quoteId,
 });
 
 const result = await coco.ops.melt.execute(prepared.id);
@@ -68,5 +74,38 @@ const result = await coco.ops.melt.execute(prepared.id);
 `amountSats` is optional and is intended for amountless BOLT12 offers.
 Use `listByQuote(mintUrl, quoteId)` when a quote id may map to more than one
 operation.
+
+## Pay an onchain address
+
+Onchain melts use NUT-30 fee options. The quote advertises one or more
+`fee_options`, and the operation stores the selected `feeIndex`.
+
+```ts
+const quote = await coco.quotes.melt.create({
+  mintUrl,
+  method: 'onchain',
+  methodData: { address, amountSats: 21_000 },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'onchain',
+  quoteId: quote.quoteId,
+  feeIndex: quote.fee_options[0].fee_index,
+});
+
+const executed = await coco.ops.melt.execute(prepared.id);
+
+if (executed.state === 'pending') {
+  const refreshed = await coco.ops.melt.refresh(executed.id);
+  console.log('Updated state:', refreshed.state);
+}
+```
+
+If the quote has exactly one fee option, `feeIndex` may be omitted and Coco will
+use that option's `fee_index`. If multiple fee options are present, pass one of
+the advertised `quote.fee_options[].fee_index` values. Onchain melts are usually
+asynchronous, but intramint melt/mint settlement can finalize immediately; handle
+both `pending` and `finalized` execution results.
 
 > For the full saga walkthrough, see [Melt Operations](../pages/melt-operations.md).
