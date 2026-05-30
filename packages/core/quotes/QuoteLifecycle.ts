@@ -583,7 +583,7 @@ export class QuoteLifecycle {
       case 'bolt11':
         return { invoice: quote.request };
       case 'bolt12':
-        return { offer: quote.request, amountSats: quote.amount };
+        return { offer: quote.request };
       default:
         throw new Error(`Unsupported melt quote method ${String(quote.method)}`);
     }
