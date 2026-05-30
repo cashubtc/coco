@@ -15,6 +15,7 @@ describe('IdbMintOperationRepository', () => {
         {
           id: 'mint-op-init',
           mintUrl: 'https://mint.test',
+          quoteId: 'quote-init',
           state: 'init',
           createdAt: 1,
           updatedAt: 2,
@@ -104,6 +105,7 @@ describe('IdbMintOperationRepository', () => {
     await expect(repository.getById('mint-op-init')).resolves.toEqual({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
+      quoteId: 'quote-init',
       state: 'init',
       createdAt: 1000,
       updatedAt: 2000,
@@ -128,8 +130,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1pending',
       expiry: null,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 5,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -147,8 +148,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1finalized',
       expiry: quoteExpiry + 1,
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: 7,
+      pubkey: undefined,
       outputData: { keep: [], send: [] },
     });
 
@@ -166,8 +166,7 @@ describe('IdbMintOperationRepository', () => {
       unit: 'sat',
       request: 'lnbc1failed',
       expiry: quoteExpiry + 2,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 9,
+      pubkey: undefined,
       terminalFailure: {
         reason: 'quote expired',
         observedAt: 10,

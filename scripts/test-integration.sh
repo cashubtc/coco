@@ -5,6 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BASE_PORT=3338
+MINTD_IMAGE="cashubtc/mintd:0.17.0-rc.0"
 MINT_CONFIG_FILES=()
 
 # Platform flag (arm64 hosts need linux/amd64 for mintd image)
@@ -162,7 +163,7 @@ start_mint_container() {
             -p "${port}:3338" \
             --name "$container_name" \
             -v "${config_file}:/config/config.toml:ro" \
-            cashubtc/mintd:0.15.1 \
+            "$MINTD_IMAGE" \
             sh -c "cdk-mintd -c /config/config.toml"
     else
         # Start new container
@@ -177,7 +178,7 @@ start_mint_container() {
             -e CDK_MINTD_FAKE_WALLET_MIN_DELAY=0 \
             -e CDK_MINTD_FAKE_WALLET_MAX_DELAY=0 \
             -e CDK_MINTD_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' \
-            cashubtc/mintd:0.15.1
+            "$MINTD_IMAGE"
     fi
 
     # Wait for mint to be ready

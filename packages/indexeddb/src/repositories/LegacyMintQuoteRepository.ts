@@ -2,6 +2,7 @@ import {
   deserializeAmount,
   normalizeMintUrl,
   type LegacyMintQuoteRepository,
+  type MintMethodRemoteState,
   type MintQuote,
 } from '@cashu/coco-core';
 import type { IdbDb } from '../lib/db.ts';
@@ -9,7 +10,7 @@ import type { IdbDb } from '../lib/db.ts';
 type LegacyMintQuoteRow = {
   mintUrl: string;
   quote: string;
-  state: MintQuote['state'];
+  state: MintMethodRemoteState;
   request: string;
   amount: string | number;
   unit: string;
@@ -32,22 +33,26 @@ export class IdbLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
         (row) =>
           row.state !== 'ISSUED' && (!normalizedMintUrl || row.mintUrl === normalizedMintUrl),
       )
-      .map((row) => ({
-        mintUrl: row.mintUrl,
-        method: 'bolt11',
-        quoteId: row.quote,
-        quote: row.quote,
-        state: row.state,
-        request: row.request,
-        amount: deserializeAmount(row.amount),
-        unit: row.unit,
-        expiry: row.expiry,
-        pubkey: row.pubkey ?? undefined,
-        lastObservedRemoteState: row.state,
-        lastObservedRemoteStateAt: now,
-        reusable: false,
-        createdAt: now,
-        updatedAt: now,
-      }));
+      .map((row) => {
+        const amount = deserializeAmount(row.amount);
+        return {
+          mintUrl: row.mintUrl,
+          method: 'bolt11',
+          quoteId: row.quote,
+          quote: row.quote,
+          state: row.state,
+          request: row.request,
+          amount,
+          unit: row.unit,
+          expiry: row.expiry,
+          pubkey: row.pubkey ?? undefined,
+          lastObservedRemoteState: row.state,
+          lastObservedRemoteStateAt: now,
+          reusable: false,
+          quoteData: { amount },
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
   }
 }

@@ -20,13 +20,14 @@ import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/Min
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
-    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.intent.amount);
+    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.createQuoteData.amount.amount);
     return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
 
   async fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
-    const remoteQuote = await ctx.mintAdapter.checkMintQuoteState(
+    const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       ctx.quote.mintUrl,
+      'bolt11',
       ctx.quote.quoteId,
     );
     return mintQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
@@ -44,7 +45,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       throw new Error(`Mint quote ${quote.quote} has invalid amount`);
     }
 
-    if (ctx.operation.quoteId && ctx.operation.quoteId !== quote.quote) {
+    if (ctx.operation.quoteId !== quote.quote) {
       throw new Error(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
@@ -79,8 +80,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: Date.now(),
       outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
       state: 'pending',
     };
@@ -113,7 +112,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const { mintUrl, quoteId } = ctx.operation;
     let remoteQuote: MintQuoteBolt11Response;
     try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuoteState(mintUrl, quoteId);
+      remoteQuote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
     } catch (error) {
       ctx.logger?.warn('Failed to check mint quote state during recovery', {
         mintUrl,
@@ -206,11 +205,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult> {
+  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult<'bolt11'>> {
     const { mintUrl, quoteId } = ctx.operation;
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 
-    const quote = await ctx.mintAdapter.checkMintQuoteState(mintUrl, quoteId);
+    const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
     ctx.logger?.info('Pending mint quote state', { mintUrl, quoteId, state: quote.state });
     const observedRemoteStateAt = Date.now();
 

@@ -30,3 +30,26 @@ events.
 Persistent adapters now store canonical mint and melt quotes, migrate existing
 BOLT11 operation quote snapshots into quote rows, and expose contract coverage
 for quote records and sibling operation lookup.
+
+Mint quote records now store method-scoped `quoteData` so BOLT11 fixed amounts
+and NUT-30 onchain balance snapshots can share the same canonical quote
+repository without requiring universal top-level quote `amount` or `state`
+fields.
+
+Keyring persistence now tracks key purpose metadata so NUT-20 mint quote keys
+can use a separate deterministic derivation branch and stay hidden from
+user-facing P2PK key management APIs.
+
+NUT-30 onchain mint quote creation now derives a fresh NUT-20 key, submits the
+public key in the onchain quote request, and persists the reusable address quote
+with `amount_paid`/`amount_issued` balance metadata.
+
+Onchain mint operation preparation now accepts an explicit withdrawal amount for
+pre-created reusable quotes, verifies the quote signing key before operation
+persistence, and creates operation-scoped deterministic outputs without requiring
+available remote balance during prepare.
+
+Onchain mint finalization now gates reusable quote execution on available remote
+balance minus locally executing siblings, keeps underfunded operations pending,
+signs mint requests with the persisted NUT-20 quote key, and refreshes the
+canonical quote before finalizing redeemed operations.

@@ -41,7 +41,16 @@ const normalizeState = (state: string): MintOperationState => {
   return 'init';
 };
 
+const requireQuoteId = (row: MintOperationRow): string => {
+  if (!row.quoteId || row.quoteId.trim() === '') {
+    throw new Error(`MintOperation ${row.id} is missing required quoteId`);
+  }
+
+  return row.quoteId;
+};
+
 const rowToOperation = (row: MintOperationRow): MintOperation => {
+  const quoteId = requireQuoteId(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -65,7 +74,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
       ...base,
       ...intent,
       state: 'init',
-      ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+      quoteId,
     };
   }
 
@@ -73,12 +82,10 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...base,
     ...intent,
     state: normalizeState(row.state),
-    quoteId: row.quoteId ?? '',
+    quoteId,
     request: row.request ?? '',
     expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : { keep: [], send: [] },
   } as MintOperation;
 };
@@ -92,7 +99,7 @@ const operationToParams = (operation: MintOperation): unknown[] => {
     return [
       operation.id,
       operation.mintUrl,
-      operation.quoteId ?? null,
+      operation.quoteId,
       operation.state,
       createdAtSeconds,
       updatedAtSeconds,
@@ -126,8 +133,8 @@ const operationToParams = (operation: MintOperation): unknown[] => {
     operation.request,
     operation.expiry,
     operation.pubkey ?? null,
-    operation.lastObservedRemoteState ?? null,
-    operation.lastObservedRemoteStateAt ?? null,
+    null,
+    null,
     operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
     JSON.stringify(operation.outputData),
   ];
@@ -175,7 +182,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
          SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
          WHERE id = ?`,
         [
-          operation.quoteId ?? null,
+          operation.quoteId,
           operation.state,
           updatedAtSeconds,
           operation.error ?? null,
@@ -206,8 +213,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         operation.request,
         operation.expiry,
         operation.pubkey ?? null,
-        operation.lastObservedRemoteState ?? null,
-        operation.lastObservedRemoteStateAt ?? null,
+        null,
+        null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
         operation.id,

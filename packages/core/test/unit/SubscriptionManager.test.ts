@@ -8,7 +8,7 @@ import { NullLogger } from '../../logging';
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
   ({
-    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMintQuote: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -17,6 +17,7 @@ class MockTransport implements RealTimeTransport {
   public paused = false;
   public resumed = false;
   public sentMessages: WsRequest[] = [];
+  public rejectSubscribes = false;
   private listeners: Map<string, Map<string, Set<(evt: any) => void>>> = new Map();
 
   on(
@@ -47,7 +48,9 @@ class MockTransport implements RealTimeTransport {
       const response = {
         data: JSON.stringify({
           jsonrpc: '2.0',
-          result: { status: 'OK', subId: (req.params as any).subId },
+          ...(this.rejectSubscribes
+            ? { error: { code: -32602, message: 'unsupported kind' } }
+            : { result: { status: 'OK', subId: (req.params as any).subId } }),
           id: req.id,
         }),
       };
@@ -255,6 +258,38 @@ describe('SubscriptionManager pause/resume', () => {
       .slice(messageCountAfterUnsub)
       .filter((msg) => msg.method === 'subscribe' && (msg.params as any).subId === subId);
     expect(newSubscribes.length).toBe(0);
+  });
+
+  it('keeps logical subscriptions active when a subscribe request is rejected', async () => {
+    const mintUrl = 'https://mint.example.com';
+    mockTransport.rejectSubscribes = true;
+
+    const { subId } = await subManager.subscribe(mintUrl, 'onchain_mint_quote', ['quote1']);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    mockTransport.triggerMessage(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        subId,
+        payload: {
+          quote: 'quote1',
+          request: 'bc1ptest',
+          unit: 'sat',
+          expiry: null,
+          pubkey: 'pubkey-1',
+          amount_paid: 10,
+          amount_issued: 0,
+        },
+      },
+    });
+
+    const subscriptions = (subManager as any).subscriptions as Map<string, unknown>;
+    const activeByMint = (subManager as any).activeByMint as Map<string, Set<string>>;
+    expect(subscriptions.has(subId)).toBe(true);
+    expect(activeByMint.get(mintUrl)?.has(subId)).toBe(true);
+
+    await subManager.unsubscribe(mintUrl, subId);
   });
 
   it('should handle pause with no active subscriptions', () => {

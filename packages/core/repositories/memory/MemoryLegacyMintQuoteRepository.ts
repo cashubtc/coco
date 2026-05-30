@@ -1,4 +1,4 @@
-import type { MintQuote } from '@core/models/MintQuote';
+import { isMintQuotePending, type MintQuote } from '@core/models/MintQuote';
 import type { LegacyMintQuoteRepository } from '..';
 import { normalizeMintUrl } from '../../utils';
 
@@ -24,7 +24,7 @@ export class MemoryLegacyMintQuoteRepository implements LegacyMintQuoteRepositor
     const result: MintQuote[] = [];
     for (const quote of this.quotes.values()) {
       if (normalizedMintUrl && quote.mintUrl !== normalizedMintUrl) continue;
-      if (quote.state !== 'ISSUED') result.push({ ...quote });
+      if (isMintQuotePending(quote)) result.push({ ...quote });
     }
     return result;
   }

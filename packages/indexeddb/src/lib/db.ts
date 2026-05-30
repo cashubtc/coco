@@ -151,12 +151,13 @@ export interface MintQuoteRow {
   mintUrl: string;
   method: string;
   quoteId: string;
-  state: 'UNPAID' | 'PAID' | 'ISSUED';
+  state: 'UNPAID' | 'PAID' | 'ISSUED' | null;
   request: string;
-  amount: string | number;
+  amount: string | number | null;
   unit: string;
   expiry: number | null;
   pubkey?: string | null;
+  quoteDataJson?: string | null;
   lastObservedRemoteState?: 'UNPAID' | 'PAID' | 'ISSUED' | null;
   lastObservedRemoteStateAt?: number | null;
   reusable: number;

@@ -8,7 +8,7 @@ import type {
  * Runtime registry for mint method handlers.
  */
 export class MintHandlerProvider {
-  private registry: Partial<MintMethodHandlerRegistry> = {};
+  private registry: Partial<Record<MintMethod, MintMethodHandler<any>>> = {};
 
   constructor(initialHandlers?: Partial<MintMethodHandlerRegistry>) {
     if (initialHandlers) {

@@ -6,7 +6,7 @@ import { NullLogger } from '../../logging';
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
   ({
-    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMintQuote: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -14,7 +14,7 @@ const createMockMintAdapter = (): MintAdapter =>
 // Helper to create a delayed mock adapter
 const createDelayedMockMintAdapter = (delayMs: number): MintAdapter =>
   ({
-    checkMintQuoteState: mock(
+    checkMintQuote: mock(
       () => new Promise((resolve) => setTimeout(() => resolve({ state: 'PAID' }), delayMs)),
     ),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
@@ -89,6 +89,80 @@ describe('PollingTransport per-mint intervals', () => {
   });
 });
 
+describe('PollingTransport subscription kinds', () => {
+  const mintUrl = 'https://mint.example.com';
+
+  it('polls onchain mint quotes with checkMintQuote', async () => {
+    const checkMintQuote = mock(() =>
+      Promise.resolve({
+        quote: 'onchain-quote-1',
+        request: 'bc1ptest',
+        unit: 'sat',
+        expiry: null,
+        pubkey: 'pubkey-1',
+        amount_paid: 10,
+        amount_issued: 0,
+      }),
+    );
+    const adapter = {
+      checkMintQuote,
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkProofStates: mock(() => Promise.resolve([])),
+    } as unknown as MintAdapter;
+    const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
+    const messages: any[] = [];
+
+    transport.on(mintUrl, 'message', (evt) => {
+      messages.push(JSON.parse(evt.data));
+    });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'onchain_mint_quote', subId: 'onchain-sub-1', filters: ['quote1'] },
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', 'quote1');
+    expect(messages.some((message) => message.params?.payload?.quote === 'onchain-quote-1')).toBe(
+      true,
+    );
+
+    transport.closeAll();
+  });
+
+  it('emits an error and does not enqueue unsupported subscription kinds', async () => {
+    const adapter = createMockMintAdapter();
+    const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
+    const messages: any[] = [];
+
+    transport.on(mintUrl, 'message', (evt) => {
+      messages.push(JSON.parse(evt.data));
+    });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'unknown_kind', subId: 'bad-sub-1', filters: ['quote1'] } as any,
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({ code: -32602 }),
+        id: 1,
+      }),
+    ]);
+    const scheduler = (transport as any).schedByMint.get(mintUrl);
+    expect(scheduler?.queue ?? []).toHaveLength(0);
+    expect((adapter.checkMintQuote as any).mock.calls.length).toBe(0);
+
+    transport.closeAll();
+  });
+});
+
 describe('PollingTransport proof state batching', () => {
   const mintUrl = 'https://mint.example.com';
 
@@ -97,7 +171,7 @@ describe('PollingTransport proof state batching', () => {
       Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
     );
     const adapter = {
-      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
@@ -124,7 +198,7 @@ describe('PollingTransport proof state batching', () => {
       Promise.resolve(ys.map((Y) => ({ Y, state: 'UNSPENT' }))),
     );
     const adapter = {
-      checkMintQuoteState: mock(() => Promise.resolve({})),
+      checkMintQuote: mock(() => Promise.resolve({})),
       checkMeltQuoteState: mock(() => Promise.resolve({})),
       checkProofStates,
     } as unknown as MintAdapter;
@@ -196,10 +270,10 @@ describe('PollingTransport unsubscribe during processing', () => {
   });
 
   it('should still re-enqueue task if not unsubscribed', async () => {
-    // Track how many times checkMintQuoteState is called
+    // Track how many times checkMintQuote is called
     let callCount = 0;
     const countingAdapter: MintAdapter = {
-      checkMintQuoteState: mock(() => {
+      checkMintQuote: mock(() => {
         callCount++;
         return Promise.resolve({ state: 'UNPAID' });
       }),

@@ -1,5 +1,12 @@
-import type { Repositories, Manager, Logger, UnitAmountLike } from '@cashu/coco-core';
-import { initializeCoco, getEncodedToken, ConsoleLogger, normalizeUnit } from '@cashu/coco-core';
+import type { Repositories, Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import {
+  initializeCoco,
+  getEncodedToken,
+  ConsoleLogger,
+  normalizeUnit,
+  parseUnitAmount,
+  getMintQuoteAvailableAmount,
+} from '@cashu/coco-core';
 import {
   HttpResponseError,
   JSONInt,
@@ -189,6 +196,76 @@ function createTestMint(mintUrl: string): Mint {
   return new Mint(mintUrl, { customRequest: testMintRequest });
 }
 
+type NutMethodSetting = {
+  disabled?: boolean;
+  methods?: Array<{
+    method?: string;
+    unit?: string;
+  }>;
+};
+
+async function mintSupportsMethodUnit(
+  manager: Manager,
+  mintUrl: string,
+  nut: 4 | 5,
+  method: string,
+  unit: string,
+): Promise<boolean> {
+  const info = await manager.mint.getMintInfo(mintUrl);
+  const settings = (info as { nuts?: Record<string, NutMethodSetting | undefined> }).nuts?.[
+    String(nut)
+  ];
+
+  if (!settings || settings.disabled || !Array.isArray(settings.methods)) {
+    return false;
+  }
+
+  const normalizedUnit = normalizeUnit(unit);
+  return settings.methods.some(
+    (entry) => entry.method === method && normalizeUnit(entry.unit ?? 'sat') === normalizedUnit,
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForOnchainQuoteAvailable(
+  manager: Manager,
+  mintUrl: string,
+  quoteId: string,
+  amount: UnitAmountLike,
+): Promise<MintQuote<'onchain'>> {
+  const requested = parseUnitAmount(amount).amount;
+  let latest: MintQuote | undefined;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    latest = await manager.quotes.mint.refresh({
+      mintUrl,
+      method: 'onchain',
+      quoteId,
+    });
+
+    if (latest.method !== 'onchain') {
+      throw new Error(`Expected onchain quote, got ${latest.method}`);
+    }
+
+    if (getMintQuoteAvailableAmount(latest).greaterThanOrEqual(requested)) {
+      return latest;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(
+    `Onchain quote ${quoteId} did not become funded enough for ${requested.toString()}; last observed available amount: ${
+      latest && latest.method === 'onchain'
+        ? getMintQuoteAvailableAmount(latest).toString()
+        : 'unknown'
+    }`,
+  );
+}
+
 const watcherTestSubscriptions = {
   slowPollingIntervalMs: 50,
   fastPollingIntervalMs: 50,
@@ -299,10 +376,23 @@ async function executeMintOperation(manager: Manager, operationId: string) {
   return manager.ops.mint.execute(operationId);
 }
 
-function isMintQuoteReady(
-  state: PreparedMintOperation['lastObservedRemoteState'] | undefined,
-): boolean {
-  return state === 'PAID' || state === 'ISSUED';
+function isMintQuoteReady(quote: MintQuote | null | undefined): boolean {
+  if (quote?.method !== 'bolt11') {
+    return false;
+  }
+
+  return quote.state === 'PAID' || quote.state === 'ISSUED';
+}
+
+async function getMintQuoteForOperation(
+  manager: Manager,
+  operation: PreparedMintOperation,
+): Promise<MintQuote | null> {
+  return manager.quotes.mint.get({
+    mintUrl: operation.mintUrl,
+    method: operation.method,
+    quoteId: operation.quoteId,
+  });
 }
 
 async function getLatestPendingMintOperation(
@@ -320,45 +410,49 @@ async function getLatestPendingMintOperation(
 async function awaitMintQuotePaid(
   manager: Manager,
   pendingMint: PreparedMintOperation,
-): Promise<PreparedMintOperation | null> {
-  if (isMintQuoteReady(pendingMint.lastObservedRemoteState)) {
-    return pendingMint;
+): Promise<MintQuote | null> {
+  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
+  if (isMintQuoteReady(initialQuote)) {
+    return initialQuote;
   }
 
   let cancelWait: (() => void) | undefined;
-  const paidEventPromise = new Promise<void>((resolve) => {
+  const paidEventPromise = new Promise<MintQuote | null>((resolve) => {
     const off = manager.on('mint-quote:updated', (payload) => {
       if (payload.quoteId !== pendingMint.quoteId || payload.quote.state !== 'PAID') {
         return;
       }
 
       off();
-      resolve();
+      resolve(payload.quote);
     });
 
     cancelWait = () => {
       off();
-      resolve();
+      resolve(null);
     };
   });
 
   const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  if (isMintQuoteReady(latestPendingMint?.lastObservedRemoteState)) {
+  const latestQuote = latestPendingMint
+    ? await getMintQuoteForOperation(manager, latestPendingMint)
+    : null;
+  if (isMintQuoteReady(latestQuote)) {
     cancelWait?.();
-    return latestPendingMint;
+    return latestQuote;
   }
 
-  await paidEventPromise;
-  return getLatestPendingMintOperation(manager, pendingMint.id);
+  return paidEventPromise;
 }
 
 async function awaitMintQuotePaidWithSubscription(
   manager: Manager,
   mintUrl: string,
   pendingMint: PreparedMintOperation,
-): Promise<PreparedMintOperation | null> {
-  if (isMintQuoteReady(pendingMint.lastObservedRemoteState)) {
-    return pendingMint;
+): Promise<MintQuote | null> {
+  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
+  if (isMintQuoteReady(initialQuote)) {
+    return initialQuote;
   }
 
   const paidNotificationPromise = manager.subscription.awaitMintQuotePaid(
@@ -367,12 +461,15 @@ async function awaitMintQuotePaidWithSubscription(
   );
 
   const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  if (isMintQuoteReady(latestPendingMint?.lastObservedRemoteState)) {
-    return latestPendingMint;
+  const latestQuote = latestPendingMint
+    ? await getMintQuoteForOperation(manager, latestPendingMint)
+    : null;
+  if (isMintQuoteReady(latestQuote)) {
+    return latestQuote;
   }
 
   await paidNotificationPromise;
-  return (await getLatestPendingMintOperation(manager, pendingMint.id)) ?? pendingMint;
+  return getMintQuoteForOperation(manager, pendingMint);
 }
 
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
@@ -567,9 +664,9 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(pendingEvent.mintUrl).toBe(mintUrl);
           expect(pendingEvent.operation.quoteId).toBe(pendingMint.quoteId);
 
-          const paidMint = await awaitMintQuotePaid(mgr!, pendingMint);
-          expect(paidMint?.quoteId).toBe(pendingMint.quoteId);
-          expect(paidMint?.lastObservedRemoteState).toBe('PAID');
+          const paidQuote = await awaitMintQuotePaid(mgr!, pendingMint);
+          expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
+          expect(paidQuote?.state).toBe('PAID');
 
           const finalizedEventPromise = waitForEvent<{
             mintUrl: string;
@@ -612,11 +709,178 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 50, testUnit);
 
-          const paidMint = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
-          expect(paidMint?.quoteId).toBe(pendingMint.quoteId);
+          const paidQuote = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
+          expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           await executeMintOperation(mgr!, pendingMint.id);
 
           expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(50);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should redeem a funded onchain mint quote when onchain minting is advertised', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 4, 'onchain', testUnit))) {
+            return;
+          }
+
+          const quote = await mgr.quotes.mint.create({
+            mintUrl,
+            method: 'onchain',
+            unit: testUnit,
+          });
+
+          expect(quote.method).toBe('onchain');
+          if (quote.method !== 'onchain') {
+            throw new Error(`Expected onchain quote, got ${quote.method}`);
+          }
+
+          expect(quote.reusable).toBe(true);
+          expect(quote.request).toBeDefined();
+          expect(quote.quoteData.pubkey).toBeDefined();
+          expectAmountEquals(expect, quote.quoteData.amountPaid, 0);
+          expectAmountEquals(expect, quote.quoteData.amountIssued, 0);
+
+          const fundedQuote = await waitForOnchainQuoteAvailable(
+            mgr,
+            mintUrl,
+            quote.quoteId,
+            testAmount(12),
+          );
+          expect(fundedQuote.quoteId).toBe(quote.quoteId);
+          expectAmountEquals(expect, fundedQuote.quoteData.amountIssued, 0);
+          expect(getMintQuoteAvailableAmount(fundedQuote).greaterThanOrEqual(Amount.from(12))).toBe(
+            true,
+          );
+
+          const pending = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(12),
+            methodData: {},
+          });
+
+          expect(pending.method).toBe('onchain');
+          expect(pending.quoteId).toBe(quote.quoteId);
+          expect(pending.state).toBe('pending');
+          expectAmountEquals(expect, pending.amount, 12);
+
+          const finalized = await mgr.ops.mint.execute(pending.id);
+          expect(finalized.state).toBe('finalized');
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(12);
+
+          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          expect(storedQuote?.quoteId).toBe(quote.quoteId);
+          if (storedQuote?.method !== 'onchain') {
+            throw new Error('Expected stored onchain quote');
+          }
+          expect(storedQuote.reusable).toBe(true);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      });
+
+      it('should redeem multiple withdrawals from one funded onchain mint quote', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+
+          if (!(await mintSupportsMethodUnit(mgr, mintUrl, 4, 'onchain', testUnit))) {
+            return;
+          }
+
+          const quote = await mgr.quotes.mint.create({
+            mintUrl,
+            method: 'onchain',
+            unit: testUnit,
+          });
+          if (quote.method !== 'onchain') {
+            throw new Error(`Expected onchain quote, got ${quote.method}`);
+          }
+
+          await waitForOnchainQuoteAvailable(mgr, mintUrl, quote.quoteId, testAmount(12));
+
+          const first = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(7),
+            methodData: {},
+          });
+          const second = await mgr.ops.mint.prepare({
+            mintUrl,
+            method: 'onchain',
+            quoteId: quote.quoteId,
+            amount: testAmount(5),
+            methodData: {},
+          });
+
+          expect(first.quoteId).toBe(quote.quoteId);
+          expect(second.quoteId).toBe(quote.quoteId);
+          const siblings = await repositories.mintOperationRepository.getByQuoteId(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          expect(siblings).toHaveLength(2);
+
+          const finalizedFirst = await mgr.ops.mint.execute(first.id);
+          const finalizedSecond = await mgr.ops.mint.execute(second.id);
+
+          expect(finalizedFirst.state).toBe('finalized');
+          expect(finalizedSecond.state).toBe('finalized');
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBeGreaterThanOrEqual(12);
+
+          const storedQuote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            'onchain',
+            quote.quoteId,
+          );
+          if (storedQuote?.method !== 'onchain') {
+            throw new Error('Expected stored onchain quote');
+          }
+          expect(storedQuote.reusable).toBe(true);
         } finally {
           if (mgr) {
             await mgr.pauseSubscriptions();
@@ -1089,6 +1353,27 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             mintUrl,
             method: 'bolt11',
             methodData: { invoice },
+            unit: testUnit,
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('should reject onchain melt quotes until the default manager wires an onchain melt handler', async () => {
+        const createOnchainMeltQuote = (input: {
+          mintUrl: string;
+          method: 'onchain';
+          methodData: { address: string; amountSats: AmountLike };
+          unit: string;
+        }): Promise<unknown> => mgr!.quotes.melt.create(input as never);
+
+        await expect(
+          createOnchainMeltQuote({
+            mintUrl,
+            method: 'onchain',
+            methodData: {
+              address: 'bc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9e75rs',
+              amountSats: 1,
+            },
             unit: testUnit,
           }),
         ).rejects.toThrow();

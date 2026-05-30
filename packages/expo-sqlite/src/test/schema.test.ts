@@ -360,4 +360,29 @@ describe('expo-sqlite schema migrations', () => {
     expect(row?.amount).toBe('21');
     expect(row?.reusable).toBe(0);
   });
+
+  it('removes legacy mint operations without quote IDs', async () => {
+    await ensureSchemaUpTo(db, '034_clean_unquoted_mint_operations');
+
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['mint-op-quoted', 'https://mint.test', 'quote-1', 'init', 1, 2, 'bolt11', '{}', '21', 'sat'],
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['mint-op-unquoted', 'https://mint.test', null, 'init', 1, 2, 'bolt11', '{}', '21', 'sat'],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    const rows = await db.all<{ id: string }>(
+      'SELECT id FROM coco_cashu_mint_operations ORDER BY id ASC',
+    );
+
+    expect(rows).toEqual([{ id: 'mint-op-quoted' }]);
+  });
 });

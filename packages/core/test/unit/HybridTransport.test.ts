@@ -7,7 +7,7 @@ import { NullLogger } from '../../logging';
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
   ({
-    checkMintQuoteState: mock(() => Promise.resolve({})),
+    checkMintQuote: mock(() => Promise.resolve({})),
     checkMeltQuoteState: mock(() => Promise.resolve({})),
     checkProofStates: mock(() => Promise.resolve([])),
   }) as unknown as MintAdapter;
@@ -271,6 +271,143 @@ describe('HybridTransport', () => {
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
     });
 
+    it('should dedupe onchain quote notifications by normalized amount counters', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification1 = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0 },
+        },
+      });
+
+      const notification2 = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: '10', amount_issued: 0 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification1);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification2);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
+    });
+
+    it('should not dedupe changed onchain quote counters', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      mockSocket.triggerMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: {
+            subId: 'sub1',
+            payload: { quote: 'q1', amount_paid: 10, amount_issued: 0 },
+          },
+        }),
+      );
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: {
+            subId: 'sub1',
+            payload: { quote: 'q1', amount_paid: 11, amount_issued: 0 },
+          },
+        }),
+      );
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
+    it('should not dedupe unchanged onchain quote counters when expiry status changes', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const originalNow = Date.now;
+      const nowSeconds = Math.floor(originalNow() / 1000);
+      const expiry = nowSeconds + 60;
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry },
+        },
+      });
+
+      try {
+        Date.now = () => nowSeconds * 1000;
+        mockSocket.triggerMessage(notification);
+        const countAfterFirst = messageHandler.mock.calls.length;
+
+        Date.now = () => (expiry + 1) * 1000;
+        mockSocket.triggerMessage(notification);
+        expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+
+    it('should bypass dedupe when no state or complete amount counters are present', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
+    it('should bypass dedupe when amount normalization fails', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const notification = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 'invalid', amount_issued: 0 },
+        },
+      });
+
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notification);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+    });
+
     it('should pass through non-notification messages', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
@@ -362,8 +499,9 @@ describe('HybridTransport', () => {
       mockSocket.triggerMessage(notification);
 
       // Verify dedup state exists
-      const lastStateByKey = (transport as any).lastStateByKey as Map<string, string>;
-      const hasKeyForMint = Array.from(lastStateByKey.keys()).some((k) =>
+      const lastNotificationSignatureByKey = (transport as any)
+        .lastNotificationSignatureByKey as Map<string, string>;
+      const hasKeyForMint = Array.from(lastNotificationSignatureByKey.keys()).some((k) =>
         k.startsWith(`${mintUrl}::`),
       );
       expect(hasKeyForMint).toBe(true);
@@ -372,7 +510,7 @@ describe('HybridTransport', () => {
       transport.closeMint(mintUrl);
 
       // Verify dedup state is cleared
-      const hasKeyAfterClose = Array.from(lastStateByKey.keys()).some((k) =>
+      const hasKeyAfterClose = Array.from(lastNotificationSignatureByKey.keys()).some((k) =>
         k.startsWith(`${mintUrl}::`),
       );
       expect(hasKeyAfterClose).toBe(false);
@@ -389,10 +527,11 @@ describe('HybridTransport', () => {
       transport.closeAll();
 
       const wsFailedByMint = (transport as any).wsFailedByMint as Set<string>;
-      const lastStateByKey = (transport as any).lastStateByKey as Map<string, string>;
+      const lastNotificationSignatureByKey = (transport as any)
+        .lastNotificationSignatureByKey as Map<string, string>;
 
       expect(wsFailedByMint.size).toBe(0);
-      expect(lastStateByKey.size).toBe(0);
+      expect(lastNotificationSignatureByKey.size).toBe(0);
     });
   });
 

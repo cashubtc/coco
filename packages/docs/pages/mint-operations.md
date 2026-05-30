@@ -11,10 +11,9 @@ create history; history starts when an operation exists.
 
 The operation lifecycle API is exposed through `coco.ops.mint`:
 
-- `prepare({ mintUrl, method, quoteId, unit?, methodData? })` prepares a
-  pending mint operation from an existing canonical quote
-- `importQuote({ mintUrl, quote, method, methodData? })` tracks an existing
-  quote as a mint operation
+- `prepare({ mintUrl, method, quoteId, unit?, methodData?, amount? })` prepares
+  a pending mint operation from an existing canonical quote. Reusable onchain
+  quotes require `amount` because one quote can fund multiple operations.
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
 - `checkPayment(operationId)` checks the remote quote state for a pending
   operation
@@ -23,7 +22,9 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 - `finalize(operationId)` executes or recovers the operation until it reaches a
   terminal state when possible
 - `get(operationId)`, `getByQuote({ mintUrl, method, quoteId })`, `listPending()`, and
-  `listInFlight()` load persisted operation state
+  `listInFlight()` load persisted operation state. Use `operationId` for local
+  operation identity; a `quoteId` is remote quote identity and can be shared by
+  more than one local operation.
 
 ## Quote Resurfacing (`coco.quotes.mint`)
 
@@ -32,14 +33,23 @@ after reload without creating or loading a mint operation:
 
 - `create({ mintUrl, amount, unit?, method })` creates and persists a canonical
   quote row only
+- `import({ mintUrl, method, quote })` imports an existing remote quote snapshot
+  into canonical quote storage only
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached
   `ISSUED`
 - `refresh({ mintUrl, method, quoteId })` checks the remote quote state and
   persists the canonical quote update before emitting `mint-quote:updated`
 
-For BOLT11 quotes, the invoice is available at `quote.request`. Future onchain
-address/payment request support should use this same canonical quote surface.
+`mint-quote:updated` is emitted when a quote is created/imported or remote
+settlement state changes. Stable metadata-only updates do not emit. Importing a
+quote can therefore start watcher interest, but it does not create history or a
+mint operation; call `coco.ops.mint.prepare(...)` when you want to redeem it.
+
+For BOLT11 quotes, the invoice is available at `quote.request`. For reusable
+onchain quotes, the address/payment request is also available at `quote.request`
+and claimable balance is derived from `quote.quoteData.amountPaid -
+quote.quoteData.amountIssued`.
 
 ## Operation States
 
@@ -64,16 +74,17 @@ init -> pending -> executing -> finalized
 | Action                      | Valid input state                                       | Resulting state                                 | Use when                                                       |
 | --------------------------- | ------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
 | `prepare(...)`              | canonical quote                                         | `pending`                                       | You are ready to track a quote as a mint operation.            |
-| `importQuote(...)`          | none                                                    | `pending`                                       | You already have a remote quote and want Coco to track it.     |
 | `checkPayment(operationId)` | `pending`                                               | latest remote observation; may queue redemption | You want to update UI after the invoice may have been paid.    |
 | `execute(operationOrId)`    | `pending`                                               | `finalized` or `failed`                         | You know the quote is payable and want to redeem it now.       |
 | `refresh(operationId)`      | any, actively checks `pending` and recovers `executing` | latest stored state                             | You are showing stale persisted state or a recovery screen.    |
 | `finalize(operationId)`     | `pending`, `executing`, or terminal                     | terminal state when possible                    | You want one explicit call to settle or recover the operation. |
 
 With the default mint watcher and processor enabled, apps usually do not need to
-poll `refresh()` in the happy path. Show the payment request from the pending
-operation, then render the latest operation state from events, hook state, or a
-targeted `checkPayment()` action.
+poll `refresh()` in the happy path. BOLT11 mint quotes and reusable onchain mint
+quotes are watched automatically by WebSocket when available and by polling as a
+fallback. Show the payment request from the pending operation, then render the
+latest operation state from events, hook state, or a targeted `checkPayment()`
+action.
 
 ## Prepare -> Pay -> Finalize Flow
 
@@ -99,6 +110,58 @@ if (check.category === 'ready' || check.category === 'completed') {
   console.log('Mint operation state:', terminal.state);
 }
 ```
+
+## Reusable Onchain Quotes
+
+Onchain mint quotes are canonical quote records first. Create and refresh them
+through `coco.quotes.mint`, then prepare one or more mint operations against the
+same `(mintUrl, method, quoteId)` identity.
+
+```ts
+const quote = await coco.quotes.mint.create({
+  mintUrl,
+  method: 'onchain',
+  unit: 'sat',
+});
+
+showAddress(quote.request);
+
+const refreshed = await coco.quotes.mint.refresh({
+  mintUrl,
+  method: 'onchain',
+  quoteId: quote.quoteId,
+});
+
+const claimable = refreshed.quoteData.amountPaid.subtract(refreshed.quoteData.amountIssued);
+```
+
+To mint part of the available balance explicitly, prepare an operation with the
+amount to withdraw from the reusable quote.
+
+```ts
+const first = await coco.ops.mint.prepare({
+  mintUrl,
+  method: 'onchain',
+  quoteId: quote.quoteId,
+  amount: { amount: 25, unit: 'sat' },
+});
+
+const second = await coco.ops.mint.prepare({
+  mintUrl,
+  method: 'onchain',
+  quoteId: quote.quoteId,
+  amount: { amount: 10, unit: 'sat' },
+});
+
+await coco.ops.mint.finalize(first.id);
+await coco.ops.mint.finalize(second.id);
+```
+
+When the mint watcher and processor are enabled, reusable onchain quotes continue
+to be watched after one claim finalizes so later deposits to the same address can
+be detected. Funded reusable onchain quotes are claimed automatically. If
+existing pending operations do not consume all currently claimable balance, Coco
+creates one additional mint operation for the remainder.
 
 ## Recovery
 

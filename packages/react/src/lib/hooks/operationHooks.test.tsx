@@ -7,7 +7,7 @@ import type { SendOperationPrepareInput } from './useSendOperation';
 import { useSendOperation } from './useSendOperation';
 import type { ReceiveOperationPrepareInput } from './useReceiveOperation';
 import { useReceiveOperation } from './useReceiveOperation';
-import type { MintOperationImportQuoteInput, MintOperationPrepareInput } from './useMintOperation';
+import type { MintOperationPrepareInput } from './useMintOperation';
 import { useMintOperation } from './useMintOperation';
 import type { MeltOperationPrepareInput } from './useMeltOperation';
 import { useMeltOperation } from './useMeltOperation';
@@ -64,18 +64,6 @@ const MINT_PREPARE_INPUT: MintOperationPrepareInput = {
   mintUrl: MINT_URL,
   quoteId: 'mint-quote-1',
   method: 'bolt11',
-};
-const MINT_IMPORT_QUOTE_INPUT: MintOperationImportQuoteInput = {
-  mintUrl: MINT_URL,
-  method: 'bolt11',
-  quote: {
-    quote: 'mint-quote-1',
-    request: 'lnbc1importquote',
-    expiry: 1_700_000_100_000,
-    state: 'UNPAID',
-    amount: Amount.from(100),
-    unit: 'sat',
-  },
 };
 const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
   mintUrl: MINT_URL,
@@ -183,7 +171,6 @@ function createReceiveManagerWithBoundOnMock() {
 function createMintManagerMock() {
   const mint = {
     prepare: vi.fn(),
-    importQuote: vi.fn(),
     execute: vi.fn(),
     get: vi.fn(),
     getByQuote: vi.fn(),
@@ -357,8 +344,6 @@ function createFinalizedMintOperation(
   return {
     ...createPendingMintOperation(),
     state: 'finalized',
-    lastObservedRemoteState: 'ISSUED',
-    lastObservedRemoteStateAt: 1_700_000_020_000,
     updatedAt: 1_700_000_020_000,
     ...overrides,
   } as MintExecuteResult;
@@ -1049,13 +1034,11 @@ describe('useMintOperation', () => {
     expect(result.current.currentOperation).toEqual(pending);
   });
 
-  it('binds newly prepared and imported quotes when starting unbound', async () => {
+  it('binds newly prepared mint operations when starting unbound', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation();
-    const imported = createPendingMintOperation({ id: 'mint-op-imported' });
 
     mint.prepare.mockResolvedValue(pending);
-    mint.importQuote.mockResolvedValue(imported);
 
     const { result: prepareResult } = renderHook(() => useMintOperation(), {
       wrapper: createHookWrapper(manager),
@@ -1066,31 +1049,17 @@ describe('useMintOperation', () => {
     });
 
     expect(prepareResult.current.currentOperation).toEqual(pending);
-
-    const { result: importResult } = renderHook(() => useMintOperation(), {
-      wrapper: createHookWrapper(manager),
-    });
-
-    await act(async () => {
-      await importResult.current.importQuote(MINT_IMPORT_QUOTE_INPUT);
-    });
-
-    expect(importResult.current.currentOperation).toEqual(imported);
-    expect(importResult.current.executeResult).toBeNull();
   });
 
   it('accepts an initial operation-id binding and synchronizes after checkPayment and execute', async () => {
     const { manager, mint } = createMintManagerMock();
     const pending = createPendingMintOperation();
-    const refreshed = createMintOperation({
-      id: pending.id,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 1_700_000_010_000,
-    });
+    const refreshed = createMintOperation({ id: pending.id, updatedAt: 1_700_000_010_000 });
     const finalized = createFinalizedMintOperation({ id: pending.id });
+    const checkPaymentResult = createMintCheckPaymentResult();
 
     mint.get.mockResolvedValueOnce(pending).mockResolvedValueOnce(refreshed);
-    mint.checkPayment.mockResolvedValue(createMintCheckPaymentResult());
+    mint.checkPayment.mockResolvedValue(checkPaymentResult);
     mint.execute.mockResolvedValue(finalized);
 
     const { result } = renderHook(() => useMintOperation(pending.id), {
@@ -1101,10 +1070,12 @@ describe('useMintOperation', () => {
       expect(result.current.currentOperation).toEqual(pending);
     });
 
+    let observedPayment: MintCheckPaymentResult | undefined;
     await act(async () => {
-      await result.current.checkPayment();
+      observedPayment = await result.current.checkPayment();
     });
 
+    expect(observedPayment).toEqual(checkPaymentResult);
     expect(result.current.currentOperation).toEqual(refreshed);
 
     await act(async () => {
@@ -1153,7 +1124,7 @@ describe('useMintOperation', () => {
     expect(result.current.currentOperation).toEqual(pending);
   });
 
-  it('rejects prepare and importQuote when the hook is already bound to a mint operation', async () => {
+  it('rejects prepare when the hook is already bound to a mint operation', async () => {
     const { manager, mint } = createMintManagerMock();
     const loaded = createPendingMintOperation({ id: 'mint-op-bound' });
 
@@ -1164,11 +1135,7 @@ describe('useMintOperation', () => {
     await expect(result.current.prepare(MINT_PREPARE_INPUT)).rejects.toThrow(
       `Cannot call prepare while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
     );
-    await expect(result.current.importQuote(MINT_IMPORT_QUOTE_INPUT)).rejects.toThrow(
-      `Cannot call importQuote while this hook is bound to operation ${loaded.id}. Remount the hook with a new React key or call reset() first.`,
-    );
     expect(mint.prepare).not.toHaveBeenCalled();
-    expect(mint.importQuote).not.toHaveBeenCalled();
     expect(result.current.currentOperation).toEqual(loaded);
   });
 
@@ -1178,8 +1145,6 @@ describe('useMintOperation', () => {
     const executing = createMintOperation({
       id: pending.id,
       state: 'executing',
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 1_700_000_010_000,
       updatedAt: 20,
     });
     const deferredLoad = createDeferred<MintOperationRecord | null>();
@@ -1213,19 +1178,13 @@ describe('useMintOperation', () => {
     expect(mint.get).toHaveBeenCalledTimes(1);
   });
 
-  it('reacts to background quote, executing, and finalized events for the bound operation id', async () => {
+  it('reacts to background pending, executing, and finalized events for the bound operation id', async () => {
     const { manager, mint, emit } = createMintManagerMock();
     const pending = createPendingMintOperation();
-    const observed = createMintOperation({
-      id: pending.id,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 1_700_000_010_000,
-    });
+    const observed = createMintOperation({ id: pending.id, updatedAt: 1_700_000_010_000 });
     const executing = createMintOperation({
       id: pending.id,
       state: 'executing',
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 1_700_000_010_000,
       updatedAt: 1_700_000_015_000,
     });
     const finalized = createFinalizedMintOperation({ id: pending.id });

@@ -1,3 +1,4 @@
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
@@ -33,8 +34,8 @@ export class HybridTransport implements RealTimeTransport {
   // Track whether we've registered internal WS handlers for a mint
   private readonly hasInternalHandlersByMint = new Set<string>();
 
-  // Deduplication: track last known state per (mintUrl, subId, identifier)
-  private readonly lastStateByKey = new Map<string, string>();
+  // Deduplication: track last notification signature per (mintUrl, subId, identifier)
+  private readonly lastNotificationSignatureByKey = new Map<string, string>();
 
   // Track 'open' events to dedupe (PollingTransport emits synthetic open immediately)
   private readonly hasEmittedOpenByMint = new Set<string>();
@@ -91,7 +92,7 @@ export class HybridTransport implements RealTimeTransport {
     this.wsFailedByMint.clear();
     this.wsConnectedByMint.clear();
     this.hasInternalHandlersByMint.clear();
-    this.lastStateByKey.clear();
+    this.lastNotificationSignatureByKey.clear();
     this.hasEmittedOpenByMint.clear();
   }
 
@@ -106,9 +107,9 @@ export class HybridTransport implements RealTimeTransport {
     this.hasEmittedOpenByMint.delete(mintUrl);
 
     // Clear deduplication state for this mint (keys start with mintUrl::)
-    for (const key of this.lastStateByKey.keys()) {
+    for (const key of this.lastNotificationSignatureByKey.keys()) {
       if (key.startsWith(`${mintUrl}::`)) {
-        this.lastStateByKey.delete(key);
+        this.lastNotificationSignatureByKey.delete(key);
       }
     }
   }
@@ -126,7 +127,7 @@ export class HybridTransport implements RealTimeTransport {
     this.wsConnectedByMint.clear();
     this.hasEmittedOpenByMint.clear();
     // Keep hasInternalHandlersByMint - handlers are still registered
-    // Keep lastStateByKey - we want to dedupe across pause/resume
+    // Keep lastNotificationSignatureByKey - we want to dedupe across pause/resume
   }
 
   resume(): void {
@@ -213,17 +214,21 @@ export class HybridTransport implements RealTimeTransport {
           return;
         }
 
-        const key = this.getStateKey(mintUrl, parsed);
-        // Only compare 'state' field - that's all we care about
-        const stateJson = JSON.stringify(parsed.params?.payload?.state);
-
-        const lastState = this.lastStateByKey.get(key);
-        if (lastState === stateJson) {
-          // Duplicate state, skip
+        const signature = this.getNotificationSignature(parsed.params?.payload);
+        if (signature === undefined) {
+          originalHandler(evt);
           return;
         }
 
-        this.lastStateByKey.set(key, stateJson);
+        const key = this.getStateKey(mintUrl, parsed);
+
+        const lastSignature = this.lastNotificationSignatureByKey.get(key);
+        if (lastSignature === signature) {
+          // Duplicate notification signature, skip
+          return;
+        }
+
+        this.lastNotificationSignatureByKey.set(key, signature);
         originalHandler(evt);
       } catch {
         // Parse failed, pass through
@@ -247,5 +252,44 @@ export class HybridTransport implements RealTimeTransport {
     // - For quotes: quote field identifies the specific quote
     const identifier = payload?.Y ?? payload?.quote ?? '';
     return `${mintUrl}::${subId}::${identifier}`;
+  }
+
+  private getNotificationSignature(
+    payload:
+      | {
+          state?: unknown;
+          amount_paid?: unknown;
+          amount_issued?: unknown;
+          expiry?: unknown;
+        }
+      | undefined,
+  ): string | undefined {
+    if (!payload) return undefined;
+
+    const expirySignature = this.getExpirySignature(payload);
+    if (payload.amount_paid !== undefined && payload.amount_issued !== undefined) {
+      try {
+        return `${Amount.from(payload.amount_paid as AmountLike).toString()}:${Amount.from(
+          payload.amount_issued as AmountLike,
+        ).toString()}:${expirySignature}`;
+      } catch {
+        return undefined;
+      }
+    }
+
+    if (payload.state !== undefined) {
+      return `${JSON.stringify(payload.state)}:${expirySignature}`;
+    }
+
+    return undefined;
+  }
+
+  private getExpirySignature(payload: { expiry?: unknown }): string {
+    if (typeof payload.expiry !== 'number') {
+      return 'no-expiry';
+    }
+
+    const status = payload.expiry * 1000 <= Date.now() ? 'expired' : 'active';
+    return `${payload.expiry}:${status}`;
   }
 }

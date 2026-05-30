@@ -275,7 +275,9 @@ function createDummySendOperationsByState(unit: string): SendOperation[] {
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
 
-export function createDummyMintQuote(overrides?: Partial<MintQuote>): MintQuote {
+export function createDummyMintQuote(
+  overrides?: Partial<MintQuote<'bolt11'>>,
+): MintQuote<'bolt11'> {
   return {
     mintUrl: 'https://mint.test',
     method: 'bolt11',
@@ -287,10 +289,13 @@ export function createDummyMintQuote(overrides?: Partial<MintQuote>): MintQuote 
     unit: 'sat',
     expiry: 1_730_000_000,
     reusable: false,
+    quoteData: {
+      amount: Amount.from(3),
+    },
     createdAt: 0,
     updatedAt: 0,
     ...overrides,
-  } satisfies MintQuote;
+  } satisfies MintQuote<'bolt11'>;
 }
 
 export function createDummyMeltQuote(overrides?: Partial<MeltQuote>): MeltQuote {
@@ -529,9 +534,59 @@ export async function runMintOperationRepositoryContract(
         expect(stored!.method).toBe('bolt11');
         expect(stored!.quoteId).toBe('canonical-quote');
         expect(stored!.reusable).toBe(false);
+        if (stored!.method !== 'bolt11') {
+          throw new Error(`Expected bolt11 quote, got ${stored!.method}`);
+        }
         expect(stored!.state).toBe('PAID');
+        expect(stored!.quoteData.amount.equals(Amount.from(3))).toBe(true);
         expect(stored!.lastObservedRemoteState).toBe('PAID');
         expect(stored!.lastObservedRemoteStateAt).toBe(20);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('persists reusable onchain mint quote data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintQuoteRepository.upsertMintQuote({
+          mintUrl: 'https://mint.test/',
+          method: 'onchain',
+          quoteId: 'onchain-quote',
+          quote: 'onchain-quote',
+          request: 'bc1qdeposit',
+          unit: 'sat',
+          expiry: 1_730_000_000,
+          pubkey: '02'.padEnd(66, '1'),
+          reusable: true,
+          quoteData: {
+            pubkey: '02'.padEnd(66, '1'),
+            amountPaid: Amount.from(21),
+            amountIssued: Amount.from(8),
+          },
+          lastObservedRemoteStateAt: 20,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'onchain',
+          'onchain-quote',
+        );
+
+        expect(stored).toBeDefined();
+        if (!stored) {
+          throw new Error('Expected onchain quote to be stored');
+        }
+        expect(stored.method).toBe('onchain');
+        if (stored.method !== 'onchain') {
+          throw new Error(`Expected onchain quote, got ${stored.method}`);
+        }
+        expect(stored.reusable).toBe(true);
+        expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '1'));
+        expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
       } finally {
         await dispose();
       }

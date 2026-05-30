@@ -1,4 +1,4 @@
-import type { HistoryProjectionRepository } from '..';
+import type { HistoryProjectionRepository, MintQuoteRepository } from '..';
 import type {
   HistoryEntry,
   HistoryType,
@@ -16,6 +16,8 @@ import {
   projectReceiveOperation,
   projectSendOperation,
 } from '@core/models/History';
+import { getMintQuoteRemoteState } from '@core/models/MintQuote';
+import type { MintOperation } from '@core/operations/mint';
 import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
@@ -25,6 +27,7 @@ type OperationRepositories = {
   sendOperationRepository?: MemorySendOperationRepository;
   meltOperationRepository?: MemoryMeltOperationRepository;
   mintOperationRepository?: MemoryMintOperationRepository;
+  mintQuoteRepository?: MintQuoteRepository;
   receiveOperationRepository?: MemoryReceiveOperationRepository;
 };
 
@@ -100,7 +103,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
 
     const mintOperations = await this.operationRepositories.mintOperationRepository?.getAll();
     for (const operation of mintOperations ?? []) {
-      const entry = projectMintOperation(operation);
+      const entry = await this.projectMintOperation(operation);
       if (entry) entries.push(entry);
     }
 
@@ -131,7 +134,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
       case 'mint': {
         const operation =
           await this.operationRepositories.mintOperationRepository?.getById(operationId);
-        return operation ? projectMintOperation(operation) : null;
+        return operation ? this.projectMintOperation(operation) : null;
       }
       case 'receive': {
         const operation =
@@ -139,6 +142,20 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
         return operation ? projectReceiveOperation(operation) : null;
       }
     }
+  }
+
+  private async projectMintOperation(operation: MintOperation): Promise<HistoryEntry | null> {
+    const entry = projectMintOperation(operation);
+    if (!entry) return null;
+
+    const quote = await this.operationRepositories.mintQuoteRepository?.getMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    const remoteState = quote ? getMintQuoteRemoteState(quote) : undefined;
+
+    return remoteState ? { ...entry, remoteState } : entry;
   }
 
   private dedupeLegacyEntries(operationEntries: HistoryEntry[]): LegacyHistoryEntry[] {

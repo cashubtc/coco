@@ -58,6 +58,7 @@ describe('MintBolt11Handler', () => {
     unit: 'sat',
     method: 'bolt11' as const,
     methodData: {},
+    quoteId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -77,8 +78,6 @@ describe('MintBolt11Handler', () => {
     quoteId,
     request: quote.request,
     expiry: quote.expiry,
-    lastObservedRemoteState: 'PAID' as const,
-    lastObservedRemoteStateAt: Date.now(),
     outputData,
   };
 
@@ -96,7 +95,7 @@ describe('MintBolt11Handler', () => {
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
     mintUrl,
-    intent: { amount: Amount.from(10), unit: 'sat' },
+    createQuoteData: { amount: { amount: Amount.from(10), unit: 'sat' } },
     wallet,
     mintAdapter,
     proofService,
@@ -118,9 +117,10 @@ describe('MintBolt11Handler', () => {
       amount: quote.amount,
       expiry: quote.expiry,
       state: quote.state,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: Date.now(),
       reusable: false,
+      quoteData: {
+        amount: quote.amount,
+      },
       createdAt: Date.now(),
       updatedAt: Date.now(),
     },
@@ -171,7 +171,7 @@ describe('MintBolt11Handler', () => {
     } as unknown as Wallet;
 
     mintAdapter = {
-      checkMintQuoteState: mock(async (): Promise<MintQuoteBolt11Response> => quote),
+      checkMintQuote: mock(async (): Promise<MintQuoteBolt11Response> => quote),
     } as unknown as MintAdapter;
 
     proofService = {
@@ -199,7 +199,7 @@ describe('MintBolt11Handler', () => {
     it('fetches a remote BOLT11 mint quote through the mint adapter', async () => {
       const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
-      expect(mintAdapter.checkMintQuoteState).toHaveBeenCalledWith(mintUrl, quoteId);
+      expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
       expect(result.quoteId).toBe(quoteId);
       expect(result.method).toBe('bolt11');
     });
@@ -221,7 +221,7 @@ describe('MintBolt11Handler', () => {
   describe('prepare', () => {
     it('requires the service to provide an existing quote snapshot', async () => {
       await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
-        'Mint quote (missing) was not provided',
+        'Mint quote quote-1 was not provided',
       );
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
@@ -235,12 +235,12 @@ describe('MintBolt11Handler', () => {
 
       const result = await handler.prepare({
         ...buildPrepareContext(),
+        operation: { ...operation, quoteId: importedQuote.quote },
         importedQuote,
       });
 
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
       expect(result.quoteId).toBe(importedQuote.quote);
-      expect(result.lastObservedRemoteState).toBe('UNPAID');
     });
 
     it('normalizes quote unit comparison and persists the operation unit', async () => {

@@ -1,12 +1,15 @@
-import type { KeyRingRepository, Keypair } from '@cashu/coco-core';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
+
+const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
 
 interface KeypairRow {
   publicKey: string;
   secretKey: string;
   createdAt: number;
   derivationIndex?: number;
+  purpose?: KeypairPurpose;
 }
 
 export class IdbKeyRingRepository implements KeyRingRepository {
@@ -16,12 +19,13 @@ export class IdbKeyRingRepository implements KeyRingRepository {
     this.db = db;
   }
 
-  async getPersistedKeyPair(publicKey: string): Promise<Keypair | null> {
+  async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
     const table = this.db.table('coco_cashu_keypairs');
     const row = await table.get(publicKey);
     if (!row) return null;
 
     const keypairRow = row as KeypairRow;
+    if (purpose && (keypairRow.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) return null;
     // Convert hex string back to Uint8Array
     const secretKeyBytes = hexToBytes(keypairRow.secretKey);
 
@@ -29,6 +33,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       publicKeyHex: keypairRow.publicKey,
       secretKey: secretKeyBytes,
       derivationIndex: keypairRow.derivationIndex,
+      purpose: keypairRow.purpose ?? DEFAULT_KEYPAIR_PURPOSE,
     };
   }
 
@@ -38,6 +43,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
 
     // Preserve existing derivationIndex if new one is not provided
     let derivationIndex = keyPair.derivationIndex;
+    const purpose = keyPair.purpose ?? DEFAULT_KEYPAIR_PURPOSE;
     if (derivationIndex == null) {
       const existing = (await table.get(keyPair.publicKeyHex)) as KeypairRow | undefined;
       if (existing?.derivationIndex != null) {
@@ -50,28 +56,39 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       secretKey: secretKeyHex,
       createdAt: Date.now(),
       derivationIndex,
+      purpose,
     });
   }
 
-  async deletePersistedKeyPair(publicKey: string): Promise<void> {
+  async deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void> {
     const table = this.db.table('coco_cashu_keypairs');
+    if (purpose) {
+      const existing = (await table.get(publicKey)) as KeypairRow | undefined;
+      if (existing && (existing.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) return;
+    }
     await table.delete(publicKey);
   }
 
-  async getAllPersistedKeyPairs(): Promise<Keypair[]> {
+  async getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]> {
     const table = this.db.table('coco_cashu_keypairs');
     const rows = (await table.toArray()) as KeypairRow[];
 
-    return rows.map((row) => ({
-      publicKeyHex: row.publicKey,
-      secretKey: hexToBytes(row.secretKey),
-      derivationIndex: row.derivationIndex,
-    }));
+    return rows
+      .filter((row) => !purpose || (row.purpose ?? DEFAULT_KEYPAIR_PURPOSE) === purpose)
+      .map((row) => ({
+        publicKeyHex: row.publicKey,
+        secretKey: hexToBytes(row.secretKey),
+        derivationIndex: row.derivationIndex,
+        purpose: row.purpose ?? DEFAULT_KEYPAIR_PURPOSE,
+      }));
   }
 
-  async getLatestKeyPair(): Promise<Keypair | null> {
+  async getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null> {
     const table = this.db.table('coco_cashu_keypairs');
-    const row = (await table.orderBy('createdAt').reverse().first()) as KeypairRow | undefined;
+    const rows = (await table.orderBy('createdAt').reverse().toArray()) as KeypairRow[];
+    const row = rows.find(
+      (candidate) => !purpose || (candidate.purpose ?? DEFAULT_KEYPAIR_PURPOSE) === purpose,
+    );
 
     if (!row) return null;
 
@@ -79,15 +96,18 @@ export class IdbKeyRingRepository implements KeyRingRepository {
       publicKeyHex: row.publicKey,
       secretKey: hexToBytes(row.secretKey),
       derivationIndex: row.derivationIndex,
+      purpose: row.purpose ?? DEFAULT_KEYPAIR_PURPOSE,
     };
   }
 
-  async getLastDerivationIndex(): Promise<number> {
+  async getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number> {
     const table = this.db.table('coco_cashu_keypairs');
-    // Use orderBy on the index and reverse to get highest first
-    const row = (await table.orderBy('derivationIndex').reverse().first()) as
-      | KeypairRow
-      | undefined;
+    const rows = (await table.orderBy('derivationIndex').reverse().toArray()) as KeypairRow[];
+    const row = rows.find(
+      (candidate) =>
+        candidate.derivationIndex != null &&
+        (!purpose || (candidate.purpose ?? DEFAULT_KEYPAIR_PURPOSE) === purpose),
+    );
 
     if (!row || row.derivationIndex == null) {
       return -1;

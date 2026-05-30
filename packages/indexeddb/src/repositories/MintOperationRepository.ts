@@ -20,7 +20,16 @@ const normalizeState = (state: string): MintOperationState => {
   return 'init';
 };
 
+const requireQuoteId = (row: MintOperationRow): string => {
+  if (!row.quoteId || row.quoteId.trim() === '') {
+    throw new Error(`MintOperation ${row.id} is missing required quoteId`);
+  }
+
+  return row.quoteId;
+};
+
 const rowToOperation = (row: MintOperationRow): MintOperation => {
+  const quoteId = requireQuoteId(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -44,7 +53,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
       ...base,
       ...intent,
       state: 'init',
-      ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+      quoteId,
     };
   }
 
@@ -52,12 +61,10 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...base,
     ...intent,
     state: normalizeState(row.state),
-    quoteId: row.quoteId ?? '',
+    quoteId,
     request: row.request ?? '',
     expiry: row.expiry ?? null,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : { keep: [], send: [] },
   } as MintOperation;
 };
@@ -71,7 +78,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     return {
       id: operation.id,
       mintUrl: operation.mintUrl,
-      quoteId: operation.quoteId ?? null,
+      quoteId: operation.quoteId,
       state: operation.state,
       createdAt: createdAtSeconds,
       updatedAt: updatedAtSeconds,
@@ -102,8 +109,8 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
     request: operation.request,
     expiry: operation.expiry,
     pubkey: operation.pubkey ?? null,
-    lastObservedRemoteState: operation.lastObservedRemoteState ?? null,
-    lastObservedRemoteStateAt: operation.lastObservedRemoteStateAt ?? null,
+    lastObservedRemoteState: null,
+    lastObservedRemoteStateAt: null,
     terminalFailureJson: operation.terminalFailure
       ? JSON.stringify(operation.terminalFailure)
       : null,

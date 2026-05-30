@@ -1,4 +1,10 @@
-import type { MintQuoteBolt11Response, Proof, Wallet } from '@cashu/cashu-ts';
+import type {
+  Amount,
+  MintQuoteBolt11Response,
+  MintQuoteOnchainResponse,
+  Proof,
+  Wallet,
+} from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -23,14 +29,35 @@ import type { MintQuote } from '../../models/MintQuote';
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
+    createQuoteData: { amount: UnitAmount };
+    quoteData: {
+      amount: Amount;
+    };
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
     quote: MintQuoteBolt11Response;
+  };
+  onchain: {
+    methodData: Record<string, never>;
+    createQuoteData: {
+      unit: string;
+    };
+    quoteData: {
+      pubkey: string;
+      amountPaid: Amount;
+      amountIssued: Amount;
+    };
+    remoteState: never;
+    quote: MintQuoteOnchainResponse;
   };
 }
 
 export type MintMethod = keyof MintMethodDefinitions;
 export type MintMethodData<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['methodData'];
+export type MintMethodCreateQuoteData<M extends MintMethod = MintMethod> =
+  MintMethodDefinitions[M]['createQuoteData'];
+export type MintMethodQuoteData<M extends MintMethod = MintMethod> =
+  MintMethodDefinitions[M]['quoteData'];
 export type MintMethodRemoteState<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['remoteState'];
 export type MintMethodQuoteSnapshot<M extends MintMethod = MintMethod> =
@@ -53,7 +80,7 @@ export interface BaseHandlerDeps {
 
 export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
   mintUrl: string;
-  intent: UnitAmount;
+  createQuoteData: MintMethodCreateQuoteData<M>;
   wallet: Wallet;
 }
 
@@ -107,8 +134,9 @@ export type RecoverExecutingResult =
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
 export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
-  observedRemoteState: MintMethodRemoteState<M>;
+  observedRemoteState?: MintMethodRemoteState<M>;
   observedRemoteStateAt: number;
+  quoteSnapshot?: MintMethodQuoteSnapshot<M>;
   category: PendingMintCheckCategory;
   terminalFailure?: MintOperationFailure;
 }
@@ -116,6 +144,7 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
+  validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;

@@ -29,13 +29,15 @@ const coco = await initializeCoco({
 
 ## MintOperationProcessor
 
-This module processes live mint operation events. When a pending mint operation is observed as
-`PAID`, the processor advances it by finalizing the operation.
+This module processes live mint operation events. When a pending BOLT11 mint operation is observed
+as `PAID`, the processor advances it by finalizing the operation. For reusable onchain mint quotes,
+it claims locally available balance when quote updates show newly claimable funds.
 
 ## MintOperationWatcher
 
 This module watches pending mint operations via WebSockets and polling, observes remote quote
-state changes, and emits operation-based mint events. It does not finalize operations itself.
+state changes, and emits operation-based mint events. It supports BOLT11 mint quotes and reusable
+onchain mint quotes. It does not finalize operations itself.
 
 ## ProofStateWatcher
 

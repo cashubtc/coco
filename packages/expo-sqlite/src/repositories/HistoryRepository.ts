@@ -88,25 +88,29 @@ const projectionSelect = `
 
     SELECT
       'operation' AS source,
-      'mint:' || id AS id,
+      'mint:' || op.id AS id,
       NULL AS legacyHistoryId,
       'mint' AS type,
-      mintUrl,
-      unit,
-      amount,
-      createdAt * 1000 AS createdAt,
-      updatedAt * 1000 AS updatedAt,
-      state,
-      quoteId,
-      request AS paymentRequest,
+      op.mintUrl,
+      op.unit,
+      op.amount,
+      op.createdAt * 1000 AS createdAt,
+      op.updatedAt * 1000 AS updatedAt,
+      op.state,
+      op.quoteId,
+      op.request AS paymentRequest,
       NULL AS tokenJson,
       NULL AS inputProofsJson,
       NULL AS metadata,
-      id AS operationId,
-      lastObservedRemoteState AS remoteState,
-      error
-    FROM coco_cashu_mint_operations
-    WHERE state != 'init'
+      op.id AS operationId,
+      q.lastObservedRemoteState AS remoteState,
+      op.error
+    FROM coco_cashu_mint_operations op
+    LEFT JOIN coco_cashu_canonical_mint_quotes q
+      ON q.mintUrl = op.mintUrl
+     AND q.method = op.method
+     AND q.quoteId = op.quoteId
+    WHERE op.state != 'init'
 
     UNION ALL
 

@@ -1,6 +1,24 @@
-import type { KeyRingRepository, Keypair } from '@cashu/coco-core';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
+
+const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
+
+type KeypairRow = {
+  publicKey: string;
+  secretKey: string;
+  derivationIndex: number | null;
+  purpose?: KeypairPurpose | null;
+};
+
+function rowToKeypair(row: KeypairRow): Keypair {
+  return {
+    publicKeyHex: row.publicKey,
+    secretKey: hexToBytes(row.secretKey),
+    derivationIndex: row.derivationIndex ?? undefined,
+    purpose: row.purpose ?? DEFAULT_KEYPAIR_PURPOSE,
+  };
+}
 
 export class SqliteKeyRingRepository implements KeyRingRepository {
   private readonly db: SqliteDb;
@@ -9,24 +27,17 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
     this.db = db;
   }
 
-  async getPersistedKeyPair(publicKey: string): Promise<Keypair | null> {
-    const row = await this.db.get<{
-      publicKey: string;
-      secretKey: string;
-      derivationIndex: number | null;
-    }>(
-      'SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs WHERE publicKey = ? LIMIT 1',
-      [publicKey],
+  async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
+    const row = await this.db.get<KeypairRow>(
+      `SELECT publicKey, secretKey, derivationIndex, purpose
+       FROM coco_cashu_keypairs
+       WHERE publicKey = ? ${purpose ? 'AND purpose = ?' : ''} LIMIT 1`,
+      purpose ? [publicKey, purpose] : [publicKey],
     );
     if (!row) return null;
 
     try {
-      const secretKeyBytes = hexToBytes(row.secretKey);
-      return {
-        publicKeyHex: row.publicKey,
-        secretKey: secretKeyBytes,
-        derivationIndex: row.derivationIndex ?? undefined,
-      };
+      return rowToKeypair(row);
     } catch (error) {
       throw new Error(
         `Failed to parse secret key for public key ${publicKey}: ${
@@ -38,36 +49,36 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
 
   async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
     const secretKeyHex = bytesToHex(keyPair.secretKey);
+    const purpose = keyPair.purpose ?? DEFAULT_KEYPAIR_PURPOSE;
 
     await this.db.run(
-      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex, purpose)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(publicKey) DO UPDATE SET
          secretKey=excluded.secretKey,
-         derivationIndex=COALESCE(excluded.derivationIndex, coco_cashu_keypairs.derivationIndex)`,
-      [keyPair.publicKeyHex, secretKeyHex, Date.now(), keyPair.derivationIndex ?? null],
+         derivationIndex=COALESCE(excluded.derivationIndex, coco_cashu_keypairs.derivationIndex),
+         purpose=excluded.purpose`,
+      [keyPair.publicKeyHex, secretKeyHex, Date.now(), keyPair.derivationIndex ?? null, purpose],
     );
   }
 
-  async deletePersistedKeyPair(publicKey: string): Promise<void> {
-    await this.db.run('DELETE FROM coco_cashu_keypairs WHERE publicKey = ?', [publicKey]);
+  async deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void> {
+    await this.db.run(
+      `DELETE FROM coco_cashu_keypairs WHERE publicKey = ? ${purpose ? 'AND purpose = ?' : ''}`,
+      purpose ? [publicKey, purpose] : [publicKey],
+    );
   }
 
-  async getAllPersistedKeyPairs(): Promise<Keypair[]> {
-    const rows = await this.db.all<{
-      publicKey: string;
-      secretKey: string;
-      derivationIndex: number | null;
-    }>('SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs');
+  async getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]> {
+    const rows = await this.db.all<KeypairRow>(
+      `SELECT publicKey, secretKey, derivationIndex, purpose
+       FROM coco_cashu_keypairs ${purpose ? 'WHERE purpose = ?' : ''}`,
+      purpose ? [purpose] : [],
+    );
 
     return rows.map((row) => {
       try {
-        const secretKeyBytes = hexToBytes(row.secretKey);
-        return {
-          publicKeyHex: row.publicKey,
-          secretKey: secretKeyBytes,
-          derivationIndex: row.derivationIndex ?? undefined,
-        };
+        return rowToKeypair(row);
       } catch (error) {
         throw new Error(
           `Failed to parse secret key for public key ${row.publicKey}: ${
@@ -78,23 +89,18 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
     });
   }
 
-  async getLatestKeyPair(): Promise<Keypair | null> {
-    const row = await this.db.get<{
-      publicKey: string;
-      secretKey: string;
-      derivationIndex: number | null;
-    }>(
-      'SELECT publicKey, secretKey, derivationIndex FROM coco_cashu_keypairs ORDER BY createdAt DESC LIMIT 1',
+  async getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null> {
+    const row = await this.db.get<KeypairRow>(
+      `SELECT publicKey, secretKey, derivationIndex, purpose
+       FROM coco_cashu_keypairs
+       ${purpose ? 'WHERE purpose = ?' : ''}
+       ORDER BY createdAt DESC LIMIT 1`,
+      purpose ? [purpose] : [],
     );
     if (!row) return null;
 
     try {
-      const secretKeyBytes = hexToBytes(row.secretKey);
-      return {
-        publicKeyHex: row.publicKey,
-        secretKey: secretKeyBytes,
-        derivationIndex: row.derivationIndex ?? undefined,
-      };
+      return rowToKeypair(row);
     } catch (error) {
       throw new Error(
         `Failed to parse latest secret key for public key ${row.publicKey}: ${
@@ -104,9 +110,12 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
     }
   }
 
-  async getLastDerivationIndex(): Promise<number> {
+  async getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number> {
     const row = await this.db.get<{ derivationIndex: number }>(
-      'SELECT derivationIndex FROM coco_cashu_keypairs WHERE derivationIndex IS NOT NULL ORDER BY derivationIndex DESC LIMIT 1',
+      `SELECT derivationIndex FROM coco_cashu_keypairs
+       WHERE derivationIndex IS NOT NULL ${purpose ? 'AND purpose = ?' : ''}
+       ORDER BY derivationIndex DESC LIMIT 1`,
+      purpose ? [purpose] : [],
     );
     return row?.derivationIndex ?? -1;
   }

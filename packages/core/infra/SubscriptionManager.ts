@@ -150,7 +150,6 @@ export class SubscriptionManager {
           const maybeSubId =
             Number.isFinite(respId) && pendingMap ? pendingMap.get(respId) : undefined;
           if (maybeSubId) {
-            this.subscriptions.delete(maybeSubId);
             pendingMap?.delete(respId);
             this.logger?.error('Subscribe request rejected', {
               mintUrl,

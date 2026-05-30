@@ -5,7 +5,7 @@
  *          ^         |
  *          +---------+-> failed
  *
- * - init: Local mint intent persisted before prepare has attached a quote snapshot
+ * - init: Quote-bound local mint intent persisted before prepare has attached output data
  * - pending: Deterministic outputData persisted; quote may now settle remotely
  * - executing: Mint or recovery call in progress
  * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
@@ -16,7 +16,7 @@ export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' 
 import type { Amount } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
-import type { MintMethod, MintMethodMeta, MintMethodRemoteState } from './MintMethodHandler';
+import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
@@ -47,11 +47,6 @@ interface MintQuoteSnapshot {
   pubkey?: string;
 }
 
-interface MintRemoteObservation<M extends MintMethod = MintMethod> {
-  lastObservedRemoteState?: MintMethodRemoteState<M>;
-  lastObservedRemoteStateAt?: number;
-}
-
 interface PendingData {
   outputData: SerializedOutputData;
 }
@@ -59,46 +54,26 @@ interface PendingData {
 export interface InitMintOperation<M extends MintMethod = MintMethod>
   extends MintOperationBase<M>, MintIntentData {
   state: 'init';
-  quoteId?: string;
+  quoteId: string;
 }
 
 export interface PendingMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'pending';
 }
 
 export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'executing';
 }
 
 export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'finalized';
 }
 
 export interface FailedMintOperation<M extends MintMethod = MintMethod>
-  extends
-    MintOperationBase<M>,
-    MintIntentData,
-    MintQuoteSnapshot,
-    MintRemoteObservation<M>,
-    PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'failed';
 }
 
@@ -143,7 +118,7 @@ export function createMintOperation<M extends MintMethod>(
   mintUrl: string,
   meta: MintMethodMeta<M>,
   intent: UnitAmount,
-  options?: { quoteId?: string },
+  options: { quoteId: string },
 ): InitMintOperation<M> {
   const now = Date.now();
   return {
@@ -151,7 +126,7 @@ export function createMintOperation<M extends MintMethod>(
     ...intent,
     amount: intent.amount,
     unit: normalizeUnit(intent.unit),
-    ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
+    quoteId: options.quoteId,
     id,
     state: 'init',
     mintUrl,

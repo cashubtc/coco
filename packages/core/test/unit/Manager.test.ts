@@ -109,7 +109,7 @@ describe('initializeCoco', () => {
       expect(pendingQuotes.map((quote) => quote.quoteId)).toEqual(['quote-only-restart']);
     });
 
-    it('projects mint history from quote observation updates with the processor disabled', async () => {
+    it('projects mint history remote state from canonical quotes', async () => {
       const manager = await initializeCoco({
         ...baseConfig,
         watchers: {
@@ -131,24 +131,22 @@ describe('initializeCoco', () => {
       });
 
       const observedAt = 3_000;
-      await manager['eventBus'].emit('mint-quote:updated', {
-        mintUrl: operation.mintUrl,
-        method: operation.method,
-        quoteId: operation.quoteId,
-        quote: {
-          mintUrl: operation.mintUrl,
-          method: operation.method,
-          quoteId: operation.quoteId,
+      await repositories.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Response(operation.mintUrl, {
           quote: operation.quoteId,
           request: operation.request,
           amount: operation.amount,
           unit: operation.unit,
           expiry: operation.expiry,
           state: 'PAID',
-          lastObservedRemoteState: 'PAID',
-          lastObservedRemoteStateAt: observedAt,
-          reusable: false,
-          createdAt: operation.createdAt,
+        }),
+      );
+
+      await manager['eventBus'].emit('mint-op:pending', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: {
+          ...operation,
           updatedAt: observedAt,
         },
       });
@@ -198,6 +196,9 @@ describe('initializeCoco', () => {
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: observedAt,
           reusable: false,
+          quoteData: {
+            amount: Amount.from(10),
+          },
           createdAt: observedAt,
           updatedAt: observedAt,
         },

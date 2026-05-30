@@ -1,16 +1,15 @@
 import type {
   MintMethod,
   MintMethodData,
-  MintMethodQuoteSnapshot,
   MintOperation,
   MintOperationService,
   PendingMintCheckResult,
   PendingMintOperation,
-  TerminalMintOperation,
 } from '@core/operations/mint';
+import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11';
+export type DefaultSupportedMintMethod = 'bolt11' | 'onchain';
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -19,11 +18,6 @@ type PrepareExistingQuoteInputCommon = {
   quoteId: string;
   /** Optional expected unit for the quote. */
   unit?: string;
-};
-
-type ImportMintQuoteInputCommon = {
-  /** Mint that issued the existing quote. */
-  mintUrl: string;
 };
 
 type MethodDataInput<M extends MintMethod> =
@@ -41,16 +35,13 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
   [M in TSupported]: PrepareExistingQuoteInputCommon & {
     /** Mint method to prepare, for example `bolt11`. */
     method: M;
-  } & MethodDataInput<M>;
-}[TSupported];
-
-export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: ImportMintQuoteInputCommon & {
-    /** Existing quote snapshot to track as an operation. */
-    quote: MintMethodQuoteSnapshot<M>;
-    /** Mint method to prepare, for example `bolt11`. */
-    method: M;
-  } & MethodDataInput<M>;
+  } & (M extends 'onchain'
+      ? {
+          /** Amount to withdraw from the reusable onchain quote. */
+          amount: UnitAmountLike;
+        }
+      : {}) &
+    MethodDataInput<M>;
 }[TSupported];
 
 export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
@@ -101,34 +92,23 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
+    const explicitAmount =
+      'amount' in input ? parseUnitAmount(input.amount, { explicitUnit: input.unit }) : undefined;
 
-    return this.mintOperationService.prepareExistingQuote(
+    return this.mintOperationService.prepare(
       input.mintUrl,
       input.method,
       input.quoteId,
       methodData,
       input.unit,
+      explicitAmount,
     );
   }
 
   /**
-   * Imports an existing quote snapshot into a prepared mint operation without executing it.
+   * Executes a pending mint operation and returns the latest operation state.
    */
-  async importQuote(input: ImportMintQuoteInput<TSupported>): Promise<PendingMintOperation> {
-    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
-
-    return this.mintOperationService.importQuote(
-      input.mintUrl,
-      input.quote,
-      input.method,
-      methodData,
-    );
-  }
-
-  /**
-   * Executes a pending mint operation and returns its terminal state.
-   */
-  async execute(operationOrId: MintOperation | string): Promise<TerminalMintOperation> {
+  async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'pending') {
       throw new Error(
@@ -200,7 +180,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Pending operations are executed, executing operations are recovered,
    * and terminal operations are returned as-is.
    */
-  async finalize(operationId: string): Promise<TerminalMintOperation> {
+  async finalize(operationId: string): Promise<MintOperation> {
     return this.mintOperationService.finalize(operationId);
   }
 

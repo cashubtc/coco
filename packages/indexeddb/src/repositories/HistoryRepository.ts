@@ -17,6 +17,7 @@ import {
 import type {
   IdbDb,
   MeltOperationRow,
+  MintQuoteRow,
   MintOperationRow,
   ReceiveOperationRow,
   SendOperationRow,
@@ -44,6 +45,7 @@ const stores = [
   'coco_cashu_send_operations',
   'coco_cashu_melt_operations',
   'coco_cashu_mint_operations',
+  'coco_cashu_canonical_mint_quotes',
   'coco_cashu_receive_operations',
   'coco_cashu_history',
 ] as const;
@@ -139,11 +141,17 @@ export class IdbHistoryRepository implements HistoryRepository {
         ),
         this.readVisibleLegacyRows(tx, tx.table('coco_cashu_history'), pageWindow),
       ]);
+      const mintRemoteStateByOperationId = await this.readMintRemoteStateByOperationId(
+        tx,
+        mintRows,
+      );
 
       const operationEntries = [
         ...sendRows.map((row) => this.sendRowToEntry(row)).filter(Boolean),
         ...meltRows.map((row) => this.meltRowToEntry(row)).filter(Boolean),
-        ...mintRows.map((row) => this.mintRowToEntry(row)).filter(Boolean),
+        ...mintRows
+          .map((row) => this.mintRowToEntry(row, mintRemoteStateByOperationId.get(row.id)))
+          .filter(Boolean),
         ...receiveRows.map((row) => this.receiveRowToEntry(row)).filter(Boolean),
       ] as HistoryEntry[];
 
@@ -183,7 +191,9 @@ export class IdbHistoryRepository implements HistoryRepository {
           const row = (await tx.table('coco_cashu_mint_operations').get(parsed.operationId)) as
             | MintOperationRow
             | undefined;
-          return row ? this.mintRowToEntry(row) : null;
+          if (!row) return null;
+          const quote = await this.getMintQuoteRowForOperation(tx, row);
+          return this.mintRowToEntry(row, quote?.lastObservedRemoteState ?? undefined);
         }
         case 'receive': {
           const row = (await tx.table('coco_cashu_receive_operations').get(parsed.operationId)) as
@@ -219,6 +229,32 @@ export class IdbHistoryRepository implements HistoryRepository {
       .offset(offset)
       .limit(limit)
       .toArray()) as TRow[];
+  }
+
+  private async readMintRemoteStateByOperationId(
+    tx: { table(name: string): Table },
+    rows: MintOperationRow[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    await Promise.all(
+      rows.map(async (row) => {
+        const quote = await this.getMintQuoteRowForOperation(tx, row);
+        if (quote?.lastObservedRemoteState) {
+          result.set(row.id, quote.lastObservedRemoteState);
+        }
+      }),
+    );
+    return result;
+  }
+
+  private async getMintQuoteRowForOperation(
+    tx: { table(name: string): Table },
+    row: MintOperationRow,
+  ): Promise<MintQuoteRow | undefined> {
+    if (!row.quoteId) return undefined;
+    return (await tx
+      .table('coco_cashu_canonical_mint_quotes')
+      .get([row.mintUrl, row.method, row.quoteId])) as MintQuoteRow | undefined;
   }
 
   private async readVisibleLegacyRows(
@@ -284,7 +320,7 @@ export class IdbHistoryRepository implements HistoryRepository {
     };
   }
 
-  private mintRowToEntry(row: MintOperationRow): HistoryEntry | null {
+  private mintRowToEntry(row: MintOperationRow, remoteState?: string): HistoryEntry | null {
     if (row.state === 'init') return null;
     return {
       id: operationHistoryId('mint', row.id),
@@ -299,7 +335,7 @@ export class IdbHistoryRepository implements HistoryRepository {
       paymentRequest: row.request ?? '',
       amount: deserializeAmount(row.amount ?? 0),
       state: row.state,
-      ...(row.lastObservedRemoteState ? { remoteState: row.lastObservedRemoteState } : {}),
+      ...(remoteState ? { remoteState } : {}),
       ...(row.error ? { error: row.error } : {}),
     };
   }

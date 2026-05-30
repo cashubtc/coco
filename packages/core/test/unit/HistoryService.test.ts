@@ -137,7 +137,7 @@ describe('HistoryService', () => {
     expect(historyUpdateEvents).toHaveLength(0);
   });
 
-  it('emits mint operation state and keeps remote quote state as metadata', async () => {
+  it('emits mint operation state without operation-level remote quote state', async () => {
     const failed = makeFailedMintOperation('mint-op-1', 'quote-1');
 
     await eventBus.emit('mint-op:finalized', {
@@ -153,7 +153,6 @@ describe('HistoryService', () => {
       type: 'mint',
       quoteId: failed.quoteId,
       state: 'failed',
-      remoteState: 'PAID',
       error: 'expired',
     });
   });
@@ -305,8 +304,6 @@ describe('HistoryService', () => {
       quoteId,
       request: 'lnbc100',
       expiry: null,
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: 2_000,
       outputData: { keep: [], send: [] },
       createdAt: 1_000,
       updatedAt: 2_000,

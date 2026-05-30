@@ -4,7 +4,7 @@ import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
 
 // Mock seed for deterministic testing
@@ -112,6 +112,35 @@ describe('KeyRingService', () => {
       const derived2 = await service.generateNewKeyPair();
       const stored2 = await repo.getPersistedKeyPair(derived2.publicKeyHex);
       expect(stored2?.derivationIndex).toBe(1);
+    });
+
+    it('derives mint quote keys from a separate NUT-20 branch', async () => {
+      const p2pk = await service.generateNewKeyPair({ dumpSecretKey: true });
+      const quoteKey = await service.generateMintQuoteKeyPair();
+
+      expect(p2pk.publicKeyHex).not.toBe(quoteKey.publicKeyHex);
+      expect(p2pk.derivationIndex).toBe(0);
+      expect(p2pk.purpose).toBe('p2pk');
+      expect(quoteKey.derivationIndex).toBe(0);
+      expect(quoteKey.purpose).toBe('nut20_mint_quote');
+      expect(quoteKey.publicKeyHex).toBe(
+        bytesToHex(secp256k1.getPublicKey(quoteKey.secretKey, true)),
+      );
+    });
+
+    it('keeps mint quote keys out of user-facing key queries and removal', async () => {
+      const p2pk = await service.generateNewKeyPair();
+      const quoteKey = await service.generateMintQuoteKeyPair();
+
+      expect(await service.getKeyPair(quoteKey.publicKeyHex)).toBeNull();
+      expect((await service.getAllKeyPairs()).map((key) => key.publicKeyHex)).toEqual([
+        p2pk.publicKeyHex,
+      ]);
+      expect((await service.getLatestKeyPair())?.publicKeyHex).toBe(p2pk.publicKeyHex);
+
+      await service.removeKeyPair(quoteKey.publicKeyHex);
+
+      expect(await service.getMintQuoteKeyPair(quoteKey.publicKeyHex)).not.toBeNull();
     });
 
     it('generates identical keys after database wipe (deterministic derivation)', async () => {

@@ -243,9 +243,6 @@ export function projectMintOperation(operation: MintOperation): MintHistoryEntry
     paymentRequest: pending.request,
     amount: pending.amount,
     state: pending.state,
-    ...(pending.lastObservedRemoteState
-      ? { remoteState: String(pending.lastObservedRemoteState) }
-      : {}),
     ...(pending.error ? { error: pending.error } : {}),
   };
 }

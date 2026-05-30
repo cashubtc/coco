@@ -1,4 +1,4 @@
-import type { Proof } from '@cashu/cashu-ts';
+import { Amount, type Proof } from '@cashu/cashu-ts';
 import type { MintOperationRepository, ProofRepository } from '../../repositories';
 import type {
   ExecutingMintOperation,
@@ -22,7 +22,6 @@ import type {
   MintMethodMeta,
   PendingMintCheckResult,
   MintMethodQuoteSnapshot,
-  MintMethodRemoteState,
 } from './MintMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -33,7 +32,6 @@ import type { Logger } from '../../logging/Logger';
 import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
 import {
   OperationInProgressError,
-  NetworkError,
   ProofValidationError,
   UnknownMintError,
 } from '../../models/Error';
@@ -42,8 +40,20 @@ import type { MintAdapter } from '../../infra';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
-import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote';
+import {
+  getMintQuoteAvailableAmount,
+  getMintQuoteAmount,
+  type MintQuote,
+} from '../../models/MintQuote';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+
+export interface ClaimMintQuoteOptions {
+  autoClaimRemaining?: boolean;
+}
+
+function isExpiredMintQuote(quote: Pick<MintQuote, 'expiry'>): boolean {
+  return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
+}
 
 /**
  * MintOperationService orchestrates mint quote redemption as a crash-safe saga.
@@ -88,21 +98,6 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
-
-    this.eventBus.on('mint-quote:updated', async ({ mintUrl, method, quoteId, quote }) => {
-      const operations = await this.getOperationsForQuote(mintUrl, method, quoteId);
-      await Promise.all(
-        operations
-          .filter((operation): operation is PendingMintOperation => operation.state === 'pending')
-          .map((operation) =>
-            this.recordPendingObservation(
-              operation.id,
-              quote.state,
-              quote.lastObservedRemoteStateAt ?? Date.now(),
-            ),
-          ),
-      );
-    });
   }
 
   private buildDeps() {
@@ -142,12 +137,12 @@ export class MintOperationService {
     return this.recoveryLock !== null;
   }
 
-  async init(
+  private async createInitOperation(
     mintUrl: string,
     intent: UnitAmount,
-    method: MintMethod = 'bolt11',
-    methodData: MintMethodData = {},
-    options?: { quoteId?: string },
+    method: MintMethod,
+    methodData: MintMethodData,
+    options: { quoteId: string },
   ): Promise<InitMintOperation> {
     const parsed = normalizeUnitAmount(intent);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
@@ -160,60 +155,36 @@ export class MintOperationService {
     }
 
     const operationId = generateSubId();
-    const createOperation = async (operationMintUrl: string, operationQuoteId?: string) => {
-      const operation = createMintOperation(
-        operationId,
-        operationMintUrl,
-        {
-          method,
-          methodData,
-        } as MintMethodMeta,
-        parsed,
-        operationQuoteId ? { quoteId: operationQuoteId } : undefined,
-      );
-
-      await this.mintOperationRepository.create(operation);
-      return operation;
-    };
-
-    const operation = options?.quoteId
-      ? await this.createQuoteBoundInitOperation(
-          mintUrl,
-          method,
-          options.quoteId,
-          parsed,
-          createOperation,
-        )
-      : await createOperation(mintUrl);
-
-    this.logger?.debug('Mint operation created', {
-      operationId,
-      mintUrl: operation.mintUrl,
-      quoteId: operation.quoteId,
-      method,
-      amount: parsed.amount,
-      unit: parsed.unit,
-    });
-
-    return operation;
-  }
-
-  private async createQuoteBoundInitOperation(
-    mintUrl: string,
-    method: MintMethod,
-    quoteId: string,
-    intent: UnitAmount,
-    createOperation: (mintUrl: string, quoteId: string) => Promise<InitMintOperation>,
-  ): Promise<InitMintOperation> {
     const releaseMintLock = await this.mintScopedLock.acquire(normalizeMintUrl(mintUrl));
     try {
       const quote = await this.resolveMintQuoteForOperationCreation(
         mintUrl,
         method,
-        quoteId,
-        intent,
+        options.quoteId,
+        parsed,
       );
-      return createOperation(quote.mintUrl, quote.quoteId);
+      const operation = createMintOperation(
+        operationId,
+        quote.mintUrl,
+        {
+          method,
+          methodData,
+        } as MintMethodMeta,
+        parsed,
+        { quoteId: quote.quoteId },
+      );
+
+      await this.mintOperationRepository.create(operation);
+      this.logger?.debug('Mint operation created', {
+        operationId,
+        mintUrl: operation.mintUrl,
+        quoteId: operation.quoteId,
+        method,
+        amount: parsed.amount,
+        unit: parsed.unit,
+      });
+
+      return operation;
     } finally {
       releaseMintLock();
     }
@@ -230,9 +201,15 @@ export class MintOperationService {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    if (!quote.amount.equals(intent.amount)) {
+    const fixedAmount = getMintQuoteAmount(quote);
+    if (fixedAmount && !fixedAmount.equals(intent.amount)) {
       throw new Error(
-        `Mint quote ${quote.quoteId} amount ${quote.amount} does not match requested amount ${intent.amount}`,
+        `Mint quote ${quote.quoteId} amount ${fixedAmount} does not match requested amount ${intent.amount}`,
+      );
+    }
+    if (!fixedAmount && !quote.reusable) {
+      throw new Error(
+        `Mint quote ${quote.quoteId} for ${method} at ${mintUrl} does not have a fixed amount`,
       );
     }
 
@@ -254,12 +231,13 @@ export class MintOperationService {
     return quote;
   }
 
-  async prepareExistingQuote(
+  async prepare(
     mintUrl: string,
     method: MintMethod,
     quoteId: string,
     methodData: MintMethodData = {},
     expectedUnit?: string,
+    explicitAmount?: UnitAmount,
   ): Promise<PendingMintOperation> {
     const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
       mintUrl,
@@ -268,70 +246,37 @@ export class MintOperationService {
       expectedUnit,
     );
 
-    const initOperation = await this.init(
+    const fixedAmount = getMintQuoteAmount(quote);
+    const amount = fixedAmount ?? explicitAmount?.amount;
+    if (!amount) {
+      throw new Error(
+        `Mint quote ${quoteId} for ${method} at ${mintUrl} does not have a fixed amount; pass an explicit amount for reusable quote preparation`,
+      );
+    }
+    if (explicitAmount && explicitAmount.unit !== quote.unit) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} unit ${quote.unit} does not match requested unit ${explicitAmount.unit}`,
+      );
+    }
+
+    const handler = this.handlerProvider.get(method);
+    await handler.validateQuoteForPrepare?.(quote as any);
+
+    const initOperation = await this.createInitOperation(
       quote.mintUrl,
-      { amount: quote.amount, unit: quote.unit },
+      { amount, unit: quote.unit },
       method,
       methodData,
       { quoteId: quote.quoteId },
     );
 
-    return this.prepare(initOperation.id);
+    return this.prepareInitOperation(initOperation.id);
   }
 
-  async importQuote(
-    mintUrl: string,
-    quote: MintMethodQuoteSnapshot,
-    method: MintMethod = 'bolt11',
-    methodData: MintMethodData = {},
-    options?: { skipMintLock?: boolean },
-  ): Promise<PendingMintOperation> {
-    if (!quote.amount || quote.amount.isZero()) {
-      throw new ProofValidationError(`Mint quote ${quote.quote} has invalid amount`);
-    }
-
-    if (method !== 'bolt11') {
-      throw new Error(`Unsupported mint quote import method ${String(method)}`);
-    }
-
-    const imported = await this.quoteLifecycle.importMintQuoteSnapshot(mintUrl, method, quote);
-    const importedSnapshot = mintQuoteToMethodSnapshot(imported);
-
-    const existing = await this.getOperationByQuote(imported.mintUrl, method, imported.quoteId);
-    if (existing?.state === 'pending') {
-      return existing;
-    }
-    if (existing?.state === 'init') {
-      return this.prepare(existing.id, {
-        importedQuote: importedSnapshot,
-        skipMintLock: options?.skipMintLock,
-      });
-    }
-    if (existing) {
-      throw new Error(
-        `Mint quote ${quote.quote} is already tracked by operation ${existing.id} in state ${existing.state}`,
-      );
-    }
-
-    const initOperation = await this.init(
-      imported.mintUrl,
-      { amount: imported.amount, unit: imported.unit },
-      method,
-      methodData,
-      { quoteId: imported.quoteId },
-    );
-
-    return this.prepare(initOperation.id, {
-      importedQuote: importedSnapshot,
-      skipMintLock: options?.skipMintLock,
-    });
-  }
-
-  async prepare(
+  private async prepareInitOperation(
     operationId: string,
     options?: {
       skipMintLock?: boolean;
-      importedQuote?: MintMethodQuoteSnapshot;
     },
   ): Promise<PendingMintOperation> {
     const releaseLock = await this.acquireOperationLock(operationId);
@@ -353,14 +298,19 @@ export class MintOperationService {
         releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
       }
       try {
-        const importedQuote =
-          options?.importedQuote ??
-          (await this.quoteLifecycle.loadMintQuoteSnapshotForOperation(initOp));
+        const importedQuote = await this.quoteLifecycle.loadMintQuoteSnapshotForOperation(initOp);
         const handler = this.handlerProvider.get(initOp.method);
-        await this.mintService.assertMethodUnitSupported(initOp.mintUrl, 4, initOp.method, {
-          amount: initOp.amount,
-          unit: initOp.unit,
-        });
+        await this.mintService.assertMethodUnitSupported(
+          initOp.mintUrl,
+          4,
+          initOp.method,
+          initOp.method === 'onchain'
+            ? initOp.unit
+            : {
+                amount: initOp.amount,
+                unit: initOp.unit,
+              },
+        );
         const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
           initOp.mintUrl,
           initOp.unit,
@@ -410,7 +360,17 @@ export class MintOperationService {
     throw new Error(`Failed to prepare operation ${operationId}`);
   }
 
-  async execute(operationId: string): Promise<TerminalMintOperation> {
+  async execute(operationId: string): Promise<MintOperation> {
+    const operation = await this.mintOperationRepository.getById(operationId);
+    //CODEX: Instead of checking for the operation method wouldnt it be better to load the quote and check if it is reusable?
+    if (operation?.state === 'pending' && operation.method === 'onchain') {
+      return this.claimReusableQuoteOperation(operation as PendingMintOperation);
+    }
+
+    return this.executeReadyOperation(operationId);
+  }
+
+  private async executeReadyOperation(operationId: string): Promise<TerminalMintOperation> {
     const releaseLock = await this.acquireOperationLockAfterWait(operationId);
     try {
       const operation = await this.mintOperationRepository.getById(operationId);
@@ -456,6 +416,7 @@ export class MintOperationService {
             }
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
+            //CODEX: Where does recovery actually happen?
             const proofsRecovered = await this.ensureOutputsSaved(executing);
             const error = proofsRecovered
               ? undefined
@@ -489,7 +450,7 @@ export class MintOperationService {
     }
   }
 
-  async finalize(operationId: string): Promise<TerminalMintOperation> {
+  async finalize(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationRepository.getById(operationId);
     if (!operation) {
       throw new Error(`Operation ${operationId} not found`);
@@ -736,6 +697,220 @@ export class MintOperationService {
     return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
   }
 
+  async claimMintQuote(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    options: ClaimMintQuoteOptions = {},
+  ): Promise<MintOperation[]> {
+    if (method !== 'onchain') {
+      return [];
+    }
+
+    const releaseQuoteLock = await this.mintScopedLock.acquire(
+      this.quoteLockKey(mintUrl, method, quoteId),
+    );
+    try {
+      const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+      if (!quote) {
+        throw new Error(
+          `Cannot claim mint quote ${quoteId}: quote for ${method} at ${mintUrl} was not found`,
+        );
+      }
+      if (quote.method !== 'onchain') {
+        return [];
+      }
+
+      const claimable = await this.getLocallyClaimableQuoteAmount(quote);
+      const siblings = await this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
+      let selectedAmount = Amount.zero();
+      const selected: PendingMintOperation[] = [];
+      const autoClaimRemaining = options.autoClaimRemaining ?? true;
+
+      for (const operation of siblings) {
+        if (operation.state !== 'pending') {
+          continue;
+        }
+
+        const nextAmount = selectedAmount.add(operation.amount);
+        if (nextAmount.greaterThan(claimable)) {
+          break;
+        }
+
+        selected.push(operation as PendingMintOperation);
+        selectedAmount = nextAmount;
+      }
+
+      const claimed: MintOperation[] = [];
+      for (const operation of selected) {
+        claimed.push(await this.executeReadyOperation(operation.id));
+      }
+
+      const remaining = claimable.subtract(selectedAmount);
+      if (autoClaimRemaining && !remaining.isZero()) {
+        const refreshedQuote =
+          (await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId)) ?? quote;
+        if (refreshedQuote.method === 'onchain') {
+          const currentClaimable = await this.getLocallyClaimableQuoteAmount(refreshedQuote);
+          const autoClaimAmount = remaining.lessThan(currentClaimable)
+            ? remaining
+            : currentClaimable;
+
+          if (!autoClaimAmount.isZero()) {
+            const autoClaim = await this.createAutoClaimOperation(refreshedQuote, autoClaimAmount);
+            claimed.push(await this.executeReadyOperation(autoClaim.id));
+          }
+        }
+      }
+
+      return claimed;
+    } finally {
+      releaseQuoteLock();
+    }
+  }
+
+  async claimPendingMintQuotes(options: ClaimMintQuoteOptions = {}): Promise<MintOperation[]> {
+    const quotes = await this.quoteLifecycle.getPendingMintQuotes('onchain');
+    const claimed: MintOperation[] = [];
+
+    for (const quote of quotes) {
+      if (quote.method !== 'onchain') {
+        continue;
+      }
+      if (getMintQuoteAvailableAmount(quote).isZero()) {
+        continue;
+      }
+
+      claimed.push(
+        ...(await this.claimMintQuote(quote.mintUrl, quote.method, quote.quoteId, options)),
+      );
+    }
+
+    return claimed;
+  }
+
+  /** @internal Used by the mint operation processor to suppress no-op reusable quote claims. */
+  async hasLocallyClaimableMintQuoteBalance(
+    mintUrl: string,
+    method: 'onchain',
+    quoteId: string,
+  ): Promise<boolean> {
+    const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
+    if (!quote || quote.method !== 'onchain') {
+      return false;
+    }
+
+    return !(await this.getLocallyClaimableQuoteAmount(quote)).isZero();
+  }
+
+  private async claimReusableQuoteOperation(
+    operation: PendingMintOperation,
+  ): Promise<MintOperation> {
+    const releaseQuoteLock = await this.mintScopedLock.acquire(
+      this.quoteLockKey(operation.mintUrl, operation.method, operation.quoteId),
+    );
+    try {
+      const current = await this.mintOperationRepository.getById(operation.id);
+      if (!current || current.state !== 'pending') {
+        if (current) return current;
+        throw new Error(`Operation ${operation.id} not found`);
+      }
+
+      const pending = current as PendingMintOperation;
+      const quote = await this.quoteLifecycle.getMintQuote(
+        pending.mintUrl,
+        pending.method,
+        pending.quoteId,
+      );
+      if (!quote) {
+        throw new Error(
+          `Cannot claim operation ${pending.id}: mint quote ${pending.quoteId} for ${pending.method} at ${pending.mintUrl} was not found`,
+        );
+      }
+
+      const claimable = await this.getLocallyClaimableQuoteAmount(quote, pending.id);
+      if (pending.amount.greaterThan(claimable)) {
+        this.logger?.info('Reusable mint quote is not sufficiently funded for operation', {
+          operationId: pending.id,
+          mintUrl: pending.mintUrl,
+          quoteId: pending.quoteId,
+          requestedAmount: pending.amount.toString(),
+          claimableAmount: claimable.toString(),
+        });
+        return pending;
+      }
+
+      return this.executeReadyOperation(pending.id);
+    } finally {
+      releaseQuoteLock();
+    }
+  }
+
+  private async createAutoClaimOperation(
+    quote: MintQuote<'onchain'>,
+    amount: Amount,
+  ): Promise<PendingMintOperation<'onchain'>> {
+    const initOperation = await this.createInitOperation(
+      quote.mintUrl,
+      { amount, unit: quote.unit },
+      quote.method,
+      {},
+      { quoteId: quote.quoteId },
+    );
+
+    return this.prepareInitOperation(initOperation.id) as Promise<PendingMintOperation<'onchain'>>;
+  }
+
+  private async getLocallyClaimableQuoteAmount(
+    quote: MintQuote,
+    targetOperationId?: string,
+  ): Promise<Amount> {
+    if (isExpiredMintQuote(quote)) {
+      return Amount.zero();
+    }
+
+    let remoteAvailable = getMintQuoteAvailableAmount(quote);
+    const siblings = await this.mintOperationRepository.getByQuoteId(
+      quote.mintUrl,
+      quote.method,
+      quote.quoteId,
+    );
+    if (quote.method === 'onchain') {
+      const locallyIssued = siblings.reduce((total, operation) => {
+        if (operation.state !== 'finalized') {
+          return total;
+        }
+
+        return total.add(operation.amount);
+      }, Amount.zero());
+      const effectiveIssued = locallyIssued.greaterThan(quote.quoteData.amountIssued)
+        ? locallyIssued
+        : quote.quoteData.amountIssued;
+
+      remoteAvailable = quote.quoteData.amountPaid.lessThan(effectiveIssued)
+        ? Amount.zero()
+        : quote.quoteData.amountPaid.subtract(effectiveIssued);
+    }
+
+    const locallyReserved = siblings.reduce((total, operation) => {
+      if (operation.state !== 'executing' || operation.id === targetOperationId) {
+        return total;
+      }
+
+      return total.add(operation.amount);
+    }, Amount.zero());
+
+    if (remoteAvailable.lessThan(locallyReserved)) {
+      return Amount.zero();
+    }
+
+    return remoteAvailable.subtract(locallyReserved);
+  }
+
+  private quoteLockKey(mintUrl: string, method: MintMethod, quoteId: string): string {
+    return `${mintUrl}::${method}::${quoteId}`;
+  }
+
   async getInFlightOperations(): Promise<MintOperation[]> {
     return this.mintOperationRepository.getPending();
   }
@@ -758,14 +933,6 @@ export class MintOperationService {
   async getPendingOperations(): Promise<PendingMintOperation[]> {
     const ops = await this.mintOperationRepository.getByState('pending');
     return ops.filter((op): op is PendingMintOperation => op.state === 'pending');
-  }
-
-  async recordQuoteObservation(
-    operation: PendingOrLaterOperation,
-    state: MintMethodRemoteState,
-    observedAt = Date.now(),
-  ): Promise<MintQuote> {
-    return this.quoteLifecycle.recordMintQuoteObservation(operation, state, observedAt);
   }
 
   private async tryRecoverInitOperation(op: InitMintOperation): Promise<void> {
@@ -841,18 +1008,17 @@ export class MintOperationService {
       throw new Error(`Cannot finalize operation ${op.id} in state ${current.state}`);
     }
 
-    const observedRemoteStateAt = Date.now();
-    await this.recordQuoteObservation(
-      current as PendingOrLaterOperation,
-      'ISSUED',
-      observedRemoteStateAt,
-    );
+    if (current.method === 'bolt11') {
+      await this.quoteLifecycle.recordMintQuoteObservation(
+        current as PendingOrLaterOperation,
+        'ISSUED',
+        Date.now(),
+      );
+    }
 
     const finalized: FinalizedMintOperation = {
       ...(current as PendingOrLaterOperation),
       state: 'finalized',
-      lastObservedRemoteState: 'ISSUED',
-      lastObservedRemoteStateAt: observedRemoteStateAt,
       updatedAt: Date.now(),
       error,
     };
@@ -970,59 +1136,27 @@ export class MintOperationService {
       wallet,
     });
 
-    const observedPending: PendingMintOperation = {
-      ...op,
-      lastObservedRemoteState: result.observedRemoteState,
-      lastObservedRemoteStateAt: result.observedRemoteStateAt,
-      updatedAt: Date.now(),
-    };
+    if (result.quoteSnapshot) {
+      await this.quoteLifecycle.recordMintQuoteSnapshot(
+        op.mintUrl,
+        op.method,
+        result.quoteSnapshot as MintMethodQuoteSnapshot,
+      );
+    }
 
-    await this.recordQuoteObservation(
-      observedPending,
-      result.observedRemoteState,
-      result.observedRemoteStateAt,
-    );
+    if (result.observedRemoteState !== undefined) {
+      await this.quoteLifecycle.recordMintQuoteObservation(
+        op,
+        result.observedRemoteState,
+        result.observedRemoteStateAt,
+      );
+    }
 
     if (result.category === 'terminal' && result.terminalFailure) {
       await this.failPendingOperation(op, result.terminalFailure);
     }
 
     return result;
-  }
-
-  async recordPendingObservation(
-    operationId: string,
-    observedRemoteState: MintMethodRemoteState,
-    observedRemoteStateAt = Date.now(),
-  ): Promise<PendingMintOperation> {
-    const releaseLock = await this.acquireOperationLock(operationId);
-    try {
-      const op = await this.getOperation(operationId);
-      if (!op || op.state !== 'pending') {
-        throw new Error(
-          `Cannot record observation for operation ${operationId}: expected state 'pending' but found '${
-            op?.state ?? 'not found'
-          }'`,
-        );
-      }
-
-      const observedPending: PendingMintOperation = {
-        ...op,
-        lastObservedRemoteState: observedRemoteState,
-        lastObservedRemoteStateAt: observedRemoteStateAt,
-        updatedAt: Date.now(),
-      };
-      await this.mintOperationRepository.update(observedPending);
-      await this.eventBus.emit('mint-op:pending', {
-        mintUrl: observedPending.mintUrl,
-        operationId: observedPending.id,
-        operation: observedPending,
-      });
-
-      return observedPending;
-    } finally {
-      releaseLock();
-    }
   }
 
   async checkPendingOperation(operationId: string): Promise<PendingMintCheckResult> {
