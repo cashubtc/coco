@@ -173,8 +173,63 @@ describe('MintBolt12Handler', () => {
     expect(result.reusable).toBe(true);
   });
 
+  it('rejects fixed-amount quotes when the mint omits the response amount', async () => {
+    (wallet.createMintQuoteBolt12 as Mock<any>).mockImplementation(async () =>
+      quote({ amount: undefined }),
+    );
+
+    await expect(
+      handler.createQuote({
+        ...buildPrepareContext(),
+        mintUrl,
+        createQuoteData: {
+          unit: 'sat',
+          amount: { amount: Amount.from(10), unit: 'sat' },
+        },
+      }),
+    ).rejects.toThrow('does not match requested amount');
+  });
+
+  it('rejects fixed-amount quotes when the mint returns a null response amount', async () => {
+    (wallet.createMintQuoteBolt12 as Mock<any>).mockImplementation(async () =>
+      quote({ amount: null as unknown as Amount }),
+    );
+
+    await expect(
+      handler.createQuote({
+        ...buildPrepareContext(),
+        mintUrl,
+        createQuoteData: {
+          unit: 'sat',
+          amount: { amount: Amount.from(10), unit: 'sat' },
+        },
+      }),
+    ).rejects.toThrow('does not match requested amount');
+  });
+
+  it('rejects fixed-amount quotes when the mint returns a different response amount', async () => {
+    (wallet.createMintQuoteBolt12 as Mock<any>).mockImplementation(async () =>
+      quote({ amount: Amount.from(21) }),
+    );
+
+    await expect(
+      handler.createQuote({
+        ...buildPrepareContext(),
+        mintUrl,
+        createQuoteData: {
+          unit: 'sat',
+          amount: { amount: Amount.from(10), unit: 'sat' },
+        },
+      }),
+    ).rejects.toThrow('does not match requested amount');
+  });
+
   it('creates amountless quotes with method-specific description data', async () => {
-    await handler.createQuote({
+    (wallet.createMintQuoteBolt12 as Mock<any>).mockImplementation(async () =>
+      quote({ amount: undefined }),
+    );
+
+    const result = await handler.createQuote({
       ...buildPrepareContext(),
       mintUrl,
       createQuoteData: {
@@ -187,6 +242,7 @@ describe('MintBolt12Handler', () => {
       amount: undefined,
       description: 'pay any amount',
     });
+    expect(result.amount).toBeUndefined();
   });
 
   it('prepares amountless imported quotes while preserving operation amount', async () => {

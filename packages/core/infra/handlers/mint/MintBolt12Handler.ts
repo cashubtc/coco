@@ -363,9 +363,15 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   private assertQuoteAmount(quote: MintQuoteBolt12Response, expectedAmount?: Amount): void {
-    if (expectedAmount && quote.amount && !quote.amount.equals(expectedAmount)) {
+    if (expectedAmount === undefined) {
+      return;
+    }
+
+    if (!quote.amount || !quote.amount.equals(expectedAmount)) {
+      const observedAmount = quote.amount ?? '(missing)';
       throw new Error(
-        `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${expectedAmount}`,
+        `Mint quote ${quote.quote} amount ${observedAmount} ` +
+          `does not match requested amount ${expectedAmount}`,
       );
     }
   }
