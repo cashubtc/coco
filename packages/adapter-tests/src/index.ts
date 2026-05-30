@@ -1035,6 +1035,47 @@ export async function runMeltOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('rejects duplicate quote-bound melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-1', quoteId: 'shared-melt-quote' }),
+        );
+
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.create(
+              createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'shared-melt-quote' }),
+            ),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects updates that would duplicate a melt quote binding', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-1', quoteId: 'shared-melt-quote' }),
+        );
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'other-melt-quote' }),
+        );
+
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.update(
+              createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'shared-melt-quote' }),
+            ),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 

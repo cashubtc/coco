@@ -18,6 +18,9 @@ type MeltSettlementData = {
   finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
 };
 
+const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
+  'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
+
 interface MeltOperationRow {
   id: string;
   mintUrl: string;
@@ -198,6 +201,8 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
       throw new Error(`MeltOperation with id ${operation.id} already exists`);
     }
 
+    await this.assertNoDuplicateQuoteOperation(operation);
+
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
@@ -219,6 +224,8 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
     if (!exists) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
+
+    await this.assertNoDuplicateQuoteOperation(operation);
 
     const updatedAtSeconds = getUnixTimeSeconds();
 
@@ -318,5 +325,20 @@ export class ExpoMeltOperationRepository implements MeltOperationRepository {
 
   async delete(id: string): Promise<void> {
     await this.db.run('DELETE FROM coco_cashu_melt_operations WHERE id = ?', [id]);
+  }
+
+  private async assertNoDuplicateQuoteOperation(operation: MeltOperation): Promise<void> {
+    const quoteId = getOperationQuoteId(operation);
+    if (!quoteId) return;
+
+    const duplicate = await this.db.get<{ id: string }>(
+      'SELECT id FROM coco_cashu_melt_operations WHERE mintUrl = ? AND quoteId = ? AND id <> ? LIMIT 1',
+      [operation.mintUrl, quoteId, operation.id],
+    );
+    if (duplicate) {
+      throw new Error(
+        `MeltOperation already exists for mint ${operation.mintUrl} and quote ${quoteId}`,
+      );
+    }
   }
 }

@@ -18,6 +18,9 @@ type MeltSettlementData = {
   finalizedData?: Extract<MeltOperation, { state: 'finalized' }>['finalizedData'];
 };
 
+const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
+  'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
+
 const preparedStates: MeltOperationState[] = [
   'prepared',
   'executing',
@@ -174,6 +177,19 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
         throw new Error(`MeltOperation with id ${operation.id} already exists`);
       }
 
+      const quoteId = getOperationQuoteId(operation);
+      if (quoteId) {
+        const duplicate = await table
+          .where('[mintUrl+quoteId]')
+          .equals([operation.mintUrl, quoteId])
+          .first();
+        if (duplicate) {
+          throw new Error(
+            `MeltOperation already exists for mint ${operation.mintUrl} and quote ${quoteId}`,
+          );
+        }
+      }
+
       await table.add(operationToRow(operation));
     });
   }
@@ -184,6 +200,19 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
       const existing = await table.get(operation.id);
       if (!existing) {
         throw new Error(`MeltOperation with id ${operation.id} not found`);
+      }
+
+      const quoteId = getOperationQuoteId(operation);
+      if (quoteId) {
+        const duplicate = await table
+          .where('[mintUrl+quoteId]')
+          .equals([operation.mintUrl, quoteId])
+          .first();
+        if (duplicate && duplicate.id !== operation.id) {
+          throw new Error(
+            `MeltOperation already exists for mint ${operation.mintUrl} and quote ${quoteId}`,
+          );
+        }
       }
 
       const row = operationToRow(operation);
