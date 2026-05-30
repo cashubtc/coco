@@ -4,10 +4,7 @@ import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
-import {
-  mintQuoteFromBolt12Response,
-  type MintQuote,
-} from '../../../models/MintQuote';
+import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -360,7 +357,9 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     this.assertQuoteAmount(quote, expectedAmount);
 
     if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
-      throw new Error(`BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`);
+      throw new Error(
+        `BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`,
+      );
     }
   }
 
