@@ -205,6 +205,23 @@ describe('MintBolt12Handler', () => {
     expect(result.amount).toEqual(Amount.from(10));
   });
 
+  it('prepares fixed-amount offers with a different operation amount', async () => {
+    const fixedOfferQuote = quote({ amount: Amount.from(21), amount_paid: Amount.from(63) });
+
+    const result = await handler.prepare(
+      buildPrepareContext({
+        importedQuote: fixedOfferQuote,
+        operation: {
+          ...operation,
+          amount: Amount.from(10),
+        },
+      }),
+    );
+
+    expect(wallet.createMintQuoteBolt12).not.toHaveBeenCalled();
+    expect(result.amount).toEqual(Amount.from(10));
+  });
+
   it('rejects imported quotes that do not match the bound operation quote id', async () => {
     await expect(
       handler.prepare(

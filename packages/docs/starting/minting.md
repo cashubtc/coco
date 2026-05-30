@@ -107,8 +107,9 @@ if (!claimable.isZero()) {
 }
 ```
 
-BOLT12 uses the same quote-first shape. Fixed-amount BOLT12 quotes can be
-prepared without repeating the amount.
+BOLT12 uses the same quote-first shape. A fixed amount on a BOLT12 quote is
+encoded into the reusable offer and constrains each payer payment, but the
+wallet still chooses how much to mint from the claimable quote balance.
 
 ```ts
 const offerQuote = await coco.quotes.mint.create({
@@ -125,6 +126,7 @@ const pendingOfferMint = await coco.ops.mint.prepare({
   mintUrl: 'https://minturl.com',
   method: 'bolt12',
   quoteId: offerQuote.quoteId,
+  amount: { amount: 10, unit: 'sat' },
 });
 ```
 

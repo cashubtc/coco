@@ -74,12 +74,18 @@ export function getMintQuoteRemoteState(
   return isStatefulMintQuote(quote) ? quote.state : undefined;
 }
 
+/**
+ * Returns the fixed mint operation amount for stateful quotes.
+ *
+ * Reusable quote metadata may include a payment amount, such as a fixed BOLT12
+ * offer amount, but that does not constrain the later mint operation amount.
+ */
 export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   if (isStatefulMintQuote(quote)) {
     return quote.amount;
   }
 
-  return quote.method === 'bolt12' ? quote.amount : undefined;
+  return undefined;
 }
 
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {

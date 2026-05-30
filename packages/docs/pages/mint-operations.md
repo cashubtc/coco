@@ -161,9 +161,10 @@ await coco.ops.mint.finalize(first.id);
 await coco.ops.mint.finalize(second.id);
 ```
 
-BOLT12 uses the same quote-first flow. Fixed-amount BOLT12 quotes can be
-prepared without an explicit operation amount; amountless BOLT12 quotes require
-one.
+BOLT12 uses the same quote-first flow. A fixed amount on a BOLT12 quote is
+encoded into the reusable offer and constrains each payer payment, but it does
+not constrain the later mint operation amount. Always pass the amount you want
+to mint from the currently claimable quote balance.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -180,6 +181,7 @@ const pending = await coco.ops.mint.prepare({
   mintUrl,
   method: 'bolt12',
   quoteId: quote.quoteId,
+  amount: { amount: 10, unit: 'sat' },
 });
 ```
 

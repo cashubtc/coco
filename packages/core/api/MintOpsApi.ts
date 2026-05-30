@@ -42,8 +42,8 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
         }
       : M extends 'bolt12'
         ? {
-            /** Amount to withdraw from an amountless reusable BOLT12 quote. */
-            amount?: UnitAmountLike;
+            /** Amount to mint from the reusable BOLT12 quote. */
+            amount: UnitAmountLike;
           }
         : {}) &
     MethodDataInput<M>;

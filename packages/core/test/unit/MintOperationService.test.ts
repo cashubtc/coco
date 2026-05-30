@@ -1,6 +1,11 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { OutputData, type MintQuoteBolt11Response, type Proof } from '@cashu/cashu-ts';
+import {
+  OutputData,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+  type Proof,
+} from '@cashu/cashu-ts';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
@@ -23,6 +28,7 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import {
   getMintQuoteAvailableAmount,
   mintQuoteFromBolt11Response,
+  mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
 } from '../../models/MintQuote';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
@@ -137,6 +143,24 @@ describe('MintOperationService', () => {
         amount_issued: amounts.issued ?? Amount.zero(),
       }),
     );
+  };
+
+  const persistBolt12Quote = async (
+    quote = 'bolt12-quote-1',
+    amounts: { amount?: Amount; paid?: Amount; issued?: Amount; expiry?: number } = {},
+  ): Promise<void> => {
+    const response: MintQuoteBolt12Response = {
+      quote,
+      request: 'lno1test',
+      amount: amounts.amount ?? null,
+      unit: 'sat',
+      expiry: amounts.expiry ?? Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '2'),
+      amount_paid: amounts.paid ?? Amount.zero(),
+      amount_issued: amounts.issued ?? Amount.zero(),
+    };
+
+    await quoteRepo.upsertMintQuote(mintQuoteFromBolt12Response(mintUrl, response));
   };
 
   const useAutoClaimOnchainHandler = (paid = Amount.from(10)) => {
@@ -412,6 +436,39 @@ describe('MintOperationService', () => {
     expect(pending.method).toBe('onchain');
     expect(pending.amount.equals(Amount.from(10))).toBe(true);
     expect(pending.quoteId).toBe(onchainQuoteId);
+  });
+
+  it('prepare accepts fixed-amount BOLT12 quotes with a different explicit mint amount', async () => {
+    const bolt12QuoteId = 'bolt12-quote-1';
+    await persistBolt12Quote(bolt12QuoteId, {
+      amount: Amount.from(21),
+      paid: Amount.from(63),
+      issued: Amount.zero(),
+    });
+    const bolt12Handler = {
+      ...handler,
+      validateQuoteForPrepare: mock(async () => {}),
+      prepare: mock(async ({ operation, importedQuote }: any) => ({
+        ...operation,
+        state: 'pending' as const,
+        quoteId: importedQuote.quote,
+        request: importedQuote.request,
+        expiry: importedQuote.expiry,
+        pubkey: importedQuote.pubkey,
+        outputData: makeSerializedOutputData('bolt12-out-1', operation.amount),
+      })),
+    } as unknown as MintMethodHandler<'bolt12'>;
+    (handlerProvider.get as Mock<any>).mockImplementation(() => bolt12Handler);
+
+    const pending = await service.prepare(mintUrl, 'bolt12', bolt12QuoteId, {}, undefined, {
+      amount: Amount.from(10),
+      unit: 'sat',
+    });
+
+    expect(bolt12Handler.validateQuoteForPrepare).toHaveBeenCalled();
+    expect(pending.method).toBe('bolt12');
+    expect(pending.amount.equals(Amount.from(10))).toBe(true);
+    expect(pending.quoteId).toBe(bolt12QuoteId);
   });
 
   it('prepare fails before persisting onchain operations when key material is missing', async () => {

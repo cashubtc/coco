@@ -32,7 +32,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # local Codex workspace data
 .codex
-issues/
 
 # Finder (MacOS) folder config
 .DS_Store

@@ -30,6 +30,13 @@ type _AssertOnchainPrepareRequiresAmount = Assert<
     ? true
     : false
 >;
+type _AssertBolt12PrepareRequiresAmount = Assert<
+  Extract<PrepareMintInput, { method: 'bolt12' }> extends {
+    amount: unknown;
+  }
+    ? true
+    : false
+>;
 type _AssertGetByQuoteUsesObjectInput = Assert<
   GetMintByQuoteInput extends {
     mintUrl: string;
@@ -147,6 +154,25 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepare).toHaveBeenCalledWith(
       mintUrl,
       'onchain',
+      quoteId,
+      {},
+      'sat',
+      { amount: Amount.from(10), unit: 'sat' },
+    );
+  });
+
+  it('prepare passes explicit BOLT12 mint amounts to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      quoteId,
+      method: 'bolt12',
+      amount: 10,
+      unit: 'sat',
+    });
+
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt12',
       quoteId,
       {},
       'sat',

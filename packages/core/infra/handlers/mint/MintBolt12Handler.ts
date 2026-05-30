@@ -79,7 +79,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     assertSameUnit(quote.unit, ctx.operation.unit, `BOLT12 mint quote ${quote.quote}`);
     await this.requireQuoteKey(quote.pubkey);
-    this.assertQuoteAmount(quote, ctx.operation.amount);
 
     const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
       ctx.operation.mintUrl,
