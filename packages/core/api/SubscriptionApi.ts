@@ -14,7 +14,7 @@ export class SubscriptionApi {
   async awaitMintQuotePaid(
     mintUrl: string,
     quoteId: string,
-    method: 'bolt11' | 'bolt12' = 'bolt11',
+    method: 'bolt11' | 'onchain' | 'bolt12' = 'bolt11',
   ): Promise<unknown> {
     return this.awaitFirstNotification(mintUrl, `${method}_mint_quote`, [quoteId]);
   }
@@ -22,7 +22,7 @@ export class SubscriptionApi {
   async awaitMeltQuotePaid(
     mintUrl: string,
     quoteId: string,
-    method: 'bolt11' | 'bolt12' = 'bolt11',
+    method: 'bolt11' | 'onchain' | 'bolt12' = 'bolt11',
   ): Promise<unknown> {
     return this.awaitFirstNotification(mintUrl, `${method}_melt_quote`, [quoteId]);
   }

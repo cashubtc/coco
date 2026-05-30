@@ -11,7 +11,12 @@ import type {
   PreparedOrLaterOperation,
 } from './MeltOperation';
 import { createMeltOperation, hasPreparedData } from './MeltOperation';
-import type { MeltMethod, MeltMethodInputData, PendingCheckResult } from './MeltMethodHandler';
+import type {
+  MeltMethod,
+  MeltMethodData,
+  MeltMethodInputData,
+  PendingCheckResult,
+} from './MeltMethodHandler';
 import { normalizeMeltMethodData } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -28,6 +33,7 @@ import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -213,19 +219,39 @@ export class MeltOperationService {
     mintUrl: string,
     method: MeltMethod,
     quoteId: string,
-    expectedUnit?: string,
+    options: { expectedUnit?: string; feeIndex?: number } = {},
   ): Promise<PreparedMeltOperation> {
     const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
       mintUrl,
       method,
       quoteId,
-      expectedUnit,
+      options.expectedUnit,
     );
-    const methodData = this.quoteLifecycle.methodDataFromMeltQuote(quote);
+    const methodData = this.methodDataFromMeltQuote(quote, options);
     const initOperation = await this.init(quote.mintUrl, method, methodData, quote.unit, {
       quoteId: quote.quoteId,
     });
     return this.prepare(initOperation.id);
+  }
+
+  private methodDataFromMeltQuote(
+    quote: MeltQuote,
+    options: { feeIndex?: number } = {},
+  ): MeltMethodData {
+    switch (quote.method) {
+      case 'bolt11':
+        return { invoice: quote.request };
+      case 'bolt12':
+        return { offer: quote.request };
+      case 'onchain': {
+        const { feeIndex } = resolveOnchainMeltFeeOption(quote, options.feeIndex);
+        return {
+          address: quote.request,
+          amountSats: quote.amount,
+          feeIndex,
+        };
+      }
+    }
   }
 
   /**

@@ -132,6 +132,49 @@ describe('PollingTransport subscription kinds', () => {
     transport.closeAll();
   });
 
+  it('polls onchain melt quotes with full checkMeltQuoteOnchain responses', async () => {
+    const checkMeltQuoteOnchain = mock(() =>
+      Promise.resolve({
+        quote: 'onchain-melt-quote-1',
+        request: 'bc1ptest',
+        amount: 10,
+        unit: 'sat',
+        expiry: 1_730_000_000,
+        state: 'PENDING',
+        fee_options: [{ fee_index: 0, fee_reserve: 1, estimated_blocks: 3 }],
+        selected_fee_index: null,
+        outpoint: null,
+      }),
+    );
+    const adapter = {
+      checkMintQuote: mock(() => Promise.resolve({})),
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkMeltQuoteOnchain,
+      checkProofStates: mock(() => Promise.resolve([])),
+    } as unknown as MintAdapter;
+    const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
+    const messages: any[] = [];
+
+    transport.on(mintUrl, 'message', (evt) => {
+      messages.push(JSON.parse(evt.data));
+    });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'onchain_melt_quote', subId: 'onchain-melt-sub-1', filters: ['quote1'] },
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, 'quote1');
+    expect(
+      messages.some((message) => message.params?.payload?.quote === 'onchain-melt-quote-1'),
+    ).toBe(true);
+
+    transport.closeAll();
+  });
+
   it('emits an error and does not enqueue unsupported subscription kinds', async () => {
     const adapter = createMockMintAdapter();
     const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());

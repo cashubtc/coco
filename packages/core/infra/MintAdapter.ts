@@ -6,6 +6,7 @@ import {
   type Proof,
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
+  type MeltQuoteOnchainResponse,
   type GetKeysetsResponse,
   type AuthProvider,
 } from '@cashu/cashu-ts';
@@ -95,6 +96,12 @@ export class MintAdapter {
     return await cashuMint.checkMeltQuoteBolt12(quoteId);
   }
 
+  // Check current state of an onchain melt quote (returns full response including change/outpoint)
+  async checkMeltQuoteOnchain(mintUrl: string, quoteId: string): Promise<MeltQuoteOnchainResponse> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    return await cashuMint.checkMeltQuoteOnchain(quoteId);
+  }
+
   // Check current state of a bolt11 melt quote (returns only state)
   async checkMeltQuoteState(
     mintUrl: string,
@@ -110,6 +117,15 @@ export class MintAdapter {
     quoteId: string,
   ): Promise<MeltQuoteBolt12Response['state']> {
     const res = await this.checkMeltQuoteBolt12(mintUrl, quoteId);
+    return res.state;
+  }
+
+  // Check current state of an onchain melt quote (returns only state)
+  async checkMeltQuoteOnchainState(
+    mintUrl: string,
+    quoteId: string,
+  ): Promise<MeltQuoteOnchainResponse['state']> {
+    const res = await this.checkMeltQuoteOnchain(mintUrl, quoteId);
     return res.state;
   }
 
@@ -141,5 +157,23 @@ export class MintAdapter {
     const cashuMint = this.getCashuMint(mintUrl);
     const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
     return cashuMint.meltBolt12({ quote: quoteId, inputs: proofsToSend, outputs: blindedMessages });
+  }
+
+  async customMeltOnchain(
+    mintUrl: string,
+    proofsToSend: Proof[],
+    changeOutputs: OutputData[],
+    quoteId: string,
+    feeIndex: number,
+  ): Promise<MeltQuoteOnchainResponse> {
+    const cashuMint = this.getCashuMint(mintUrl);
+    const blindedMessages = changeOutputs.map((output) => output.blindedMessage);
+    return cashuMint.meltOnchain({
+      quote: quoteId,
+      inputs: proofsToSend,
+      outputs: blindedMessages,
+      fee_index: feeIndex,
+      prefer_async: true,
+    });
   }
 }
