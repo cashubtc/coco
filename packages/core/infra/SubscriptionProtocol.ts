@@ -5,7 +5,9 @@ export type WsRequestMethod = 'subscribe' | 'unsubscribe';
 export type SubscriptionKind =
   | 'bolt11_mint_quote'
   | 'onchain_mint_quote'
+  | 'bolt12_mint_quote'
   | 'bolt11_melt_quote'
+  | 'bolt12_melt_quote'
   | 'proof_state';
 
 export type UnsubscribeHandler = () => Promise<void>;

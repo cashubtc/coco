@@ -201,6 +201,7 @@ describe('MeltOperationService', () => {
           unit: operation.unit,
           method: operation.method,
           methodData: operation.methodData,
+          quoteId: operation.quoteId,
         }),
       ),
       execute: mock(async ({ operation }) => ({
@@ -394,6 +395,31 @@ describe('MeltOperationService', () => {
       expect(byQuote?.id).toBe(prepared.id);
     });
 
+    it('prepares BOLT12 melt quotes using offer method data from the canonical quote', async () => {
+      await meltQuoteRepository.upsertMeltQuote({
+        mintUrl,
+        method: 'bolt12',
+        quoteId: 'quote-bolt12',
+        quote: 'quote-bolt12',
+        request: 'lno1offer',
+        amount: Amount.from(100),
+        unit: 'sat',
+        fee_reserve: Amount.from(1),
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+        payment_preimage: null,
+        lastObservedRemoteState: 'UNPAID',
+        lastObservedRemoteStateAt: Date.now(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const prepared = await service.prepareExistingQuote(mintUrl, 'bolt12', 'quote-bolt12');
+
+      expect(prepared.method).toBe('bolt12');
+      expect(prepared.methodData).toEqual({ offer: 'lno1offer' });
+    });
+
     it('rejects duplicate prepares for the same canonical quote', async () => {
       const first = await service.prepareExistingQuote('https://MINT.test/', 'bolt11', 'quote-1');
 
@@ -484,7 +510,8 @@ describe('MeltOperationService', () => {
 
     it('serializes prepare calls for the same mint', async () => {
       const firstOp = makeInitOp('op-12');
-      const secondOp = makeInitOp('op-13');
+      const secondOp = makeInitOp('op-13', { quoteId: 'quote-2' });
+      await persistMeltQuote('quote-2');
       await meltOperationRepository.create(firstOp);
       await meltOperationRepository.create(secondOp);
 
@@ -501,6 +528,7 @@ describe('MeltOperationService', () => {
             mintUrl: operation.mintUrl,
             method: operation.method,
             methodData: operation.methodData,
+            quoteId: operation.quoteId,
           });
         },
       );
@@ -846,7 +874,7 @@ describe('MeltOperationService', () => {
   describe('queries', () => {
     it('returns pending operations', async () => {
       await meltOperationRepository.create(makeExecutingOp('pending-1'));
-      await meltOperationRepository.create(makePendingOp('pending-2'));
+      await meltOperationRepository.create(makePendingOp('pending-2', { quoteId: 'quote-2' }));
 
       const pending = await service.getPendingOperations();
 
@@ -870,13 +898,12 @@ describe('MeltOperationService', () => {
       expect(operation).toBeNull();
     });
 
-    it('throws when multiple operations share a quote id', async () => {
+    it('rejects repository writes when multiple operations share a quote id', async () => {
       await meltOperationRepository.create(makePreparedOp('op-quote-1', { quoteId: 'quote-dupe' }));
-      await meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' }));
 
-      expect(service.getOperationByQuote(mintUrl, 'bolt11', 'quote-dupe')).rejects.toThrow(
-        'melt operations',
-      );
+      await expect(
+        meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' })),
+      ).rejects.toThrow('MeltOperation already exists');
     });
   });
 });

@@ -1,4 +1,9 @@
-import { Amount, type AmountLike, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type AmountLike,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+} from '@cashu/cashu-ts';
 import type {
   MintMethod,
   MintMethodQuoteData,
@@ -43,11 +48,21 @@ export type OnchainMintQuote = MintQuoteBase<'onchain'> & {
   reusable: true;
 };
 
+export type Bolt12MintQuote = MintQuoteBase<'bolt12'> & {
+  amount?: Amount;
+  state?: never;
+  lastObservedRemoteState?: never;
+  lastObservedRemoteStateAt?: number;
+  reusable: true;
+};
+
 export type MintQuote<M extends MintMethod = MintMethod> = M extends 'bolt11'
   ? Bolt11MintQuote
   : M extends 'onchain'
     ? OnchainMintQuote
-    : never;
+    : M extends 'bolt12'
+      ? Bolt12MintQuote
+      : never;
 
 export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt11'> {
   return quote.method === 'bolt11';
@@ -59,12 +74,22 @@ export function getMintQuoteRemoteState(
   return isStatefulMintQuote(quote) ? quote.state : undefined;
 }
 
+/**
+ * Returns the fixed mint operation amount for stateful quotes.
+ *
+ * Reusable quote metadata may include a payment amount, such as a fixed BOLT12
+ * offer amount, but that does not constrain the later mint operation amount.
+ */
 export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
-  return isStatefulMintQuote(quote) ? quote.amount : undefined;
+  if (isStatefulMintQuote(quote)) {
+    return quote.amount;
+  }
+
+  return undefined;
 }
 
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
-  if (quote.method === 'onchain') {
+  if (quote.reusable) {
     return quote.quoteData.amountPaid.subtract(quote.quoteData.amountIssued);
   }
 
@@ -135,6 +160,36 @@ export function mintQuoteFromOnchainResponse(
   };
 }
 
+export function mintQuoteFromBolt12Response(
+  mintUrl: string,
+  quote: MintQuoteBolt12Response,
+  options?: { now?: number },
+): MintQuote<'bolt12'> {
+  const now = options?.now ?? Date.now();
+  const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
+  return {
+    mintUrl,
+    method: 'bolt12',
+    quoteId: quote.quote,
+    quote: quote.quote,
+    request: quote.request,
+    unit: quote.unit,
+    amount,
+    expiry: quote.expiry,
+    pubkey: quote.pubkey,
+    reusable: true,
+    quoteData: {
+      pubkey: quote.pubkey,
+      amount,
+      amountPaid: Amount.from(quote.amount_paid),
+      amountIssued: Amount.from(quote.amount_issued),
+    },
+    lastObservedRemoteStateAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function mintQuoteToMethodSnapshot<M extends MintMethod>(
   quote: MintQuote<M>,
 ): MintMethodQuoteSnapshot<M> {
@@ -150,9 +205,22 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
     } as MintMethodQuoteSnapshot<M>;
   }
 
+  if (quote.method === 'onchain') {
+    return {
+      quote: quote.quoteId,
+      request: quote.request,
+      unit: quote.unit,
+      expiry: quote.expiry,
+      pubkey: quote.quoteData.pubkey,
+      amount_paid: quote.quoteData.amountPaid,
+      amount_issued: quote.quoteData.amountIssued,
+    } as MintMethodQuoteSnapshot<M>;
+  }
+
   return {
     quote: quote.quoteId,
     request: quote.request,
+    amount: quote.amount,
     unit: quote.unit,
     expiry: quote.expiry,
     pubkey: quote.quoteData.pubkey,

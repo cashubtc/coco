@@ -21,6 +21,9 @@ export type MintOperationPrepareResult = Awaited<ReturnType<MintOps['prepare']>>
 export type MintOperationExecuteResult = Awaited<ReturnType<MintOps['execute']>>;
 export type MintOperationCheckPaymentResult = Awaited<ReturnType<MintOps['checkPayment']>>;
 export type MintOperationFinalizeResult = Awaited<ReturnType<MintOps['finalize']>>;
+export type MintOperationByQuoteInput = Parameters<MintOps['getByQuote']>[0];
+export type MintOperationByQuoteResult = Awaited<ReturnType<MintOps['getByQuote']>>;
+export type MintOperationListByQuoteResult = Awaited<ReturnType<MintOps['listByQuote']>>;
 export type MintOperationPendingList = Awaited<ReturnType<MintOps['listPending']>>;
 
 export interface UseMintOperationResult extends OperationHookResult<
@@ -31,6 +34,8 @@ export interface UseMintOperationResult extends OperationHookResult<
   execute(): Promise<MintOperationExecuteResult>;
   checkPayment(): Promise<MintOperationCheckPaymentResult>;
   finalize(): Promise<MintOperationFinalizeResult>;
+  getByQuote(input: MintOperationByQuoteInput): Promise<MintOperationByQuoteResult>;
+  listByQuote(mintUrl: string, quoteId: string): Promise<MintOperationListByQuoteResult>;
   listPending(): Promise<MintOperationPendingList>;
   listInFlight(): Promise<MintOperation[]>;
 }
@@ -196,6 +201,20 @@ export function useMintOperation(
     );
   }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
 
+  const getByQuote = useCallback(
+    async (input: MintOperationByQuoteInput): Promise<MintOperationByQuoteResult> => {
+      return manager.ops.mint.getByQuote(input);
+    },
+    [manager],
+  );
+
+  const listByQuote = useCallback(
+    async (mintUrl: string, quoteId: string): Promise<MintOperationListByQuoteResult> => {
+      return manager.ops.mint.listByQuote(mintUrl, quoteId);
+    },
+    [manager],
+  );
+
   const listPending = useCallback(async (): Promise<MintOperationPendingList> => {
     return manager.ops.mint.listPending();
   }, [manager]);
@@ -221,6 +240,8 @@ export function useMintOperation(
     execute,
     checkPayment,
     finalize,
+    getByQuote,
+    listByQuote,
     listPending,
     listInFlight,
     reset: resetBoundOperation,

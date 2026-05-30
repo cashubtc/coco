@@ -53,4 +53,20 @@ if (operation) {
 
 Use this when you only persisted the quote id (for example after a restart).
 
+## Pay a BOLT12 offer
+
+```ts
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt12',
+  methodData: { offer, amountSats: 1000 },
+});
+
+const result = await coco.ops.melt.execute(prepared.id);
+```
+
+`amountSats` is optional and is intended for amountless BOLT12 offers.
+Use `listByQuote(mintUrl, quoteId)` when a quote id may map to more than one
+operation.
+
 > For the full saga walkthrough, see [Melt Operations](../pages/melt-operations.md).

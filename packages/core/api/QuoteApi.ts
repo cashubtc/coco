@@ -10,7 +10,11 @@ import type { MintQuote } from '../models/MintQuote';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
-export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain';
+export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain' | 'bolt12';
+type DefaultImportableMintQuoteMethod<TSupported extends MintMethod> = Extract<
+  TSupported,
+  'bolt11'
+>;
 
 type MintQuoteIdentityInput<M extends MintMethod> = {
   mintUrl: string;
@@ -35,7 +39,13 @@ export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupporte
         ? {
             unit?: string;
           }
-        : never);
+        : M extends 'bolt12'
+          ? {
+              unit?: string;
+              amount?: UnitAmountLike;
+              description?: string;
+            }
+          : never);
   }[TSupported];
 
 export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> = {
@@ -43,16 +53,18 @@ export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMi
 }[TSupported];
 
 export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
-  {
-    [M in TSupported]: {
-      /** Mint that issued the existing quote. */
-      mintUrl: string;
-      /** Existing quote snapshot to persist as canonical quote state. */
-      quote: MintMethodQuoteSnapshot<M>;
-      /** Mint method for the quote snapshot. */
-      method: M;
-    };
-  }[TSupported];
+  DefaultImportableMintQuoteMethod<TSupported> extends never
+    ? never
+    : {
+        [M in DefaultImportableMintQuoteMethod<TSupported>]: {
+          /** Mint that issued the existing quote. */
+          mintUrl: string;
+          /** Existing quote snapshot to persist as canonical quote state. */
+          quote: MintMethodQuoteSnapshot<M>;
+          /** Mint method for the quote snapshot. */
+          method: M;
+        };
+      }[DefaultImportableMintQuoteMethod<TSupported>];
 
 export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
   GetMintQuoteInput<TSupported>;
@@ -88,16 +100,34 @@ export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQu
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
   async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
-    if ('amount' in input) {
-      const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
-      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+    if (input.method === 'bolt11') {
+      const bolt11Input = input as CreateMintQuoteInput<'bolt11'>;
+      const parsed = parseUnitAmount(bolt11Input.amount, { explicitUnit: bolt11Input.unit });
+      return this.quoteLifecycle.createMintQuote(bolt11Input.mintUrl, bolt11Input.method, {
         amount: parsed,
-      } as MintMethodCreateQuoteData<typeof input.method>);
+      } as MintMethodCreateQuoteData<typeof bolt11Input.method>);
     }
 
-    return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
-      unit: normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT }),
-    } as MintMethodCreateQuoteData<typeof input.method>);
+    if (input.method === 'bolt12') {
+      const bolt12Input = input as CreateMintQuoteInput<'bolt12'>;
+      const parsed =
+        bolt12Input.amount !== undefined
+          ? parseUnitAmount(bolt12Input.amount, { explicitUnit: bolt12Input.unit })
+          : undefined;
+      const unit = parsed?.unit ?? normalizeUnit(bolt12Input.unit, { defaultUnit: DEFAULT_UNIT });
+      const createQuoteData =
+        parsed === undefined
+          ? { unit, description: bolt12Input.description }
+          : { unit, amount: parsed, description: bolt12Input.description };
+      return this.quoteLifecycle.createMintQuote(bolt12Input.mintUrl, bolt12Input.method, {
+        ...createQuoteData,
+      } as MintMethodCreateQuoteData<typeof bolt12Input.method>);
+    }
+
+    const onchainInput = input as CreateMintQuoteInput<'onchain'>;
+    return this.quoteLifecycle.createMintQuote(onchainInput.mintUrl, onchainInput.method, {
+      unit: normalizeUnit(onchainInput.unit, { defaultUnit: DEFAULT_UNIT }),
+    } as MintMethodCreateQuoteData<typeof onchainInput.method>);
   }
 
   get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {

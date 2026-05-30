@@ -26,7 +26,9 @@ type MintScheduler = {
 const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
   'bolt11_mint_quote',
   'onchain_mint_quote',
+  'bolt12_mint_quote',
   'bolt11_melt_quote',
+  'bolt12_melt_quote',
   'proof_state',
 ]);
 
@@ -401,8 +403,14 @@ export class PollingTransport implements RealTimeTransport {
       case 'onchain_mint_quote':
         payload = await this.mintAdapter.checkMintQuote(mintUrl, 'onchain', task.filter!);
         break;
+      case 'bolt12_mint_quote':
+        payload = await this.mintAdapter.checkMintQuote(mintUrl, 'bolt12', task.filter!);
+        break;
       case 'bolt11_melt_quote':
         payload = await this.mintAdapter.checkMeltQuoteState(mintUrl, task.filter!);
+        break;
+      case 'bolt12_melt_quote':
+        payload = await this.mintAdapter.checkMeltQuoteBolt12State(mintUrl, task.filter!);
         break;
       default:
         throw new Error(`Unsupported polling task kind: ${String(task.kind)}`);

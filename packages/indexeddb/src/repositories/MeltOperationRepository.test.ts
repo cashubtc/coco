@@ -8,7 +8,9 @@ import type { MeltOperationRow } from '../lib/db.ts';
 
 type FinalizedMeltOperation = Extract<MeltOperation, { state: 'finalized' }>;
 
-function makeFinalizedOperation(): FinalizedMeltOperation {
+function makeFinalizedOperation(
+  overrides: Partial<FinalizedMeltOperation> = {},
+): FinalizedMeltOperation {
   return {
     id: 'melt-op-1',
     mintUrl: 'https://mint.test',
@@ -29,7 +31,40 @@ function makeFinalizedOperation(): FinalizedMeltOperation {
     changeAmount: Amount.from(2),
     effectiveFee: Amount.from(3),
     finalizedData: { preimage: '' },
+    ...overrides,
   };
+}
+
+function makeRepositoryWithRows(rows: MeltOperationRow[]): IdbMeltOperationRepository {
+  return new IdbMeltOperationRepository({
+    runTransaction: async (
+      _mode: 'r' | 'rw',
+      _stores: string[],
+      fn: (tx: { table: (name: string) => unknown }) => Promise<unknown>,
+    ) =>
+      fn({
+        table: () => ({
+          get: async (id: string) => rows.find((row) => row.id === id),
+          where: () => ({
+            equals: ([mintUrl, quoteId]: [string, string]) => ({
+              first: async () =>
+                rows.find((row) => row.mintUrl === mintUrl && row.quoteId === quoteId),
+            }),
+          }),
+          add: async (row: MeltOperationRow) => {
+            rows.push(row);
+          },
+          put: async (row: MeltOperationRow) => {
+            const index = rows.findIndex((existing) => existing.id === row.id);
+            if (index >= 0) {
+              rows[index] = row;
+            } else {
+              rows.push(row);
+            }
+          },
+        }),
+      }),
+  } as any);
 }
 
 describe('IdbMeltOperationRepository', () => {
@@ -132,5 +167,28 @@ describe('IdbMeltOperationRepository', () => {
     expect(persistedRow?.changeAmount).toBe('2');
     expect(persistedRow?.effectiveFee).toBe('3');
     expect(persistedRow?.finalizedDataJson).toBe(JSON.stringify({ preimage: '' }));
+  });
+
+  it('rejects duplicate quote-bound operations on create', async () => {
+    const rows: MeltOperationRow[] = [];
+    const repository = makeRepositoryWithRows(rows);
+    await repository.create(makeFinalizedOperation());
+
+    await expect(repository.create(makeFinalizedOperation({ id: 'melt-op-2' }))).rejects.toThrow(
+      'MeltOperation already exists',
+    );
+  });
+
+  it('rejects updates that would duplicate a quote binding', async () => {
+    const rows: MeltOperationRow[] = [];
+    const repository = makeRepositoryWithRows(rows);
+    await repository.create(makeFinalizedOperation());
+    await repository.create(
+      makeFinalizedOperation({ id: 'melt-op-2', quoteId: 'other-melt-quote' }),
+    );
+
+    await expect(repository.update(makeFinalizedOperation({ id: 'melt-op-2' }))).rejects.toThrow(
+      'MeltOperation already exists',
+    );
   });
 });

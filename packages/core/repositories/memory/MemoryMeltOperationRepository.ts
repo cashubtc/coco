@@ -1,6 +1,9 @@
 import type { MeltOperationRepository } from '..';
 import type { MeltOperation, MeltOperationState } from '../../operations/melt/MeltOperation';
 
+const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
+  'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
+
 export class MemoryMeltOperationRepository implements MeltOperationRepository {
   private readonly operations = new Map<string, MeltOperation>();
 
@@ -8,6 +11,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     if (this.operations.has(operation.id)) {
       throw new Error(`MeltOperation with id ${operation.id} already exists`);
     }
+    this.assertNoDuplicateQuoteOperation(operation);
     this.operations.set(operation.id, { ...operation });
   }
 
@@ -15,6 +19,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     if (!this.operations.has(operation.id)) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
+    this.assertNoDuplicateQuoteOperation(operation);
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
   }
 
@@ -73,5 +78,22 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
 
   async delete(id: string): Promise<void> {
     this.operations.delete(id);
+  }
+
+  private assertNoDuplicateQuoteOperation(operation: MeltOperation): void {
+    const quoteId = getOperationQuoteId(operation);
+    if (!quoteId) return;
+
+    for (const existing of this.operations.values()) {
+      if (
+        existing.id !== operation.id &&
+        existing.mintUrl === operation.mintUrl &&
+        getOperationQuoteId(existing) === quoteId
+      ) {
+        throw new Error(
+          `MeltOperation already exists for mint ${operation.mintUrl} and quote ${quoteId}`,
+        );
+      }
+    }
   }
 }

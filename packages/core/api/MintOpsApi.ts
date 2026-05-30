@@ -9,7 +9,7 @@ import type {
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11' | 'onchain';
+export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
 
 type PrepareExistingQuoteInputCommon = {
   /** Mint that issued the canonical quote. */
@@ -40,7 +40,12 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
           /** Amount to withdraw from the reusable onchain quote. */
           amount: UnitAmountLike;
         }
-      : {}) &
+      : M extends 'bolt12'
+        ? {
+            /** Amount to mint from the reusable BOLT12 quote. */
+            amount: UnitAmountLike;
+          }
+        : {}) &
     MethodDataInput<M>;
 }[TSupported];
 
@@ -93,7 +98,9 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
     const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
     const explicitAmount =
-      'amount' in input ? parseUnitAmount(input.amount, { explicitUnit: input.unit }) : undefined;
+      'amount' in input && input.amount !== undefined
+        ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
+        : undefined;
 
     return this.mintOperationService.prepare(
       input.mintUrl,
@@ -131,6 +138,11 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
       input.method,
       input.quoteId,
     );
+  }
+
+  /** Lists mint operations for a mint URL and quote ID. */
+  async listByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+    return this.mintOperationService.listOperationsByQuote(mintUrl, quoteId);
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */

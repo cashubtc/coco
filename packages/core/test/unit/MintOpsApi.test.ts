@@ -30,14 +30,24 @@ type _AssertOnchainPrepareRequiresAmount = Assert<
     ? true
     : false
 >;
+type _AssertBolt12PrepareRequiresAmount = Assert<
+  Extract<PrepareMintInput, { method: 'bolt12' }> extends {
+    amount: unknown;
+  }
+    ? true
+    : false
+>;
 type _AssertGetByQuoteUsesObjectInput = Assert<
   GetMintByQuoteInput extends {
     mintUrl: string;
-    method: 'bolt11' | 'onchain';
+    method: 'bolt11' | 'onchain' | 'bolt12';
     quoteId: string;
   }
     ? true
     : false
+>;
+type _AssertDefaultAllowsBolt12Mint = Assert<
+  'bolt12' extends PrepareMintInput['method'] ? true : false
 >;
 
 const makePendingOperation = (): PendingMintOperation => ({
@@ -77,6 +87,7 @@ describe('MintOpsApi', () => {
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => pendingOperation),
       getOperationByQuote: mock(async () => pendingOperation),
+      listOperationsByQuote: mock(async () => [pendingOperation]),
       getPendingOperations: mock(async () => [pendingOperation]),
       getInFlightOperations: mock(async () => [pendingOperation, executingOperation]),
       checkPendingOperation: mock(async () => ({
@@ -143,6 +154,25 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepare).toHaveBeenCalledWith(
       mintUrl,
       'onchain',
+      quoteId,
+      {},
+      'sat',
+      { amount: Amount.from(10), unit: 'sat' },
+    );
+  });
+
+  it('prepare passes explicit BOLT12 mint amounts to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      quoteId,
+      method: 'bolt12',
+      amount: 10,
+      unit: 'sat',
+    });
+
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt12',
       quoteId,
       {},
       'sat',

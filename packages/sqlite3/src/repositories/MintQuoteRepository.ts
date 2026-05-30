@@ -46,27 +46,34 @@ function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
 
 function rowToMintQuote(row: MintQuoteRow): MintQuote {
   const quoteData = parseQuoteData(row.quoteDataJson);
-  if (row.method === 'onchain') {
+  if (row.method === 'onchain' || row.method === 'bolt12') {
     const pubkey = quoteData.pubkey ?? row.pubkey ?? '';
+    const amountValue = quoteData.amount ?? row.amount ?? undefined;
+    const amount =
+      row.method === 'bolt12' && amountValue !== undefined
+        ? deserializeAmount(amountValue)
+        : undefined;
     return {
       mintUrl: row.mintUrl,
-      method: 'onchain',
+      method: row.method,
       quoteId: row.quoteId,
       quote: row.quoteId,
       request: row.request,
       unit: row.unit,
+      ...(amount !== undefined ? { amount } : {}),
       expiry: row.expiry,
       pubkey,
       reusable: true,
       quoteData: {
         pubkey,
+        ...(amount !== undefined ? { amount } : {}),
         amountPaid: deserializeAmount(quoteData.amountPaid ?? 0),
         amountIssued: deserializeAmount(quoteData.amountIssued ?? 0),
       },
       lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-    };
+    } as MintQuote;
   }
 
   const amount = deserializeAmount(quoteData.amount ?? row.amount ?? 0);
@@ -94,6 +101,16 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
 function serializeQuoteData(quote: MintQuote): string {
   if (isStatefulMintQuote(quote)) {
     return stringifyJson({ amount: serializeAmount(quote.quoteData.amount) });
+  }
+
+  if (quote.method === 'bolt12') {
+    const amount = quote.quoteData.amount ?? quote.amount;
+    return stringifyJson({
+      pubkey: quote.quoteData.pubkey,
+      ...(amount !== undefined ? { amount: serializeAmount(amount) } : {}),
+      amountPaid: serializeAmount(quote.quoteData.amountPaid),
+      amountIssued: serializeAmount(quote.quoteData.amountIssued),
+    });
   }
 
   return stringifyJson({

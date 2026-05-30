@@ -362,9 +362,15 @@ export class MintOperationService {
 
   async execute(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationRepository.getById(operationId);
-    //CODEX: Instead of checking for the operation method wouldnt it be better to load the quote and check if it is reusable?
-    if (operation?.state === 'pending' && operation.method === 'onchain') {
-      return this.claimReusableQuoteOperation(operation as PendingMintOperation);
+    if (operation?.state === 'pending') {
+      const quote = await this.quoteLifecycle.getMintQuote(
+        operation.mintUrl,
+        operation.method,
+        operation.quoteId,
+      );
+      if (quote?.reusable) {
+        return this.claimReusableQuoteOperation(operation as PendingMintOperation);
+      }
     }
 
     return this.executeReadyOperation(operationId);
@@ -674,7 +680,15 @@ export class MintOperationService {
       return null;
     }
 
-    const sorted = operations.sort((a, b) => b.updatedAt - a.updatedAt);
+    const sorted = operations.sort((a, b) => {
+      if (a.updatedAt !== b.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      if (a.createdAt !== b.createdAt) {
+        return b.createdAt - a.createdAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
 
     const finalized = sorted.find((op) => op.state === 'finalized');
     if (finalized) {
@@ -697,16 +711,19 @@ export class MintOperationService {
     return this.mintOperationRepository.getByQuoteId(mintUrl, method, quoteId);
   }
 
+  async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
+    const operations = await this.mintOperationRepository.getByMintUrl(normalizeMintUrl(mintUrl));
+    return operations
+      .filter((operation) => operation.quoteId === quoteId)
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+
   async claimMintQuote(
     mintUrl: string,
     method: MintMethod,
     quoteId: string,
     options: ClaimMintQuoteOptions = {},
   ): Promise<MintOperation[]> {
-    if (method !== 'onchain') {
-      return [];
-    }
-
     const releaseQuoteLock = await this.mintScopedLock.acquire(
       this.quoteLockKey(mintUrl, method, quoteId),
     );
@@ -717,7 +734,7 @@ export class MintOperationService {
           `Cannot claim mint quote ${quoteId}: quote for ${method} at ${mintUrl} was not found`,
         );
       }
-      if (quote.method !== 'onchain') {
+      if (!quote.reusable) {
         return [];
       }
 
@@ -750,7 +767,7 @@ export class MintOperationService {
       if (autoClaimRemaining && !remaining.isZero()) {
         const refreshedQuote =
           (await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId)) ?? quote;
-        if (refreshedQuote.method === 'onchain') {
+        if (refreshedQuote.reusable) {
           const currentClaimable = await this.getLocallyClaimableQuoteAmount(refreshedQuote);
           const autoClaimAmount = remaining.lessThan(currentClaimable)
             ? remaining
@@ -770,11 +787,11 @@ export class MintOperationService {
   }
 
   async claimPendingMintQuotes(options: ClaimMintQuoteOptions = {}): Promise<MintOperation[]> {
-    const quotes = await this.quoteLifecycle.getPendingMintQuotes('onchain');
+    const quotes = await this.quoteLifecycle.getPendingMintQuotes();
     const claimed: MintOperation[] = [];
 
     for (const quote of quotes) {
-      if (quote.method !== 'onchain') {
+      if (!quote.reusable) {
         continue;
       }
       if (getMintQuoteAvailableAmount(quote).isZero()) {
@@ -792,11 +809,11 @@ export class MintOperationService {
   /** @internal Used by the mint operation processor to suppress no-op reusable quote claims. */
   async hasLocallyClaimableMintQuoteBalance(
     mintUrl: string,
-    method: 'onchain',
+    method: MintMethod,
     quoteId: string,
   ): Promise<boolean> {
     const quote = await this.quoteLifecycle.getMintQuote(mintUrl, method, quoteId);
-    if (!quote || quote.method !== 'onchain') {
+    if (!quote || !quote.reusable) {
       return false;
     }
 
@@ -847,9 +864,9 @@ export class MintOperationService {
   }
 
   private async createAutoClaimOperation(
-    quote: MintQuote<'onchain'>,
+    quote: MintQuote,
     amount: Amount,
-  ): Promise<PendingMintOperation<'onchain'>> {
+  ): Promise<PendingMintOperation> {
     const initOperation = await this.createInitOperation(
       quote.mintUrl,
       { amount, unit: quote.unit },
@@ -858,7 +875,7 @@ export class MintOperationService {
       { quoteId: quote.quoteId },
     );
 
-    return this.prepareInitOperation(initOperation.id) as Promise<PendingMintOperation<'onchain'>>;
+    return this.prepareInitOperation(initOperation.id);
   }
 
   private async getLocallyClaimableQuoteAmount(
@@ -875,7 +892,7 @@ export class MintOperationService {
       quote.method,
       quote.quoteId,
     );
-    if (quote.method === 'onchain') {
+    if (quote.reusable) {
       const locallyIssued = siblings.reduce((total, operation) => {
         if (operation.state !== 'finalized') {
           return total;

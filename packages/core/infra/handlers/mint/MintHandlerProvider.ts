@@ -17,13 +17,14 @@ export class MintHandlerProvider {
   }
 
   register<M extends MintMethod>(method: M, handler: MintMethodHandler<M>): void {
-    this.registry[method] = handler;
+    this.set(method, handler);
   }
 
   registerMany(handlers: Partial<MintMethodHandlerRegistry>): void {
-    for (const [method, handler] of Object.entries(handlers)) {
+    for (const method of Object.keys(handlers) as MintMethod[]) {
+      const handler = handlers[method];
       if (handler) {
-        this.registry[method as MintMethod] = handler;
+        this.set(method, handler as MintMethodHandler<typeof method>);
       }
     }
   }
@@ -38,5 +39,9 @@ export class MintHandlerProvider {
 
   getAll(): MintMethodHandlerRegistry {
     return this.registry as MintMethodHandlerRegistry;
+  }
+
+  private set<M extends MintMethod>(method: M, handler: MintMethodHandler<M>): void {
+    (this.registry as Partial<Record<M, MintMethodHandler<M>>>)[method] = handler;
   }
 }

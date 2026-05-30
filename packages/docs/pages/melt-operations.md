@@ -16,15 +16,18 @@ The melt operation saga provides:
 The canonical API is exposed through `coco.ops.melt`:
 
 - `prepare({ mintUrl, method: 'bolt11', quoteId })` prepares an operation from a canonical melt quote
+- `prepare({ mintUrl, method: 'bolt12', quoteId })` prepares a BOLT12 offer melt from a canonical melt quote
 - `execute(operationOrId)` executes the prepared operation
 - `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
 - `cancel(operationId)` cancels a prepared melt
 - `reclaim(operationId)` reclaims a pending melt when rollback is allowed
 
-Create and resurface quote payment requests through `coco.quotes.melt`:
+Create and resurface quote payment requests through `coco.quotes.melt` before
+preparing a melt operation:
 
 - `create({ mintUrl, method: 'bolt11', methodData: { invoice }, unit? })` creates and persists a canonical quote row only
+- `create({ mintUrl, method: 'bolt12', methodData: { offer, amountSats }, unit? })` creates and persists a canonical quote row only
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, method, quoteId })` checks the remote quote state and persists the canonical quote update
@@ -78,6 +81,22 @@ console.log('Amount:', prepared.amount);
 console.log('Fee reserve:', prepared.fee_reserve);
 console.log('Swap fee:', prepared.swap_fee);
 console.log('Needs swap:', prepared.needsSwap);
+```
+
+For BOLT12 offers:
+
+```ts
+const quote = await coco.quotes.melt.create({
+  mintUrl,
+  method: 'bolt12',
+  methodData: { offer, amountSats: 1000 },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'bolt12',
+  quoteId: quote.quoteId,
+});
 ```
 
 Internally, the service:
@@ -180,5 +199,5 @@ coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
 
 ## Implementation Notes
 
-- Built-in `manager.ops.melt` support currently covers `bolt11`; additional methods require wiring another `MeltMethodHandler`
+- Built-in `manager.ops.melt` support covers `bolt11` and `bolt12`
 - Operations are locked per id; concurrent calls throw `OperationInProgressError`

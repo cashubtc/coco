@@ -26,6 +26,10 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
   operation identity; a `quoteId` is remote quote identity and can be shared by
   more than one local operation.
 
+Built-in mint methods are `bolt11` and `bolt12`. Quote lookups use the full
+`{ mintUrl, method, quoteId }` identity so reused quote IDs remain scoped by
+method.
+
 ## Quote Resurfacing (`coco.quotes.mint`)
 
 Use `coco.quotes.mint` when an app needs to show a quote payment request again
@@ -111,11 +115,11 @@ if (check.category === 'ready' || check.category === 'completed') {
 }
 ```
 
-## Reusable Onchain Quotes
+## Reusable Quotes
 
-Onchain mint quotes are canonical quote records first. Create and refresh them
-through `coco.quotes.mint`, then prepare one or more mint operations against the
-same `(mintUrl, method, quoteId)` identity.
+Onchain and BOLT12 mint quotes are canonical quote records first. Create and
+refresh them through `coco.quotes.mint`, then prepare one or more mint
+operations against the same `(mintUrl, method, quoteId)` identity.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -157,11 +161,35 @@ await coco.ops.mint.finalize(first.id);
 await coco.ops.mint.finalize(second.id);
 ```
 
-When the mint watcher and processor are enabled, reusable onchain quotes continue
-to be watched after one claim finalizes so later deposits to the same address can
-be detected. Funded reusable onchain quotes are claimed automatically. If
-existing pending operations do not consume all currently claimable balance, Coco
-creates one additional mint operation for the remainder.
+BOLT12 uses the same quote-first flow. A fixed amount on a BOLT12 quote is
+encoded into the reusable offer and constrains each payer payment, but it does
+not constrain the later mint operation amount. Always pass the amount you want
+to mint from the currently claimable quote balance.
+
+```ts
+const quote = await coco.quotes.mint.create({
+  mintUrl,
+  method: 'bolt12',
+  unit: 'sat',
+  amount: { amount: 100, unit: 'sat' },
+  description: 'Coffee refill',
+});
+
+showOffer(quote.request);
+
+const pending = await coco.ops.mint.prepare({
+  mintUrl,
+  method: 'bolt12',
+  quoteId: quote.quoteId,
+  amount: { amount: 10, unit: 'sat' },
+});
+```
+
+When the mint watcher and processor are enabled, reusable quotes continue to be
+watched after one claim finalizes so later deposits to the same reusable quote
+can be detected. Funded reusable quotes are claimed automatically. If existing
+pending operations do not consume all currently claimable balance, Coco creates
+one additional mint operation for the remainder.
 
 ## Recovery
 

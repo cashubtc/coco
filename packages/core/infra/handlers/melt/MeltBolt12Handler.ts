@@ -11,16 +11,16 @@ import {
   type BoltMeltQuoteState,
 } from './BaseBoltMeltHandler.ts';
 
-export class MeltBolt11Handler extends BaseBoltMeltHandler<'bolt11'> {
-  protected readonly method = 'bolt11' as const;
+export class MeltBolt12Handler extends BaseBoltMeltHandler<'bolt12'> {
+  protected readonly method = 'bolt12' as const;
 
   protected executeMelt(
-    ctx: ExecuteContext<'bolt11'>,
+    ctx: ExecuteContext<'bolt12'>,
     proofsToMelt: Proof[],
     changeOutputs: OutputData[],
     quoteId: string,
   ): Promise<BoltMeltQuoteResponse> {
-    return ctx.mintAdapter.customMeltBolt11(
+    return ctx.mintAdapter.customMeltBolt12(
       ctx.operation.mintUrl,
       proofsToMelt,
       changeOutputs,
@@ -29,14 +29,14 @@ export class MeltBolt11Handler extends BaseBoltMeltHandler<'bolt11'> {
   }
 
   protected checkMeltQuote(
-    ctx: FinalizeContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
+    ctx: FinalizeContext<'bolt12'> | RecoverExecutingContext<'bolt12'>,
   ): Promise<BoltMeltQuoteResponse> {
-    return ctx.mintAdapter.checkMeltQuote(ctx.operation.mintUrl, ctx.operation.quoteId);
+    return ctx.mintAdapter.checkMeltQuoteBolt12(ctx.operation.mintUrl, ctx.operation.quoteId);
   }
 
   protected checkMeltQuoteState(
-    ctx: PendingContext<'bolt11'> | RecoverExecutingContext<'bolt11'>,
+    ctx: PendingContext<'bolt12'> | RecoverExecutingContext<'bolt12'>,
   ): Promise<BoltMeltQuoteState> {
-    return ctx.mintAdapter.checkMeltQuoteState(ctx.operation.mintUrl, ctx.operation.quoteId);
+    return ctx.mintAdapter.checkMeltQuoteBolt12State(ctx.operation.mintUrl, ctx.operation.quoteId);
   }
 }

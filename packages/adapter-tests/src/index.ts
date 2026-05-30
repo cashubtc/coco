@@ -591,6 +591,95 @@ export async function runMintOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('persists reusable BOLT12 mint quote data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintQuoteRepository.upsertMintQuote({
+          mintUrl: 'https://mint.test/',
+          method: 'bolt12',
+          quoteId: 'bolt12-quote',
+          quote: 'bolt12-quote',
+          request: 'lno1offer',
+          amount: Amount.from(12),
+          unit: 'sat',
+          expiry: 1_730_000_000,
+          pubkey: '02'.padEnd(66, '2'),
+          reusable: true,
+          quoteData: {
+            pubkey: '02'.padEnd(66, '2'),
+            amount: Amount.from(12),
+            amountPaid: Amount.from(21),
+            amountIssued: Amount.from(8),
+          },
+          lastObservedRemoteStateAt: 20,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote({
+          mintUrl: 'https://mint.test/',
+          method: 'bolt12',
+          quoteId: 'bolt12-amountless-quote',
+          quote: 'bolt12-amountless-quote',
+          request: 'lno1amountless',
+          unit: 'sat',
+          expiry: 1_730_000_000,
+          pubkey: '02'.padEnd(66, '3'),
+          reusable: true,
+          quoteData: {
+            pubkey: '02'.padEnd(66, '3'),
+            amountPaid: Amount.from(5),
+            amountIssued: Amount.from(0),
+          },
+          lastObservedRemoteStateAt: 20,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt12',
+          'bolt12-quote',
+        );
+        const amountless = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt12',
+          'bolt12-amountless-quote',
+        );
+
+        expect(stored).toBeDefined();
+        if (!stored) {
+          throw new Error('Expected BOLT12 quote to be stored');
+        }
+        expect(stored.method).toBe('bolt12');
+        if (stored.method !== 'bolt12') {
+          throw new Error(`Expected BOLT12 quote, got ${stored.method}`);
+        }
+        expect(stored.reusable).toBe(true);
+        expect(stored.amount?.equals(Amount.from(12))).toBe(true);
+        expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '2'));
+        expect(stored.quoteData.amount?.equals(Amount.from(12))).toBe(true);
+        expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+
+        expect(amountless).toBeDefined();
+        if (!amountless) {
+          throw new Error('Expected amountless BOLT12 quote to be stored');
+        }
+        expect(amountless.method).toBe('bolt12');
+        if (amountless.method !== 'bolt12') {
+          throw new Error(`Expected amountless BOLT12 quote, got ${amountless.method}`);
+        }
+        expect(amountless.reusable).toBe(true);
+        expect(amountless.amount).toBe(undefined);
+        expect(amountless.quoteData.amount).toBe(undefined);
+        expect(amountless.quoteData.pubkey).toBe('02'.padEnd(66, '3'));
+        expect(amountless.quoteData.amountPaid.equals(Amount.from(5))).toBe(true);
+        expect(amountless.quoteData.amountIssued.equals(Amount.from(0))).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
@@ -942,6 +1031,47 @@ export async function runMeltOperationRepositoryContract(
         expect(stored!.state).toBe('init');
         expect(stored!.quoteId).toBe('init-melt-quote');
         expect(stored!.unit).toBe('usd');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects duplicate quote-bound melt operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-1', quoteId: 'shared-melt-quote' }),
+        );
+
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.create(
+              createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'shared-melt-quote' }),
+            ),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects updates that would duplicate a melt quote binding', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-1', quoteId: 'shared-melt-quote' }),
+        );
+        await repositories.meltOperationRepository.create(
+          createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'other-melt-quote' }),
+        );
+
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.update(
+              createDummyMeltOperation({ id: 'melt-op-2', quoteId: 'shared-melt-quote' }),
+            ),
+          expect,
+        );
       } finally {
         await dispose();
       }
