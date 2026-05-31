@@ -1,15 +1,30 @@
 import { defineConfig } from 'vitepress';
 
+const docsBase = process.env.DOCS_BASE ?? '/coco/';
+const docsSiteUrl = (process.env.DOCS_SITE_URL ?? 'https://cashubtc.github.io').replace(
+  /\/$/,
+  '',
+);
+const docsVersion = process.env.DOCS_VERSION ?? 'stable';
+const versionLabel = docsVersion === 'nightly' ? 'Nightly' : 'Stable';
+
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: 'Coco Cashu Docs',
   description: 'Cashu out of the box',
-  base: '/coco/',
+  base: docsBase,
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Get Started', link: '/starting/start-here' },
+      {
+        text: `Version: ${versionLabel}`,
+        items: [
+          { text: 'Stable', link: `${docsSiteUrl}/coco/`, target: '_self', noIcon: true },
+          { text: 'Nightly', link: `${docsSiteUrl}/coco/nightly/`, target: '_self', noIcon: true },
+        ],
+      },
     ],
 
     sidebar: [

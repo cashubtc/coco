@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - master
-    paths:
-      - 'packages/docs/**'
-      - '.github/workflows/docs.yml'
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -16,34 +16,100 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/docs
+    env:
+      SITE_DIR: ${{ runner.temp }}/site
     steps:
-      - name: Checkout
+      - name: Resolve stable docs ref
+        id: stable-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            stable_ref="${{ github.event.release.tag_name }}"
+          else
+            stable_ref="$(gh release list \
+              --repo "${{ github.repository }}" \
+              --exclude-drafts \
+              --exclude-pre-releases \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName')"
+          fi
+
+          if [ -z "$stable_ref" ] || [ "$stable_ref" = "null" ]; then
+            echo "No non-prerelease GitHub release found" >&2
+            exit 1
+          fi
+
+          echo "stable_ref=$stable_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout stable docs
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.stable-ref.outputs.stable_ref }}
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+          path: stable
+
+      - name: Checkout nightly docs
+        uses: actions/checkout@v5
+        with:
+          ref: master
+          fetch-depth: 0
+          path: nightly
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.18
+
       - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Install dependencies
+        uses: actions/configure-pages@v5
+
+      - name: Install stable dependencies
+        working-directory: stable
         run: bun install --frozen-lockfile
-      - name: Build with VitePress
+
+      - name: Build stable docs
+        working-directory: stable
+        env:
+          DOCS_BASE: /coco/
+          DOCS_VERSION: stable
         run: bun run docs:build
+
+      - name: Stage stable docs
+        run: |
+          mkdir -p "$SITE_DIR"
+          cp -R stable/packages/docs/.vitepress/dist/. "$SITE_DIR/"
+
+      - name: Install nightly dependencies
+        working-directory: nightly
+        run: bun install --frozen-lockfile
+
+      - name: Build nightly docs
+        working-directory: nightly
+        env:
+          DOCS_BASE: /coco/nightly/
+          DOCS_VERSION: nightly
+        run: bun run docs:build
+
+      - name: Stage nightly docs
+        run: |
+          mkdir -p "$SITE_DIR/nightly"
+          cp -R nightly/packages/docs/.vitepress/dist/. "$SITE_DIR/nightly/"
+
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: packages/docs/.vitepress/dist
+          path: ${{ env.SITE_DIR }}
 
   deploy:
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
