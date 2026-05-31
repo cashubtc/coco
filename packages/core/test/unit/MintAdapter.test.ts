@@ -72,9 +72,8 @@ type FakeCashuMint = {
 };
 
 function installFakeMint(adapter: MintAdapter, fakeMint: FakeCashuMint): void {
-  (
-    adapter as unknown as { cashuMints: Record<string, FakeCashuMint> }
-  ).cashuMints[mintUrl] = fakeMint;
+  (adapter as unknown as { cashuMints: Record<string, FakeCashuMint> }).cashuMints[mintUrl] =
+    fakeMint;
 }
 
 describe('MintAdapter', () => {
