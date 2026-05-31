@@ -5,8 +5,14 @@ import type {
   BasePrepareContext,
   CreateMeltQuoteContext,
   ExecuteContext,
+  FinalizeContext,
+  PendingContext,
 } from '../../operations/melt/MeltMethodHandler.ts';
-import type { ExecutingMeltOperation, InitMeltOperation } from '../../operations/melt';
+import type {
+  ExecutingMeltOperation,
+  InitMeltOperation,
+  PendingMeltOperation,
+} from '../../operations/melt';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'onchain-quote';
@@ -76,6 +82,11 @@ const buildExecutingOperation = (): ExecutingMeltOperation & { method: 'onchain'
   inputAmount: Amount.from(23),
   inputProofSecrets: ['secret-1'],
   changeOutputData: { keep: [], send: [] },
+});
+
+const buildPendingOperation = (): PendingMeltOperation & { method: 'onchain' } => ({
+  ...buildExecutingOperation(),
+  state: 'pending',
 });
 
 describe('MeltOnchainHandler', () => {
@@ -178,5 +189,52 @@ describe('MeltOnchainHandler', () => {
     expect(result.status).toBe('PAID');
     if (result.status !== 'PAID') throw new Error('Expected paid result');
     expect(result.finalized.finalizedData).toBeUndefined();
+  });
+
+  it('fetches remote onchain melt quotes through the adapter', async () => {
+    const handler = new MeltOnchainHandler();
+    const deps = baseDeps();
+
+    const quote = await handler.fetchRemoteQuote({
+      ...deps,
+      quote: {
+        mintUrl,
+        method: 'onchain',
+        quoteId,
+        quote: quoteId,
+      },
+    } as never);
+
+    expect(deps.mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(quote.method).toBe('onchain');
+    expect(quote.quoteId).toBe(quoteId);
+  });
+
+  it('checks pending onchain melt quotes with the state-only adapter call', async () => {
+    const handler = new MeltOnchainHandler();
+    const deps = baseDeps();
+
+    const result = await handler.checkPending({
+      ...deps,
+      operation: buildPendingOperation(),
+      wallet: {},
+    } as unknown as PendingContext<'onchain'>);
+
+    expect(deps.mintAdapter.checkMeltQuoteOnchainState).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(result).toBe('finalize');
+  });
+
+  it('finalizes pending onchain melt quotes by checking the full remote quote', async () => {
+    const handler = new MeltOnchainHandler();
+    const deps = baseDeps();
+
+    const result = await handler.finalize({
+      ...deps,
+      operation: buildPendingOperation(),
+      wallet: {},
+    } as unknown as FinalizeContext<'onchain'>);
+
+    expect(deps.mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(result.finalizedData).toBeUndefined();
   });
 });

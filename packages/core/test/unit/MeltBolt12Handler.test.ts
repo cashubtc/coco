@@ -8,6 +8,7 @@ import type { Logger } from '../../logging/Logger';
 import type {
   BasePrepareContext,
   ExecuteContext,
+  FinalizeContext,
   PendingContext,
 } from '../../operations/melt/MeltMethodHandler';
 import type {
@@ -132,7 +133,13 @@ describe('MeltBolt12Handler', () => {
         payment_preimage: 'preimage-12',
       })),
       checkMeltQuoteBolt12: mock(async () => ({
+        quote: quoteId,
+        request: offer,
+        amount: Amount.from(100),
+        fee_reserve: Amount.from(12),
+        unit: 'sat',
         state: 'PAID',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
         change: [],
         payment_preimage: 'preimage-12',
       })),
@@ -170,6 +177,22 @@ describe('MeltBolt12Handler', () => {
     }
   });
 
+  it('fetches remote BOLT12 melt quotes through the adapter', async () => {
+    const fetched = await handler.fetchRemoteQuote({
+      ...prepareContext(),
+      quote: {
+        mintUrl,
+        method: 'bolt12',
+        quoteId,
+        quote: quoteId,
+      },
+    } as never);
+
+    expect(mintAdapter.checkMeltQuoteBolt12).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(fetched.method).toBe('bolt12');
+    expect(fetched.quoteId).toBe(quoteId);
+  });
+
   it('checks pending BOLT12 melt quotes with the method-specific adapter call', async () => {
     const result = await handler.checkPending?.({
       ...prepareContext(),
@@ -181,5 +204,29 @@ describe('MeltBolt12Handler', () => {
 
     expect(mintAdapter.checkMeltQuoteBolt12State).toHaveBeenCalledWith(mintUrl, quoteId);
     expect(result).toBe('finalize');
+  });
+
+  it('prepares BOLT12 melts using the remote fee reserve', async () => {
+    const prepared = await handler.prepare(prepareContext());
+
+    expect(prepared.fee_reserve).toEqual(Amount.from(12));
+    expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+      mintUrl,
+      { amount: Amount.from(112), unit: 'sat' },
+      true,
+    );
+  });
+
+  it('finalizes pending BOLT12 melt quotes with the method-specific adapter call', async () => {
+    const result = await handler.finalize({
+      ...prepareContext(),
+      operation: { ...executingOperation(), state: 'pending' } as PendingMeltOperation & {
+        method: 'bolt12';
+        methodData: { offer: string };
+      },
+    } as FinalizeContext<'bolt12'>);
+
+    expect(mintAdapter.checkMeltQuoteBolt12).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(result.finalizedData).toEqual({ preimage: 'preimage-12' });
   });
 });
