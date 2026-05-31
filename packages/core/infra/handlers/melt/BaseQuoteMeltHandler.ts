@@ -61,9 +61,7 @@ export interface QuoteMeltResponse<M extends MeltMethod = MeltMethod> {
   outpoint?: string | null;
 }
 
-export abstract class BaseQuoteMeltHandler<
-  M extends MeltMethod,
-> implements MeltMethodHandler<M> {
+export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements MeltMethodHandler<M> {
   protected abstract readonly method: M;
 
   protected abstract createRemoteQuote(

@@ -36,8 +36,7 @@ interface MeltQuoteBase<M extends MeltMethod> {
   updatedAt: number;
 }
 
-export interface BoltMeltQuote<M extends BoltMeltMethod = BoltMeltMethod>
-  extends MeltQuoteBase<M> {
+export interface BoltMeltQuote<M extends BoltMeltMethod = BoltMeltMethod> extends MeltQuoteBase<M> {
   fee_reserve: Amount;
   payment_preimage?: string | null;
 }
@@ -166,10 +165,7 @@ export function resolveOnchainMeltFeeOption(
   }
 
   const resolvedFeeIndex =
-    feeIndex ??
-    (feeOptions.length === 1
-      ? feeOptions[0]!.fee_index
-      : undefined);
+    feeIndex ?? (feeOptions.length === 1 ? feeOptions[0]!.fee_index : undefined);
   if (resolvedFeeIndex === undefined) {
     throw new Error(`Melt quote ${quote.quoteId} requires an explicit feeIndex`);
   }

@@ -34,7 +34,9 @@ export class MeltOnchainHandler extends BaseQuoteMeltHandler<'onchain'> {
   ): Promise<QuoteMeltResponse<'onchain'>> {
     const feeIndex = ctx.operation.methodData.feeIndex;
     if (feeIndex === undefined) {
-      throw new Error(`Cannot execute onchain melt operation ${ctx.operation.id}: feeIndex missing`);
+      throw new Error(
+        `Cannot execute onchain melt operation ${ctx.operation.id}: feeIndex missing`,
+      );
     }
 
     return ctx.mintAdapter.customMeltOnchain(
