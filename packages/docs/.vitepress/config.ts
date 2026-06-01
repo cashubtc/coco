@@ -1,10 +1,7 @@
 import { defineConfig } from 'vitepress';
 
 const docsBase = process.env.DOCS_BASE ?? '/coco/';
-const docsSiteUrl = (process.env.DOCS_SITE_URL ?? 'https://cashubtc.github.io').replace(
-  /\/$/,
-  '',
-);
+const docsSiteUrl = (process.env.DOCS_SITE_URL ?? 'https://cashubtc.github.io').replace(/\/$/, '');
 const docsVersion = process.env.DOCS_VERSION ?? 'stable';
 const versionLabel = docsVersion === 'nightly' ? 'Nightly' : 'Stable';
 
