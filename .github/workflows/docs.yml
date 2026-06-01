@@ -22,8 +22,6 @@ jobs:
   build:
     if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     runs-on: ubuntu-latest
-    env:
-      SITE_DIR: ${{ runner.temp }}/site
     steps:
       - name: Resolve stable docs ref
         id: stable-ref
@@ -84,8 +82,8 @@ jobs:
 
       - name: Stage stable docs
         run: |
-          mkdir -p "$SITE_DIR"
-          cp -R stable/packages/docs/.vitepress/dist/. "$SITE_DIR/"
+          mkdir -p "$RUNNER_TEMP/site"
+          cp -R stable/packages/docs/.vitepress/dist/. "$RUNNER_TEMP/site/"
 
       - name: Install nightly dependencies
         working-directory: nightly
@@ -100,13 +98,13 @@ jobs:
 
       - name: Stage nightly docs
         run: |
-          mkdir -p "$SITE_DIR/nightly"
-          cp -R nightly/packages/docs/.vitepress/dist/. "$SITE_DIR/nightly/"
+          mkdir -p "$RUNNER_TEMP/site/nightly"
+          cp -R nightly/packages/docs/.vitepress/dist/. "$RUNNER_TEMP/site/nightly/"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: ${{ env.SITE_DIR }}
+          path: ${{ runner.temp }}/site
 
   deploy:
     if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
