@@ -31,7 +31,6 @@ export default defineConfig({
           { text: 'Start Here', link: '/starting/start-here' },
           { text: 'Migrating from Alpha', link: '/starting/migrating-from-alpha' },
           { text: 'Migrating from v1', link: '/starting/migrating-from-v1' },
-          { text: 'Migrating to cashu-ts v4', link: '/starting/migrating-to-cashu-ts-v4' },
           { text: 'Adding Mints', link: '/starting/adding-mints' },
           { text: 'Subscriptions', link: '/starting/subscriptions' },
           { text: 'Minting Tokens', link: '/starting/minting' },
