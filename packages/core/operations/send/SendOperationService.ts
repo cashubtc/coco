@@ -36,6 +36,10 @@ import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
+export interface ExecuteSendOptions {
+  memo?: string;
+}
+
 /**
  * Service that manages send operations as sagas.
  *
@@ -226,6 +230,7 @@ export class SendOperationService {
    */
   async execute(
     operation: PreparedSendOperation,
+    options?: ExecuteSendOptions,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     if (!this.handlerProvider) {
       throw new Error('SendHandlerProvider is required');
@@ -274,10 +279,17 @@ export class SendOperationService {
         const result = await handler.execute(ctx);
 
         if (result.status === 'PENDING') {
+          const tokenWithMemo = this.applyTokenMemo(
+            result.token ?? result.pending.token,
+            options?.memo,
+          );
+          const pendingWithMemo: PendingSendOperation = tokenWithMemo
+            ? { ...result.pending, token: tokenWithMemo }
+            : result.pending;
           // Save the pending operation to the repository
-          await this.sendOperationRepository.update(result.pending);
-          pending = result.pending;
-          token = result.token ?? null;
+          await this.sendOperationRepository.update(pendingWithMemo);
+          pending = pendingWithMemo;
+          token = tokenWithMemo ?? null;
         } else {
           // Handler returned FAILED - persist the terminal result without re-running recovery
           await this.sendOperationRepository.update(result.failed);
@@ -818,6 +830,16 @@ export class SendOperationService {
     }
 
     return orphanedProofs.length;
+  }
+
+  private normalizeMemo(memo: string | undefined): string | undefined {
+    const trimmed = memo?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private applyTokenMemo(token: Token | undefined, memo: string | undefined): Token | undefined {
+    const normalized = this.normalizeMemo(memo);
+    return token && normalized ? { ...token, memo: normalized } : token;
   }
 
   /**

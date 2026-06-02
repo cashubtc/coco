@@ -106,7 +106,7 @@ describe('SendOpsApi', () => {
     const result = await api.execute(staleOperation);
 
     expect(sendOperationService.getOperation).toHaveBeenCalledWith(preparedOperation.id);
-    expect(sendOperationService.execute).toHaveBeenCalledWith(preparedOperation);
+    expect(sendOperationService.execute).toHaveBeenCalledWith(preparedOperation, undefined);
     expect(result.operation).toBe(pendingOperation);
   });
 
@@ -175,5 +175,11 @@ describe('SendOpsApi', () => {
 
     await expect(api.finalize(finalizedOperation.id)).resolves.toBeUndefined();
     expect(sendOperationService.finalize).toHaveBeenCalledWith(finalizedOperation.id);
+  });
+
+  it('execute passes memo option through to the service', async () => {
+    await api.execute(preparedOperation.id, { memo: 'hello' });
+
+    expect(sendOperationService.execute).toHaveBeenCalledWith(preparedOperation, { memo: 'hello' });
   });
 });

@@ -447,4 +447,44 @@ describe('SendOperationService', () => {
     expect(persistedStateDuringFinalize).toBe('pending');
     expect((await sendOpRepo.getById(pendingOp.id))?.state).toBe('finalized');
   });
+
+  it('persists memo on the token when execute is called with a memo option', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+    const result = await service.execute(preparedOp, { memo: 'hello' });
+
+    expect(result.token.memo).toBe('hello');
+    const persisted = await sendOpRepo.getById(preparedOp.id);
+    expect((persisted as PendingSendOperation).token?.memo).toBe('hello');
+  });
+
+  it('omits memo from token when memo is whitespace-only', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+    const result = await service.execute(preparedOp, { memo: '   ' });
+
+    expect(result.token.memo).toBeUndefined();
+    const persisted = await sendOpRepo.getById(preparedOp.id);
+    expect((persisted as PendingSendOperation).token?.memo).toBeUndefined();
+  });
+
+  it('emits send:pending event with memo-bearing token', async () => {
+    await proofRepo.saveProofs(mintUrl, [makeProof('proof-1', 100)]);
+
+    const initOp = await service.init(mintUrl, unitAmount(100));
+    const preparedOp = await service.prepare(initOp);
+
+    let eventToken: import('@cashu/cashu-ts').Token | undefined;
+    eventBus.on('send:pending', ({ token }) => {
+      eventToken = token;
+    });
+
+    await service.execute(preparedOp, { memo: 'event-memo' });
+
+    expect(eventToken?.memo).toBe('event-memo');
+  });
 });
