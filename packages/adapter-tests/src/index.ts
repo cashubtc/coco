@@ -298,7 +298,9 @@ export function createDummyMintQuote(
   } satisfies MintQuote<'bolt11'>;
 }
 
-export function createDummyMeltQuote(overrides?: Partial<MeltQuote>): MeltQuote {
+export function createDummyMeltQuote(
+  overrides?: Partial<MeltQuote<'bolt11'>>,
+): MeltQuote<'bolt11'> {
   return {
     mintUrl: 'https://mint.test',
     method: 'bolt11',
@@ -314,7 +316,7 @@ export function createDummyMeltQuote(overrides?: Partial<MeltQuote>): MeltQuote 
     createdAt: 0,
     updatedAt: 0,
     ...overrides,
-  } satisfies MeltQuote;
+  } satisfies MeltQuote<'bolt11'>;
 }
 
 export function createDummyMintOperation(
@@ -739,6 +741,53 @@ export async function runMeltQuoteRepositoryContract(
 
         expect(pending).toHaveLength(2);
         expect(pending.some((quote) => quote.quoteId === 'paid')).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('persists onchain melt quote fee options and outpoint', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote: MeltQuote<'onchain'> = {
+          mintUrl: 'https://mint.test/',
+          method: 'onchain',
+          quoteId: 'onchain-melt-quote',
+          quote: 'onchain-melt-quote',
+          state: 'PENDING',
+          request: 'bc1ptest',
+          amount: Amount.from(21),
+          unit: 'sat',
+          fee_options: [
+            {
+              fee_index: 7,
+              fee_reserve: Amount.from(2),
+              estimated_blocks: 3,
+            },
+          ],
+          outpoint: 'txid:0',
+          expiry: 1_730_000_000,
+          createdAt: 0,
+          updatedAt: 0,
+        };
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+
+        const stored = await repositories.meltQuoteRepository.getMeltQuote(
+          'https://mint.test',
+          'onchain',
+          'onchain-melt-quote',
+        );
+
+        expect(stored?.method).toBe('onchain');
+        if (stored?.method !== 'onchain') {
+          throw new Error('Expected onchain melt quote');
+        }
+        expect(stored.fee_options).toHaveLength(1);
+        expect(stored.fee_options[0]!.fee_index).toBe(7);
+        expect(stored.fee_options[0]!.fee_reserve.equals(Amount.from(2))).toBe(true);
+        expect(stored.fee_options[0]!.estimated_blocks).toBe(3);
+        expect(stored.outpoint).toBe('txid:0');
       } finally {
         await dispose();
       }

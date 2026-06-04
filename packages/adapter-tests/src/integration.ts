@@ -1358,27 +1358,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         ).rejects.toThrow();
       });
 
-      it('should reject onchain melt quotes until the default manager wires an onchain melt handler', async () => {
-        const createOnchainMeltQuote = (input: {
-          mintUrl: string;
-          method: 'onchain';
-          methodData: { address: string; amountSats: AmountLike };
-          unit: string;
-        }): Promise<unknown> => mgr!.quotes.melt.create(input as never);
-
-        await expect(
-          createOnchainMeltQuote({
-            mintUrl,
-            method: 'onchain',
-            methodData: {
-              address: 'bc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9e75rs',
-              amountSats: 1,
-            },
-            unit: testUnit,
-          }),
-        ).rejects.toThrow();
-      });
-
       it('should reject executing a missing melt operation', async () => {
         await expect(mgr!.ops.melt.execute('missing-operation')).rejects.toThrow();
       });

@@ -3,6 +3,7 @@ import {
   OutputData,
   sumProofs,
   type MeltQuoteBolt11Response,
+  type MeltQuoteBolt12Response,
   type OutputConfig,
   type Proof,
   type SerializedBlindedSignature,
@@ -18,6 +19,9 @@ import type {
   FinalizeResult,
   MeltMethodHandler,
   MeltMethodMeta,
+  MeltMethod,
+  MeltMethodQuoteSnapshot,
+  MeltMethodRemoteState,
   PendingCheckResult,
   PendingContext,
   PreparedMeltOperation,
@@ -39,86 +43,87 @@ import {
   buildPendingResult,
   getSwapSendSecrets,
   type MeltQuoteData,
-} from './BoltMeltHandler.utils.ts';
+} from './QuoteMeltHandler.utils.ts';
 import { assertSameUnit } from '@core/amounts';
-import type { MeltQuote } from '../../../models/MeltQuote.ts';
+import {
+  meltQuoteFromBolt11Response,
+  meltQuoteFromBolt12Response,
+  meltQuoteFromOnchainResponse,
+  type MeltQuote,
+} from '../../../models/MeltQuote.ts';
 
 export type BoltMeltQuoteState = 'UNPAID' | 'PENDING' | 'PAID';
 
-export interface BoltMeltQuoteResponse {
-  state: BoltMeltQuoteState;
+export interface QuoteMeltResponse<M extends MeltMethod = MeltMethod> {
+  state: MeltMethodRemoteState<M>;
   change?: SerializedBlindedSignature[];
   payment_preimage?: string | null;
+  outpoint?: string | null;
 }
 
-export abstract class BaseBoltMeltHandler<
-  M extends 'bolt11' | 'bolt12',
-> implements MeltMethodHandler<M> {
+export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements MeltMethodHandler<M> {
   protected abstract readonly method: M;
+
+  protected abstract createRemoteQuote(
+    ctx: CreateMeltQuoteContext<M>,
+  ): Promise<MeltMethodQuoteSnapshot<M>>;
+
+  protected abstract fetchRemoteMeltQuote(
+    ctx: FetchRemoteMeltQuoteContext<M>,
+  ): Promise<MeltMethodQuoteSnapshot<M>>;
 
   protected abstract executeMelt(
     ctx: ExecuteContext<M>,
     proofsToMelt: Proof[],
     changeOutputs: OutputData[],
     quoteId: string,
-  ): Promise<BoltMeltQuoteResponse>;
+  ): Promise<QuoteMeltResponse<M>>;
 
   protected abstract checkMeltQuote(
     ctx: FinalizeContext<M> | RecoverExecutingContext<M>,
-  ): Promise<BoltMeltQuoteResponse>;
+  ): Promise<QuoteMeltResponse<M>>;
 
   protected abstract checkMeltQuoteState(
     ctx: PendingContext<M> | RecoverExecutingContext<M>,
-  ): Promise<BoltMeltQuoteState>;
+  ): Promise<MeltMethodRemoteState<M>>;
+
+  protected abstract getFeeReserveForQuote(
+    quote: MeltMethodQuoteSnapshot<M>,
+    operation: BasePrepareContext<M>['operation'],
+  ): Amount;
+
+  protected abstract buildFinalizedData(
+    response: QuoteMeltResponse<M>,
+  ): FinalizeResult<M>['finalizedData'];
 
   async createQuote(ctx: CreateMeltQuoteContext<M>): Promise<MeltQuote<M>> {
-    const amountMsat =
-      ctx.methodData.amountSats === undefined
-        ? undefined
-        : ctx.methodData.amountSats.multiplyBy(1000);
-    const remoteQuote =
-      this.method === 'bolt11'
-        ? await ctx.wallet.createMeltQuoteBolt11(
-            (ctx.methodData as { invoice: string }).invoice,
-            amountMsat,
-          )
-        : await ctx.wallet.createMeltQuoteBolt12(
-            (ctx.methodData as { offer: string }).offer,
-            amountMsat,
-          );
-
-    return this.toCanonicalQuote(ctx.mintUrl, remoteQuote);
+    return this.toCanonicalQuote(ctx.mintUrl, await this.createRemoteQuote(ctx));
   }
 
   async fetchRemoteQuote(ctx: FetchRemoteMeltQuoteContext<M>): Promise<MeltQuote<M>> {
-    const remoteQuote =
-      this.method === 'bolt11'
-        ? await ctx.mintAdapter.checkMeltQuote(ctx.quote.mintUrl, ctx.quote.quoteId)
-        : await ctx.mintAdapter.checkMeltQuoteBolt12(ctx.quote.mintUrl, ctx.quote.quoteId);
-
-    return this.toCanonicalQuote(ctx.quote.mintUrl, remoteQuote);
+    return this.toCanonicalQuote(ctx.quote.mintUrl, await this.fetchRemoteMeltQuote(ctx));
   }
 
-  private toCanonicalQuote(mintUrl: string, quote: MeltQuoteBolt11Response): MeltQuote<M> {
-    const now = Date.now();
-    return {
-      mintUrl,
-      method: this.method,
-      quoteId: quote.quote,
-      quote: quote.quote,
-      request: quote.request,
-      amount: quote.amount,
-      unit: quote.unit,
-      fee_reserve: quote.fee_reserve,
-      expiry: quote.expiry,
-      state: quote.state,
-      payment_preimage: quote.payment_preimage,
-      change: quote.change,
-      lastObservedRemoteState: quote.state,
-      lastObservedRemoteStateAt: now,
-      createdAt: now,
-      updatedAt: now,
-    } as MeltQuote<M>;
+  private toCanonicalQuote(mintUrl: string, quote: MeltMethodQuoteSnapshot<M>): MeltQuote<M> {
+    switch (this.method) {
+      case 'bolt11':
+        return meltQuoteFromBolt11Response(
+          mintUrl,
+          quote as MeltQuoteBolt11Response,
+        ) as MeltQuote<M>;
+      case 'bolt12':
+        return meltQuoteFromBolt12Response(
+          mintUrl,
+          quote as MeltQuoteBolt12Response,
+        ) as MeltQuote<M>;
+      case 'onchain':
+        return meltQuoteFromOnchainResponse(
+          mintUrl,
+          quote as MeltMethodQuoteSnapshot<'onchain'>,
+        ) as MeltQuote<M>;
+      default:
+        throw new Error(`Unsupported melt method ${String(this.method)}`);
+    }
   }
 
   // ============================================================================
@@ -162,12 +167,6 @@ export abstract class BaseBoltMeltHandler<
     return OutputData.sumOutputAmounts(deserializeOutputData(operation.swapOutputData).send);
   }
 
-  private buildFinalizedData(paymentPreimage?: string | null): FinalizeResult<M>['finalizedData'] {
-    return (paymentPreimage == null ? undefined : { preimage: paymentPreimage }) as
-      | FinalizeResult<M>['finalizedData']
-      | undefined;
-  }
-
   // ============================================================================
   // Prepare Phase
   // ============================================================================
@@ -190,7 +189,14 @@ export abstract class BaseBoltMeltHandler<
 
     const quote = ctx.quote;
     assertSameUnit(quote.unit, ctx.operation.unit, `Melt quote ${quote.quote}`);
-    const { amount, fee_reserve } = quote;
+    const { amount } = quote;
+    const fee_reserve = this.getFeeReserveForQuote(quote, ctx.operation);
+    const quoteData: MeltQuoteData = {
+      quote: quote.quote,
+      amount,
+      fee_reserve,
+      unit: quote.unit,
+    };
     const totalAmount = amount.add(fee_reserve);
 
     ctx.logger?.debug('Melt quote created', {
@@ -228,9 +234,9 @@ export abstract class BaseBoltMeltHandler<
     });
 
     if (!needsSwap) {
-      return this.prepareDirectMelt(ctx, quote, selectedProofs);
+      return this.prepareDirectMelt(ctx, quoteData, selectedProofs);
     }
-    return this.prepareSwapThenMelt(ctx, quote, totalAmount);
+    return this.prepareSwapThenMelt(ctx, quoteData, totalAmount);
   }
 
   /**
@@ -442,11 +448,12 @@ export abstract class BaseBoltMeltHandler<
       state: 'PAID' | 'UNPAID' | 'PENDING';
       change?: SerializedBlindedSignature[];
       payment_preimage?: string | null;
+      outpoint?: string | null;
     },
     proofsToMelt: Proof[],
   ): Promise<ExecutionResult<M>> {
     const { mintUrl } = ctx.operation;
-    const { state, change, payment_preimage: paymentPreimage } = response;
+    const { state, change } = response;
 
     switch (state) {
       case 'PAID': {
@@ -461,7 +468,7 @@ export abstract class BaseBoltMeltHandler<
         return buildPaidResult(ctx.operation, {
           changeAmount,
           effectiveFee,
-          finalizedData: this.buildFinalizedData(paymentPreimage),
+          finalizedData: this.buildFinalizedData(response),
         });
       }
 
@@ -591,7 +598,7 @@ export abstract class BaseBoltMeltHandler<
     return {
       changeAmount,
       effectiveFee,
-      finalizedData: this.buildFinalizedData(res.payment_preimage),
+      finalizedData: this.buildFinalizedData(res),
     };
   }
 
@@ -782,7 +789,7 @@ export abstract class BaseBoltMeltHandler<
     return buildPaidResult(ctx.operation, {
       changeAmount,
       effectiveFee,
-      finalizedData: this.buildFinalizedData(res.payment_preimage),
+      finalizedData: this.buildFinalizedData(res),
     });
   }
 

@@ -97,6 +97,29 @@ describe('MeltOperationService', () => {
     );
   };
 
+  const persistOnchainMeltQuote = async (
+    quoteId = 'onchain-quote',
+    feeOptions = [
+      { fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 },
+      { fee_index: 7, fee_reserve: Amount.from(2), estimated_blocks: 3 },
+    ],
+  ) => {
+    await meltQuoteRepository.upsertMeltQuote({
+      mintUrl,
+      method: 'onchain',
+      quoteId,
+      quote: quoteId,
+      state: 'UNPAID',
+      request: 'bc1ptest',
+      amount: Amount.from(21),
+      unit: 'sat',
+      fee_options: feeOptions,
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  };
+
   const makePreparedOp = (
     id: string,
     overrides?: Partial<PreparedMeltOperation>,
@@ -418,6 +441,46 @@ describe('MeltOperationService', () => {
 
       expect(prepared.method).toBe('bolt12');
       expect(prepared.methodData).toEqual({ offer: 'lno1offer' });
+    });
+
+    it('prepares onchain melt quotes with the selected fee index in operation data', async () => {
+      await persistOnchainMeltQuote();
+
+      const prepared = await service.prepareExistingQuote(mintUrl, 'onchain', 'onchain-quote', {
+        feeIndex: 7,
+      });
+
+      expect(prepared.method).toBe('onchain');
+      expect(prepared.methodData).toEqual({
+        address: 'bc1ptest',
+        amountSats: Amount.from(21),
+        feeIndex: 7,
+      });
+    });
+
+    it('defaults onchain fee index only when the quote has one fee option', async () => {
+      await persistOnchainMeltQuote('single-option-onchain-quote', [
+        { fee_index: 3, fee_reserve: Amount.from(4), estimated_blocks: 6 },
+      ]);
+
+      const prepared = await service.prepareExistingQuote(
+        mintUrl,
+        'onchain',
+        'single-option-onchain-quote',
+      );
+
+      expect(prepared.method).toBe('onchain');
+      expect((prepared.methodData as { feeIndex: number }).feeIndex).toBe(3);
+    });
+
+    it('rejects missing onchain fee index for multi-option quotes before creating operations', async () => {
+      await persistOnchainMeltQuote();
+
+      await expect(
+        service.prepareExistingQuote(mintUrl, 'onchain', 'onchain-quote'),
+      ).rejects.toThrow('requires an explicit feeIndex');
+
+      expect(await service.getOperationByQuote(mintUrl, 'onchain', 'onchain-quote')).toBeNull();
     });
 
     it('rejects duplicate prepares for the same canonical quote', async () => {

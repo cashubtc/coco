@@ -16,7 +16,7 @@ type Assert<T extends true> = T;
 type PrepareMeltInput = Parameters<MeltOpsApi['prepare']>[0];
 type PrepareMeltMethod = PrepareMeltInput['method'];
 type _AssertDefaultBoltMethods = Assert<
-  Exclude<PrepareMeltMethod, 'bolt11' | 'bolt12'> extends never ? true : false
+  Exclude<PrepareMeltMethod, 'bolt11' | 'bolt12' | 'onchain'> extends never ? true : false
 >;
 type CustomPrepareMeltInput = Parameters<MeltOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
 type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['method'] ? true : false>;
@@ -97,7 +97,7 @@ describe('MeltOpsApi', () => {
       mintUrl,
       'bolt11',
       'quote-1',
-      undefined,
+      { expectedUnit: undefined, feeIndex: undefined },
     );
     expect(result).toBe(preparedOperation);
   });
@@ -114,7 +114,23 @@ describe('MeltOpsApi', () => {
       mintUrl,
       'bolt11',
       'quote-1',
-      'USD',
+      { expectedUnit: 'USD', feeIndex: undefined },
+    );
+  });
+
+  it('prepare passes onchain feeIndex to the service', async () => {
+    await api.prepare({
+      mintUrl,
+      method: 'onchain',
+      quoteId: 'quote-1',
+      feeIndex: 2,
+    });
+
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain',
+      'quote-1',
+      { expectedUnit: undefined, feeIndex: 2 },
     );
   });
 

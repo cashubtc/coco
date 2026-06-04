@@ -7,7 +7,7 @@ import type {
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 
 /** Melt methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12';
+export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
 
 export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
   [M in TSupported]: {
@@ -19,7 +19,7 @@ export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMel
     quoteId: string;
     /** Unit to melt. Defaults to `sat`. */
     unit?: string;
-  };
+  } & (M extends 'onchain' ? { feeIndex?: number } : {});
 }[TSupported];
 
 export type GetMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
@@ -77,7 +77,13 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
       input.mintUrl,
       input.method,
       input.quoteId,
-      input.unit,
+      {
+        expectedUnit: input.unit,
+        feeIndex:
+          input.method === 'onchain'
+            ? (input as PrepareMeltInput<Extract<TSupported, 'onchain'>>).feeIndex
+            : undefined,
+      },
     );
   }
 

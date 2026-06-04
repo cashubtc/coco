@@ -2,6 +2,8 @@ import {
   Amount,
   type AmountLike,
   type MeltQuoteBolt11Response,
+  type MeltQuoteBolt12Response,
+  type MeltQuoteOnchainResponse,
   type Wallet,
   type Proof,
 } from '@cashu/cashu-ts';
@@ -42,7 +44,7 @@ export interface MeltMethodInputDefinitions {
 export interface MeltMethodDefinitions {
   bolt11: { invoice: string; amountSats?: Amount };
   bolt12: { offer: string; amountSats?: Amount };
-  onchain: { address: string; amountSats: Amount };
+  onchain: { address: string; amountSats: Amount; feeIndex?: number };
 }
 
 export type MeltMethod = keyof MeltMethodDefinitions;
@@ -51,8 +53,8 @@ export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefini
 
 export interface MeltMethodQuoteDefinitions {
   bolt11: MeltQuoteBolt11Response;
-  bolt12: MeltQuoteBolt11Response;
-  onchain: never;
+  bolt12: MeltQuoteBolt12Response;
+  onchain: MeltQuoteOnchainResponse;
 }
 
 export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =

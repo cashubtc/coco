@@ -17,6 +17,7 @@ The canonical API is exposed through `coco.ops.melt`:
 
 - `prepare({ mintUrl, method: 'bolt11', quoteId })` prepares an operation from a canonical melt quote
 - `prepare({ mintUrl, method: 'bolt12', quoteId })` prepares a BOLT12 offer melt from a canonical melt quote
+- `prepare({ mintUrl, method: 'onchain', quoteId, feeIndex? })` prepares an onchain melt from a canonical NUT-30 quote
 - `execute(operationOrId)` executes the prepared operation
 - `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
@@ -28,6 +29,7 @@ preparing a melt operation:
 
 - `create({ mintUrl, method: 'bolt11', methodData: { invoice }, unit? })` creates and persists a canonical quote row only
 - `create({ mintUrl, method: 'bolt12', methodData: { offer, amountSats }, unit? })` creates and persists a canonical quote row only
+- `create({ mintUrl, method: 'onchain', methodData: { address, amountSats }, unit? })` creates and persists a canonical quote row with `fee_options`
 - `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, method, quoteId })` checks the remote quote state and persists the canonical quote update
@@ -99,6 +101,29 @@ const prepared = await coco.ops.melt.prepare({
 });
 ```
 
+For onchain addresses, choose one advertised fee option by its `fee_index`:
+
+```ts
+const quote = await coco.quotes.melt.create({
+  mintUrl,
+  method: 'onchain',
+  methodData: { address, amountSats: 21_000 },
+});
+
+const prepared = await coco.ops.melt.prepare({
+  mintUrl,
+  method: 'onchain',
+  quoteId: quote.quoteId,
+  feeIndex: quote.fee_options[0].fee_index,
+});
+```
+
+If the onchain quote has exactly one fee option, `feeIndex` may be omitted. If
+there are multiple fee options, pass one of the advertised
+`quote.fee_options[].fee_index` values. The selected fee option's `fee_reserve`
+is copied onto the prepared operation for proof selection; the selected
+`feeIndex` is operation data, not quote data.
+
 Internally, the service:
 
 1. Loads the canonical quote row
@@ -128,7 +153,7 @@ if (result.state === 'pending') {
 }
 ```
 
-If the mint returns `PAID`, the operation is finalized immediately. If the mint returns `PENDING`, the operation moves to `pending` and must be checked later.
+If the mint returns `PAID`, the operation is finalized immediately. If the mint returns `PENDING`, the operation moves to `pending` and must be checked later. Onchain melts are generally asynchronous, but intramint melt/mint settlement can also return `PAID` immediately, sometimes without an outpoint.
 
 ## Handling Pending Operations
 
@@ -144,7 +169,7 @@ if (operation.state === 'finalized') {
 }
 ```
 
-`refresh` queries the mint for the quote state when the operation is pending, performs any needed finalize or rollback work, and returns the latest stored operation.
+`refresh` queries the mint for the quote state when the operation is pending, performs any needed finalize or rollback work, and returns the latest stored operation. Refresh the operation, not only the quote, when you need local proof state and change proofs to advance.
 
 The operation returned by `refresh()` already includes settlement details when the melt has finalized:
 
@@ -199,5 +224,5 @@ coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
 
 ## Implementation Notes
 
-- Built-in `manager.ops.melt` support covers `bolt11` and `bolt12`
+- Built-in `manager.ops.melt` support covers `bolt11`, `bolt12`, and `onchain`
 - Operations are locked per id; concurrent calls throw `OperationInProgressError`

@@ -32,7 +32,6 @@ import type { InitMeltOperation } from '../operations/melt/MeltOperation';
 import { normalizeMintUrl } from '../utils';
 import type {
   MeltMethod,
-  MeltMethodData,
   MeltMethodInputData,
   MeltMethodQuoteSnapshot,
 } from '../operations/melt/MeltMethodHandler';
@@ -576,17 +575,6 @@ export class QuoteLifecycle {
     }
 
     return meltQuoteToMethodSnapshot(quote);
-  }
-
-  methodDataFromMeltQuote(quote: MeltQuote): MeltMethodData {
-    switch (quote.method) {
-      case 'bolt11':
-        return { invoice: quote.request };
-      case 'bolt12':
-        return { offer: quote.request };
-      default:
-        throw new Error(`Unsupported melt quote method ${String(quote.method)}`);
-    }
   }
 
   private async persistCanonicalMintQuote(canonicalQuote: MintQuote): Promise<MintQuote> {

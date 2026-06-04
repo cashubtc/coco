@@ -39,6 +39,7 @@ import {
   MintRequestProvider,
   MeltBolt11Handler,
   MeltBolt12Handler,
+  MeltOnchainHandler,
   MeltHandlerProvider,
   SendHandlerProvider,
   DefaultSendHandler,
@@ -807,6 +808,7 @@ export class Manager {
     const meltHandlerProvider = new MeltHandlerProvider({
       bolt11: new MeltBolt11Handler(),
       bolt12: new MeltBolt12Handler(),
+      onchain: new MeltOnchainHandler(),
     });
     const mintHandlerProvider = new MintHandlerProvider({
       bolt11: new MintBolt11Handler(),

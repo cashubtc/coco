@@ -1318,6 +1318,53 @@ const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
+    id: '032_onchain_melt_quotes',
+    sql: `
+      ALTER TABLE coco_cashu_melt_quotes RENAME TO coco_cashu_melt_quotes_pre_onchain;
+
+      CREATE TABLE coco_cashu_melt_quotes (
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        quoteId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('UNPAID','PENDING','PAID')),
+        request TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        expiry INTEGER NOT NULL,
+        fee_reserve TEXT,
+        payment_preimage TEXT,
+        fee_options_json TEXT,
+        outpoint TEXT,
+        changeJson TEXT,
+        lastObservedRemoteState TEXT,
+        lastObservedRemoteStateAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (mintUrl, method, quoteId)
+      );
+
+      INSERT INTO coco_cashu_melt_quotes (
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
+        payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState,
+        lastObservedRemoteStateAt, createdAt, updatedAt
+      )
+      SELECT
+        mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
+        payment_preimage, NULL, NULL, changeJson, lastObservedRemoteState,
+        lastObservedRemoteStateAt, createdAt, updatedAt
+      FROM coco_cashu_melt_quotes_pre_onchain;
+
+      DROP TABLE coco_cashu_melt_quotes_pre_onchain;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_state
+        ON coco_cashu_melt_quotes(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_mint
+        ON coco_cashu_melt_quotes(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_quotes_method
+        ON coco_cashu_melt_quotes(method);
+    `,
+  },
+  {
     id: '032_mint_quote_method_data',
     sql: `
       ALTER TABLE coco_cashu_canonical_mint_quotes

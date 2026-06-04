@@ -102,11 +102,16 @@ interface PreparedData {
 export interface MeltMethodFinalizedDataMap {
   bolt11: {
     preimage?: string;
+    outpoint?: never;
   };
   bolt12: {
     preimage?: string;
+    outpoint?: never;
   };
-  onchain: never;
+  onchain: {
+    preimage?: never;
+    outpoint?: string;
+  };
 }
 
 export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =

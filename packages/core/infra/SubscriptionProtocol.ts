@@ -8,6 +8,7 @@ export type SubscriptionKind =
   | 'bolt12_mint_quote'
   | 'bolt11_melt_quote'
   | 'bolt12_melt_quote'
+  | 'onchain_melt_quote'
   | 'proof_state';
 
 export type UnsubscribeHandler = () => Promise<void>;

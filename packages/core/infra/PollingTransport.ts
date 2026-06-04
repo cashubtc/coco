@@ -29,6 +29,7 @@ const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
   'bolt12_mint_quote',
   'bolt11_melt_quote',
   'bolt12_melt_quote',
+  'onchain_melt_quote',
   'proof_state',
 ]);
 
@@ -411,6 +412,9 @@ export class PollingTransport implements RealTimeTransport {
         break;
       case 'bolt12_melt_quote':
         payload = await this.mintAdapter.checkMeltQuoteBolt12State(mintUrl, task.filter!);
+        break;
+      case 'onchain_melt_quote':
+        payload = await this.mintAdapter.checkMeltQuoteOnchain(mintUrl, task.filter!);
         break;
       default:
         throw new Error(`Unsupported polling task kind: ${String(task.kind)}`);

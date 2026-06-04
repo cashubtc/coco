@@ -4,7 +4,7 @@ import type { MeltQuote } from '@cashu/coco-core';
 import type { IdbDb, MeltQuoteRow } from '../lib/db.ts';
 
 function rowToQuote(row: MeltQuoteRow): MeltQuote {
-  return {
+  const base = {
     mintUrl: row.mintUrl,
     method: row.method as MeltQuote['method'],
     quoteId: row.quoteId,
@@ -13,14 +13,39 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
     request: row.request,
     amount: deserializeAmount(row.amount),
     unit: row.unit,
-    fee_reserve: deserializeAmount(row.fee_reserve),
     expiry: row.expiry,
-    payment_preimage: row.payment_preimage ?? undefined,
     change: row.change ?? undefined,
     lastObservedRemoteState: row.lastObservedRemoteState ?? undefined,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+
+  if (row.method === 'onchain') {
+    if (!row.fee_options || row.fee_options.length === 0) {
+      throw new Error(`Stored onchain melt quote ${row.quoteId} is missing fee_options`);
+    }
+
+    return {
+      ...base,
+      method: 'onchain',
+      fee_options: row.fee_options.map((option) => ({
+        ...option,
+        fee_reserve: deserializeAmount(option.fee_reserve),
+      })),
+      outpoint: row.outpoint ?? undefined,
+    };
+  }
+
+  if (row.fee_reserve === null || row.fee_reserve === undefined) {
+    throw new Error(`Stored BOLT melt quote ${row.quoteId} is missing fee_reserve`);
+  }
+
+  return {
+    ...base,
+    method: row.method as 'bolt11' | 'bolt12',
+    fee_reserve: deserializeAmount(row.fee_reserve),
+    payment_preimage: row.payment_preimage ?? undefined,
   };
 }
 
@@ -46,9 +71,17 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
       request: quote.request,
       amount: serializeAmount(quote.amount),
       unit: quote.unit,
-      fee_reserve: serializeAmount(quote.fee_reserve),
+      fee_reserve: quote.method === 'onchain' ? null : serializeAmount(quote.fee_reserve),
+      fee_options:
+        quote.method === 'onchain'
+          ? quote.fee_options.map((option) => ({
+              ...option,
+              fee_reserve: serializeAmount(option.fee_reserve),
+            }))
+          : undefined,
+      outpoint: quote.method === 'onchain' ? (quote.outpoint ?? null) : null,
       expiry: quote.expiry,
-      payment_preimage: quote.payment_preimage ?? null,
+      payment_preimage: quote.method === 'onchain' ? null : (quote.payment_preimage ?? null),
       change: quote.change,
       lastObservedRemoteState: quote.lastObservedRemoteState ?? quote.state,
       lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,

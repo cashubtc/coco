@@ -175,7 +175,9 @@ export interface MeltQuoteRow {
   amount: string | number;
   unit: string;
   expiry: number;
-  fee_reserve: string | number;
+  fee_reserve?: string | number | null;
+  fee_options?: { fee_index: number; fee_reserve: string | number; estimated_blocks: number }[];
+  outpoint?: string | null;
   payment_preimage?: string | null;
   change?: SerializedBlindedSignature[];
   lastObservedRemoteState?: 'UNPAID' | 'PENDING' | 'PAID' | null;
