@@ -43,7 +43,7 @@ jobs:
 
       - name: Upload core integration coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           working-directory: packages/core
           files: coverage/integration/lcov.info

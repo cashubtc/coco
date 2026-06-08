@@ -36,7 +36,7 @@ jobs:
 
       - name: Upload core coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage/core/lcov.info
           disable_search: true
