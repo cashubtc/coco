@@ -109,9 +109,10 @@ is_browser_test_package() {
 ensure_playwright_browsers() {
     log_info "Ensuring Playwright browsers are installed..."
     cd "$PROJECT_ROOT"
-    npx playwright install --with-deps chromium firefox webkit 2>/dev/null || {
+    bun --cwd packages/indexeddb playwright install --with-deps \
+        chromium firefox webkit 2>/dev/null || {
         log_warn "Failed to install all browsers, trying without deps..."
-        npx playwright install chromium firefox webkit || {
+        bun --cwd packages/indexeddb playwright install chromium firefox webkit || {
             log_error "Failed to install Playwright browsers"
             return 1
         }
