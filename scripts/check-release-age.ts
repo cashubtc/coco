@@ -87,10 +87,6 @@ async function readReleaseAgeConfig(configPath: string): Promise<ReleaseAgeConfi
   };
 }
 
-function parseLockString(raw: string): string {
-  return JSON.parse(`"${raw}"`) as string;
-}
-
 function parsePackageSpec(spec: string): { name: string; version: string } | null {
   const aliasMarker = '@npm:';
   const aliasIndex = spec.lastIndexOf(aliasMarker);
@@ -110,27 +106,191 @@ function parsePackageSpec(spec: string): { name: string; version: string } | nul
   return { name, version };
 }
 
+type JsonPosition = {
+  index: number;
+  line: number;
+};
+
+type JsonStringToken = JsonPosition & {
+  value: string;
+};
+
+function readJsonStringToken(text: string, startIndex: number, line: number): JsonStringToken {
+  let index = startIndex + 1;
+  let escaped = false;
+
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '"' && !escaped) {
+      return {
+        value: JSON.parse(text.slice(startIndex, index + 1)) as string,
+        index: index + 1,
+        line,
+      };
+    }
+
+    escaped = char === '\\' && !escaped;
+    if (char !== '\\') {
+      escaped = false;
+    }
+    index += 1;
+  }
+
+  throw new Error('Unterminated string in bun.lock');
+}
+
+function skipJsonWhitespaceAndComments(text: string, position: JsonPosition): JsonPosition {
+  let { index, line } = position;
+
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '\n') {
+      index += 1;
+      line += 1;
+      continue;
+    }
+    if (char === ' ' || char === '\r' || char === '\t') {
+      index += 1;
+      continue;
+    }
+    if (char === '/' && text[index + 1] === '/') {
+      index += 2;
+      while (index < text.length && text[index] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '/' && text[index + 1] === '*') {
+      index += 2;
+      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) {
+        if (text[index] === '\n') {
+          line += 1;
+        }
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+
+    break;
+  }
+
+  return { index, line };
+}
+
+function findPackagesObject(text: string): JsonPosition {
+  let position: JsonPosition = { index: 0, line: 1 };
+  let objectDepth = 0;
+
+  while (position.index < text.length) {
+    position = skipJsonWhitespaceAndComments(text, position);
+    const char = text[position.index];
+
+    if (char === '"') {
+      const key = readJsonStringToken(text, position.index, position.line);
+      if (objectDepth === 1 && key.value === 'packages') {
+        let afterKey = skipJsonWhitespaceAndComments(text, key);
+        if (text[afterKey.index] === ':') {
+          afterKey = skipJsonWhitespaceAndComments(text, {
+            index: afterKey.index + 1,
+            line: afterKey.line,
+          });
+          if (text[afterKey.index] === '{') {
+            return afterKey;
+          }
+        }
+      }
+
+      position = key;
+      continue;
+    }
+
+    if (char === '{') {
+      objectDepth += 1;
+    } else if (char === '}') {
+      objectDepth -= 1;
+    } else if (char === '\n') {
+      position.line += 1;
+    }
+    position.index += 1;
+  }
+
+  return { index: -1, line: 1 };
+}
+
+function readLockPackageLines(lockfileText: string): Map<string, number> {
+  const packageLines = new Map<string, number>();
+  let position = findPackagesObject(lockfileText);
+  if (position.index === -1) {
+    return packageLines;
+  }
+
+  let objectDepth = 1;
+  position = { index: position.index + 1, line: position.line };
+
+  while (position.index < lockfileText.length && objectDepth > 0) {
+    position = skipJsonWhitespaceAndComments(lockfileText, position);
+    const char = lockfileText[position.index];
+
+    if (char === '"') {
+      const key = readJsonStringToken(lockfileText, position.index, position.line);
+      if (objectDepth === 1) {
+        const afterKey = skipJsonWhitespaceAndComments(lockfileText, key);
+        if (lockfileText[afterKey.index] === ':') {
+          packageLines.set(key.value, position.line);
+        }
+      }
+      position = key;
+      continue;
+    }
+
+    if (char === '{') {
+      objectDepth += 1;
+    } else if (char === '}') {
+      objectDepth -= 1;
+    } else if (char === '\n') {
+      position.line += 1;
+    }
+    position.index += 1;
+  }
+
+  return packageLines;
+}
+
 async function readLockedPackages(lockfilePath: string): Promise<LockedPackage[]> {
   const text = await Bun.file(lockfilePath).text();
+  const parsedLockfile = Bun.JSONC.parse(text);
+  if (!isRecord(parsedLockfile)) {
+    throw new Error(`${lockfilePath} does not contain a JSONC object`);
+  }
+
+  const lockfilePackages = parsedLockfile.packages;
+  if (!isRecord(lockfilePackages)) {
+    throw new Error(`${lockfilePath} must define a packages object`);
+  }
+
   const packages = new Map<string, LockedPackage>();
-  const entryPattern = /^\s{4}"(?:\\.|[^"\\])*": \["((?:\\.|[^"\\])*)"/;
+  const packageLines = readLockPackageLines(text);
 
-  text.split('\n').forEach((line, index) => {
-    const match = line.match(entryPattern);
-    if (!match?.[1]) return;
+  for (const [packageKey, packageEntry] of Object.entries(lockfilePackages)) {
+    if (!Array.isArray(packageEntry) || typeof packageEntry[0] !== 'string') {
+      throw new Error(
+        `${lockfilePath}:${packageLines.get(packageKey) ?? 1} has an invalid package entry`,
+      );
+    }
 
-    const spec = parseLockString(match[1]);
+    const spec = packageEntry[0];
     const parsed = parsePackageSpec(spec);
-    if (!parsed) return;
+    if (!parsed) continue;
 
     const key = `${parsed.name}@${parsed.version}`;
     if (!packages.has(key)) {
       packages.set(key, {
         ...parsed,
-        line: index + 1,
+        line: packageLines.get(packageKey) ?? 1,
       });
     }
-  });
+  }
 
   if (packages.size === 0) {
     throw new Error(`No npm package entries were found in ${lockfilePath}`);
