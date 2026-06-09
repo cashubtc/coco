@@ -34,6 +34,12 @@ Store quote identity as `mintUrl + method + quoteId`. `quoteId` is no longer a
 sufficient lookup key on its own, and it should not be treated as an operation
 id.
 
+TypeScript supported-method generics were removed from the quote API facade and
+input aliases. Use the concrete `QuoteApi`, `MintQuoteApi`, `MeltQuoteApi`,
+`CreateMintQuoteInput`, and `CreateMeltQuoteInput` types directly instead of
+passing method subset type parameters such as `QuoteApi<'bolt11'>` or
+`CreateMintQuoteInput<'bolt11'>`.
+
 ## Mint quote migration
 
 `manager.ops.mint.prepare({ mintUrl, amount, unit?, method })` no longer creates

@@ -26,9 +26,9 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
   operation identity; a `quoteId` is remote quote identity and can be shared by
   more than one local operation.
 
-Built-in mint methods are `bolt11` and `bolt12`. Quote lookups use the full
-`{ mintUrl, method, quoteId }` identity so reused quote IDs remain scoped by
-method.
+Built-in mint methods are `bolt11`, `onchain`, and `bolt12`. Quote lookups use
+the full `{ mintUrl, method, quoteId }` identity so reused quote IDs remain
+scoped by method.
 
 ## Quote Resurfacing (`coco.quotes.mint`)
 

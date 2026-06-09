@@ -1,9 +1,5 @@
-import type { MeltMethod, MeltMethodInputData } from '@core/operations/melt';
-import type {
-  MintMethod,
-  MintMethodCreateQuoteData,
-  MintMethodQuoteSnapshot,
-} from '@core/operations/mint';
+import type { MeltMethodInputData } from '@core/operations/melt';
+import type { MintMethodQuoteSnapshot } from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
@@ -11,146 +7,119 @@ import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
 export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain' | 'bolt12';
-type DefaultImportableMintQuoteMethod<TSupported extends MintMethod> = Extract<
-  TSupported,
-  'bolt11'
->;
 
-type MintQuoteIdentityInput<M extends MintMethod> = {
+export type CreateMintQuoteInput =
+  | {
+      mintUrl: string;
+      method: 'bolt11';
+      amount: UnitAmountLike;
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'onchain';
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'bolt12';
+      unit?: string;
+      amount?: UnitAmountLike;
+      description?: string;
+    };
+
+export type GetMintQuoteInput = {
   mintUrl: string;
-  method: M;
+  method: DefaultSupportedMintQuoteMethod;
   quoteId: string;
 };
 
-type MeltQuoteIdentityInput<M extends MeltMethod> = {
+export type ImportMintQuoteInput = {
+  /** Mint that issued the existing quote. */
   mintUrl: string;
-  method: M;
-  quoteId: string;
+  /** Existing quote snapshot to persist as canonical quote state. */
+  quote: MintMethodQuoteSnapshot<'bolt11'>;
+  /** Mint method for the quote snapshot. */
+  method: 'bolt11';
 };
 
-export type CreateMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
-  {
-    [M in TSupported]: { mintUrl: string; method: M } & (M extends 'bolt11'
-      ? {
-          amount: UnitAmountLike;
-          unit?: string;
-        }
-      : M extends 'onchain'
-        ? {
-            unit?: string;
-          }
-        : M extends 'bolt12'
-          ? {
-              unit?: string;
-              amount?: UnitAmountLike;
-              description?: string;
-            }
-          : never);
-  }[TSupported];
+export type RefreshMintQuoteInput = GetMintQuoteInput;
 
-export type GetMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> = {
-  [M in TSupported]: MintQuoteIdentityInput<M>;
-}[TSupported];
-
-export type ImportMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
-  DefaultImportableMintQuoteMethod<TSupported> extends never
-    ? never
-    : {
-        [M in DefaultImportableMintQuoteMethod<TSupported>]: {
-          /** Mint that issued the existing quote. */
-          mintUrl: string;
-          /** Existing quote snapshot to persist as canonical quote state. */
-          quote: MintMethodQuoteSnapshot<M>;
-          /** Mint method for the quote snapshot. */
-          method: M;
-        };
-      }[DefaultImportableMintQuoteMethod<TSupported>];
-
-export type RefreshMintQuoteInput<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> =
-  GetMintQuoteInput<TSupported>;
-
-export type ListPendingMintQuotesInput<
-  TSupported extends MintMethod = DefaultSupportedMintQuoteMethod,
-> = {
-  method?: TSupported;
+export type ListPendingMintQuotesInput = {
+  method?: DefaultSupportedMintQuoteMethod;
 };
 
-export type CreateMeltQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
-  [M in TSupported]: {
+export type CreateMeltQuoteInput = {
+  [M in DefaultSupportedMeltMethod]: {
     mintUrl: string;
     method: M;
     methodData: MeltMethodInputData<M>;
     unit?: string;
   };
-}[TSupported];
+}[DefaultSupportedMeltMethod];
 
-export type GetMeltQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
-  [M in TSupported]: MeltQuoteIdentityInput<M>;
-}[TSupported];
+export type GetMeltQuoteInput = {
+  mintUrl: string;
+  method: DefaultSupportedMeltMethod;
+  quoteId: string;
+};
 
-export type RefreshMeltQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> =
-  GetMeltQuoteInput<TSupported>;
+export type RefreshMeltQuoteInput = GetMeltQuoteInput;
 
-export type ListPendingMeltQuotesInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> =
-  {
-    method?: TSupported;
-  };
+export type ListPendingMeltQuotesInput = {
+  method?: DefaultSupportedMeltMethod;
+};
 
-export class MintQuoteApi<TSupported extends MintMethod = DefaultSupportedMintQuoteMethod> {
+export class MintQuoteApi {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
-  async create(input: CreateMintQuoteInput<TSupported>): Promise<MintQuote> {
+  async create(input: CreateMintQuoteInput): Promise<MintQuote> {
     if (input.method === 'bolt11') {
-      const bolt11Input = input as CreateMintQuoteInput<'bolt11'>;
-      const parsed = parseUnitAmount(bolt11Input.amount, { explicitUnit: bolt11Input.unit });
-      return this.quoteLifecycle.createMintQuote(bolt11Input.mintUrl, bolt11Input.method, {
+      const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
         amount: parsed,
-      } as MintMethodCreateQuoteData<typeof bolt11Input.method>);
+      });
     }
 
     if (input.method === 'bolt12') {
-      const bolt12Input = input as CreateMintQuoteInput<'bolt12'>;
       const parsed =
-        bolt12Input.amount !== undefined
-          ? parseUnitAmount(bolt12Input.amount, { explicitUnit: bolt12Input.unit })
+        input.amount !== undefined
+          ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
           : undefined;
-      const unit = parsed?.unit ?? normalizeUnit(bolt12Input.unit, { defaultUnit: DEFAULT_UNIT });
+      const unit = parsed?.unit ?? normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT });
       const createQuoteData =
         parsed === undefined
-          ? { unit, description: bolt12Input.description }
-          : { unit, amount: parsed, description: bolt12Input.description };
-      return this.quoteLifecycle.createMintQuote(bolt12Input.mintUrl, bolt12Input.method, {
-        ...createQuoteData,
-      } as MintMethodCreateQuoteData<typeof bolt12Input.method>);
+          ? { unit, description: input.description }
+          : { unit, amount: parsed, description: input.description };
+      return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, createQuoteData);
     }
 
-    const onchainInput = input as CreateMintQuoteInput<'onchain'>;
-    return this.quoteLifecycle.createMintQuote(onchainInput.mintUrl, onchainInput.method, {
-      unit: normalizeUnit(onchainInput.unit, { defaultUnit: DEFAULT_UNIT }),
-    } as MintMethodCreateQuoteData<typeof onchainInput.method>);
+    return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+      unit: normalizeUnit(input.unit, { defaultUnit: DEFAULT_UNIT }),
+    });
   }
 
-  get(input: GetMintQuoteInput<TSupported>): Promise<MintQuote | null> {
+  get(input: GetMintQuoteInput): Promise<MintQuote | null> {
     return this.quoteLifecycle.getMintQuote(input.mintUrl, input.method, input.quoteId);
   }
 
-  import(input: ImportMintQuoteInput<TSupported>): Promise<MintQuote> {
+  import(input: ImportMintQuoteInput): Promise<MintQuote> {
     return this.quoteLifecycle.importMintQuote(input.mintUrl, input.method, input.quote);
   }
 
-  listPending(input: ListPendingMintQuotesInput<TSupported> = {}): Promise<MintQuote[]> {
+  listPending(input: ListPendingMintQuotesInput = {}): Promise<MintQuote[]> {
     return this.quoteLifecycle.getPendingMintQuotes(input.method);
   }
 
-  refresh(input: RefreshMintQuoteInput<TSupported>): Promise<MintQuote> {
+  refresh(input: RefreshMintQuoteInput): Promise<MintQuote> {
     return this.quoteLifecycle.refreshMintQuote(input.mintUrl, input.method, input.quoteId);
   }
 }
 
-export class MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
+export class MeltQuoteApi {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
-  create(input: CreateMeltQuoteInput<TSupported>): Promise<MeltQuote> {
+  create(input: CreateMeltQuoteInput): Promise<MeltQuote> {
     return this.quoteLifecycle.createMeltQuote(
       input.mintUrl,
       input.method,
@@ -159,15 +128,15 @@ export class MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMe
     );
   }
 
-  get(input: GetMeltQuoteInput<TSupported>): Promise<MeltQuote | null> {
+  get(input: GetMeltQuoteInput): Promise<MeltQuote | null> {
     return this.quoteLifecycle.getMeltQuote(input.mintUrl, input.method, input.quoteId);
   }
 
-  listPending(input: ListPendingMeltQuotesInput<TSupported> = {}): Promise<MeltQuote[]> {
+  listPending(input: ListPendingMeltQuotesInput = {}): Promise<MeltQuote[]> {
     return this.quoteLifecycle.getPendingMeltQuotes(input.method);
   }
 
-  refresh(input: RefreshMeltQuoteInput<TSupported>): Promise<MeltQuote> {
+  refresh(input: RefreshMeltQuoteInput): Promise<MeltQuote> {
     return this.quoteLifecycle.refreshMeltQuote(input.mintUrl, input.method, input.quoteId);
   }
 }
@@ -177,12 +146,9 @@ export class MeltQuoteApi<TSupported extends MeltMethod = DefaultSupportedMeltMe
  *
  * Quote rows are not value movements and are separate from operation history.
  */
-export class QuoteApi<
-  TMintSupported extends MintMethod = DefaultSupportedMintQuoteMethod,
-  TMeltSupported extends MeltMethod = DefaultSupportedMeltMethod,
-> {
-  readonly mint: MintQuoteApi<TMintSupported>;
-  readonly melt: MeltQuoteApi<TMeltSupported>;
+export class QuoteApi {
+  readonly mint: MintQuoteApi;
+  readonly melt: MeltQuoteApi;
 
   constructor(quoteLifecycle: QuoteLifecycle) {
     this.mint = new MintQuoteApi(quoteLifecycle);
