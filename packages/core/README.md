@@ -207,7 +207,8 @@ In-memory reference implementations are provided under `repositories/memory/` fo
   `bolt12`.
 - `melt`: `prepare`, `execute`, `get`, `getByQuote`, `listByQuote`,
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,
-  plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`.
+  plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
+  `onchain`.
 
 ### MintApi
 
