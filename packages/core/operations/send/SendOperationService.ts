@@ -246,9 +246,9 @@ export class SendOperationService {
       };
       await this.sendOperationRepository.update(executing);
 
-      let pending: PendingSendOperation | null = null;
-      let token: Token | null = null;
-      let failed: RolledBackSendOperation | null = null;
+      let pending: PendingSendOperation | undefined;
+      let token: Token | undefined;
+      let failed: RolledBackSendOperation | undefined;
       try {
         const handler = this.handlerProvider.get(operation.method);
         if (!handler) {
@@ -279,17 +279,14 @@ export class SendOperationService {
         const result = await handler.execute(ctx);
 
         if (result.status === 'PENDING') {
-          const tokenWithMemo = this.applyTokenMemo(
-            result.token ?? result.pending.token,
-            options?.memo,
-          );
-          const pendingWithMemo: PendingSendOperation = tokenWithMemo
-            ? { ...result.pending, token: tokenWithMemo }
-            : result.pending;
+          const resolvedToken = options?.memo
+            ? this.applyTokenMemo(result.token!, options.memo)
+            : result.token!;
+          const pendingWithMemo: PendingSendOperation = { ...result.pending, token: resolvedToken };
           // Save the pending operation to the repository
           await this.sendOperationRepository.update(pendingWithMemo);
           pending = pendingWithMemo;
-          token = tokenWithMemo ?? null;
+          token = resolvedToken;
         } else {
           // Handler returned FAILED - persist the terminal result without re-running recovery
           await this.sendOperationRepository.update(result.failed);
@@ -832,14 +829,14 @@ export class SendOperationService {
     return orphanedProofs.length;
   }
 
-  private normalizeMemo(memo: string | undefined): string | undefined {
-    const trimmed = memo?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : undefined;
+  private normalizeMemo(memo: string): string | undefined {
+    const trimmed = memo.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 
-  private applyTokenMemo(token: Token | undefined, memo: string | undefined): Token | undefined {
+  private applyTokenMemo(token: Token, memo: string): Token {
     const normalized = this.normalizeMemo(memo);
-    return token && normalized ? { ...token, memo: normalized } : token;
+    return normalized ? { ...token, memo: normalized } : token;
   }
 
   /**
