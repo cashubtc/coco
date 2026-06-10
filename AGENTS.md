@@ -8,6 +8,20 @@ Guidance for agentic coding in this repo.
 - If you are in a feature worktree, the project root is the worktree root (paths may differ).
 - When planning in a feature worktree, use `FEATURE_TODO.md` in the worktree root to track plan and progress. If you are building and this file is present, check whether it should be updated.
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for `cashubtc/coco`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default mattpocock/skills triage label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context domain doc layout. See `docs/agents/domain.md`.
+
 ## Git and commits
 
 - Prefer Conventional Commit style messages.
