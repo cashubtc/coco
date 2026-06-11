@@ -597,16 +597,15 @@ describe('MintOperationService', () => {
     });
   });
 
-  it('getQuote returns a persisted quote by full identity', async () => {
+  it('getQuoteById returns a persisted quote by canonical identity', async () => {
     await persistQuote('quote-exact');
 
-    const found = await quoteLifecycle.getMintQuote(mintUrl, 'bolt11', 'quote-exact');
-    const wrongQuoteId = await quoteLifecycle.getMintQuote(mintUrl, 'bolt11', 'quote-other');
-    const wrongMint = await quoteLifecycle.getMintQuote(
-      'https://other-mint.test',
-      'bolt11',
-      'quote-exact',
-    );
+    const found = await quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: 'quote-exact' });
+    const wrongQuoteId = await quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: 'quote-other' });
+    const wrongMint = await quoteLifecycle.getMintQuoteById({
+      mintUrl: 'https://other-mint.test',
+      quoteId: 'quote-exact',
+    });
 
     expect(found?.quoteId).toBe('quote-exact');
     expect(wrongQuoteId).toBeNull();
@@ -644,10 +643,24 @@ describe('MintOperationService', () => {
 
   it('refreshMintQuote fails when the canonical quote is missing', async () => {
     await expect(
-      quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', 'missing-quote'),
+      quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId: 'missing-quote' }),
     ).rejects.toThrow('was not found');
 
     expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
+  });
+
+  it('refreshMintQuote keeps the method-aware exact refresh path for internal callers', async () => {
+    await persistQuote('quote-exact-refresh');
+
+    const refreshed = await quoteLifecycle.refreshMintQuote(
+      mintUrl,
+      'bolt11',
+      'quote-exact-refresh',
+    );
+
+    expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
+    expect(handler.fetchRemoteQuote).toHaveBeenCalled();
+    expect(refreshed.quoteId).toBe('quote-exact-refresh');
   });
 
   it('refreshMintQuote persists the canonical quote before emitting mint-quote:updated', async () => {
@@ -679,7 +692,7 @@ describe('MintOperationService', () => {
       persistedDuringEvent.push(storedQuote?.state);
     });
 
-    const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'bolt11', quoteId);
+    const refreshed = await quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
 
     expect(handler.fetchRemoteQuote).toHaveBeenCalled();
     expect(refreshed.state).toBe('PAID');
@@ -726,8 +739,12 @@ describe('MintOperationService', () => {
       }
     });
 
-    const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const refreshed = await quoteLifecycle.refreshMintQuoteById({
+      mintUrl,
+      quoteId: onchainQuoteId,
+    });
 
+    expect(handlerProvider.get).toHaveBeenCalledWith('onchain');
     expect(onchainHandler.fetchRemoteQuote).toHaveBeenCalled();
     expect(refreshed.method).toBe('onchain');
     if (refreshed.method !== 'onchain') throw new Error('Expected onchain quote');

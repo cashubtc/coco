@@ -3,6 +3,7 @@ import type { MintMethodQuoteSnapshot } from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
+import type { QuoteIdentity } from '../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
@@ -28,12 +29,6 @@ export type CreateMintQuoteInput =
       description?: string;
     };
 
-export type GetMintQuoteInput = {
-  mintUrl: string;
-  method: DefaultSupportedMintQuoteMethod;
-  quoteId: string;
-};
-
 export type ImportMintQuoteInput = {
   /** Mint that issued the existing quote. */
   mintUrl: string;
@@ -42,8 +37,6 @@ export type ImportMintQuoteInput = {
   /** Mint method for the quote snapshot. */
   method: 'bolt11';
 };
-
-export type RefreshMintQuoteInput = GetMintQuoteInput;
 
 export type ListPendingMintQuotesInput = {
   method?: DefaultSupportedMintQuoteMethod;
@@ -57,14 +50,6 @@ export type CreateMeltQuoteInput = {
     unit?: string;
   };
 }[DefaultSupportedMeltMethod];
-
-export type GetMeltQuoteInput = {
-  mintUrl: string;
-  method: DefaultSupportedMeltMethod;
-  quoteId: string;
-};
-
-export type RefreshMeltQuoteInput = GetMeltQuoteInput;
 
 export type ListPendingMeltQuotesInput = {
   method?: DefaultSupportedMeltMethod;
@@ -99,8 +84,8 @@ export class MintQuoteApi {
     });
   }
 
-  get(input: GetMintQuoteInput): Promise<MintQuote | null> {
-    return this.quoteLifecycle.getMintQuote(input.mintUrl, input.method, input.quoteId);
+  get(input: QuoteIdentity): Promise<MintQuote | null> {
+    return this.quoteLifecycle.getMintQuoteById(input);
   }
 
   import(input: ImportMintQuoteInput): Promise<MintQuote> {
@@ -111,8 +96,8 @@ export class MintQuoteApi {
     return this.quoteLifecycle.getPendingMintQuotes(input.method);
   }
 
-  refresh(input: RefreshMintQuoteInput): Promise<MintQuote> {
-    return this.quoteLifecycle.refreshMintQuote(input.mintUrl, input.method, input.quoteId);
+  refresh(input: QuoteIdentity): Promise<MintQuote> {
+    return this.quoteLifecycle.refreshMintQuoteById(input);
   }
 }
 
@@ -128,16 +113,16 @@ export class MeltQuoteApi {
     );
   }
 
-  get(input: GetMeltQuoteInput): Promise<MeltQuote | null> {
-    return this.quoteLifecycle.getMeltQuote(input.mintUrl, input.method, input.quoteId);
+  get(input: QuoteIdentity): Promise<MeltQuote | null> {
+    return this.quoteLifecycle.getMeltQuoteById(input);
   }
 
   listPending(input: ListPendingMeltQuotesInput = {}): Promise<MeltQuote[]> {
     return this.quoteLifecycle.getPendingMeltQuotes(input.method);
   }
 
-  refresh(input: RefreshMeltQuoteInput): Promise<MeltQuote> {
-    return this.quoteLifecycle.refreshMeltQuote(input.mintUrl, input.method, input.quoteId);
+  refresh(input: QuoteIdentity): Promise<MeltQuote> {
+    return this.quoteLifecycle.refreshMeltQuoteById(input);
   }
 }
 

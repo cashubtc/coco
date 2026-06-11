@@ -8,6 +8,33 @@ import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
 
+type MintCreateInput = Parameters<QuoteApi['mint']['create']>[0];
+type MintImportInput = Parameters<QuoteApi['mint']['import']>[0];
+type MeltCreateInput = Parameters<QuoteApi['melt']['create']>[0];
+
+function assertMethodRequirementsRemain(): void {
+  // @ts-expect-error Mint quote creation still requires method.
+  const mintCreateWithoutMethod: MintCreateInput = { mintUrl, amount: Amount.from(10) };
+  // @ts-expect-error Mint quote import still requires method.
+  const mintImportWithoutMethod: MintImportInput = {
+    mintUrl,
+    quote: {
+      quote: quoteId,
+      request: 'lnbc1mint',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+    },
+  };
+  // @ts-expect-error Melt quote creation still requires method.
+  const meltCreateWithoutMethod: MeltCreateInput = {
+    mintUrl,
+    methodData: { invoice: 'lnbc1melt' },
+  };
+  void [mintCreateWithoutMethod, mintImportWithoutMethod, meltCreateWithoutMethod];
+}
+
 const makeMintQuote = (): MintQuote<'bolt11'> => ({
   mintUrl,
   method: 'bolt11',
@@ -58,13 +85,13 @@ describe('QuoteApi', () => {
     quoteLifecycle = {
       createMintQuote: mock(async () => mintQuote),
       importMintQuote: mock(async () => mintQuote),
-      getMintQuote: mock(async () => mintQuote),
+      getMintQuoteById: mock(async () => mintQuote),
       getPendingMintQuotes: mock(async () => [mintQuote]),
-      refreshMintQuote: mock(async () => ({ ...mintQuote, state: 'PAID' })),
+      refreshMintQuoteById: mock(async () => ({ ...mintQuote, state: 'PAID' })),
       createMeltQuote: mock(async () => meltQuote),
-      getMeltQuote: mock(async () => meltQuote),
+      getMeltQuoteById: mock(async () => meltQuote),
       getPendingMeltQuotes: mock(async () => [meltQuote]),
-      refreshMeltQuote: mock(async () => ({ ...meltQuote, state: 'PENDING' })),
+      refreshMeltQuoteById: mock(async () => ({ ...meltQuote, state: 'PENDING' })),
     } as unknown as QuoteLifecycle;
 
     api = new QuoteApi(quoteLifecycle);
@@ -74,7 +101,7 @@ describe('QuoteApi', () => {
     await expect(
       api.mint.create({ mintUrl, amount: Amount.from(10), method: 'bolt11' }),
     ).resolves.toBe(mintQuote);
-    await expect(api.mint.get({ mintUrl, method: 'bolt11', quoteId })).resolves.toBe(mintQuote);
+    await expect(api.mint.get({ mintUrl, quoteId })).resolves.toBe(mintQuote);
     await expect(
       api.mint.import({
         mintUrl,
@@ -90,7 +117,7 @@ describe('QuoteApi', () => {
       }),
     ).resolves.toBe(mintQuote);
     await expect(api.mint.listPending({ method: 'bolt11' })).resolves.toEqual([mintQuote]);
-    await expect(api.mint.refresh({ mintUrl, method: 'bolt11', quoteId })).resolves.toMatchObject({
+    await expect(api.mint.refresh({ mintUrl, quoteId })).resolves.toMatchObject({
       state: 'PAID',
     });
 
@@ -105,9 +132,9 @@ describe('QuoteApi', () => {
       expiry: mintQuote.expiry,
       state: 'UNPAID',
     });
-    expect(quoteLifecycle.getMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getMintQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
-    expect(quoteLifecycle.refreshMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.refreshMintQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
   });
 
   it('delegates onchain mint quote creation without an amount', async () => {
@@ -154,6 +181,14 @@ describe('QuoteApi', () => {
     });
   });
 
+  it('returns null for absent methodless quote lookups', async () => {
+    (quoteLifecycle.getMintQuoteById as any).mockImplementationOnce(async () => null);
+    (quoteLifecycle.getMeltQuoteById as any).mockImplementationOnce(async () => null);
+
+    await expect(api.mint.get({ mintUrl, quoteId: 'missing-mint' })).resolves.toBeNull();
+    await expect(api.melt.get({ mintUrl, quoteId: 'missing-melt' })).resolves.toBeNull();
+  });
+
   it('delegates melt quote methods', async () => {
     await expect(
       api.melt.create({
@@ -162,9 +197,9 @@ describe('QuoteApi', () => {
         methodData: { invoice: 'lnbc1melt' },
       }),
     ).resolves.toBe(meltQuote);
-    await expect(api.melt.get({ mintUrl, method: 'bolt11', quoteId })).resolves.toBe(meltQuote);
+    await expect(api.melt.get({ mintUrl, quoteId })).resolves.toBe(meltQuote);
     await expect(api.melt.listPending({ method: 'bolt11' })).resolves.toEqual([meltQuote]);
-    await expect(api.melt.refresh({ mintUrl, method: 'bolt11', quoteId })).resolves.toMatchObject({
+    await expect(api.melt.refresh({ mintUrl, quoteId })).resolves.toMatchObject({
       state: 'PENDING',
     });
 
@@ -174,8 +209,12 @@ describe('QuoteApi', () => {
       { invoice: 'lnbc1melt' },
       undefined,
     );
-    expect(quoteLifecycle.getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.getMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
     expect(quoteLifecycle.getPendingMeltQuotes).toHaveBeenCalledWith('bolt11');
-    expect(quoteLifecycle.refreshMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(quoteLifecycle.refreshMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
+  });
+
+  it('keeps method required for quote creation and import inputs', () => {
+    assertMethodRequirementsRemain();
   });
 });
