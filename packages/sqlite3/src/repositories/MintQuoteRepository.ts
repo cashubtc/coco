@@ -5,11 +5,13 @@ import {
   isMintQuotePending,
   isStatefulMintQuote,
   normalizeMintUrl,
+  QuoteIdentityConflictError,
   serializeAmount,
   stringifyJson,
   type MintMethodRemoteState,
   type MintQuote,
   type MintQuoteRepository,
+  type QuoteIdentity,
 } from '@cashu/coco-core';
 import { SqliteDb } from '../db.ts';
 
@@ -127,6 +129,27 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     this.db = db;
   }
 
+  async getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null> {
+    const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
+    const rows = await this.db.all<MintQuoteRow>(
+      `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
+              quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+              createdAt, updatedAt
+       FROM coco_cashu_canonical_mint_quotes
+       WHERE mintUrl = ? AND quoteId = ?`,
+      [normalizedMintUrl, identity.quoteId],
+    );
+    if (rows.length > 1) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        identity.quoteId,
+        rows.map((row) => row.method),
+      );
+    }
+    return rows[0] ? rowToMintQuote(rows[0]) : null;
+  }
+
   async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
     const row = await this.db.get<MintQuoteRow>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
@@ -141,6 +164,20 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
 
   async upsertMintQuote(quote: MintQuote): Promise<void> {
     const now = Date.now();
+    const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
+    const identityOwner = await this.getMintQuoteById({
+      mintUrl: normalizedMintUrl,
+      quoteId: quote.quoteId,
+    });
+    if (identityOwner && identityOwner.method !== quote.method) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        quote.quoteId,
+        [identityOwner.method, quote.method],
+        `Mint quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
+      );
+    }
     const state = getMintQuoteRemoteState(quote) ?? null;
     const amount = getMintQuoteAmount(quote);
     await this.db.run(
@@ -161,7 +198,7 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
          reusable=excluded.reusable,
          updatedAt=excluded.updatedAt`,
       [
-        normalizeMintUrl(quote.mintUrl),
+        normalizedMintUrl,
         quote.method,
         quote.quoteId,
         state,

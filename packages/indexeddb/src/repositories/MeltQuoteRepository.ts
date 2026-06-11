@@ -1,6 +1,12 @@
 import type { MeltQuoteRepository } from '@cashu/coco-core';
-import { deserializeAmount, normalizeMintUrl, serializeAmount } from '@cashu/coco-core';
+import {
+  deserializeAmount,
+  normalizeMintUrl,
+  QuoteIdentityConflictError,
+  serializeAmount,
+} from '@cashu/coco-core';
 import type { MeltQuote } from '@cashu/coco-core';
+import type { QuoteIdentity } from '@cashu/coco-core';
 import type { IdbDb, MeltQuoteRow } from '../lib/db.ts';
 
 function rowToQuote(row: MeltQuoteRow): MeltQuote {
@@ -52,6 +58,24 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
 export class IdbMeltQuoteRepository implements MeltQuoteRepository {
   constructor(private readonly db: IdbDb) {}
 
+  async getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null> {
+    const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
+    const rows = (await (this.db as any)
+      .table('coco_cashu_melt_quotes')
+      .where('[mintUrl+quoteId]')
+      .equals([normalizedMintUrl, identity.quoteId])
+      .toArray()) as MeltQuoteRow[];
+    if (rows.length > 1) {
+      throw new QuoteIdentityConflictError(
+        'melt',
+        normalizedMintUrl,
+        identity.quoteId,
+        rows.map((row) => row.method),
+      );
+    }
+    return rows[0] ? rowToQuote(rows[0]) : null;
+  }
+
   async getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null> {
     const row = (await (this.db as any)
       .table('coco_cashu_melt_quotes')
@@ -61,9 +85,23 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
 
   async upsertMeltQuote(quote: MeltQuote): Promise<void> {
     const now = Date.now();
+    const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
+    const identityOwner = await this.getMeltQuoteById({
+      mintUrl: normalizedMintUrl,
+      quoteId: quote.quoteId,
+    });
+    if (identityOwner && identityOwner.method !== quote.method) {
+      throw new QuoteIdentityConflictError(
+        'melt',
+        normalizedMintUrl,
+        quote.quoteId,
+        [identityOwner.method, quote.method],
+        `Melt quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
+      );
+    }
     const existing = await this.getMeltQuote(quote.mintUrl, quote.method, quote.quoteId);
     const row: MeltQuoteRow = {
-      mintUrl: normalizeMintUrl(quote.mintUrl),
+      mintUrl: normalizedMintUrl,
       method: quote.method,
       quoteId: quote.quoteId,
       quote: quote.quoteId,

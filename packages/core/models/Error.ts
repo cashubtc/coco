@@ -148,3 +148,28 @@ export class AuthSessionExpiredError extends AuthSessionError {
     this.name = `AuthSessionExpiredError`;
   }
 }
+
+export class QuoteIdentityConflictError extends Error {
+  readonly kind: 'mint' | 'melt';
+  readonly mintUrl: string;
+  readonly quoteId: string;
+  readonly methods: readonly string[];
+
+  constructor(
+    kind: 'mint' | 'melt',
+    mintUrl: string,
+    quoteId: string,
+    methods: readonly string[],
+    message?: string,
+  ) {
+    super(
+      message ??
+        `${kind} quote identity conflict for quote ${quoteId} at ${mintUrl}: methods ${methods.join(', ')}`,
+    );
+    this.name = 'QuoteIdentityConflictError';
+    this.kind = kind;
+    this.mintUrl = mintUrl;
+    this.quoteId = quoteId;
+    this.methods = [...methods];
+  }
+}
