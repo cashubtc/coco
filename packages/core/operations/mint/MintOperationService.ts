@@ -45,6 +45,7 @@ import {
   getMintQuoteAmount,
   type MintQuote,
 } from '../../models/MintQuote';
+import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 export interface ClaimMintQuoteOptions {
@@ -231,46 +232,36 @@ export class MintOperationService {
     return quote;
   }
 
-  async prepare(
-    mintUrl: string,
-    method: MintMethod,
-    quoteId: string,
-    methodData: MintMethodData = {},
-    expectedUnit?: string,
-    explicitAmount?: UnitAmount,
-  ): Promise<PendingMintOperation> {
-    const quote = await this.quoteLifecycle.requireMintQuoteForPrepare(
-      mintUrl,
-      method,
-      quoteId,
-      expectedUnit,
-    );
+  async prepare(quoteRef: MintQuoteRef, requestedAmount: Amount): Promise<PendingMintOperation> {
+    const quote = await this.quoteLifecycle.requireMintQuoteRefForPrepare(quoteRef);
+    const amount = Amount.from(requestedAmount);
 
     const fixedAmount = getMintQuoteAmount(quote);
-    const amount = fixedAmount ?? explicitAmount?.amount;
-    if (!amount) {
+    if (fixedAmount && !fixedAmount.equals(amount)) {
       throw new Error(
-        `Mint quote ${quoteId} for ${method} at ${mintUrl} does not have a fixed amount; pass an explicit amount for reusable quote preparation`,
-      );
-    }
-    if (explicitAmount && explicitAmount.unit !== quote.unit) {
-      throw new ProofValidationError(
-        `Mint quote ${quoteId} unit ${quote.unit} does not match requested unit ${explicitAmount.unit}`,
+        `Mint quote ${quote.quoteId} amount ${fixedAmount} does not match requested amount ${amount}`,
       );
     }
 
-    const handler = this.handlerProvider.get(method);
+    const handler = this.handlerProvider.get(quote.method);
     await handler.validateQuoteForPrepare?.(quote as any);
 
     const initOperation = await this.createInitOperation(
       quote.mintUrl,
       { amount, unit: quote.unit },
-      method,
-      methodData,
+      quote.method,
+      this.deriveMintOperationMethodData(quote) as MintMethodData,
       { quoteId: quote.quoteId },
     );
 
     return this.prepareInitOperation(initOperation.id);
+  }
+
+  private deriveMintOperationMethodData<M extends MintMethod>(
+    quote: MintQuote<M>,
+  ): MintMethodData<M> {
+    void quote;
+    return {} as MintMethodData<M>;
   }
 
   private async prepareInitOperation(

@@ -84,10 +84,8 @@ const quote = await manager.quotes.mint.create({
 });
 
 const pendingMint = await manager.ops.mint.prepare({
-  mintUrl: 'https://nofees.testnut.cashu.space',
-  quoteId: quote.quoteId,
-  method: 'bolt11',
-  methodData: {},
+  quote,
+  amount: 100,
 });
 
 // Optionally, wait via subscription API instead of polling

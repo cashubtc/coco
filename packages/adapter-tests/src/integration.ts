@@ -363,11 +363,8 @@ async function prepareMintOperation(
   });
 
   return manager.ops.mint.prepare({
-    mintUrl,
-    quoteId: quote.quoteId,
-    unit,
-    method: 'bolt11',
-    methodData: {},
+    quote,
+    amount,
   });
 }
 
@@ -772,11 +769,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           );
 
           const pending = await mgr.ops.mint.prepare({
-            mintUrl,
-            method: 'onchain',
-            quoteId: quote.quoteId,
+            quote,
             amount: testAmount(12),
-            methodData: {},
           });
 
           expect(pending.method).toBe('onchain');
@@ -840,18 +834,12 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           await waitForOnchainQuoteAvailable(mgr, mintUrl, quote.quoteId, testAmount(12));
 
           const first = await mgr.ops.mint.prepare({
-            mintUrl,
-            method: 'onchain',
-            quoteId: quote.quoteId,
+            quote,
             amount: testAmount(7),
-            methodData: {},
           });
           const second = await mgr.ops.mint.prepare({
-            mintUrl,
-            method: 'onchain',
-            quoteId: quote.quoteId,
+            quote,
             amount: testAmount(5),
-            methodData: {},
           });
 
           expect(first.quoteId).toBe(quote.quoteId);

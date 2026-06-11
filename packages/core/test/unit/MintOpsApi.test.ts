@@ -9,6 +9,7 @@ import type {
   PendingMintOperation,
   TerminalMintOperation,
 } from '../../operations/mint/MintOperation.ts';
+import type { MintQuote } from '../../models/MintQuote.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -16,26 +17,24 @@ const quoteId = 'quote-1';
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
 type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
-type _AssertBolt11PrepareAllowsOmittedMethodData = Assert<
-  Extract<PrepareMintInput, { method: 'bolt11' }> extends {
-    methodData?: Record<string, never>;
-  }
-    ? true
-    : false
->;
-type _AssertOnchainPrepareRequiresAmount = Assert<
-  Extract<PrepareMintInput, { method: 'onchain' }> extends {
+type _AssertPrepareAcceptsQuoteRef = Assert<
+  PrepareMintInput extends {
+    quote: {
+      mintUrl: string;
+      quoteId: string;
+      method: 'bolt11' | 'onchain' | 'bolt12';
+    };
     amount: unknown;
   }
     ? true
     : false
 >;
-type _AssertBolt12PrepareRequiresAmount = Assert<
-  Extract<PrepareMintInput, { method: 'bolt12' }> extends {
-    amount: unknown;
-  }
-    ? true
-    : false
+type _AssertPrepareOmitsLooseMethod = Assert<
+  'method' extends keyof PrepareMintInput ? false : true
+>;
+type _AssertPrepareOmitsLooseUnit = Assert<'unit' extends keyof PrepareMintInput ? false : true>;
+type _AssertPrepareOmitsMethodData = Assert<
+  'methodData' extends keyof PrepareMintInput ? false : true
 >;
 type _AssertGetByQuoteUsesObjectInput = Assert<
   GetMintByQuoteInput extends {
@@ -47,7 +46,7 @@ type _AssertGetByQuoteUsesObjectInput = Assert<
     : false
 >;
 type _AssertDefaultAllowsBolt12Mint = Assert<
-  'bolt12' extends PrepareMintInput['method'] ? true : false
+  'bolt12' extends PrepareMintInput['quote']['method'] ? true : false
 >;
 
 const makePendingOperation = (): PendingMintOperation => ({
@@ -106,78 +105,66 @@ describe('MintOpsApi', () => {
   });
 
   it('prepare targets an existing canonical quote and returns a pending mint operation', async () => {
+    const quote = { mintUrl, quoteId, method: 'bolt11' } as const;
+
     const result = await api.prepare({
-      mintUrl,
-      quoteId,
-      method: 'bolt11',
+      quote,
+      amount: 10,
     });
 
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      quoteId,
-      {},
-      undefined,
-      undefined,
-    );
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
     expect(result).toBe(pendingOperation);
   });
 
-  it('prepare passes methodData and expected units to the service', async () => {
-    await api.prepare({
+  it('prepare accepts a full canonical quote as the quote ref', async () => {
+    const quote: MintQuote<'bolt11'> = {
       mintUrl,
       quoteId,
+      quote: quoteId,
+      request: 'lnbc1test',
       unit: 'usd',
       method: 'bolt11',
-      methodData: {},
+      amount: Amount.from(12),
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+      lastObservedRemoteState: 'PAID',
+      lastObservedRemoteStateAt: Date.now(),
+      reusable: false,
+      quoteData: {
+        amount: Amount.from(12),
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await api.prepare({
+      quote,
+      amount: Amount.from(12),
     });
 
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      quoteId,
-      {},
-      'usd',
-      undefined,
-    );
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(12));
   });
 
   it('prepare passes explicit onchain withdrawal amounts to the service', async () => {
+    const quote = { mintUrl, quoteId, method: 'onchain' } as const;
+
     await api.prepare({
-      mintUrl,
-      quoteId,
-      method: 'onchain',
+      quote,
       amount: 10,
-      unit: 'sat',
     });
 
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(
-      mintUrl,
-      'onchain',
-      quoteId,
-      {},
-      'sat',
-      { amount: Amount.from(10), unit: 'sat' },
-    );
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
   });
 
   it('prepare passes explicit BOLT12 mint amounts to the service', async () => {
+    const quote = { mintUrl, quoteId, method: 'bolt12' } as const;
+
     await api.prepare({
-      mintUrl,
-      quoteId,
-      method: 'bolt12',
+      quote,
       amount: 10,
-      unit: 'sat',
     });
 
-    expect(mintOperationService.prepare).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt12',
-      quoteId,
-      {},
-      'sat',
-      { amount: Amount.from(10), unit: 'sat' },
-    );
+    expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
   });
 
   it('execute only allows pending operations', async () => {

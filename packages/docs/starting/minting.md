@@ -2,8 +2,8 @@
 
 The process of swapping value for a Cashu token is called "minting". To mint
 with Coco you first create a canonical mint quote, then prepare a mint operation
-from that quote. Bare amounts default to sats; for custom units pass
-`{ amount, unit }`.
+from that quote. The mint operation amount uses the canonical quote's stored
+unit.
 
 Before minting, ensure the mint is added and trusted (see [Adding a Mint](./adding-mints.md)):
 
@@ -20,10 +20,8 @@ const quote = await coco.quotes.mint.create({
 
 // Prepare an operation from the quote
 const pendingMint = await coco.ops.mint.prepare({
-  mintUrl: 'https://minturl.com',
-  quoteId: quote.quoteId,
-  method: 'bolt11',
-  methodData: {},
+  quote,
+  amount: 21,
 });
 ```
 
@@ -35,10 +33,8 @@ const customUnitQuote = await coco.quotes.mint.create({
 });
 
 const customUnitMint = await coco.ops.mint.prepare({
-  mintUrl: 'https://minturl.com',
-  quoteId: customUnitQuote.quoteId,
-  unit: 'usd',
-  method: 'bolt11',
+  quote: customUnitQuote,
+  amount: 10,
 });
 ```
 
@@ -57,10 +53,8 @@ const quote = await coco.quotes.mint.create({
 });
 
 const pendingMint = await coco.ops.mint.prepare({
-  mintUrl: 'https://minturl.com',
-  quoteId: quote.quoteId,
-  method: 'bolt11',
-  methodData: {},
+  quote,
+  amount: 21,
 });
 
 console.log('pay this: ', pendingMint.request);
@@ -96,10 +90,8 @@ const claimable = refreshed.quoteData.amountPaid.subtract(refreshed.quoteData.am
 
 if (!claimable.isZero()) {
   const pendingOnchainMint = await coco.ops.mint.prepare({
-    mintUrl: 'https://minturl.com',
-    method: 'onchain',
-    quoteId: quote.quoteId,
-    amount: { amount: 5, unit: 'sat' },
+    quote,
+    amount: 5,
   });
 
   await coco.ops.mint.finalize(pendingOnchainMint.id);
@@ -122,10 +114,8 @@ const offerQuote = await coco.quotes.mint.create({
 console.log('pay this offer:', offerQuote.request);
 
 const pendingOfferMint = await coco.ops.mint.prepare({
-  mintUrl: 'https://minturl.com',
-  method: 'bolt12',
-  quoteId: offerQuote.quoteId,
-  amount: { amount: 10, unit: 'sat' },
+  quote: offerQuote,
+  amount: 10,
 });
 ```
 

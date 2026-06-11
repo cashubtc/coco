@@ -1016,10 +1016,12 @@ describe('useMintOperation', () => {
       unit: 'usd',
     });
     const input: MintOperationPrepareInput = {
-      mintUrl: MINT_URL,
-      quoteId: 'mint-quote-usd',
-      unit: 'USD',
-      method: 'bolt11',
+      quote: {
+        mintUrl: MINT_URL,
+        quoteId: 'mint-quote-usd',
+        method: 'bolt11',
+      },
+      amount: 50,
     };
 
     mint.prepare.mockResolvedValue(pending);
@@ -1052,10 +1054,12 @@ describe('useMintOperation', () => {
     });
 
     const input: MintOperationPrepareInput = {
-      mintUrl: MINT_URL,
-      method: 'bolt12',
-      quoteId: prepared.quoteId,
-      amount: { amount: 100, unit: 'sat' },
+      quote: {
+        mintUrl: MINT_URL,
+        method: 'bolt12',
+        quoteId: prepared.quoteId,
+      },
+      amount: 100,
     };
 
     mint.prepare.mockResolvedValue(prepared);

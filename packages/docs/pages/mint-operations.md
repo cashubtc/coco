@@ -100,9 +100,8 @@ const quote = await coco.quotes.mint.create({
 });
 
 const pending = await coco.ops.mint.prepare({
-  mintUrl,
-  quoteId: quote.quoteId,
-  method: 'bolt11',
+  quote,
+  amount: 100,
 });
 
 showInvoice(pending.request);
@@ -143,17 +142,13 @@ amount to withdraw from the reusable quote.
 
 ```ts
 const first = await coco.ops.mint.prepare({
-  mintUrl,
-  method: 'onchain',
-  quoteId: quote.quoteId,
-  amount: { amount: 25, unit: 'sat' },
+  quote,
+  amount: 25,
 });
 
 const second = await coco.ops.mint.prepare({
-  mintUrl,
-  method: 'onchain',
-  quoteId: quote.quoteId,
-  amount: { amount: 10, unit: 'sat' },
+  quote,
+  amount: 10,
 });
 
 await coco.ops.mint.finalize(first.id);
@@ -177,10 +172,8 @@ const quote = await coco.quotes.mint.create({
 showOffer(quote.request);
 
 const pending = await coco.ops.mint.prepare({
-  mintUrl,
-  method: 'bolt12',
-  quoteId: quote.quoteId,
-  amount: { amount: 10, unit: 'sat' },
+  quote,
+  amount: 10,
 });
 ```
 

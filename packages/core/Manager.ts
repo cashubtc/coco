@@ -71,7 +71,11 @@ import { PluginHost } from './plugins/PluginHost.ts';
 import type { MintMethodQuoteSnapshot } from './operations/mint';
 import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
-import { isStatefulMintQuote, mintQuoteToMethodSnapshot } from './models/MintQuote.ts';
+import {
+  getMintQuoteAmount,
+  isStatefulMintQuote,
+  mintQuoteToMethodSnapshot,
+} from './models/MintQuote.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -532,12 +536,12 @@ export class Manager {
           'bolt11',
           mintQuoteToMethodSnapshot(quote) as MintMethodQuoteSnapshot<'bolt11'>,
         );
-        const operation = await this.mintOperationService.prepare(
-          imported.mintUrl,
-          imported.method,
-          imported.quoteId,
-          {},
-        );
+        const amount = getMintQuoteAmount(imported);
+        if (!amount) {
+          throw new Error(`Legacy mint quote ${imported.quoteId} does not have a fixed amount`);
+        }
+
+        const operation = await this.mintOperationService.prepare(imported, amount);
         reconciled.push(operation.quoteId);
       } catch (err) {
         this.logger.warn('Failed to reconcile legacy mint quote', {

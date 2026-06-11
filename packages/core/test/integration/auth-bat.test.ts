@@ -81,10 +81,8 @@ describe('Auth BAT (automated — password grant)', () => {
     });
 
     return manager.ops.mint.prepare({
-      mintUrl: mintUrl!,
-      quoteId: quote.quoteId,
-      method: 'bolt11',
-      methodData: {},
+      quote: { mintUrl: quote.mintUrl, method: 'bolt11', quoteId: quote.quoteId },
+      amount: Amount.from(1),
     });
   }
 
