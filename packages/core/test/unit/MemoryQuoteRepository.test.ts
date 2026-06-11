@@ -84,6 +84,7 @@ describe('memory quote repositories', () => {
       expiry: 1_730_000_000,
       reusable: true,
       quoteData: {
+        pubkey: '02'.padEnd(66, '4'),
         amountPaid: Amount.from(0),
         amountIssued: Amount.from(0),
       },
