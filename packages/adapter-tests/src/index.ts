@@ -7,12 +7,16 @@ import {
   type MeltOperation,
   type MintQuote,
   type MeltQuote,
+  type QuoteIdentity,
+  type MintQuoteRef,
+  type MeltQuoteRef,
   type MintOperation,
   type PaymentRequestReceiveAttempt,
   type PaymentRequestReceiveOperation,
   type ReceiveOperation,
   type SendOperation,
   type AuthSession,
+  QuoteIdentityConflictError,
 } from '@cashu/coco-core';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
@@ -149,6 +153,20 @@ async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
     didThrow = true;
   }
   expect(didThrow).toBe(true);
+}
+
+async function expectThrowsError(
+  fn: () => Promise<void>,
+  errorClass: Function,
+  expect: Expectation,
+) {
+  let thrown: unknown;
+  try {
+    await fn();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown instanceof errorClass).toBe(true);
 }
 
 function createDeferred<T = void>() {
@@ -548,6 +566,118 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('looks up canonical mint quotes by identity without method', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'identity-mint-quote',
+          quote: 'identity-mint-quote',
+        });
+        const ref: MintQuoteRef = quote;
+        const identity: QuoteIdentity = ref;
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        const stored = await repositories.mintQuoteRepository.getMintQuoteById(identity);
+        const absent = await repositories.mintQuoteRepository.getMintQuoteById({
+          mintUrl: 'https://mint.test',
+          quoteId: 'missing-mint-quote',
+        });
+
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('bolt11');
+        expect(stored!.quoteId).toBe('identity-mint-quote');
+        expect(absent).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects same-mint mint quote identity collisions across methods', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'colliding-mint-quote',
+          quote: 'colliding-mint-quote',
+        });
+        const collidingQuote: MintQuote<'bolt12'> = {
+          mintUrl: 'https://mint.test',
+          method: 'bolt12',
+          quoteId: 'colliding-mint-quote',
+          quote: 'colliding-mint-quote',
+          request: 'lno1collision',
+          unit: 'sat',
+          expiry: 1_730_000_000,
+          pubkey: '02'.padEnd(66, '4'),
+          reusable: true,
+          quoteData: {
+            pubkey: '02'.padEnd(66, '4'),
+            amountPaid: Amount.from(0),
+            amountIssued: Amount.from(0),
+          },
+          lastObservedRemoteStateAt: 20,
+          createdAt: 0,
+          updatedAt: 0,
+        };
+
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+        await expectThrowsError(
+          () => repositories.mintQuoteRepository.upsertMintQuote(collidingQuote),
+          QuoteIdentityConflictError,
+          expect,
+        );
+
+        const exact = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt11',
+          'colliding-mint-quote',
+        );
+        const missingSibling = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt12',
+          'colliding-mint-quote',
+        );
+        expect(exact).toBeDefined();
+        expect(missingSibling).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('keeps mint and melt quote identity namespaces separate', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintQuoteRepository.upsertMintQuote(
+          createDummyMintQuote({
+            quoteId: 'shared-cross-kind-quote',
+            quote: 'shared-cross-kind-quote',
+          }),
+        );
+        await repositories.meltQuoteRepository.upsertMeltQuote(
+          createDummyMeltQuote({
+            quoteId: 'shared-cross-kind-quote',
+            quote: 'shared-cross-kind-quote',
+          }),
+        );
+
+        const mintQuote = await repositories.mintQuoteRepository.getMintQuoteById({
+          mintUrl: 'https://mint.test',
+          quoteId: 'shared-cross-kind-quote',
+        });
+        const meltQuote = await repositories.meltQuoteRepository.getMeltQuoteById({
+          mintUrl: 'https://mint.test',
+          quoteId: 'shared-cross-kind-quote',
+        });
+
+        expect(mintQuote).toBeDefined();
+        expect(meltQuote).toBeDefined();
+        expect(mintQuote!.quoteId).toBe(meltQuote!.quoteId);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('persists reusable onchain mint quote data', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -719,6 +849,75 @@ export async function runMeltQuoteRepositoryContract(
         expect(stored!.state).toBe('PENDING');
         expect(stored!.lastObservedRemoteState).toBe('PENDING');
         expect(stored!.lastObservedRemoteStateAt).toBe(20);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('looks up canonical melt quotes by identity without method', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'identity-melt-quote',
+          quote: 'identity-melt-quote',
+        });
+        const ref: MeltQuoteRef = quote;
+        const identity: QuoteIdentity = ref;
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+
+        const stored = await repositories.meltQuoteRepository.getMeltQuoteById(identity);
+        const absent = await repositories.meltQuoteRepository.getMeltQuoteById({
+          mintUrl: 'https://mint.test',
+          quoteId: 'missing-melt-quote',
+        });
+
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('bolt11');
+        expect(stored!.quoteId).toBe('identity-melt-quote');
+        expect(absent).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects same-mint melt quote identity collisions across methods', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMeltQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'colliding-melt-quote',
+          quote: 'colliding-melt-quote',
+        });
+        const collidingQuote = {
+          ...createDummyMeltQuote({
+            mintUrl: 'https://mint.test',
+            quoteId: 'colliding-melt-quote',
+            quote: 'colliding-melt-quote',
+            request: 'lno1collision',
+          }),
+          method: 'bolt12' as const,
+        } satisfies MeltQuote<'bolt12'>;
+
+        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        await expectThrowsError(
+          () => repositories.meltQuoteRepository.upsertMeltQuote(collidingQuote),
+          QuoteIdentityConflictError,
+          expect,
+        );
+
+        const exact = await repositories.meltQuoteRepository.getMeltQuote(
+          'https://mint.test',
+          'bolt11',
+          'colliding-melt-quote',
+        );
+        const missingSibling = await repositories.meltQuoteRepository.getMeltQuote(
+          'https://mint.test',
+          'bolt12',
+          'colliding-melt-quote',
+        );
+        expect(exact).toBeDefined();
+        expect(missingSibling).toBe(null);
       } finally {
         await dispose();
       }

@@ -24,6 +24,16 @@ async function createRepositories() {
   };
 }
 
+async function expectRejects(fn: () => Promise<void>) {
+  let didThrow = false;
+  try {
+    await fn();
+  } catch {
+    didThrow = true;
+  }
+  expect(didThrow).toBe(true);
+}
+
 runRepositoryTransactionContract(
   {
     createRepositories,
@@ -46,3 +56,95 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('indexeddb quote storage constraints', () => {
+  it('rejects persisted mint quote method siblings for one identity', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.table('coco_cashu_canonical_mint_quotes').add({
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'duplicate-mint-quote',
+        state: 'UNPAID',
+        request: 'bolt11-request',
+        amount: '1',
+        unit: 'sat',
+        expiry: null,
+        pubkey: null,
+        quoteDataJson: '{"amount":"1"}',
+        lastObservedRemoteState: 'UNPAID',
+        lastObservedRemoteStateAt: 0,
+        reusable: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      await expectRejects(async () => {
+        await repositories.db.table('coco_cashu_canonical_mint_quotes').add({
+          mintUrl: 'https://mint.test',
+          method: 'bolt12',
+          quoteId: 'duplicate-mint-quote',
+          state: null,
+          request: 'bolt12-request',
+          amount: null,
+          unit: 'sat',
+          expiry: null,
+          pubkey: '02',
+          quoteDataJson: '{"pubkey":"02","amountPaid":"0","amountIssued":"0"}',
+          lastObservedRemoteState: null,
+          lastObservedRemoteStateAt: 0,
+          reusable: 1,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+      });
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('rejects persisted melt quote method siblings for one identity', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.table('coco_cashu_melt_quotes').add({
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'duplicate-melt-quote',
+        quote: 'duplicate-melt-quote',
+        state: 'UNPAID',
+        request: 'bolt11-request',
+        amount: '1',
+        unit: 'sat',
+        fee_reserve: '1',
+        expiry: 0,
+        payment_preimage: null,
+        change: undefined,
+        lastObservedRemoteState: 'UNPAID',
+        lastObservedRemoteStateAt: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      await expectRejects(async () => {
+        await repositories.db.table('coco_cashu_melt_quotes').add({
+          mintUrl: 'https://mint.test',
+          method: 'bolt12',
+          quoteId: 'duplicate-melt-quote',
+          quote: 'duplicate-melt-quote',
+          state: 'UNPAID',
+          request: 'bolt12-request',
+          amount: '1',
+          unit: 'sat',
+          fee_reserve: '1',
+          expiry: 0,
+          payment_preimage: null,
+          change: undefined,
+          lastObservedRemoteState: 'UNPAID',
+          lastObservedRemoteStateAt: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        });
+      });
+    } finally {
+      await dispose();
+    }
+  });
+});

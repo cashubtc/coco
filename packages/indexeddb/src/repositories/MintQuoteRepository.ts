@@ -6,10 +6,12 @@ import {
   isMintQuotePending,
   isStatefulMintQuote,
   normalizeMintUrl,
+  QuoteIdentityConflictError,
   serializeAmount,
   stringifyJson,
   type MintMethodRemoteState,
   type MintQuote,
+  type QuoteIdentity,
 } from '@cashu/coco-core';
 import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 
@@ -109,6 +111,24 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
     this.db = db;
   }
 
+  async getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null> {
+    const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
+    const rows = (await (this.db as any)
+      .table('coco_cashu_canonical_mint_quotes')
+      .where('[mintUrl+quoteId]')
+      .equals([normalizedMintUrl, identity.quoteId])
+      .toArray()) as MintQuoteRow[];
+    if (rows.length > 1) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        identity.quoteId,
+        rows.map((row) => row.method),
+      );
+    }
+    return rows[0] ? rowToMintQuote(rows[0]) : null;
+  }
+
   async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
     const row = (await (this.db as any)
       .table('coco_cashu_canonical_mint_quotes')
@@ -118,10 +138,24 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
 
   async upsertMintQuote(quote: MintQuote): Promise<void> {
     const now = Date.now();
+    const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
+    const identityOwner = await this.getMintQuoteById({
+      mintUrl: normalizedMintUrl,
+      quoteId: quote.quoteId,
+    });
+    if (identityOwner && identityOwner.method !== quote.method) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        quote.quoteId,
+        [identityOwner.method, quote.method],
+        `Mint quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
+      );
+    }
     const state = getMintQuoteRemoteState(quote) ?? null;
     const amount = getMintQuoteAmount(quote);
     const row: MintQuoteRow = {
-      mintUrl: normalizeMintUrl(quote.mintUrl),
+      mintUrl: normalizedMintUrl,
       method: quote.method,
       quoteId: quote.quoteId,
       state,

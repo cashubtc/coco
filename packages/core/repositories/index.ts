@@ -3,6 +3,7 @@ import type { HistoryEntry } from '@core/models/History';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
+import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
@@ -114,6 +115,7 @@ export interface ProofRepository {
 }
 
 export interface MintQuoteRepository {
+  getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null>;
   getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null>;
   upsertMintQuote(quote: MintQuote): Promise<void>;
   setMintQuoteState(
@@ -131,6 +133,7 @@ export interface LegacyMintQuoteRepository {
 }
 
 export interface MeltQuoteRepository {
+  getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null>;
   getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null>;
   upsertMeltQuote(quote: MeltQuote): Promise<void>;
   getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;

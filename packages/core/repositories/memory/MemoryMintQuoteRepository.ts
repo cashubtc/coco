@@ -1,4 +1,6 @@
+import { QuoteIdentityConflictError } from '@core/models/Error';
 import { isMintQuotePending, isStatefulMintQuote, type MintQuote } from '@core/models/MintQuote';
+import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MintMethodRemoteState } from '@core/operations/mint/MintMethodHandler';
 import type { MintQuoteRepository } from '..';
 import { normalizeMintUrl } from '../../utils';
@@ -10,6 +12,22 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     return `${normalizeMintUrl(mintUrl)}::${method}::${quoteId}`;
   }
 
+  async getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null> {
+    const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
+    const matches = Array.from(this.quotes.values()).filter(
+      (quote) => quote.mintUrl === normalizedMintUrl && quote.quoteId === identity.quoteId,
+    );
+    if (matches.length > 1) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        identity.quoteId,
+        matches.map((quote) => quote.method),
+      );
+    }
+    return matches[0] ? { ...matches[0] } : null;
+  }
+
   async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
     const key = this.makeKey(mintUrl, method, quoteId);
     const quote = this.quotes.get(key);
@@ -19,6 +37,19 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
   async upsertMintQuote(quote: MintQuote): Promise<void> {
     const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
     const now = Date.now();
+    const identityOwner = await this.getMintQuoteById({
+      mintUrl: normalizedMintUrl,
+      quoteId: quote.quoteId,
+    });
+    if (identityOwner && identityOwner.method !== quote.method) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        normalizedMintUrl,
+        quote.quoteId,
+        [identityOwner.method, quote.method],
+        `Mint quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
+      );
+    }
     const existing = await this.getMintQuote(normalizedMintUrl, quote.method, quote.quoteId);
     const key = this.makeKey(normalizedMintUrl, quote.method, quote.quoteId);
     this.quotes.set(key, {

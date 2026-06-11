@@ -1,10 +1,12 @@
 import {
   deserializeAmount,
   normalizeMintUrl,
+  QuoteIdentityConflictError,
   serializeAmount,
   stringifyJson,
   type MeltQuote,
   type MeltQuoteRepository,
+  type QuoteIdentity,
 } from '@cashu/coco-core';
 import { ExpoSqliteDb } from '../db.ts';
 
@@ -79,6 +81,27 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
 export class ExpoMeltQuoteRepository implements MeltQuoteRepository {
   constructor(private readonly db: ExpoSqliteDb) {}
 
+  async getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null> {
+    const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
+    const rows = await this.db.all<MeltQuoteRow>(
+      `SELECT mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
+              payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState, lastObservedRemoteStateAt,
+              createdAt, updatedAt
+       FROM coco_cashu_melt_quotes
+       WHERE mintUrl = ? AND quoteId = ?`,
+      [normalizedMintUrl, identity.quoteId],
+    );
+    if (rows.length > 1) {
+      throw new QuoteIdentityConflictError(
+        'melt',
+        normalizedMintUrl,
+        identity.quoteId,
+        rows.map((row) => row.method),
+      );
+    }
+    return rows[0] ? rowToQuote(rows[0]) : null;
+  }
+
   async getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null> {
     const row = await this.db.get<MeltQuoteRow>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
@@ -93,6 +116,20 @@ export class ExpoMeltQuoteRepository implements MeltQuoteRepository {
 
   async upsertMeltQuote(quote: MeltQuote): Promise<void> {
     const now = Date.now();
+    const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
+    const identityOwner = await this.getMeltQuoteById({
+      mintUrl: normalizedMintUrl,
+      quoteId: quote.quoteId,
+    });
+    if (identityOwner && identityOwner.method !== quote.method) {
+      throw new QuoteIdentityConflictError(
+        'melt',
+        normalizedMintUrl,
+        quote.quoteId,
+        [identityOwner.method, quote.method],
+        `Melt quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
+      );
+    }
     await this.db.run(
       `INSERT INTO coco_cashu_melt_quotes
          (mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
@@ -114,7 +151,7 @@ export class ExpoMeltQuoteRepository implements MeltQuoteRepository {
          lastObservedRemoteStateAt=excluded.lastObservedRemoteStateAt,
          updatedAt=excluded.updatedAt`,
       [
-        normalizeMintUrl(quote.mintUrl),
+        normalizedMintUrl,
         quote.method,
         quote.quoteId,
         quote.state,

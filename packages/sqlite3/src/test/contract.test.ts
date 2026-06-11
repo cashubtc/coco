@@ -38,6 +38,56 @@ async function createRepositories() {
   };
 }
 
+async function expectRejects(fn: () => Promise<void>) {
+  let didThrow = false;
+  try {
+    await fn();
+  } catch {
+    didThrow = true;
+  }
+  expect(didThrow).toBe(true);
+}
+
+async function insertMintQuoteRow(
+  repositories: Repositories,
+  method: string,
+  quoteId: string,
+): Promise<void> {
+  await repositories.db.run(
+    `INSERT INTO coco_cashu_canonical_mint_quotes
+       (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson, reusable, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'https://mint.test',
+      method,
+      quoteId,
+      method === 'bolt11' ? 'UNPAID' : null,
+      `${method}-request`,
+      method === 'bolt11' ? '1' : null,
+      'sat',
+      method === 'bolt11'
+        ? '{"amount":"1"}'
+        : '{"pubkey":"02","amountPaid":"0","amountIssued":"0"}',
+      method === 'bolt11' ? 0 : 1,
+      0,
+      0,
+    ],
+  );
+}
+
+async function insertMeltQuoteRow(
+  repositories: Repositories,
+  method: string,
+  quoteId: string,
+): Promise<void> {
+  await repositories.db.run(
+    `INSERT INTO coco_cashu_melt_quotes
+       (mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ['https://mint.test', method, quoteId, 'UNPAID', `${method}-request`, '1', 'sat', 0, '1', 0, 0],
+  );
+}
+
 runRepositoryTransactionContract(
   {
     createRepositories,
@@ -61,6 +111,28 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+describe('sqlite3 quote storage constraints', () => {
+  it('rejects persisted mint quote method siblings for one identity', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await insertMintQuoteRow(repositories, 'bolt11', 'duplicate-mint-quote');
+      await expectRejects(() => insertMintQuoteRow(repositories, 'bolt12', 'duplicate-mint-quote'));
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('rejects persisted melt quote method siblings for one identity', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await insertMeltQuoteRow(repositories, 'bolt11', 'duplicate-melt-quote');
+      await expectRejects(() => insertMeltQuoteRow(repositories, 'bolt12', 'duplicate-melt-quote'));
+    } finally {
+      await dispose();
+    }
+  });
+});
 
 describe('sqlite3 adapter transactions', () => {
   it('commits across repositories', async () => {

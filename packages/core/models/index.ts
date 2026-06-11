@@ -8,3 +8,4 @@ export * from './Mint';
 export * from './MeltQuote';
 export * from './MintQuote';
 export * from './MintQuoteState';
+export * from './QuoteIdentity';

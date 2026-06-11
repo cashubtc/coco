@@ -1433,6 +1433,15 @@ const MIGRATIONS: readonly Migration[] = [
       DROP INDEX IF EXISTS ux_coco_cashu_history_mint_quote_melt;
     `,
   },
+  {
+    id: '036_quote_identity_unique_indexes',
+    sql: `
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_canonical_mint_quotes_identity
+        ON coco_cashu_canonical_mint_quotes(mintUrl, quoteId);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_quotes_identity
+        ON coco_cashu_melt_quotes(mintUrl, quoteId);
+    `,
+  },
 ];
 
 // Export for testing
