@@ -61,9 +61,12 @@ const MINT_URL = 'https://mint.example';
 const SEND_PREPARE_INPUT: SendOperationPrepareInput = { mintUrl: MINT_URL, amount: 100 };
 const RECEIVE_PREPARE_INPUT: ReceiveOperationPrepareInput = { token: 'cashu-token' };
 const MINT_PREPARE_INPUT: MintOperationPrepareInput = {
-  mintUrl: MINT_URL,
-  quoteId: 'mint-quote-1',
-  method: 'bolt11',
+  quote: {
+    mintUrl: MINT_URL,
+    quoteId: 'mint-quote-1',
+    method: 'bolt11',
+  },
+  amount: 100,
 };
 const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
   mintUrl: MINT_URL,
