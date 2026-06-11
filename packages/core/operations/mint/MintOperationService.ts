@@ -250,18 +250,11 @@ export class MintOperationService {
       quote.mintUrl,
       { amount, unit: quote.unit },
       quote.method,
-      this.deriveMintOperationMethodData(quote) as MintMethodData,
+      {} as MintMethodData,
       { quoteId: quote.quoteId },
     );
 
     return this.prepareInitOperation(initOperation.id);
-  }
-
-  private deriveMintOperationMethodData<M extends MintMethod>(
-    quote: MintQuote<M>,
-  ): MintMethodData<M> {
-    void quote;
-    return {} as MintMethodData<M>;
   }
 
   private async prepareInitOperation(
