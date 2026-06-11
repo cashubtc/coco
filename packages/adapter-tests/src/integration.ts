@@ -770,7 +770,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pending = await mgr.ops.mint.prepare({
             quote,
-            amount: testAmount(12),
+            amount: 12,
           });
 
           expect(pending.method).toBe('onchain');
@@ -835,11 +835,11 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const first = await mgr.ops.mint.prepare({
             quote,
-            amount: testAmount(7),
+            amount: 7,
           });
           const second = await mgr.ops.mint.prepare({
             quote,
-            amount: testAmount(5),
+            amount: 5,
           });
 
           expect(first.quoteId).toBe(quote.quoteId);

@@ -153,7 +153,7 @@ describe('MintOperationService', () => {
     const response: MintQuoteBolt12Response = {
       quote,
       request: 'lno1test',
-      amount: amounts.amount,
+      amount: amounts.amount ?? null,
       unit: 'sat',
       expiry: amounts.expiry ?? Math.floor(Date.now() / 1000) + 3600,
       pubkey: '02'.padEnd(66, '2'),
