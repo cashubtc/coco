@@ -393,9 +393,27 @@ describe('MeltOperationService', () => {
       expect(quotes.map((quote) => quote.quoteId).sort()).toEqual(['quote-1', 'quote-pending']);
     });
 
-    it('refreshMeltQuote persists a canonical melt quote after fetching remote state', async () => {
+    it('gets canonical melt quotes by quote identity', async () => {
+      const quote = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+      const missing = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'missing' });
+
+      expect(quote?.quoteId).toBe('quote-1');
+      expect(missing).toBeNull();
+    });
+
+    it('refreshMeltQuoteById resolves the stored method before fetching remote state', async () => {
+      const quote = await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+
+      expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
+      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
+      expect(quote.state).toBe('PENDING');
+      expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
+    });
+
+    it('refreshMeltQuote keeps the method-aware exact refresh path for internal callers', async () => {
       const quote = await quoteLifecycle.refreshMeltQuote(mintUrl, 'bolt11', 'quote-1');
 
+      expect(handlerProvider.get).toHaveBeenCalledWith('bolt11');
       expect(handler.fetchRemoteQuote).toHaveBeenCalled();
       expect(quote.state).toBe('PENDING');
       expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);

@@ -43,6 +43,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import type { QuoteIdentity } from '../models/QuoteIdentity';
 
 const MINT_QUOTE_STATE_RANK: Record<string, number> = {
   UNPAID: 0,
@@ -157,6 +158,40 @@ export class QuoteLifecycle {
     };
   }
 
+  private async refreshResolvedMintQuote(existingQuote: MintQuote): Promise<MintQuote> {
+    const handler = this.mintHandlerProvider.get(existingQuote.method);
+    const refreshed = await handler.fetchRemoteQuote({
+      ...this.buildDeps(),
+      quote: existingQuote,
+    });
+
+    const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
+    const quote = await this.persistCanonicalMintQuote(refreshed);
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
+    return quote;
+  }
+
+  private async refreshResolvedMeltQuote(existingQuote: MeltQuote): Promise<MeltQuote> {
+    const handler = this.meltHandlerProvider.get(existingQuote.method);
+    const refreshed = await handler.fetchRemoteQuote({
+      ...this.buildDeps(),
+      quote: existingQuote,
+    });
+
+    await this.meltQuoteRepository.upsertMeltQuote(refreshed);
+    const quote = await this.meltQuoteRepository.getMeltQuote(
+      existingQuote.mintUrl,
+      existingQuote.method,
+      existingQuote.quoteId,
+    );
+    if (!quote) {
+      throw new Error(
+        `Cannot refresh quote: melt quote ${existingQuote.quoteId} was not found after persistence`,
+      );
+    }
+    return quote;
+  }
+
   async createMintQuote(mintUrl: string, intent: UnitAmount, method?: 'bolt11'): Promise<MintQuote>;
   async createMintQuote<M extends MintMethod>(
     mintUrl: string,
@@ -230,6 +265,10 @@ export class QuoteLifecycle {
     return this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
   }
 
+  getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null> {
+    return this.mintQuoteRepository.getMintQuoteById(identity);
+  }
+
   getPendingMintQuotes(method?: MintMethod): Promise<MintQuote[]> {
     return this.mintQuoteRepository.getPendingMintQuotes(method);
   }
@@ -240,16 +279,16 @@ export class QuoteLifecycle {
       throw new Error(`Mint quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    const handler = this.mintHandlerProvider.get(method);
-    const refreshed = await handler.fetchRemoteQuote({
-      ...this.buildDeps(),
-      quote: existingQuote,
-    });
+    return this.refreshResolvedMintQuote(existingQuote);
+  }
 
-    const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
-    const quote = await this.persistCanonicalMintQuote(refreshed);
-    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
-    return quote;
+  async refreshMintQuoteById(identity: QuoteIdentity): Promise<MintQuote> {
+    const existingQuote = await this.mintQuoteRepository.getMintQuoteById(identity);
+    if (!existingQuote) {
+      throw new Error(`Mint quote ${identity.quoteId} at ${identity.mintUrl} was not found`);
+    }
+
+    return this.refreshResolvedMintQuote(existingQuote);
   }
 
   async requireMintQuoteForPrepare(
@@ -503,6 +542,10 @@ export class QuoteLifecycle {
     return this.meltQuoteRepository.getMeltQuote(mintUrl, method, quoteId);
   }
 
+  getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null> {
+    return this.meltQuoteRepository.getMeltQuoteById(identity);
+  }
+
   getPendingMeltQuotes(method?: MeltMethod): Promise<MeltQuote[]> {
     return this.meltQuoteRepository.getPendingMeltQuotes(method);
   }
@@ -513,24 +556,16 @@ export class QuoteLifecycle {
       throw new Error(`Melt quote ${quoteId} for ${method} at ${mintUrl} was not found`);
     }
 
-    const handler = this.meltHandlerProvider.get(method);
-    const refreshed = await handler.fetchRemoteQuote({
-      ...this.buildDeps(),
-      quote: existingQuote,
-    });
+    return this.refreshResolvedMeltQuote(existingQuote);
+  }
 
-    await this.meltQuoteRepository.upsertMeltQuote(refreshed);
-    const quote = await this.meltQuoteRepository.getMeltQuote(
-      existingQuote.mintUrl,
-      method,
-      quoteId,
-    );
-    if (!quote) {
-      throw new Error(
-        `Cannot refresh quote: melt quote ${quoteId} for ${method} at ${mintUrl} was not found after persistence`,
-      );
+  async refreshMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote> {
+    const existingQuote = await this.meltQuoteRepository.getMeltQuoteById(identity);
+    if (!existingQuote) {
+      throw new Error(`Melt quote ${identity.quoteId} at ${identity.mintUrl} was not found`);
     }
-    return quote;
+
+    return this.refreshResolvedMeltQuote(existingQuote);
   }
 
   async requireMeltQuoteForPrepare(

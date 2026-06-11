@@ -89,7 +89,6 @@ console.log('fund this: ', quote.request);
 
 const refreshed = await coco.quotes.mint.refresh({
   mintUrl: 'https://minturl.com',
-  method: 'onchain',
   quoteId: quote.quoteId,
 });
 

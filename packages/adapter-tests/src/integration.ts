@@ -242,7 +242,6 @@ async function waitForOnchainQuoteAvailable(
   for (let attempt = 0; attempt < 30; attempt++) {
     latest = await manager.quotes.mint.refresh({
       mintUrl,
-      method: 'onchain',
       quoteId,
     });
 
@@ -390,7 +389,6 @@ async function getMintQuoteForOperation(
 ): Promise<MintQuote | null> {
   return manager.quotes.mint.get({
     mintUrl: operation.mintUrl,
-    method: operation.method,
     quoteId: operation.quoteId,
   });
 }

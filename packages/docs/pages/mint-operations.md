@@ -39,10 +39,10 @@ after reload without creating or loading a mint operation:
   quote row only
 - `import({ mintUrl, method, quote })` imports an existing remote quote snapshot
   into canonical quote storage only
-- `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
+- `get({ mintUrl, quoteId })` loads a canonical quote by quote identity
 - `listPending({ method? })` lists canonical quote rows that have not reached
   `ISSUED`
-- `refresh({ mintUrl, method, quoteId })` checks the remote quote state and
+- `refresh({ mintUrl, quoteId })` checks the remote quote state and
   persists the canonical quote update before emitting `mint-quote:updated`
 
 `mint-quote:updated` is emitted when a quote is created/imported or remote
@@ -119,7 +119,7 @@ if (check.category === 'ready' || check.category === 'completed') {
 
 Onchain and BOLT12 mint quotes are canonical quote records first. Create and
 refresh them through `coco.quotes.mint`, then prepare one or more mint
-operations against the same `(mintUrl, method, quoteId)` identity.
+operations against the same `{ mintUrl, quoteId }` identity.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -132,7 +132,6 @@ showAddress(quote.request);
 
 const refreshed = await coco.quotes.mint.refresh({
   mintUrl,
-  method: 'onchain',
   quoteId: quote.quoteId,
 });
 

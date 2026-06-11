@@ -20,17 +20,17 @@ Use `manager.quotes` when you need to create, reload, list, or refresh quote
 payment requests without treating that quote as a wallet activity yet:
 
 - `manager.quotes.mint.create({ mintUrl, amount, unit?, method })`
-- `manager.quotes.mint.get({ mintUrl, method, quoteId })`
+- `manager.quotes.mint.get({ mintUrl, quoteId })`
 - `manager.quotes.mint.listPending({ method? })`
-- `manager.quotes.mint.refresh({ mintUrl, method, quoteId })`
+- `manager.quotes.mint.refresh({ mintUrl, quoteId })`
 - `manager.quotes.melt.create({ mintUrl, method, methodData, unit? })`
-- `manager.quotes.melt.get({ mintUrl, method, quoteId })`
+- `manager.quotes.melt.get({ mintUrl, quoteId })`
 - `manager.quotes.melt.listPending({ method? })`
-- `manager.quotes.melt.refresh({ mintUrl, method, quoteId })`
+- `manager.quotes.melt.refresh({ mintUrl, quoteId })`
 
 For BOLT11 quotes, the invoice is exposed as `quote.request`.
 
-Store quote identity as `mintUrl + method + quoteId`. `quoteId` is no longer a
+Store quote identity as `{ mintUrl, quoteId }`. `quoteId` is no longer a
 sufficient lookup key on its own, and it should not be treated as an operation
 id.
 
@@ -153,8 +153,10 @@ The bundled adapters migrate existing data automatically:
 
 Custom repository implementations must provide the current repository contract:
 
-- `MintQuoteRepository` keyed by `mintUrl + method + quoteId`
-- `MeltQuoteRepository` keyed by `mintUrl + method + quoteId`
+- `MintQuoteRepository` with `{ mintUrl, quoteId }` identity helpers and
+  method-aware exact lookup
+- `MeltQuoteRepository` with `{ mintUrl, quoteId }` identity helpers and
+  method-aware exact lookup
 - `LegacyMintQuoteRepository` for startup reconciliation of old mint quote rows
 - method-aware `MintOperationRepository.getByQuoteId(...)`
 

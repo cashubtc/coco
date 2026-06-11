@@ -30,9 +30,10 @@ preparing a melt operation:
 - `create({ mintUrl, method: 'bolt11', methodData: { invoice }, unit? })` creates and persists a canonical quote row only
 - `create({ mintUrl, method: 'bolt12', methodData: { offer, amountSats }, unit? })` creates and persists a canonical quote row only
 - `create({ mintUrl, method: 'onchain', methodData: { address, amountSats }, unit? })` creates and persists a canonical quote row with `fee_options`
-- `get({ mintUrl, method, quoteId })` loads a canonical quote by full identity
+- `get({ mintUrl, quoteId })` loads a canonical quote by quote identity
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
-- `refresh({ mintUrl, method, quoteId })` checks the remote quote state and persists the canonical quote update
+- `refresh({ mintUrl, quoteId })` checks the remote quote state and persists
+  the canonical quote update
 
 ## Operation States
 
