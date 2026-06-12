@@ -32,7 +32,8 @@ For BOLT11 quotes, the invoice is exposed as `quote.request`.
 
 Store quote identity as `{ mintUrl, quoteId }`. `quoteId` is no longer a
 sufficient lookup key on its own, and it should not be treated as an operation
-id.
+id. Full canonical quote objects structurally satisfy the operation quote ref
+types because they include `{ mintUrl, quoteId, method }`.
 
 TypeScript supported-method generics were removed from the quote API facade and
 input aliases. Use the concrete `QuoteApi`, `MintQuoteApi`, `MeltQuoteApi`,
@@ -42,9 +43,9 @@ passing method subset type parameters such as `QuoteApi<'bolt11'>` or
 
 ## Mint quote migration
 
-`manager.ops.mint.prepare({ mintUrl, amount, unit?, method })` no longer creates
-a remote quote. Create the canonical quote first, then prepare the operation
-from that quote with `prepare({ quote, amount })`:
+Mint operation prepare no longer creates a remote quote. Create the canonical
+quote first, then prepare the operation from that quote with
+`prepare({ quote, amount })`:
 
 ```ts
 const quote = await manager.quotes.mint.create({
@@ -91,14 +92,6 @@ pass the invoice directly to `prepare()` must now create the canonical quote
 first:
 
 ```ts
-// before
-const prepared = await manager.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt11',
-  methodData: { invoice },
-});
-
-// after
 const quote = await manager.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
@@ -112,7 +105,9 @@ const prepared = await manager.ops.melt.prepare({
 
 `manager.ops.melt.prepare()` now reserves proofs and calculates fees from an
 existing canonical melt quote. Use `manager.ops.melt.getByQuote({ mintUrl,
-method, quoteId })` when resolving a melt operation by quote.
+quoteId })` when resolving a melt operation by quote identity. Use
+`manager.ops.melt.listByQuote({ mintUrl, quoteId })` when multiple tracked
+operations are possible.
 
 ## Quote events
 

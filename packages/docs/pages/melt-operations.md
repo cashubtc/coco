@@ -18,7 +18,8 @@ The canonical API is exposed through `coco.ops.melt`:
 - `prepare({ quote })` prepares a BOLT11 or BOLT12 operation from a canonical melt quote or quote ref
 - `prepare({ quote, feeIndex })` prepares an onchain melt from a canonical NUT-30 quote or quote ref
 - `execute(operationOrId)` executes the prepared operation
-- `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
+- `getByQuote({ mintUrl, quoteId })` resolves an operation from a persisted quote identity
+- `listByQuote({ mintUrl, quoteId })` lists operations for a persisted quote identity
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
 - `cancel(operationId)` cancels a prepared melt
 - `reclaim(operationId)` reclaims a pending melt when rollback is allowed
@@ -33,6 +34,25 @@ preparing a melt operation:
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, quoteId })` checks the remote quote state and persists
   the canonical quote update
+
+## Quote Identity and Refs
+
+`QuoteIdentity` is the methodless lookup shape `{ mintUrl, quoteId }`. Use it
+for canonical quote get/refresh calls and quote-based operation queries:
+
+```ts
+const quoteIdentity = { mintUrl, quoteId: quote.quoteId };
+
+const currentQuote = await coco.quotes.melt.get(quoteIdentity);
+const refreshedQuote = await coco.quotes.melt.refresh(quoteIdentity);
+const operation = await coco.ops.melt.getByQuote(quoteIdentity);
+const operations = await coco.ops.melt.listByQuote(quoteIdentity);
+```
+
+Operation preparation accepts a `MeltQuoteRef`, which is structurally
+`{ mintUrl, quoteId, method }`. Full canonical melt quote objects already
+satisfy that ref type, so pass the quote object directly. BOLT11 and BOLT12
+prepare calls use only `{ quote }`; onchain prepare also requires `feeIndex`.
 
 ## Operation States
 

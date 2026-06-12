@@ -21,7 +21,7 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
   stored state
 - `finalize(operationId)` executes or recovers the operation until it reaches a
   terminal state when possible
-- `get(operationId)`, `getByQuote({ mintUrl, method, quoteId })`, `listPending()`, and
+- `get(operationId)`, `listByQuote({ mintUrl, quoteId })`, `listPending()`, and
   `listInFlight()` load persisted operation state. Use `operationId` for local
   operation identity; a `quoteId` is remote quote identity and can be shared by
   more than one local operation.
@@ -29,6 +29,42 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
 Built-in mint methods are `bolt11`, `onchain`, and `bolt12`. Public quote
 lookups use `{ mintUrl, quoteId }`; operation preparation accepts the full
 canonical quote or a structural quote ref with `{ mintUrl, quoteId, method }`.
+The old single-operation quote lookup was removed because reusable quotes can
+back multiple mint operations; use `listByQuote({ mintUrl, quoteId })` instead.
+
+## Quote Identity and Refs
+
+`QuoteIdentity` is the methodless lookup shape `{ mintUrl, quoteId }`. Use it
+for canonical quote get/refresh calls and for quote-based operation queries:
+
+```ts
+const quoteIdentity = { mintUrl, quoteId: quote.quoteId };
+
+const currentQuote = await coco.quotes.mint.get(quoteIdentity);
+const refreshedQuote = await coco.quotes.mint.refresh(quoteIdentity);
+const operations = await coco.ops.mint.listByQuote(quoteIdentity);
+```
+
+Operation preparation accepts a `MintQuoteRef`, which is structurally
+`{ mintUrl, quoteId, method }`. Full canonical mint quote objects already
+satisfy that ref type, so pass the quote object directly:
+
+```ts
+const quote = await coco.quotes.mint.create({
+  mintUrl,
+  amount: 100,
+  method: 'bolt11',
+});
+
+const pending = await coco.ops.mint.prepare({
+  quote,
+  amount: 100,
+});
+```
+
+`prepare({ quote, amount })` derives the quote unit, method data, and request
+details from canonical quote storage. Do not pass public `unit`, `method`, or
+`methodData` siblings to mint operation prepare.
 
 ## Quote Resurfacing (`coco.quotes.mint`)
 
