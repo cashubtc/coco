@@ -19,10 +19,8 @@ const quote = await coco.quotes.mint.create({
 });
 
 await coco.ops.mint.prepare({
-  mintUrl,
-  quoteId: quote.quoteId,
-  unit: 'usd',
-  method: 'bolt11',
+  quote,
+  amount: 25,
 });
 
 const preparedSend = await coco.ops.send.prepare({

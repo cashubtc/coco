@@ -23,7 +23,11 @@ import {
   type MintQuote,
 } from '../models/MintQuote';
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
-import { ProofValidationError, UnknownMintError } from '../models/Error';
+import {
+  ProofValidationError,
+  QuoteIdentityConflictError,
+  UnknownMintError,
+} from '../models/Error';
 import type { MeltQuoteRepository, MintQuoteRepository, ProofRepository } from '../repositories';
 import type { MintService } from '../services/MintService';
 import type { ProofService } from '../services/ProofService';
@@ -43,7 +47,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
-import type { QuoteIdentity } from '../models/QuoteIdentity';
+import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
 
 const MINT_QUOTE_STATE_RANK: Record<string, number> = {
   UNPAID: 0,
@@ -309,6 +313,29 @@ export class QuoteLifecycle {
     }
 
     this.assertMintQuoteCanPrepare(quote, `mint quote ${quoteId}`);
+    return quote;
+  }
+
+  async requireMintQuoteRefForPrepare(ref: MintQuoteRef): Promise<MintQuote> {
+    const quote = await this.mintQuoteRepository.getMintQuoteById({
+      mintUrl: ref.mintUrl,
+      quoteId: ref.quoteId,
+    });
+    if (!quote) {
+      throw new Error(`Mint quote ${ref.quoteId} at ${ref.mintUrl} was not found`);
+    }
+
+    if (quote.method !== ref.method) {
+      throw new QuoteIdentityConflictError(
+        'mint',
+        quote.mintUrl,
+        quote.quoteId,
+        [ref.method, quote.method],
+        `Mint quote ${quote.quoteId} at ${quote.mintUrl} resolved to method ${quote.method}, not requested method ${ref.method}`,
+      );
+    }
+
+    this.assertMintQuoteCanPrepare(quote, `mint quote ${ref.quoteId}`);
     return quote;
   }
 

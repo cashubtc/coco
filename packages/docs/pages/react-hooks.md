@@ -120,7 +120,7 @@ const quote = await manager.quotes.mint.create({
   method: 'bolt11',
 });
 
-const pendingMint = await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
+const pendingMint = await prepare({ quote, amount: 100 });
 
 if (pendingMint.state === 'pending') {
   await checkPayment();

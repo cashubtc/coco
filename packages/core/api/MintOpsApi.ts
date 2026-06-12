@@ -1,53 +1,22 @@
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type {
   MintMethod,
-  MintMethodData,
   MintOperation,
   MintOperationService,
   PendingMintCheckResult,
   PendingMintOperation,
 } from '@core/operations/mint';
-import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
+import type { MintQuoteRef } from '../models/QuoteIdentity.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
 
-type PrepareExistingQuoteInputCommon = {
-  /** Mint that issued the canonical quote. */
-  mintUrl: string;
-  /** Existing canonical mint quote ID to prepare against. */
-  quoteId: string;
-  /** Optional expected unit for the quote. */
-  unit?: string;
-};
-
-type MethodDataInput<M extends MintMethod> =
-  MintMethodData<M> extends Record<string, never>
-    ? {
-        /** Method-specific payload required for the selected mint method. */
-        methodData?: MintMethodData<M>;
-      }
-    : {
-        /** Method-specific payload required for the selected mint method. */
-        methodData: MintMethodData<M>;
-      };
-
 export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: PrepareExistingQuoteInputCommon & {
-    /** Mint method to prepare, for example `bolt11`. */
-    method: M;
-  } & (M extends 'onchain'
-      ? {
-          /** Amount to withdraw from the reusable onchain quote. */
-          amount: UnitAmountLike;
-        }
-      : M extends 'bolt12'
-        ? {
-            /** Amount to mint from the reusable BOLT12 quote. */
-            amount: UnitAmountLike;
-          }
-        : {}) &
-    MethodDataInput<M>;
-}[TSupported];
+  /** Existing canonical mint quote or structural quote reference. */
+  quote: MintQuoteRef<TSupported>;
+  /** Amount to mint using the canonical quote's stored unit. */
+  amount: AmountLike;
+};
 
 export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
   [M in TSupported]: {
@@ -96,20 +65,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Prepares a mint operation against an existing canonical quote without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
-    const methodData = ('methodData' in input ? input.methodData : undefined) ?? {};
-    const explicitAmount =
-      'amount' in input && input.amount !== undefined
-        ? parseUnitAmount(input.amount, { explicitUnit: input.unit })
-        : undefined;
-
-    return this.mintOperationService.prepare(
-      input.mintUrl,
-      input.method,
-      input.quoteId,
-      methodData,
-      input.unit,
-      explicitAmount,
-    );
+    return this.mintOperationService.prepare(input.quote, Amount.from(input.amount));
   }
 
   /**

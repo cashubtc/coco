@@ -44,7 +44,7 @@ passing method subset type parameters such as `QuoteApi<'bolt11'>` or
 
 `manager.ops.mint.prepare({ mintUrl, amount, unit?, method })` no longer creates
 a remote quote. Create the canonical quote first, then prepare the operation
-from that quote:
+from that quote with `prepare({ quote, amount })`:
 
 ```ts
 const quote = await manager.quotes.mint.create({
@@ -56,9 +56,8 @@ const quote = await manager.quotes.mint.create({
 showInvoice(quote.request);
 
 const operation = await manager.ops.mint.prepare({
-  mintUrl,
-  method: 'bolt11',
-  quoteId: quote.quoteId,
+  quote,
+  amount: 100,
 });
 ```
 
@@ -74,9 +73,8 @@ const quote = await manager.quotes.mint.import({
 });
 
 const operation = await manager.ops.mint.prepare({
-  mintUrl: quote.mintUrl,
-  method: quote.method,
-  quoteId: quote.quoteId,
+  quote,
+  amount: quoteSnapshot.amount,
 });
 ```
 

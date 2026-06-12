@@ -61,9 +61,12 @@ const MINT_URL = 'https://mint.example';
 const SEND_PREPARE_INPUT: SendOperationPrepareInput = { mintUrl: MINT_URL, amount: 100 };
 const RECEIVE_PREPARE_INPUT: ReceiveOperationPrepareInput = { token: 'cashu-token' };
 const MINT_PREPARE_INPUT: MintOperationPrepareInput = {
-  mintUrl: MINT_URL,
-  quoteId: 'mint-quote-1',
-  method: 'bolt11',
+  quote: {
+    mintUrl: MINT_URL,
+    quoteId: 'mint-quote-1',
+    method: 'bolt11',
+  },
+  amount: 100,
 };
 const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
   mintUrl: MINT_URL,
@@ -1016,10 +1019,12 @@ describe('useMintOperation', () => {
       unit: 'usd',
     });
     const input: MintOperationPrepareInput = {
-      mintUrl: MINT_URL,
-      quoteId: 'mint-quote-usd',
-      unit: 'USD',
-      method: 'bolt11',
+      quote: {
+        mintUrl: MINT_URL,
+        quoteId: 'mint-quote-usd',
+        method: 'bolt11',
+      },
+      amount: 50,
     };
 
     mint.prepare.mockResolvedValue(pending);
@@ -1052,10 +1057,12 @@ describe('useMintOperation', () => {
     });
 
     const input: MintOperationPrepareInput = {
-      mintUrl: MINT_URL,
-      method: 'bolt12',
-      quoteId: prepared.quoteId,
-      amount: { amount: 100, unit: 'sat' },
+      quote: {
+        mintUrl: MINT_URL,
+        method: 'bolt12',
+        quoteId: prepared.quoteId,
+      },
+      amount: 100,
     };
 
     mint.prepare.mockResolvedValue(prepared);

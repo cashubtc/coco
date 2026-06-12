@@ -70,10 +70,8 @@ describe('ReceiveOperationService integration', () => {
       method: 'bolt11',
     });
     const pendingMint = await sender.ops.mint.prepare({
-      mintUrl,
-      quoteId: quote.quoteId,
-      method: 'bolt11',
-      methodData: {},
+      quote: { mintUrl: quote.mintUrl, method: 'bolt11', quoteId: quote.quoteId },
+      amount: Amount.from(50),
     });
     await sender.ops.mint.execute(pendingMint.id);
 

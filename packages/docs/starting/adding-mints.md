@@ -34,10 +34,8 @@ const quote = await coco.quotes.mint.create({
 });
 
 const pendingMint = await coco.ops.mint.prepare({
-  mintUrl,
-  quoteId: quote.quoteId,
-  method: 'bolt11',
-  methodData: {},
+  quote,
+  amount: 21,
 });
 ```
 
@@ -59,10 +57,8 @@ const quote = await coco.quotes.mint.create({
 });
 
 const pendingMint = await coco.ops.mint.prepare({
-  mintUrl,
-  quoteId: quote.quoteId,
-  method: 'bolt11',
-  methodData: {},
+  quote,
+  amount: 21,
 });
 ```
 

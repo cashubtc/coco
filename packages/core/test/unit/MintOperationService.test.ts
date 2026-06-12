@@ -38,6 +38,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
+import { QuoteIdentityConflictError } from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -367,7 +368,7 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const pending = await service.prepare(mintUrl, 'bolt11', quote.quoteId);
+    const pending = await service.prepare(quote, Amount.from(10));
 
     expect(pending.state).toBe('pending');
     expect(pending.quoteId).toBe(quote.quoteId);
@@ -394,7 +395,7 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const pending = await service.prepare(mintUrl, 'bolt11', quote.quoteId, {}, 'USD');
+    const pending = await service.prepare(quote, Amount.from(10));
 
     expect(pending.unit).toBe('usd');
     expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(mintUrl, 4, 'bolt11', {
@@ -421,10 +422,10 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
-    const pending = await service.prepare(mintUrl, 'onchain', onchainQuoteId, {}, undefined, {
-      amount: Amount.from(10),
-      unit: 'sat',
-    });
+    const pending = await service.prepare(
+      { mintUrl, method: 'onchain', quoteId: onchainQuoteId },
+      Amount.from(10),
+    );
 
     expect(onchainHandler.validateQuoteForPrepare).toHaveBeenCalled();
     expect(mintService.assertMethodUnitSupported).toHaveBeenCalledWith(
@@ -460,10 +461,10 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'bolt12'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => bolt12Handler);
 
-    const pending = await service.prepare(mintUrl, 'bolt12', bolt12QuoteId, {}, undefined, {
-      amount: Amount.from(10),
-      unit: 'sat',
-    });
+    const pending = await service.prepare(
+      { mintUrl, method: 'bolt12', quoteId: bolt12QuoteId },
+      Amount.from(10),
+    );
 
     expect(bolt12Handler.validateQuoteForPrepare).toHaveBeenCalled();
     expect(pending.method).toBe('bolt12');
@@ -486,10 +487,7 @@ describe('MintOperationService', () => {
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
     await expect(
-      service.prepare(mintUrl, 'onchain', onchainQuoteId, {}, undefined, {
-        amount: Amount.from(10),
-        unit: 'sat',
-      }),
+      service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(10)),
     ).rejects.toThrow('Missing NUT-20 mint quote key');
 
     expect(onchainHandler.prepare).not.toHaveBeenCalled();
@@ -514,14 +512,8 @@ describe('MintOperationService', () => {
     } as unknown as MintMethodHandler<'onchain'>;
     (handlerProvider.get as Mock<any>).mockImplementation(() => onchainHandler);
 
-    await service.prepare(mintUrl, 'onchain', onchainQuoteId, {}, undefined, {
-      amount: Amount.from(10),
-      unit: 'sat',
-    });
-    await service.prepare(mintUrl, 'onchain', onchainQuoteId, {}, undefined, {
-      amount: Amount.from(5),
-      unit: 'sat',
-    });
+    await service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(10));
+    await service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(5));
 
     const operations = await operationRepo.getAll();
 
@@ -556,10 +548,7 @@ describe('MintOperationService', () => {
     }) as typeof operationRepo.update;
 
     await expect(
-      service.prepare(mintUrl, 'onchain', onchainQuoteId, {}, undefined, {
-        amount: Amount.from(10),
-        unit: 'sat',
-      }),
+      service.prepare({ mintUrl, method: 'onchain', quoteId: onchainQuoteId }, Amount.from(10)),
     ).rejects.toThrow('pending persistence failed');
 
     expect(consumedCounters).toHaveLength(1);
@@ -755,9 +744,23 @@ describe('MintOperationService', () => {
   });
 
   it('prepare fails before creating an operation when the quote is missing', async () => {
-    await expect(service.prepare(mintUrl, 'bolt11', 'missing-quote', {})).rejects.toThrow(
-      'was not found',
-    );
+    await expect(
+      service.prepare({ mintUrl, method: 'bolt11', quoteId: 'missing-quote' }, Amount.from(10)),
+    ).rejects.toThrow('was not found');
+
+    await expect(operationRepo.getAll()).resolves.toHaveLength(0);
+    expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('prepare rejects quote refs whose method differs from canonical storage', async () => {
+    await persistQuote('quote-method-conflict');
+
+    await expect(
+      service.prepare(
+        { mintUrl, method: 'onchain', quoteId: 'quote-method-conflict' },
+        Amount.from(10),
+      ),
+    ).rejects.toThrow(QuoteIdentityConflictError);
 
     await expect(operationRepo.getAll()).resolves.toHaveLength(0);
     expect(handler.prepare).not.toHaveBeenCalled();
@@ -775,9 +778,9 @@ describe('MintOperationService', () => {
       }),
     );
 
-    await expect(service.prepare(mintUrl, 'bolt11', 'issued-quote', {})).rejects.toThrow(
-      'quote is terminal',
-    );
+    await expect(
+      service.prepare({ mintUrl, method: 'bolt11', quoteId: 'issued-quote' }, Amount.from(10)),
+    ).rejects.toThrow('quote is terminal');
 
     await expect(operationRepo.getAll()).resolves.toHaveLength(0);
     expect(handler.prepare).not.toHaveBeenCalled();
@@ -797,9 +800,9 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const first = await service.prepare(mintUrl, 'bolt11', quote.quoteId);
+    const first = await service.prepare(quote, Amount.from(10));
 
-    await expect(service.prepare(mintUrl, 'bolt11', quote.quoteId)).rejects.toThrow(
+    await expect(service.prepare(quote, Amount.from(10))).rejects.toThrow(
       `Mint quote ${quote.quoteId} is already tracked by operation ${first.id} in state pending`,
     );
 
@@ -834,7 +837,7 @@ describe('MintOperationService', () => {
     );
 
     const imported = await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', importedQuote);
-    const pending = await service.prepare(imported.mintUrl, imported.method, imported.quoteId);
+    const pending = await service.prepare(imported, Amount.from(12));
 
     expect(pending.state).toBe('pending');
     expect(pending.quoteId).toBe(importedQuote.quote);
@@ -883,7 +886,10 @@ describe('MintOperationService', () => {
     );
 
     await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', staleQuote);
-    const pending = await service.prepare(mintUrl, 'bolt11', staleQuote.quote);
+    const pending = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId: staleQuote.quote },
+      Amount.from(12),
+    );
     const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', staleQuote.quote);
 
     expect(pending.quoteId).toBe(staleQuote.quote);
@@ -925,7 +931,7 @@ describe('MintOperationService', () => {
 
     await persistQuote();
 
-    const pending = await service.prepare(mintUrl, 'bolt11', quoteId);
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
     const finalized = await service.finalize(pending.id);
 
     expect(finalized?.state).toBe('finalized');
@@ -950,7 +956,7 @@ describe('MintOperationService', () => {
   it('finalize is idempotent after finalize', async () => {
     await persistQuote();
 
-    const pending = await service.prepare(mintUrl, 'bolt11', quoteId);
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
     const first = await service.finalize(pending.id);
     const second = await service.finalize(first.id);
 

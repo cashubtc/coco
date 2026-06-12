@@ -176,7 +176,7 @@ const mintQuote = await manager.quotes.mint.create({
   amount: 100,
   method: 'bolt11',
 });
-await manager.ops.mint.prepare({ mintUrl, method: 'bolt11', quoteId: mintQuote.quoteId });
+await manager.ops.mint.prepare({ quote: mintQuote, amount: 100 });
 const meltQuote = await manager.quotes.melt.create({
   mintUrl,
   method: 'bolt11',
@@ -282,7 +282,7 @@ const { prepare, execute, cancel, currentOperation, executeResult, status, error
   useSendOperation();
 
 const quote = await manager.quotes.mint.create({ mintUrl, amount, method: 'bolt11' });
-await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
+await prepare({ quote, amount });
 if (userCanceled) {
   await cancel();
 } else {
