@@ -69,9 +69,11 @@ const MINT_PREPARE_INPUT: MintOperationPrepareInput = {
   amount: 100,
 };
 const MELT_PREPARE_INPUT: MeltOperationPrepareInput = {
-  mintUrl: MINT_URL,
-  method: 'bolt11',
-  quoteId: 'melt-quote-1',
+  quote: {
+    mintUrl: MINT_URL,
+    method: 'bolt11',
+    quoteId: 'melt-quote-1',
+  },
 };
 
 function createEventBusMock() {
@@ -1323,7 +1325,7 @@ describe('useMintOperation', () => {
 });
 
 describe('useMeltOperation', () => {
-  it('passes custom-unit melt inputs through to melt prepare', async () => {
+  it('passes custom-unit melt quote inputs through to melt prepare', async () => {
     const { manager, melt } = createMeltManagerMock();
     const prepared = createPreparedMeltOperation({ unit: 'usd' });
     melt.prepare.mockResolvedValue(prepared);
@@ -1332,12 +1334,22 @@ describe('useMeltOperation', () => {
       wrapper: createHookWrapper(manager),
     });
 
-    const input: MeltOperationPrepareInput = {
+    const quote = {
       mintUrl: MINT_URL,
-      method: 'bolt11',
       quoteId: 'melt-quote-1',
+      quote: 'melt-quote-1',
+      request: 'lnbc1test',
       unit: 'USD',
-    };
+      method: 'bolt11',
+      amount: Amount.from(100),
+      fee_reserve: Amount.from(1),
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      payment_preimage: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as const;
+    const input: MeltOperationPrepareInput = { quote };
 
     await act(async () => {
       await result.current.prepare(input);
@@ -1363,9 +1375,11 @@ describe('useMeltOperation', () => {
     });
 
     const input: MeltOperationPrepareInput = {
-      mintUrl: MINT_URL,
-      method: 'bolt12',
-      quoteId: prepared.quoteId,
+      quote: {
+        mintUrl: MINT_URL,
+        method: 'bolt12',
+        quoteId: prepared.quoteId,
+      },
     };
 
     melt.prepare.mockResolvedValue(prepared);
