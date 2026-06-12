@@ -40,6 +40,15 @@ async function getColumnNames(db: SqliteDb, tableName: string): Promise<string[]
   return rows.map((row) => row.name);
 }
 
+async function insertMeltOperationRow(db: SqliteDb, id: string, quoteId: string): Promise<void> {
+  await db.run(
+    `INSERT INTO coco_cashu_melt_operations
+      (id, mintUrl, state, createdAt, updatedAt, method, methodDataJson, quoteId, unit)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, 'https://mint.test', 'init', 1, 1, 'bolt11', '{}', quoteId, 'sat'],
+  );
+}
+
 const LEGACY_SEND_TOKEN = {
   mint: 'https://mint.test',
   proofs: [{ id: 'keyset-1', amount: '100', secret: 'send-secret', C: 'C_send' }],
@@ -374,6 +383,72 @@ describe('sqlite-bun schema migrations', () => {
     expect(row?.reusable).toBe(0);
   });
 
+  it('projects mint history remote state from canonical mint quotes', async () => {
+    await ensureSchemaUpTo(db);
+
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson,
+         amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt,
+         terminalFailureJson, outputDataJson)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'mint-op-remote-state',
+        'https://mint.test',
+        'quote-remote-state',
+        'pending',
+        1,
+        2,
+        null,
+        'bolt11',
+        '{}',
+        '21',
+        'sat',
+        'lnbc1remote',
+        1_730_000_000,
+        null,
+        'UNPAID',
+        2_000,
+        null,
+        JSON.stringify({ keep: [], send: [] }),
+      ],
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_canonical_mint_quotes
+        (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
+         lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'https://mint.test',
+        'bolt11',
+        'quote-remote-state',
+        'PAID',
+        'lnbc1remote',
+        '21',
+        'sat',
+        JSON.stringify({ amount: '21' }),
+        'PAID',
+        3_000,
+        0,
+        1,
+        2,
+      ],
+    );
+
+    const repository = new SqliteHistoryRepository(db);
+    const history = await repository.getPaginatedHistoryEntries(10, 0);
+
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      id: 'mint:mint-op-remote-state',
+      source: 'operation',
+      type: 'mint',
+      operationId: 'mint-op-remote-state',
+      quoteId: 'quote-remote-state',
+      remoteState: 'PAID',
+    });
+  });
+
   it('removes legacy mint operations without quote IDs', async () => {
     await ensureSchemaUpTo(db, '034_clean_unquoted_mint_operations');
 
@@ -397,5 +472,31 @@ describe('sqlite-bun schema migrations', () => {
     );
 
     expect(rows).toEqual([{ id: 'mint-op-quoted' }]);
+  });
+
+  it('preserves quote-bound melt operation uniqueness after duplicate quote migration', async () => {
+    await ensureSchemaUpTo(db);
+
+    const indexes = await db.all<{ name: string; unique: number; partial: number }>(
+      'PRAGMA index_list(coco_cashu_melt_operations)',
+    );
+    expect(indexes).toContainEqual(
+      expect.objectContaining({
+        name: 'ux_coco_cashu_melt_operations_mint_quote',
+        unique: 1,
+        partial: 1,
+      }),
+    );
+
+    await insertMeltOperationRow(db, 'melt-op-1', 'shared-melt-quote');
+
+    let rejection: unknown;
+    try {
+      await insertMeltOperationRow(db, 'melt-op-2', 'shared-melt-quote');
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(String(rejection).toLowerCase()).toContain('unique');
   });
 });
