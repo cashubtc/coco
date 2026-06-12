@@ -164,20 +164,18 @@ export function resolveOnchainMeltFeeOption(
     throw new Error(`Melt quote ${quote.quoteId} has no onchain fee options`);
   }
 
-  const resolvedFeeIndex =
-    feeIndex ?? (feeOptions.length === 1 ? feeOptions[0]!.fee_index : undefined);
-  if (resolvedFeeIndex === undefined) {
+  if (feeIndex === undefined) {
     throw new Error(`Melt quote ${quote.quoteId} requires an explicit feeIndex`);
   }
 
-  const feeOption = feeOptions.find((option) => option.fee_index === resolvedFeeIndex);
+  const feeOption = feeOptions.find((option) => option.fee_index === feeIndex);
   if (!feeOption) {
     throw new Error(
-      `Melt quote ${quote.quoteId} does not include onchain fee option ${resolvedFeeIndex}`,
+      `Melt quote ${quote.quoteId} does not include onchain fee option ${feeIndex}`,
     );
   }
 
-  return { feeIndex: resolvedFeeIndex, feeOption };
+  return { feeIndex, feeOption };
 }
 
 function normalizeOnchainFeeOptions(

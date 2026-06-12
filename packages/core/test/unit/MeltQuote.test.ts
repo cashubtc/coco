@@ -46,24 +46,17 @@ function makeOnchainQuote(overrides: Partial<MeltQuote<'onchain'>> = {}): MeltQu
 }
 
 describe('MeltQuote model', () => {
-  it('defaults a single onchain fee option when no fee index is provided', () => {
-    const resolved = resolveOnchainMeltFeeOption(makeOnchainQuote());
+  it('requires an explicit onchain fee index', () => {
+    expect(() => resolveOnchainMeltFeeOption(makeOnchainQuote())).toThrow(
+      'requires an explicit feeIndex',
+    );
+  });
+
+  it('resolves an explicit onchain fee index', () => {
+    const resolved = resolveOnchainMeltFeeOption(makeOnchainQuote(), 1);
 
     expect(resolved.feeIndex).toBe(1);
     expect(resolved.feeOption.fee_reserve).toEqual(Amount.from(2));
-  });
-
-  it('requires an explicit onchain fee index for multi-option quotes', () => {
-    expect(() =>
-      resolveOnchainMeltFeeOption(
-        makeOnchainQuote({
-          fee_options: [
-            { fee_index: 1, fee_reserve: Amount.from(2), estimated_blocks: 6 },
-            { fee_index: 2, fee_reserve: Amount.from(3), estimated_blocks: 3 },
-          ],
-        }),
-      ),
-    ).toThrow('requires an explicit feeIndex');
   });
 
   it('rejects empty or missing onchain fee options', () => {

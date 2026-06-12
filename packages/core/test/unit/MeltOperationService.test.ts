@@ -486,19 +486,22 @@ describe('MeltOperationService', () => {
       });
     });
 
-    it('defaults onchain fee index only when the quote has one fee option', async () => {
+    it('rejects missing onchain fee index even when the quote has one fee option', async () => {
       await persistOnchainMeltQuote('single-option-onchain-quote', [
         { fee_index: 3, fee_reserve: Amount.from(4), estimated_blocks: 6 },
       ]);
 
-      const prepared = await service.prepareExistingQuote({
-        mintUrl,
-        method: 'onchain',
-        quoteId: 'single-option-onchain-quote',
-      });
+      await expect(
+        service.prepareExistingQuote({
+          mintUrl,
+          method: 'onchain',
+          quoteId: 'single-option-onchain-quote',
+        }),
+      ).rejects.toThrow('requires an explicit feeIndex');
 
-      expect(prepared.method).toBe('onchain');
-      expect((prepared.methodData as { feeIndex: number }).feeIndex).toBe(3);
+      expect(
+        await service.getOperationByQuote(mintUrl, 'onchain', 'single-option-onchain-quote'),
+      ).toBeNull();
     });
 
     it('rejects missing onchain fee index for multi-option quotes before creating operations', async () => {
