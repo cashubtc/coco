@@ -182,7 +182,7 @@ const meltQuote = await manager.quotes.melt.create({
   method: 'bolt11',
   methodData: { invoice },
 });
-await manager.ops.melt.prepare({ mintUrl, method: 'bolt11', quoteId: meltQuote.quoteId });
+await manager.ops.melt.prepare({ quote: meltQuote });
 
 const balancesByMint = await manager.wallet.balances.byMint();
 const trustedBalancesByMint = await manager.wallet.balances.byMint({ trustedOnly: true });

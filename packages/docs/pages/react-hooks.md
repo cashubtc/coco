@@ -149,7 +149,7 @@ const quote = await manager.quotes.melt.create({
   methodData: { invoice },
 });
 
-const preparedMelt = await prepare({ mintUrl, method: 'bolt11', quoteId: quote.quoteId });
+const preparedMelt = await prepare({ quote });
 
 if (preparedMelt.state === 'prepared') {
   await execute();

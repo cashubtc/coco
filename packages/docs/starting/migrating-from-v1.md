@@ -106,9 +106,7 @@ const quote = await manager.quotes.melt.create({
 });
 
 const prepared = await manager.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt11',
-  quoteId: quote.quoteId,
+  quote,
 });
 ```
 

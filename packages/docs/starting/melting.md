@@ -14,9 +14,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt11',
-  quoteId: quote.quoteId,
+  quote,
 });
 
 console.log('Quote:', prepared.quoteId);
@@ -63,9 +61,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt12',
-  quoteId: quote.quoteId,
+  quote,
 });
 
 const result = await coco.ops.melt.execute(prepared.id);
@@ -88,9 +84,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'onchain',
-  quoteId: quote.quoteId,
+  quote,
   feeIndex: quote.fee_options[0].fee_index,
 });
 
@@ -102,10 +96,8 @@ if (executed.state === 'pending') {
 }
 ```
 
-If the quote has exactly one fee option, `feeIndex` may be omitted and Coco will
-use that option's `fee_index`. If multiple fee options are present, pass one of
-the advertised `quote.fee_options[].fee_index` values. Onchain melts are usually
-asynchronous, but intramint melt/mint settlement can finalize immediately; handle
-both `pending` and `finalized` execution results.
+Pass one of the advertised `quote.fee_options[].fee_index` values. Onchain melts
+are usually asynchronous, but intramint melt/mint settlement can finalize
+immediately; handle both `pending` and `finalized` execution results.
 
 > For the full saga walkthrough, see [Melt Operations](../pages/melt-operations.md).

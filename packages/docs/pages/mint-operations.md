@@ -11,9 +11,9 @@ create history; history starts when an operation exists.
 
 The operation lifecycle API is exposed through `coco.ops.mint`:
 
-- `prepare({ mintUrl, method, quoteId, unit?, methodData?, amount? })` prepares
-  a pending mint operation from an existing canonical quote. Reusable onchain
-  quotes require `amount` because one quote can fund multiple operations.
+- `prepare({ quote, amount })` prepares a pending mint operation from an
+  existing canonical quote or quote ref. Reusable onchain quotes require
+  `amount` because one quote can fund multiple operations.
 - `execute(operationOrId)` redeems a paid quote and returns the terminal state
 - `checkPayment(operationId)` checks the remote quote state for a pending
   operation
@@ -26,9 +26,9 @@ The operation lifecycle API is exposed through `coco.ops.mint`:
   operation identity; a `quoteId` is remote quote identity and can be shared by
   more than one local operation.
 
-Built-in mint methods are `bolt11`, `onchain`, and `bolt12`. Quote lookups use
-the full `{ mintUrl, method, quoteId }` identity so reused quote IDs remain
-scoped by method.
+Built-in mint methods are `bolt11`, `onchain`, and `bolt12`. Public quote
+lookups use `{ mintUrl, quoteId }`; operation preparation accepts the full
+canonical quote or a structural quote ref with `{ mintUrl, quoteId, method }`.
 
 ## Quote Resurfacing (`coco.quotes.mint`)
 
