@@ -184,6 +184,16 @@ describe('MintOpsApi', () => {
     await expect(api.execute(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
   });
 
+  it('get and listByQuote delegate to the service', async () => {
+    const operation = await api.get(pendingOperation.id);
+    const operations = await api.listByQuote(mintUrl, quoteId);
+
+    expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
+    expect(mintOperationService.listOperationsByQuote).toHaveBeenCalledWith(mintUrl, quoteId);
+    expect(operation).toBe(pendingOperation);
+    expect(operations).toEqual([pendingOperation]);
+  });
+
   it('listPending and listInFlight delegate to separate service methods', async () => {
     const pending = await api.listPending();
     const inFlight = await api.listInFlight();
@@ -207,6 +217,23 @@ describe('MintOpsApi', () => {
       pendingOperation.quoteId,
     );
     expect(result).toBe(pendingOperation);
+  });
+
+  it('checkPayment only allows pending operations', async () => {
+    const result = await api.checkPayment(pendingOperation.id);
+
+    expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
+    expect(mintOperationService.checkPendingOperation).toHaveBeenCalledWith(pendingOperation.id);
+    expect(result.category).toBe('waiting');
+
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      {
+        ...pendingOperation,
+        state: 'finalized',
+      } as MintOperation,
+    );
+
+    await expect(api.checkPayment(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
   });
 
   it('refresh reconciles pending and executing operations', async () => {
@@ -237,5 +264,37 @@ describe('MintOpsApi', () => {
 
     expect(mintOperationService.recoverExecutingOperation).toHaveBeenCalledWith(executingOperation);
     expect(refreshedExecuting).toBe(finalizedOperation);
+  });
+
+  it('refresh returns terminal operations as-is', async () => {
+    const finalizedOperation: TerminalMintOperation = {
+      ...pendingOperation,
+      state: 'finalized',
+    };
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      finalizedOperation as MintOperation,
+    );
+
+    const result = await api.refresh(finalizedOperation.id);
+
+    expect(mintOperationService.checkPendingOperation).not.toHaveBeenCalled();
+    expect(mintOperationService.recoverExecutingOperation).not.toHaveBeenCalled();
+    expect(result).toBe(finalizedOperation);
+  });
+
+  it('finalize and helper APIs delegate to the service', async () => {
+    const result = await api.finalize(pendingOperation.id);
+
+    await api.recovery.run();
+    const recoveryInProgress = api.recovery.inProgress();
+    const locked = api.diagnostics.isLocked(pendingOperation.id);
+
+    expect(mintOperationService.finalize).toHaveBeenCalledWith(pendingOperation.id);
+    expect(mintOperationService.recoverPendingOperations).toHaveBeenCalledWith();
+    expect(mintOperationService.isRecoveryInProgress).toHaveBeenCalledWith();
+    expect(mintOperationService.isOperationLocked).toHaveBeenCalledWith(pendingOperation.id);
+    expect(result.state).toBe('finalized');
+    expect(recoveryInProgress).toBe(false);
+    expect(locked).toBe(false);
   });
 });
