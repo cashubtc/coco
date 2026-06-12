@@ -42,14 +42,16 @@ For newly finalized melts, `changeAmount` and `effectiveFee` show the actual set
 ## Resume by quote
 
 ```ts
-const operation = await coco.ops.melt.getByQuote({ mintUrl, method: 'bolt11', quoteId });
+const operation = await coco.ops.melt.getByQuote({ mintUrl, quoteId });
 
 if (operation) {
   const result = await coco.ops.melt.execute(operation.id);
 }
 ```
 
-Use this when you only persisted the quote id (for example after a restart).
+Use this when you persisted the quote identity but not the operation id. Quote
+identity is `{ mintUrl, quoteId }`; the stored canonical quote supplies the
+method.
 
 ## Pay a BOLT12 offer
 
@@ -68,8 +70,8 @@ const result = await coco.ops.melt.execute(prepared.id);
 ```
 
 `amountSats` is optional and is intended for amountless BOLT12 offers.
-Use `listByQuote(mintUrl, quoteId)` when a quote id may map to more than one
-operation.
+Use `listByQuote({ mintUrl, quoteId })` when a quote id may map to more than
+one operation.
 
 ## Pay an onchain address
 

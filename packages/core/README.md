@@ -199,7 +199,7 @@ In-memory reference implementations are provided under `repositories/memory/` fo
   `refresh`, `cancel`, `reclaim`, plus `recovery` and `diagnostics`
 - `receive`: `prepare`, `execute`, `get`, `listPrepared`, `listInFlight`,
   `refresh`, `cancel`, plus `recovery` and `diagnostics`
-- `mint`: `prepare`, `execute`, `get`, `getByQuote`, `listByQuote`,
+- `mint`: `prepare`, `execute`, `get`, `listByQuote`,
   `listPending`, `listInFlight`, `checkPayment`, `refresh`, `finalize`, plus
   `recovery` and `diagnostics`. Built-in methods: `bolt11`, `onchain`,
   `bolt12`.
@@ -207,6 +207,32 @@ In-memory reference implementations are provided under `repositories/memory/` fo
   `listPrepared`, `listInFlight`, `refresh`, `cancel`, `reclaim`, `finalize`,
   plus `recovery` and `diagnostics`. Built-in methods: `bolt11`, `bolt12`,
   `onchain`.
+
+Mint and melt quote lookups use `QuoteIdentity`, the methodless object shape
+`{ mintUrl, quoteId }`:
+
+```ts
+const mintIdentity = { mintUrl: mintQuote.mintUrl, quoteId: mintQuote.quoteId };
+
+await manager.quotes.mint.get(mintIdentity);
+await manager.quotes.mint.refresh(mintIdentity);
+await manager.ops.mint.listByQuote(mintIdentity);
+
+const meltIdentity = { mintUrl: meltQuote.mintUrl, quoteId: meltQuote.quoteId };
+
+await manager.quotes.melt.get(meltIdentity);
+await manager.quotes.melt.refresh(meltIdentity);
+await manager.ops.melt.getByQuote(meltIdentity);
+await manager.ops.melt.listByQuote(meltIdentity);
+```
+
+Operation preparation accepts structural quote refs. `MintQuoteRef` and
+`MeltQuoteRef` are `{ mintUrl, quoteId, method }`, and full canonical quote
+objects already satisfy those types. Mint prepare uses
+`prepare({ quote, amount })`; BOLT melt prepare uses `prepare({ quote })`; and
+onchain melt prepare uses `prepare({ quote, feeIndex })`. Public operation
+prepare inputs do not accept sibling `unit`, `method`, or `methodData` fields;
+those details are derived from canonical quote storage.
 
 ### MintApi
 
