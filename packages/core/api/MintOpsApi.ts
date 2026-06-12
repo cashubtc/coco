@@ -6,7 +6,7 @@ import type {
   PendingMintCheckResult,
   PendingMintOperation,
 } from '@core/operations/mint';
-import type { MintQuoteRef } from '../models/QuoteIdentity.ts';
+import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
@@ -17,17 +17,6 @@ export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMin
   /** Amount to mint using the canonical quote's stored unit. */
   amount: AmountLike;
 };
-
-export type GetMintByQuoteInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
-  [M in TSupported]: {
-    /** Mint that owns the mint operation. */
-    mintUrl: string;
-    /** Mint method to resolve, for example `bolt11`. */
-    method: M;
-    /** Canonical mint quote ID. */
-    quoteId: string;
-  };
-}[TSupported];
 
 export interface MintRecoveryApi {
   /** Runs the startup-style recovery sweep for mint operations. */
@@ -87,18 +76,9 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     return this.mintOperationService.getOperation(operationId);
   }
 
-  /** Returns a mint operation by mint URL, method, and quote ID, or `null` if not found. */
-  async getByQuote(input: GetMintByQuoteInput<TSupported>): Promise<MintOperation | null> {
-    return this.mintOperationService.getOperationByQuote(
-      input.mintUrl,
-      input.method,
-      input.quoteId,
-    );
-  }
-
   /** Lists mint operations for a mint URL and quote ID. */
-  async listByQuote(mintUrl: string, quoteId: string): Promise<MintOperation[]> {
-    return this.mintOperationService.listOperationsByQuote(mintUrl, quoteId);
+  async listByQuote(input: QuoteIdentity): Promise<MintOperation[]> {
+    return this.mintOperationService.listOperationsByQuote(input.mintUrl, input.quoteId);
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */
