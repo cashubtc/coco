@@ -1094,10 +1094,7 @@ describe('MeltOperationService', () => {
 
     it('throws by quote identity when multiple operations are tracked', async () => {
       const mockedRepository = {
-        getByQuoteId: mock(async () => [
-          makeInitOp('op-dupe-1'),
-          makeInitOp('op-dupe-2'),
-        ]),
+        getByQuoteId: mock(async () => [makeInitOp('op-dupe-1'), makeInitOp('op-dupe-2')]),
       } as unknown as MeltOperationRepository;
       const duplicateService = new MeltOperationService(
         handlerProvider,
