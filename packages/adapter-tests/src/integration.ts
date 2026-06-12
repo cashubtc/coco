@@ -491,7 +491,11 @@ async function prepareMeltOperation(
 ) {
   const quote = await createMeltQuote(manager, mintUrl, invoice, unit);
   return manager.ops.melt.prepare({
-    quote,
+    quote: {
+      mintUrl: quote.mintUrl,
+      method: 'bolt11',
+      quoteId: quote.quoteId,
+    },
   });
 }
 
