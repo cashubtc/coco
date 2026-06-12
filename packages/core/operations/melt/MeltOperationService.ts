@@ -34,7 +34,7 @@ import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
-import type { MeltQuoteRef } from '../../models/QuoteIdentity.ts';
+import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -884,6 +884,30 @@ export class MeltOperationService {
     }
 
     return matching[0]!;
+  }
+
+  async getOperationByQuoteIdentity(identity: QuoteIdentity): Promise<MeltOperation | null> {
+    const quote = await this.quoteLifecycle.getMeltQuoteById(identity);
+    if (!quote) {
+      return null;
+    }
+
+    const operations = await this.meltOperationRepository.getByQuoteId(
+      normalizeMintUrl(quote.mintUrl),
+      quote.quoteId,
+    );
+
+    if (operations.length === 0) {
+      return null;
+    }
+
+    if (operations.length > 1) {
+      throw new Error(
+        `Found ${operations.length} melt operations for mint ${quote.mintUrl} and quote ${quote.quoteId}`,
+      );
+    }
+
+    return operations[0]!;
   }
 
   async listOperationsByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {

@@ -13,6 +13,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { CoreProof } from '../../types.ts';
+import type { MeltOperationRepository } from '../../repositories/index.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import type {
   InitMeltOperation,
@@ -1042,6 +1043,78 @@ describe('MeltOperationService', () => {
       const operation = await service.getOperationByQuote(mintUrl, 'bolt11', 'missing-quote');
 
       expect(operation).toBeNull();
+    });
+
+    it('returns tracked init operations by canonical quote identity', async () => {
+      const init = makeInitOp('op-init-query');
+      await meltOperationRepository.create(init);
+
+      const operation = await service.getOperationByQuoteIdentity({
+        mintUrl,
+        quoteId: init.quoteId!,
+      });
+
+      expect(operation?.id).toBe(init.id);
+      expect(operation?.state).toBe('init');
+    });
+
+    it('returns tracked early-failed init operations by canonical quote identity', async () => {
+      const init = makeInitOp('op-init-failed-query', { error: 'prepare failed' });
+      await meltOperationRepository.create(init);
+
+      const operation = await service.getOperationByQuoteIdentity({
+        mintUrl,
+        quoteId: init.quoteId!,
+      });
+
+      expect(operation?.id).toBe(init.id);
+      expect(operation?.state).toBe('init');
+      expect(operation?.error).toBe('prepare failed');
+    });
+
+    it('returns null by quote identity when no canonical quote exists', async () => {
+      const operation = await service.getOperationByQuoteIdentity({
+        mintUrl,
+        quoteId: 'missing-quote',
+      });
+
+      expect(operation).toBeNull();
+    });
+
+    it('returns null by quote identity when no operation is tracked', async () => {
+      await persistMeltQuote('untracked-quote');
+
+      const operation = await service.getOperationByQuoteIdentity({
+        mintUrl,
+        quoteId: 'untracked-quote',
+      });
+
+      expect(operation).toBeNull();
+    });
+
+    it('throws by quote identity when multiple operations are tracked', async () => {
+      const mockedRepository = {
+        getByQuoteId: mock(async () => [
+          makeInitOp('op-dupe-1'),
+          makeInitOp('op-dupe-2'),
+        ]),
+      } as unknown as MeltOperationRepository;
+      const duplicateService = new MeltOperationService(
+        handlerProvider,
+        mockedRepository,
+        quoteLifecycle,
+        proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+
+      await expect(
+        duplicateService.getOperationByQuoteIdentity({ mintUrl, quoteId: 'quote-1' }),
+      ).rejects.toThrow('Found 2 melt operations');
     });
 
     it('rejects repository writes when multiple operations share a quote id', async () => {

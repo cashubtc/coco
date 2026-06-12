@@ -16,7 +16,6 @@ const quoteId = 'quote-1';
 
 type Assert<T extends true> = T;
 type PrepareMintInput = Parameters<MintOpsApi['prepare']>[0];
-type GetMintByQuoteInput = Parameters<MintOpsApi['getByQuote']>[0];
 type _AssertPrepareAcceptsQuoteRef = Assert<
   PrepareMintInput extends {
     quote: {
@@ -36,12 +35,9 @@ type _AssertPrepareOmitsLooseUnit = Assert<'unit' extends keyof PrepareMintInput
 type _AssertPrepareOmitsMethodData = Assert<
   'methodData' extends keyof PrepareMintInput ? false : true
 >;
-type _AssertGetByQuoteUsesObjectInput = Assert<
-  GetMintByQuoteInput extends {
-    mintUrl: string;
-    method: 'bolt11' | 'onchain' | 'bolt12';
-    quoteId: string;
-  }
+type _AssertGetByQuoteRemoved = Assert<'getByQuote' extends keyof MintOpsApi ? false : true>;
+type _AssertListByQuoteUsesQuoteIdentity = Assert<
+  Parameters<MintOpsApi['listByQuote']> extends [{ mintUrl: string; quoteId: string }]
     ? true
     : false
 >;
@@ -186,7 +182,7 @@ describe('MintOpsApi', () => {
 
   it('get and listByQuote delegate to the service', async () => {
     const operation = await api.get(pendingOperation.id);
-    const operations = await api.listByQuote(mintUrl, quoteId);
+    const operations = await api.listByQuote({ mintUrl, quoteId });
 
     expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
     expect(mintOperationService.listOperationsByQuote).toHaveBeenCalledWith(mintUrl, quoteId);
@@ -202,21 +198,6 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.getInFlightOperations).toHaveBeenCalledWith();
     expect(pending).toEqual([pendingOperation]);
     expect(inFlight).toHaveLength(2);
-  });
-
-  it('getByQuote forwards object input to the service', async () => {
-    const result = await api.getByQuote({
-      mintUrl,
-      method: 'bolt11',
-      quoteId: pendingOperation.quoteId,
-    });
-
-    expect(mintOperationService.getOperationByQuote).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      pendingOperation.quoteId,
-    );
-    expect(result).toBe(pendingOperation);
   });
 
   it('checkPayment only allows pending operations', async () => {

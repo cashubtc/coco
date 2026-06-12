@@ -5,7 +5,7 @@ import type {
   PreparedMeltOperation,
 } from '@core/operations/melt';
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
-import type { MeltQuoteRef } from '../models/QuoteIdentity.ts';
+import type { MeltQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
 /** Melt methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
@@ -15,17 +15,6 @@ export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMel
     /** Existing canonical melt quote or structural quote reference. */
     quote: MeltQuoteRef<M>;
   } & (M extends 'onchain' ? { feeIndex: number } : { feeIndex?: number });
-}[TSupported];
-
-export type GetMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
-  [M in TSupported]: {
-    /** Mint that owns the melt operation. */
-    mintUrl: string;
-    /** Melt method to resolve, for example `bolt11`. */
-    method: M;
-    /** Canonical melt quote ID. */
-    quoteId: string;
-  };
 }[TSupported];
 
 export interface MeltRecoveryApi {
@@ -97,18 +86,14 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
     return this.meltOperationService.getOperation(operationId);
   }
 
-  /** Returns a melt operation by mint URL, method, and quote ID, or `null` if not found. */
-  async getByQuote(input: GetMeltByQuoteInput<TSupported>): Promise<MeltOperation | null> {
-    return this.meltOperationService.getOperationByQuote(
-      input.mintUrl,
-      input.method,
-      input.quoteId,
-    );
+  /** Returns the tracked melt operation for a canonical quote identity, or `null`. */
+  async getByQuote(input: QuoteIdentity): Promise<MeltOperation | null> {
+    return this.meltOperationService.getOperationByQuoteIdentity(input);
   }
 
   /** Lists melt operations for a mint URL and quote ID. */
-  async listByQuote(mintUrl: string, quoteId: string): Promise<MeltOperation[]> {
-    return this.meltOperationService.listOperationsByQuote(mintUrl, quoteId);
+  async listByQuote(input: QuoteIdentity): Promise<MeltOperation[]> {
+    return this.meltOperationService.listOperationsByQuote(input.mintUrl, input.quoteId);
   }
 
   /** Lists melt operations that are prepared and ready to execute or cancel. */

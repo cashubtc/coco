@@ -52,13 +52,14 @@ type _AssertOnchainRequiresFeeIndex = Assert<
 type _AssertBoltFeeIndexOptional = Assert<
   Bolt11PrepareMeltInput extends { feeIndex?: number } ? true : false
 >;
-type _AssertListByQuoteUsesMintAndQuoteArgs = Assert<
-  Parameters<MeltOpsApi['listByQuote']> extends [string, string] ? true : false
+type _AssertListByQuoteUsesQuoteIdentity = Assert<
+  Parameters<MeltOpsApi['listByQuote']> extends [{ mintUrl: string; quoteId: string }]
+    ? true
+    : false
 >;
 type _AssertGetByQuoteUsesObjectInput = Assert<
   GetMeltByQuoteInput extends {
     mintUrl: string;
-    method: 'bolt11' | 'bolt12' | 'onchain';
     quoteId: string;
   }
     ? true
@@ -116,7 +117,7 @@ describe('MeltOpsApi', () => {
       prepare: mock(async () => preparedOperation),
       execute: mock(async () => pendingOperation),
       getOperation: mock(async () => preparedOperation),
-      getOperationByQuote: mock(async () => preparedOperation),
+      getOperationByQuoteIdentity: mock(async () => preparedOperation),
       listOperationsByQuote: mock(async () => [preparedOperation]),
       prepareExistingQuote: mock(async () => preparedOperation),
       getPreparedOperations: mock(async () => [preparedOperation]),
@@ -208,20 +209,18 @@ describe('MeltOpsApi', () => {
   it('getByQuote forwards to the service', async () => {
     const result = await api.getByQuote({
       mintUrl,
-      method: 'bolt11',
       quoteId: preparedOperation.quoteId,
     });
 
-    expect(meltOperationService.getOperationByQuote).toHaveBeenCalledWith(
+    expect(meltOperationService.getOperationByQuoteIdentity).toHaveBeenCalledWith({
       mintUrl,
-      'bolt11',
-      preparedOperation.quoteId,
-    );
+      quoteId: preparedOperation.quoteId,
+    });
     expect(result).toBe(preparedOperation);
   });
 
   it('listByQuote forwards to the service', async () => {
-    const result = await api.listByQuote(mintUrl, preparedOperation.quoteId);
+    const result = await api.listByQuote({ mintUrl, quoteId: preparedOperation.quoteId });
 
     expect(meltOperationService.listOperationsByQuote).toHaveBeenCalledWith(
       mintUrl,
