@@ -5,21 +5,16 @@ import type {
   PreparedMeltOperation,
 } from '@core/operations/melt';
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
+import type { MeltQuoteRef } from '../models/QuoteIdentity.ts';
 
 /** Melt methods supported by the default `Manager` wiring. */
 export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
 
 export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
   [M in TSupported]: {
-    /** Mint that will execute the melt. */
-    mintUrl: string;
-    /** Melt method to prepare, for example `bolt11`. */
-    method: M;
-    /** Existing canonical melt quote ID to prepare against. */
-    quoteId: string;
-    /** Unit to melt. Defaults to `sat`. */
-    unit?: string;
-  } & (M extends 'onchain' ? { feeIndex?: number } : {});
+    /** Existing canonical melt quote or structural quote reference. */
+    quote: MeltQuoteRef<M>;
+  } & (M extends 'onchain' ? { feeIndex: number } : { feeIndex?: number });
 }[TSupported];
 
 export type GetMeltByQuoteInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
@@ -73,18 +68,9 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * before committing to the external payment.
    */
   async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
-    return this.meltOperationService.prepareExistingQuote(
-      input.mintUrl,
-      input.method,
-      input.quoteId,
-      {
-        expectedUnit: input.unit,
-        feeIndex:
-          input.method === 'onchain'
-            ? (input as PrepareMeltInput<Extract<TSupported, 'onchain'>>).feeIndex
-            : undefined,
-      },
-    );
+    return this.meltOperationService.prepareExistingQuote(input.quote, {
+      feeIndex: input.feeIndex,
+    });
   }
 
   /**

@@ -15,9 +15,8 @@ The melt operation saga provides:
 
 The canonical API is exposed through `coco.ops.melt`:
 
-- `prepare({ mintUrl, method: 'bolt11', quoteId })` prepares an operation from a canonical melt quote
-- `prepare({ mintUrl, method: 'bolt12', quoteId })` prepares a BOLT12 offer melt from a canonical melt quote
-- `prepare({ mintUrl, method: 'onchain', quoteId, feeIndex? })` prepares an onchain melt from a canonical NUT-30 quote
+- `prepare({ quote })` prepares a BOLT11 or BOLT12 operation from a canonical melt quote or quote ref
+- `prepare({ quote, feeIndex })` prepares an onchain melt from a canonical NUT-30 quote or quote ref
 - `execute(operationOrId)` executes the prepared operation
 - `getByQuote({ mintUrl, method, quoteId })` resolves an operation from a persisted quote id
 - `refresh(operationId)` checks a pending melt and returns the latest operation state
@@ -74,9 +73,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt11',
-  quoteId: quote.quoteId,
+  quote,
 });
 
 console.log('Quote:', prepared.quoteId);
@@ -96,9 +93,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt12',
-  quoteId: quote.quoteId,
+  quote,
 });
 ```
 
@@ -112,18 +107,14 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'onchain',
-  quoteId: quote.quoteId,
+  quote,
   feeIndex: quote.fee_options[0].fee_index,
 });
 ```
 
-If the onchain quote has exactly one fee option, `feeIndex` may be omitted. If
-there are multiple fee options, pass one of the advertised
-`quote.fee_options[].fee_index` values. The selected fee option's `fee_reserve`
-is copied onto the prepared operation for proof selection; the selected
-`feeIndex` is operation data, not quote data.
+Pass one of the advertised `quote.fee_options[].fee_index` values. The selected
+fee option's `fee_reserve` is copied onto the prepared operation for proof
+selection; the selected `feeIndex` is operation data, not quote data.
 
 Internally, the service:
 

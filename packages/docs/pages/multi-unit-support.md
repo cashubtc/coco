@@ -82,9 +82,7 @@ const quote = await coco.quotes.melt.create({
 });
 
 const prepared = await coco.ops.melt.prepare({
-  mintUrl,
-  method: 'bolt11',
-  quoteId: quote.quoteId,
+  quote,
 });
 
 console.log(prepared.amount, prepared.unit, prepared.fee_reserve);

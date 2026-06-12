@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { QuoteApi } from '../../api/QuoteApi.ts';
+import type { MeltOpsApi } from '../../api/MeltOpsApi.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -212,6 +213,22 @@ describe('QuoteApi', () => {
     expect(quoteLifecycle.getMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
     expect(quoteLifecycle.getPendingMeltQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
+  });
+
+  it('types created BOLT melt quotes as direct prepare inputs', async () => {
+    const meltOps = {
+      prepare: mock(async () => undefined),
+    } as unknown as Pick<MeltOpsApi, 'prepare'>;
+
+    const quote = await api.melt.create({
+      mintUrl,
+      method: 'bolt11',
+      methodData: { invoice: 'lnbc1melt' },
+    });
+
+    await meltOps.prepare({ quote });
+
+    expect(meltOps.prepare).toHaveBeenCalledWith({ quote });
   });
 
   it('keeps method required for quote creation and import inputs', () => {

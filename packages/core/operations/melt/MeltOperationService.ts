@@ -34,6 +34,7 @@ import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
+import type { MeltQuoteRef } from '../../models/QuoteIdentity.ts';
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -216,19 +217,12 @@ export class MeltOperationService {
   }
 
   async prepareExistingQuote(
-    mintUrl: string,
-    method: MeltMethod,
-    quoteId: string,
-    options: { expectedUnit?: string; feeIndex?: number } = {},
+    quoteRef: MeltQuoteRef,
+    options: { feeIndex?: number } = {},
   ): Promise<PreparedMeltOperation> {
-    const quote = await this.quoteLifecycle.requireMeltQuoteForPrepare(
-      mintUrl,
-      method,
-      quoteId,
-      options.expectedUnit,
-    );
+    const quote = await this.quoteLifecycle.requireMeltQuoteRefForPrepare(quoteRef);
     const methodData = this.methodDataFromMeltQuote(quote, options);
-    const initOperation = await this.init(quote.mintUrl, method, methodData, quote.unit, {
+    const initOperation = await this.init(quote.mintUrl, quote.method, methodData, quote.unit, {
       quoteId: quote.quoteId,
     });
     return this.prepare(initOperation.id);

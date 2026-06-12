@@ -47,7 +47,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
-import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
+import type { MeltQuoteRef, MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
 
 const MINT_QUOTE_STATE_RANK: Record<string, number> = {
   UNPAID: 0,
@@ -520,12 +520,12 @@ export class QuoteLifecycle {
     return quote;
   }
 
-  async createMeltQuote(
+  async createMeltQuote<M extends MeltMethod>(
     mintUrl: string,
-    method: MeltMethod,
-    methodData: MeltMethodInputData,
+    method: M,
+    methodData: MeltMethodInputData<M>,
     unit = DEFAULT_UNIT,
-  ): Promise<MeltQuote> {
+  ): Promise<MeltQuote<M>> {
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -562,7 +562,9 @@ export class QuoteLifecycle {
     }
 
     await this.meltQuoteRepository.upsertMeltQuote(quote);
-    return (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
+    const persistedQuote =
+      (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
+    return persistedQuote as MeltQuote<M>;
   }
 
   getMeltQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote | null> {
@@ -613,6 +615,29 @@ export class QuoteLifecycle {
     }
 
     this.assertMeltQuoteCanPrepare(quote, `melt quote ${quoteId}`);
+    return quote;
+  }
+
+  async requireMeltQuoteRefForPrepare(ref: MeltQuoteRef): Promise<MeltQuote> {
+    const quote = await this.meltQuoteRepository.getMeltQuoteById({
+      mintUrl: ref.mintUrl,
+      quoteId: ref.quoteId,
+    });
+    if (!quote) {
+      throw new Error(`Melt quote ${ref.quoteId} at ${ref.mintUrl} was not found`);
+    }
+
+    if (quote.method !== ref.method) {
+      throw new QuoteIdentityConflictError(
+        'melt',
+        quote.mintUrl,
+        quote.quoteId,
+        [ref.method, quote.method],
+        `Melt quote ${quote.quoteId} at ${quote.mintUrl} resolved to method ${quote.method}, not requested method ${ref.method}`,
+      );
+    }
+
+    this.assertMeltQuoteCanPrepare(quote, `melt quote ${ref.quoteId}`);
     return quote;
   }
 

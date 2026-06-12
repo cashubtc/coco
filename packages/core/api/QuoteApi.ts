@@ -42,14 +42,16 @@ export type ListPendingMintQuotesInput = {
   method?: DefaultSupportedMintQuoteMethod;
 };
 
-export type CreateMeltQuoteInput = {
-  [M in DefaultSupportedMeltMethod]: {
+export type CreateMeltQuoteInput<
+  TSupported extends DefaultSupportedMeltMethod = DefaultSupportedMeltMethod,
+> = {
+  [M in TSupported]: {
     mintUrl: string;
     method: M;
     methodData: MeltMethodInputData<M>;
     unit?: string;
   };
-}[DefaultSupportedMeltMethod];
+}[TSupported];
 
 export type ListPendingMeltQuotesInput = {
   method?: DefaultSupportedMeltMethod;
@@ -104,7 +106,9 @@ export class MintQuoteApi {
 export class MeltQuoteApi {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
-  create(input: CreateMeltQuoteInput): Promise<MeltQuote> {
+  create<M extends DefaultSupportedMeltMethod>(
+    input: CreateMeltQuoteInput<M>,
+  ): Promise<MeltQuote<M>> {
     return this.quoteLifecycle.createMeltQuote(
       input.mintUrl,
       input.method,
