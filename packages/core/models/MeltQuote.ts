@@ -170,9 +170,7 @@ export function resolveOnchainMeltFeeOption(
 
   const feeOption = feeOptions.find((option) => option.fee_index === feeIndex);
   if (!feeOption) {
-    throw new Error(
-      `Melt quote ${quote.quoteId} does not include onchain fee option ${feeIndex}`,
-    );
+    throw new Error(`Melt quote ${quote.quoteId} does not include onchain fee option ${feeIndex}`);
   }
 
   return { feeIndex, feeOption };
