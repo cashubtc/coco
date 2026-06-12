@@ -32,6 +32,7 @@ import {
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
+  QuoteIdentityConflictError,
 } from '../../models/Error.ts';
 
 describe('MeltOperationService', () => {
@@ -422,11 +423,11 @@ describe('MeltOperationService', () => {
 
   describe('prepare', () => {
     it('prepares existing quotes using the canonical quote mint URL', async () => {
-      const prepared = await service.prepareExistingQuote(
-        'https://MINT.test/',
-        'bolt11',
-        'quote-1',
-      );
+      const prepared = await service.prepareExistingQuote({
+        mintUrl: 'https://MINT.test/',
+        method: 'bolt11',
+        quoteId: 'quote-1',
+      });
 
       const stored = await meltOperationRepository.getById(prepared.id);
       const byQuote = await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-1');
@@ -455,7 +456,11 @@ describe('MeltOperationService', () => {
         updatedAt: Date.now(),
       });
 
-      const prepared = await service.prepareExistingQuote(mintUrl, 'bolt12', 'quote-bolt12');
+      const prepared = await service.prepareExistingQuote({
+        mintUrl,
+        method: 'bolt12',
+        quoteId: 'quote-bolt12',
+      });
 
       expect(prepared.method).toBe('bolt12');
       expect(prepared.methodData).toEqual({ offer: 'lno1offer' });
@@ -464,9 +469,14 @@ describe('MeltOperationService', () => {
     it('prepares onchain melt quotes with the selected fee index in operation data', async () => {
       await persistOnchainMeltQuote();
 
-      const prepared = await service.prepareExistingQuote(mintUrl, 'onchain', 'onchain-quote', {
-        feeIndex: 7,
-      });
+      const prepared = await service.prepareExistingQuote(
+        {
+          mintUrl,
+          method: 'onchain',
+          quoteId: 'onchain-quote',
+        },
+        { feeIndex: 7 },
+      );
 
       expect(prepared.method).toBe('onchain');
       expect(prepared.methodData).toEqual({
@@ -481,11 +491,11 @@ describe('MeltOperationService', () => {
         { fee_index: 3, fee_reserve: Amount.from(4), estimated_blocks: 6 },
       ]);
 
-      const prepared = await service.prepareExistingQuote(
+      const prepared = await service.prepareExistingQuote({
         mintUrl,
-        'onchain',
-        'single-option-onchain-quote',
-      );
+        method: 'onchain',
+        quoteId: 'single-option-onchain-quote',
+      });
 
       expect(prepared.method).toBe('onchain');
       expect((prepared.methodData as { feeIndex: number }).feeIndex).toBe(3);
@@ -495,16 +505,68 @@ describe('MeltOperationService', () => {
       await persistOnchainMeltQuote();
 
       await expect(
-        service.prepareExistingQuote(mintUrl, 'onchain', 'onchain-quote'),
+        service.prepareExistingQuote({
+          mintUrl,
+          method: 'onchain',
+          quoteId: 'onchain-quote',
+        }),
       ).rejects.toThrow('requires an explicit feeIndex');
 
       expect(await service.getOperationByQuote(mintUrl, 'onchain', 'onchain-quote')).toBeNull();
     });
 
-    it('rejects duplicate prepares for the same canonical quote', async () => {
-      const first = await service.prepareExistingQuote('https://MINT.test/', 'bolt11', 'quote-1');
+    it('rejects invalid onchain fee index before creating operations', async () => {
+      await persistOnchainMeltQuote();
 
-      await expect(service.prepareExistingQuote(mintUrl, 'bolt11', 'quote-1')).rejects.toThrow(
+      await expect(
+        service.prepareExistingQuote(
+          {
+            mintUrl,
+            method: 'onchain',
+            quoteId: 'onchain-quote',
+          },
+          { feeIndex: 99 },
+        ),
+      ).rejects.toThrow('does not include onchain fee option 99');
+
+      expect(await service.getOperationByQuote(mintUrl, 'onchain', 'onchain-quote')).toBeNull();
+    });
+
+    it('throws quote identity conflict when the input ref method differs from storage', async () => {
+      await expect(
+        service.prepareExistingQuote({
+          mintUrl,
+          method: 'bolt12',
+          quoteId: 'quote-1',
+        }),
+      ).rejects.toThrow(QuoteIdentityConflictError);
+
+      expect(await service.getOperationByQuote(mintUrl, 'bolt11', 'quote-1')).toBeNull();
+    });
+
+    it('accepts full canonical melt quotes as quote refs', async () => {
+      const quote = await quoteLifecycle.getMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+      if (!quote) {
+        throw new Error('Expected test quote to exist');
+      }
+
+      const prepared = await service.prepareExistingQuote(quote);
+
+      expect(prepared.quoteId).toBe(quote.quoteId);
+      expect(prepared.method).toBe(quote.method);
+      expect(prepared.methodData).toEqual({ invoice: quote.request });
+    });
+
+    it('rejects duplicate prepares for the same canonical quote', async () => {
+      const first = await service.prepareExistingQuote({
+        mintUrl: 'https://MINT.test/',
+        method: 'bolt11',
+        quoteId: 'quote-1',
+      });
+
+      await expect(
+        service.prepareExistingQuote({ mintUrl, method: 'bolt11', quoteId: 'quote-1' }),
+      ).rejects.toThrow(
         `Melt quote quote-1 is already tracked by operation ${first.id} in state prepared`,
       );
 

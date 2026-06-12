@@ -9,25 +9,68 @@ import type {
 } from '../../operations/melt/MeltOperation.ts';
 import type { MeltOperationService } from '../../operations/melt/MeltOperationService.ts';
 import { MeltOpsApi } from '../../api/MeltOpsApi.ts';
+import type { MeltQuote } from '../../models/MeltQuote.ts';
 
 const mintUrl = 'https://mint.test';
+const quoteId = 'quote-1';
 
 type Assert<T extends true> = T;
 type PrepareMeltInput = Parameters<MeltOpsApi['prepare']>[0];
-type PrepareMeltMethod = PrepareMeltInput['method'];
+type GetMeltByQuoteInput = Parameters<MeltOpsApi['getByQuote']>[0];
+type OnchainPrepareMeltInput = Extract<PrepareMeltInput, { quote: { method: 'onchain' } }>;
+type Bolt11PrepareMeltInput = Extract<PrepareMeltInput, { quote: { method: 'bolt11' } }>;
 type _AssertDefaultBoltMethods = Assert<
-  Exclude<PrepareMeltMethod, 'bolt11' | 'bolt12' | 'onchain'> extends never ? true : false
+  Exclude<PrepareMeltInput['quote']['method'], 'bolt11' | 'bolt12' | 'onchain'> extends never
+    ? true
+    : false
 >;
 type CustomPrepareMeltInput = Parameters<MeltOpsApi<'bolt11' | 'bolt12'>['prepare']>[0];
-type _AssertAllowsBolt12 = Assert<'bolt12' extends CustomPrepareMeltInput['method'] ? true : false>;
+type _AssertAllowsBolt12 = Assert<
+  'bolt12' extends CustomPrepareMeltInput['quote']['method'] ? true : false
+>;
+type _AssertPrepareAcceptsQuoteRef = Assert<
+  PrepareMeltInput extends {
+    quote: {
+      mintUrl: string;
+      quoteId: string;
+      method: 'bolt11' | 'bolt12' | 'onchain';
+    };
+  }
+    ? true
+    : false
+>;
+type _AssertPrepareOmitsLooseMethod = Assert<
+  'method' extends keyof PrepareMeltInput ? false : true
+>;
+type _AssertPrepareOmitsLooseUnit = Assert<'unit' extends keyof PrepareMeltInput ? false : true>;
+type _AssertPrepareOmitsMethodData = Assert<
+  'methodData' extends keyof PrepareMeltInput ? false : true
+>;
+type _AssertOnchainRequiresFeeIndex = Assert<
+  OnchainPrepareMeltInput extends { feeIndex: number } ? true : false
+>;
+type _AssertBoltFeeIndexOptional = Assert<
+  Bolt11PrepareMeltInput extends { feeIndex?: number } ? true : false
+>;
 type _AssertListByQuoteUsesMintAndQuoteArgs = Assert<
   Parameters<MeltOpsApi['listByQuote']> extends [string, string] ? true : false
 >;
+type _AssertGetByQuoteUsesObjectInput = Assert<
+  GetMeltByQuoteInput extends {
+    mintUrl: string;
+    method: 'bolt11' | 'bolt12' | 'onchain';
+    quoteId: string;
+  }
+    ? true
+    : false
+>;
 
 const supportedPrepareInput: PrepareMeltInput = {
-  mintUrl,
-  method: 'bolt11',
-  quoteId: 'quote-1',
+  quote: {
+    mintUrl,
+    method: 'bolt11',
+    quoteId,
+  },
 };
 void supportedPrepareInput;
 
@@ -39,7 +82,7 @@ const makePreparedOperation = (): PreparedMeltOperation => ({
   methodData: { invoice: 'lnbc1test' },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  quoteId: 'quote-1',
+  quoteId,
   unit: 'sat',
   amount: Amount.from(100),
   fee_reserve: Amount.from(0),
@@ -94,44 +137,64 @@ describe('MeltOpsApi', () => {
     const result = await api.prepare(supportedPrepareInput);
 
     expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      'quote-1',
-      { expectedUnit: undefined, feeIndex: undefined },
+      supportedPrepareInput.quote,
+      { feeIndex: undefined },
     );
     expect(result).toBe(preparedOperation);
   });
 
-  it('prepare passes non-sat units to the service', async () => {
-    await api.prepare({
+  it('prepare accepts a full canonical quote as the quote ref', async () => {
+    const quote: MeltQuote<'bolt11'> = {
       mintUrl,
+      quoteId,
+      quote: quoteId,
+      request: 'lnbc1test',
+      unit: 'usd',
       method: 'bolt11',
-      quoteId: 'quote-1',
-      unit: 'USD',
+      amount: Amount.from(12),
+      fee_reserve: Amount.from(1),
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      lastObservedRemoteState: 'UNPAID',
+      lastObservedRemoteStateAt: Date.now(),
+      payment_preimage: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await api.prepare({
+      quote,
     });
 
-    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
-      mintUrl,
-      'bolt11',
-      'quote-1',
-      { expectedUnit: 'USD', feeIndex: undefined },
-    );
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(quote, {
+      feeIndex: undefined,
+    });
   });
 
   it('prepare passes onchain feeIndex to the service', async () => {
+    const quote = { mintUrl, method: 'onchain', quoteId } as const;
+
     await api.prepare({
-      mintUrl,
-      method: 'onchain',
-      quoteId: 'quote-1',
+      quote,
       feeIndex: 2,
     });
 
-    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(
-      mintUrl,
-      'onchain',
-      'quote-1',
-      { expectedUnit: undefined, feeIndex: 2 },
-    );
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(quote, {
+      feeIndex: 2,
+    });
+  });
+
+  it('prepare ignores extra BOLT feeIndex at the API boundary', async () => {
+    const quote = { mintUrl, method: 'bolt12', quoteId } as const;
+
+    await api.prepare({
+      quote,
+      feeIndex: 9,
+    });
+
+    expect(meltOperationService.prepareExistingQuote).toHaveBeenCalledWith(quote, {
+      feeIndex: 9,
+    });
   });
 
   it('execute resolves ids before executing', async () => {
