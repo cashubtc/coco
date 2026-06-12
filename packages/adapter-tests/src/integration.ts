@@ -1310,7 +1310,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const byQuote = await mgr!.ops.melt.getByQuote({
           mintUrl,
-          method: 'bolt11',
           quoteId: prepared.quoteId,
         });
         expect(byQuote?.id).toBe(prepared.id);
@@ -1400,7 +1399,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
         const byQuote = await mgr!.ops.melt.getByQuote({
           mintUrl,
-          method: 'bolt11',
           quoteId: prepared.quoteId,
         });
         expect(byQuote?.id).toBeDefined();
@@ -1488,7 +1486,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
       it('should return null when resolving a missing melt quote', async () => {
         const missingOperation = await mgr!.ops.melt.getByQuote({
           mintUrl,
-          method: 'bolt11',
           quoteId: 'missing-quote',
         });
         expect(missingOperation).toBe(null);

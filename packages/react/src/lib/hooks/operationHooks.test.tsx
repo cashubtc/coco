@@ -178,7 +178,6 @@ function createMintManagerMock() {
     prepare: vi.fn(),
     execute: vi.fn(),
     get: vi.fn(),
-    getByQuote: vi.fn(),
     listByQuote: vi.fn(),
     listPending: vi.fn(),
     listInFlight: vi.fn(),
@@ -1043,19 +1042,13 @@ describe('useMintOperation', () => {
     expect(result.current.currentOperation).toEqual(pending);
   });
 
-  it('passes BOLT12 mint inputs and quote lookup helpers through without rebinding', async () => {
+  it('passes BOLT12 mint inputs and quote list helpers through without rebinding', async () => {
     const { manager, mint } = createMintManagerMock();
     const prepared = createPendingMintOperation({
       method: 'bolt12',
       methodData: {},
       quoteId: 'shared-mint-quote',
       request: 'lno1mintoffer',
-    });
-    const latest = createPendingMintOperation({
-      id: 'mint-op-latest',
-      method: 'bolt12',
-      quoteId: prepared.quoteId,
-      updatedAt: prepared.updatedAt + 1,
     });
 
     const input: MintOperationPrepareInput = {
@@ -1068,8 +1061,7 @@ describe('useMintOperation', () => {
     };
 
     mint.prepare.mockResolvedValue(prepared);
-    mint.getByQuote.mockResolvedValue(latest);
-    mint.listByQuote.mockResolvedValue([prepared, latest]);
+    mint.listByQuote.mockResolvedValue([prepared]);
 
     const { result } = renderHook(() => useMintOperation(), {
       wrapper: createHookWrapper(manager),
@@ -1079,22 +1071,17 @@ describe('useMintOperation', () => {
       await result.current.prepare(input);
     });
 
-    const byQuote = await result.current.getByQuote({
+    const listByQuote = await result.current.listByQuote({
       mintUrl: MINT_URL,
-      method: 'bolt12',
       quoteId: prepared.quoteId,
     });
-    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
 
     expect(mint.prepare).toHaveBeenCalledWith(input);
-    expect(mint.getByQuote).toHaveBeenCalledWith({
+    expect(mint.listByQuote).toHaveBeenCalledWith({
       mintUrl: MINT_URL,
-      method: 'bolt12',
       quoteId: prepared.quoteId,
     });
-    expect(mint.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
-    expect(byQuote).toEqual(latest);
-    expect(listByQuote).toEqual([prepared, latest]);
+    expect(listByQuote).toEqual([prepared]);
     expect(result.current.currentOperation).toEqual(prepared);
   });
 
@@ -1396,18 +1383,22 @@ describe('useMeltOperation', () => {
 
     const byQuote = await result.current.getByQuote({
       mintUrl: MINT_URL,
-      method: 'bolt12',
       quoteId: prepared.quoteId,
     });
-    const listByQuote = await result.current.listByQuote(MINT_URL, prepared.quoteId);
+    const listByQuote = await result.current.listByQuote({
+      mintUrl: MINT_URL,
+      quoteId: prepared.quoteId,
+    });
 
     expect(melt.prepare).toHaveBeenCalledWith(input);
     expect(melt.getByQuote).toHaveBeenCalledWith({
       mintUrl: MINT_URL,
-      method: 'bolt12',
       quoteId: prepared.quoteId,
     });
-    expect(melt.listByQuote).toHaveBeenCalledWith(MINT_URL, prepared.quoteId);
+    expect(melt.listByQuote).toHaveBeenCalledWith({
+      mintUrl: MINT_URL,
+      quoteId: prepared.quoteId,
+    });
     expect(byQuote).toEqual(latest);
     expect(listByQuote).toEqual([prepared, latest]);
     expect(result.current.currentOperation).toEqual(prepared);
