@@ -111,6 +111,13 @@
         "react": "^19",
       },
     },
+    "packages/sql-storage": {
+      "name": "@cashu/coco-sql-storage",
+      "version": "1.0.0",
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "packages/sqlite-bun": {
       "name": "@cashu/coco-sqlite-bun",
       "version": "1.0.0",
@@ -392,6 +399,8 @@
     "@cashu/coco-indexeddb": ["@cashu/coco-indexeddb@workspace:packages/indexeddb"],
 
     "@cashu/coco-react": ["@cashu/coco-react@workspace:packages/react"],
+
+    "@cashu/coco-sql-storage": ["@cashu/coco-sql-storage@workspace:packages/sql-storage"],
 
     "@cashu/coco-sqlite": ["@cashu/coco-sqlite@workspace:packages/sqlite3"],
 
