@@ -63,7 +63,7 @@ export class BunSqlDatabase implements SqlDatabase {
     };
   }
 
-  async get<Row extends Record<string, unknown> = Record<string, unknown>>(
+  async get<Row extends object = Record<string, unknown>>(
     sql: string,
     params: SqlParams = [],
   ): Promise<Row | undefined> {
@@ -74,7 +74,7 @@ export class BunSqlDatabase implements SqlDatabase {
     return (this.getStatement(sql).get(...params) ?? undefined) as Row | undefined;
   }
 
-  async all<Row extends Record<string, unknown> = Record<string, unknown>>(
+  async all<Row extends object = Record<string, unknown>>(
     sql: string,
     params: SqlParams = [],
   ): Promise<Row[]> {

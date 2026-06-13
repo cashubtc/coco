@@ -10,11 +10,11 @@ export interface SqlRunResult {
 export interface SqlDatabase {
   exec(sql: string): Promise<void>;
   run(sql: string, params?: SqlParams): Promise<SqlRunResult>;
-  get<Row extends Record<string, unknown> = Record<string, unknown>>(
+  get<Row extends object = Record<string, unknown>>(
     sql: string,
     params?: SqlParams,
   ): Promise<Row | undefined>;
-  all<Row extends Record<string, unknown> = Record<string, unknown>>(
+  all<Row extends object = Record<string, unknown>>(
     sql: string,
     params?: SqlParams,
   ): Promise<Row[]>;

@@ -21,6 +21,10 @@ interface Expect {
   (actual: unknown): Matcher;
 }
 
+interface ContractLabelRow {
+  label: string;
+}
+
 export interface SqlDatabaseContractTestApi {
   describe(name: string, fn: () => void): void;
   it(name: string, fn: () => TestResult, timeout?: number): void;
@@ -78,7 +82,7 @@ export function runSqlDatabaseContract(
           INSERT INTO contract_items (label) VALUES ('beta');
         `);
 
-        const rows = await database.all<{ label: string }>(
+        const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_items ORDER BY id ASC',
         );
 
@@ -168,14 +172,14 @@ export function runSqlDatabaseContract(
           INSERT INTO contract_query_results (label) VALUES ('beta');
         `);
 
-        const first = await database.get<{ label: string }>(
+        const first = await database.get<ContractLabelRow>(
           'SELECT label FROM contract_query_results ORDER BY id ASC',
         );
-        const missing = await database.get<{ label: string }>(
+        const missing = await database.get<ContractLabelRow>(
           'SELECT label FROM contract_query_results WHERE label = ?',
           ['missing'],
         );
-        const all = await database.all<{ label: string }>(
+        const all = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_query_results ORDER BY id ASC',
         );
 
@@ -198,7 +202,7 @@ export function runSqlDatabaseContract(
           await tx.run('INSERT INTO contract_transactions (label) VALUES (?)', ['alpha']);
         });
 
-        const rows = await database.all<{ label: string }>(
+        const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_transactions',
         );
         expect(rows).toEqual([{ label: 'alpha' }]);
@@ -223,7 +227,7 @@ export function runSqlDatabaseContract(
           });
         });
 
-        const rows = await database.all<{ label: string }>(
+        const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_transaction_rollbacks',
         );
         expect(didReject).toBe(true);
@@ -251,7 +255,7 @@ export function runSqlDatabaseContract(
           });
         });
 
-        const rows = await database.all<{ label: string }>(
+        const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_nested_transactions ORDER BY id ASC',
         );
         expect(rows).toEqual([{ label: 'outer' }, { label: 'inner' }]);
@@ -289,7 +293,7 @@ export function runSqlDatabaseContract(
         releaseFirst.resolve();
         await Promise.all([firstTransaction, secondTransaction]);
 
-        const rows = await database.all<{ label: string }>(
+        const rows = await database.all<ContractLabelRow>(
           'SELECT label FROM contract_concurrent_transactions ORDER BY id ASC',
         );
         expect(rows).toEqual([{ label: 'first' }, { label: 'second' }]);
