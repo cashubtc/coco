@@ -198,7 +198,9 @@ export function runSqlDatabaseContract(
           await tx.run('INSERT INTO contract_transactions (label) VALUES (?)', ['alpha']);
         });
 
-        const rows = await database.all<{ label: string }>('SELECT label FROM contract_transactions');
+        const rows = await database.all<{ label: string }>(
+          'SELECT label FROM contract_transactions',
+        );
         expect(rows).toEqual([{ label: 'alpha' }]);
       });
     });
