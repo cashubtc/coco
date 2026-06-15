@@ -265,31 +265,34 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  itWithDatabase('continues old sqlite-bun databases stopped after receive operations', async (db) => {
-    await ensureSchemaUpTo(db, '012_send_operations_method');
-    await db.exec(RECEIVE_OPERATIONS_SQL);
-    await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
-      '012_receive_operations',
-      1,
-    ]);
-
-    await ensureSchemaUpTo(db);
-
-    expect(await getColumnNames(db, 'coco_cashu_send_operations')).toEqual(
-      expect.arrayContaining(['method', 'methodDataJson', 'tokenJson']),
-    );
-    expect(await getColumnNames(db, 'coco_cashu_receive_operations')).toEqual(
-      expect.arrayContaining(['unit']),
-    );
-    expect(await getMigrationIds(db)).toEqual(
-      expect.arrayContaining([
-        '012_send_operations_method',
-        '013_send_operations_method',
+  itWithDatabase(
+    'continues old sqlite-bun databases stopped after receive operations',
+    async (db) => {
+      await ensureSchemaUpTo(db, '012_send_operations_method');
+      await db.exec(RECEIVE_OPERATIONS_SQL);
+      await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
         '012_receive_operations',
-        '013_receive_operations',
-      ]),
-    );
-  });
+        1,
+      ]);
+
+      await ensureSchemaUpTo(db);
+
+      expect(await getColumnNames(db, 'coco_cashu_send_operations')).toEqual(
+        expect.arrayContaining(['method', 'methodDataJson', 'tokenJson']),
+      );
+      expect(await getColumnNames(db, 'coco_cashu_receive_operations')).toEqual(
+        expect.arrayContaining(['unit']),
+      );
+      expect(await getMigrationIds(db)).toEqual(
+        expect.arrayContaining([
+          '012_send_operations_method',
+          '013_send_operations_method',
+          '012_receive_operations',
+          '013_receive_operations',
+        ]),
+      );
+    },
+  );
 
   itWithDatabase('backfills legacy proof units from keyset metadata', async (db) => {
     await ensureSchemaUpTo(db, '025_proof_unit');
@@ -555,29 +558,32 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  itWithDatabase('backfills send operation tokens from matching legacy history rows', async (db) => {
-    await ensureSchemaUpTo(db, '029_backfill_send_operation_tokens');
-    await seedSendOperationWithLegacyToken(db);
+  itWithDatabase(
+    'backfills send operation tokens from matching legacy history rows',
+    async (db) => {
+      await ensureSchemaUpTo(db, '029_backfill_send_operation_tokens');
+      await seedSendOperationWithLegacyToken(db);
 
-    await ensureSchemaUpTo(db);
+      await ensureSchemaUpTo(db);
 
-    const row = await db.get<{ tokenJson: string | null }>(
-      `SELECT tokenJson FROM coco_cashu_send_operations WHERE id = ?`,
-      ['send-op-token-backfill'],
-    );
-    expect(row?.tokenJson).toBe(JSON.stringify(LEGACY_SEND_TOKEN));
+      const row = await db.get<{ tokenJson: string | null }>(
+        `SELECT tokenJson FROM coco_cashu_send_operations WHERE id = ?`,
+        ['send-op-token-backfill'],
+      );
+      expect(row?.tokenJson).toBe(JSON.stringify(LEGACY_SEND_TOKEN));
 
-    const operation = await db.get<{ unit: string; tokenJson: string }>(
-      `SELECT unit, tokenJson
+      const operation = await db.get<{ unit: string; tokenJson: string }>(
+        `SELECT unit, tokenJson
        FROM coco_cashu_send_operations
        WHERE id = ?`,
-      ['send-op-token-backfill'],
-    );
-    const token = JSON.parse(operation?.tokenJson ?? '{}') as typeof LEGACY_SEND_TOKEN;
+        ['send-op-token-backfill'],
+      );
+      const token = JSON.parse(operation?.tokenJson ?? '{}') as typeof LEGACY_SEND_TOKEN;
 
-    expect(operation?.unit).toBe('usd');
-    expect(token).toEqual(LEGACY_SEND_TOKEN);
-  });
+      expect(operation?.unit).toBe('usd');
+      expect(token).toEqual(LEGACY_SEND_TOKEN);
+    },
+  );
 
   itWithDatabase('backfills method-aware mint quotes from existing mint operations', async (db) => {
     await ensureSchemaUpTo(db, '030_method_aware_mint_quotes');
@@ -632,86 +638,89 @@ describe('shared SQL schema migrations', () => {
     expect(row?.reusable).toBe(0);
   });
 
-  itWithDatabase('backfills method-aware melt quotes from legacy quotes and melt operations', async (db) => {
-    await ensureSchemaUpTo(db, '031_method_aware_melt_quotes');
+  itWithDatabase(
+    'backfills method-aware melt quotes from legacy quotes and melt operations',
+    async (db) => {
+      await ensureSchemaUpTo(db, '031_method_aware_melt_quotes');
 
-    await db.run(
-      `INSERT INTO coco_cashu_melt_quotes
+      await db.run(
+        `INSERT INTO coco_cashu_melt_quotes
         (mintUrl, quote, state, request, amount, unit, expiry, fee_reserve, payment_preimage)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'https://mint.test',
-        'legacy-melt-quote',
-        'PENDING',
-        'lnbc1legacy',
-        '100',
-        'sat',
-        1_730_000_000,
-        '2',
-        null,
-      ],
-    );
-    await db.run(
-      `INSERT INTO coco_cashu_melt_operations
+        [
+          'https://mint.test',
+          'legacy-melt-quote',
+          'PENDING',
+          'lnbc1legacy',
+          '100',
+          'sat',
+          1_730_000_000,
+          '2',
+          null,
+        ],
+      );
+      await db.run(
+        `INSERT INTO coco_cashu_melt_operations
         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId,
          amount, fee_reserve, unit, finalizedDataJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'melt-op-quote-backfill',
-        'https://mint.test',
-        'finalized',
-        1,
-        2,
-        null,
-        'bolt11',
-        JSON.stringify({ invoice: 'lnbc1operation' }),
-        'operation-melt-quote',
-        '150',
-        '3',
-        'sat',
-        JSON.stringify({ preimage: 'preimage-1' }),
-      ],
-    );
+        [
+          'melt-op-quote-backfill',
+          'https://mint.test',
+          'finalized',
+          1,
+          2,
+          null,
+          'bolt11',
+          JSON.stringify({ invoice: 'lnbc1operation' }),
+          'operation-melt-quote',
+          '150',
+          '3',
+          'sat',
+          JSON.stringify({ preimage: 'preimage-1' }),
+        ],
+      );
 
-    await ensureSchemaUpTo(db);
+      await ensureSchemaUpTo(db);
 
-    const rows = await db.all<{
-      method: string;
-      quoteId: string;
-      state: string;
-      request: string;
-      amount: string;
-      fee_reserve: string | null;
-      payment_preimage: string | null;
-    }>(
-      `SELECT method, quoteId, state, request, amount, fee_reserve, payment_preimage
+      const rows = await db.all<{
+        method: string;
+        quoteId: string;
+        state: string;
+        request: string;
+        amount: string;
+        fee_reserve: string | null;
+        payment_preimage: string | null;
+      }>(
+        `SELECT method, quoteId, state, request, amount, fee_reserve, payment_preimage
        FROM coco_cashu_melt_quotes
        WHERE mintUrl = ?
        ORDER BY quoteId ASC`,
-      ['https://mint.test'],
-    );
+        ['https://mint.test'],
+      );
 
-    expect(rows).toEqual([
-      {
-        method: 'bolt11',
-        quoteId: 'legacy-melt-quote',
-        state: 'PENDING',
-        request: 'lnbc1legacy',
-        amount: '100',
-        fee_reserve: '2',
-        payment_preimage: null,
-      },
-      {
-        method: 'bolt11',
-        quoteId: 'operation-melt-quote',
-        state: 'PAID',
-        request: 'lnbc1operation',
-        amount: '150',
-        fee_reserve: '3',
-        payment_preimage: 'preimage-1',
-      },
-    ]);
-  });
+      expect(rows).toEqual([
+        {
+          method: 'bolt11',
+          quoteId: 'legacy-melt-quote',
+          state: 'PENDING',
+          request: 'lnbc1legacy',
+          amount: '100',
+          fee_reserve: '2',
+          payment_preimage: null,
+        },
+        {
+          method: 'bolt11',
+          quoteId: 'operation-melt-quote',
+          state: 'PAID',
+          request: 'lnbc1operation',
+          amount: '150',
+          fee_reserve: '3',
+          payment_preimage: 'preimage-1',
+        },
+      ]);
+    },
+  );
 
   itWithDatabase('projects mint history remote state from canonical mint quotes', async (db) => {
     await ensureSchemaUpTo(db);
@@ -815,63 +824,46 @@ describe('shared SQL schema migrations', () => {
     expect(rows).toEqual([{ id: 'mint-op-quoted' }]);
   });
 
-  itWithDatabase('preserves quote-bound melt operation uniqueness after duplicate quote migration', async (db) => {
-    await ensureSchemaUpTo(db);
+  itWithDatabase(
+    'preserves quote-bound melt operation uniqueness after duplicate quote migration',
+    async (db) => {
+      await ensureSchemaUpTo(db);
 
-    const indexes = await db.all<{ name: string; unique: number; partial: number }>(
-      'PRAGMA index_list(coco_cashu_melt_operations)',
-    );
-    expect(indexes).toContainEqual(
-      expect.objectContaining({
-        name: 'ux_coco_cashu_melt_operations_mint_quote',
-        unique: 1,
-        partial: 1,
-      }),
-    );
+      const indexes = await db.all<{ name: string; unique: number; partial: number }>(
+        'PRAGMA index_list(coco_cashu_melt_operations)',
+      );
+      expect(indexes).toContainEqual(
+        expect.objectContaining({
+          name: 'ux_coco_cashu_melt_operations_mint_quote',
+          unique: 1,
+          partial: 1,
+        }),
+      );
 
-    await insertMeltOperationRow(db, 'melt-op-1', 'shared-melt-quote');
+      await insertMeltOperationRow(db, 'melt-op-1', 'shared-melt-quote');
 
-    await expectUniqueViolation(async () => {
-      await insertMeltOperationRow(db, 'melt-op-2', 'shared-melt-quote');
-    });
-  });
+      await expectUniqueViolation(async () => {
+        await insertMeltOperationRow(db, 'melt-op-2', 'shared-melt-quote');
+      });
+    },
+  );
 
-  itWithDatabase('enforces quote identity uniqueness across canonical quote methods', async (db) => {
-    await ensureSchemaUpTo(db);
+  itWithDatabase(
+    'enforces quote identity uniqueness across canonical quote methods',
+    async (db) => {
+      await ensureSchemaUpTo(db);
 
-    await db.run(
-      `INSERT INTO coco_cashu_canonical_mint_quotes
+      await db.run(
+        `INSERT INTO coco_cashu_canonical_mint_quotes
         (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
          lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'https://mint.test',
-        'bolt11',
-        'shared-mint-quote',
-        'UNPAID',
-        'lnbc1mint',
-        '21',
-        'sat',
-        '{}',
-        'UNPAID',
-        1,
-        0,
-        1,
-        1,
-      ],
-    );
-    await expectUniqueViolation(async () => {
-      await db.run(
-        `INSERT INTO coco_cashu_canonical_mint_quotes
-          (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
-           lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           'https://mint.test',
-          'custom',
+          'bolt11',
           'shared-mint-quote',
           'UNPAID',
-          'custom-mint-request',
+          'lnbc1mint',
           '21',
           'sat',
           '{}',
@@ -882,47 +874,42 @@ describe('shared SQL schema migrations', () => {
           1,
         ],
       );
-    });
+      await expectUniqueViolation(async () => {
+        await db.run(
+          `INSERT INTO coco_cashu_canonical_mint_quotes
+          (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
+           lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            'https://mint.test',
+            'custom',
+            'shared-mint-quote',
+            'UNPAID',
+            'custom-mint-request',
+            '21',
+            'sat',
+            '{}',
+            'UNPAID',
+            1,
+            0,
+            1,
+            1,
+          ],
+        );
+      });
 
-    await db.run(
-      `INSERT INTO coco_cashu_melt_quotes
+      await db.run(
+        `INSERT INTO coco_cashu_melt_quotes
         (mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
          payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState,
          lastObservedRemoteStateAt, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'https://mint.test',
-        'bolt11',
-        'shared-melt-quote',
-        'UNPAID',
-        'lnbc1melt',
-        '21',
-        'sat',
-        1_730_000_000,
-        '1',
-        null,
-        null,
-        null,
-        null,
-        'UNPAID',
-        1,
-        1,
-        1,
-      ],
-    );
-    await expectUniqueViolation(async () => {
-      await db.run(
-        `INSERT INTO coco_cashu_melt_quotes
-          (mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
-           payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState,
-           lastObservedRemoteStateAt, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           'https://mint.test',
-          'custom',
+          'bolt11',
           'shared-melt-quote',
           'UNPAID',
-          'custom-melt-request',
+          'lnbc1melt',
           '21',
           'sat',
           1_730_000_000,
@@ -937,6 +924,34 @@ describe('shared SQL schema migrations', () => {
           1,
         ],
       );
-    });
-  });
+      await expectUniqueViolation(async () => {
+        await db.run(
+          `INSERT INTO coco_cashu_melt_quotes
+          (mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve,
+           payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState,
+           lastObservedRemoteStateAt, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            'https://mint.test',
+            'custom',
+            'shared-melt-quote',
+            'UNPAID',
+            'custom-melt-request',
+            '21',
+            'sat',
+            1_730_000_000,
+            '1',
+            null,
+            null,
+            null,
+            null,
+            'UNPAID',
+            1,
+            1,
+            1,
+          ],
+        );
+      });
+    },
+  );
 });
