@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { ensureSchemaUpTo, MIGRATIONS, type SqlDatabase } from '../index.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
@@ -158,20 +158,20 @@ async function expectUniqueViolation(fn: () => Promise<void>): Promise<void> {
   expect(String(rejection).toLowerCase()).toContain('unique');
 }
 
+function itWithDatabase(name: string, fn: (db: SqlDatabase) => Promise<void>): void {
+  it(name, async () => {
+    const database = new Database(':memory:');
+    const db = createBunSqlDatabase(database);
+    try {
+      await fn(db);
+    } finally {
+      database.close();
+    }
+  });
+}
+
 describe('shared SQL schema migrations', () => {
-  let database: Database;
-  let db: SqlDatabase;
-
-  beforeEach(() => {
-    database = new Database(':memory:');
-    db = createBunSqlDatabase(database);
-  });
-
-  afterEach(async () => {
-    database.close();
-  });
-
-  it('preserves the migration list and applies all migration ids', async () => {
+  itWithDatabase('preserves the migration list and applies all migration ids', async (db) => {
     expect(MIGRATIONS.map((migration) => migration.id)).toEqual(EXPECTED_MIGRATION_IDS);
 
     await ensureSchemaUpTo(db);
@@ -182,7 +182,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('upgrades mint operations to allow failed state persistence', async () => {
+  itWithDatabase('upgrades mint operations to allow failed state persistence', async (db) => {
     await ensureSchemaUpTo(db, '020_mint_operations_failed_state');
 
     await db.run(
@@ -235,7 +235,7 @@ describe('shared SQL schema migrations', () => {
     });
   });
 
-  it('accepts databases with old sqlite-bun swapped migration ids', async () => {
+  itWithDatabase('accepts databases with old sqlite-bun swapped migration ids', async (db) => {
     await ensureSchemaUpTo(db, '012_send_operations_method');
     await db.exec(RECEIVE_OPERATIONS_SQL);
     await db.run(
@@ -265,7 +265,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('continues old sqlite-bun databases stopped after receive operations', async () => {
+  itWithDatabase('continues old sqlite-bun databases stopped after receive operations', async (db) => {
     await ensureSchemaUpTo(db, '012_send_operations_method');
     await db.exec(RECEIVE_OPERATIONS_SQL);
     await db.run('INSERT INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
@@ -291,7 +291,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('backfills legacy proof units from keyset metadata', async () => {
+  itWithDatabase('backfills legacy proof units from keyset metadata', async (db) => {
     await ensureSchemaUpTo(db, '025_proof_unit');
     await db.run(
       `INSERT INTO coco_cashu_keysets
@@ -318,7 +318,7 @@ describe('shared SQL schema migrations', () => {
     expect(indexes.map((row) => row.name)).toContain('idx_coco_cashu_proofs_mint_unit_id_state');
   });
 
-  it('keeps legacy proof units as sat when keyset metadata is missing', async () => {
+  itWithDatabase('keeps legacy proof units as sat when keyset metadata is missing', async (db) => {
     await ensureSchemaUpTo(db, '025_proof_unit');
     await db.run(
       `INSERT INTO coco_cashu_proofs
@@ -337,7 +337,7 @@ describe('shared SQL schema migrations', () => {
     expect(proof?.unit).toBe('sat');
   });
 
-  it('backfills legacy aliases for canonical databases', async () => {
+  itWithDatabase('backfills legacy aliases for canonical databases', async (db) => {
     await ensureSchemaUpTo(db);
 
     expect(await getMigrationIds(db)).toEqual(
@@ -350,7 +350,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('adds only missing send method columns for partial schemas', async () => {
+  itWithDatabase('adds only missing send method columns for partial schemas', async (db) => {
     await ensureSchemaUpTo(db, '012_send_operations_method');
     await db.run(
       `ALTER TABLE coco_cashu_send_operations ADD COLUMN method TEXT NOT NULL DEFAULT 'default'`,
@@ -363,7 +363,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('migrates legacy amount columns to text', async () => {
+  itWithDatabase('migrates legacy amount columns to text', async (db) => {
     await ensureSchemaUpTo(db, '024_amount_columns_text');
 
     await db.run(
@@ -532,7 +532,7 @@ describe('shared SQL schema migrations', () => {
     });
   });
 
-  it('creates indexes used by history projection queries', async () => {
+  itWithDatabase('creates indexes used by history projection queries', async (db) => {
     await ensureSchemaUpTo(db);
 
     expect(await getIndexNames(db, 'coco_cashu_send_operations')).toContain(
@@ -555,7 +555,7 @@ describe('shared SQL schema migrations', () => {
     );
   });
 
-  it('backfills send operation tokens from matching legacy history rows', async () => {
+  itWithDatabase('backfills send operation tokens from matching legacy history rows', async (db) => {
     await ensureSchemaUpTo(db, '029_backfill_send_operation_tokens');
     await seedSendOperationWithLegacyToken(db);
 
@@ -579,7 +579,7 @@ describe('shared SQL schema migrations', () => {
     expect(token).toEqual(LEGACY_SEND_TOKEN);
   });
 
-  it('backfills method-aware mint quotes from existing mint operations', async () => {
+  itWithDatabase('backfills method-aware mint quotes from existing mint operations', async (db) => {
     await ensureSchemaUpTo(db, '030_method_aware_mint_quotes');
 
     await db.run(
@@ -632,7 +632,7 @@ describe('shared SQL schema migrations', () => {
     expect(row?.reusable).toBe(0);
   });
 
-  it('backfills method-aware melt quotes from legacy quotes and melt operations', async () => {
+  itWithDatabase('backfills method-aware melt quotes from legacy quotes and melt operations', async (db) => {
     await ensureSchemaUpTo(db, '031_method_aware_melt_quotes');
 
     await db.run(
@@ -713,7 +713,7 @@ describe('shared SQL schema migrations', () => {
     ]);
   });
 
-  it('projects mint history remote state from canonical mint quotes', async () => {
+  itWithDatabase('projects mint history remote state from canonical mint quotes', async (db) => {
     await ensureSchemaUpTo(db);
 
     await db.run(
@@ -790,7 +790,7 @@ describe('shared SQL schema migrations', () => {
     });
   });
 
-  it('removes legacy mint operations without quote IDs', async () => {
+  itWithDatabase('removes legacy mint operations without quote IDs', async (db) => {
     await ensureSchemaUpTo(db, '034_clean_unquoted_mint_operations');
 
     await db.run(
@@ -815,7 +815,7 @@ describe('shared SQL schema migrations', () => {
     expect(rows).toEqual([{ id: 'mint-op-quoted' }]);
   });
 
-  it('preserves quote-bound melt operation uniqueness after duplicate quote migration', async () => {
+  itWithDatabase('preserves quote-bound melt operation uniqueness after duplicate quote migration', async (db) => {
     await ensureSchemaUpTo(db);
 
     const indexes = await db.all<{ name: string; unique: number; partial: number }>(
@@ -836,7 +836,7 @@ describe('shared SQL schema migrations', () => {
     });
   });
 
-  it('enforces quote identity uniqueness across canonical quote methods', async () => {
+  itWithDatabase('enforces quote identity uniqueness across canonical quote methods', async (db) => {
     await ensureSchemaUpTo(db);
 
     await db.run(

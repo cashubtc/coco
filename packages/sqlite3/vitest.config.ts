@@ -1,9 +1,15 @@
 import { defineConfig } from 'vitest/config';
 
+declare const process: {
+  cwd(): string;
+};
+
+const sqlStorageEntry = `${process.cwd()}/../sql-storage/src/index.ts`;
+
 export default defineConfig({
   resolve: {
     alias: {
-      '@cashu/coco-sql-storage': '../sql-storage/src/index.ts',
+      '@cashu/coco-sql-storage': sqlStorageEntry,
     },
   },
   test: {
