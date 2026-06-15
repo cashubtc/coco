@@ -1,7 +1,5 @@
 import { defineConfig } from 'tsdown';
 
-const sqlStorageEntry = new URL('../sql-storage/src/index.ts', import.meta.url).pathname;
-
 export default defineConfig([
   {
     entry: ['./index.ts'],
@@ -10,7 +8,7 @@ export default defineConfig([
     dts: true,
     format: ['esm'],
     alias: {
-      '@cashu/coco-sql-storage': sqlStorageEntry,
+      '@cashu/coco-sql-storage': '../sql-storage/src/index.ts',
     },
     noExternal: ['@cashu/coco-sql-storage'],
   },
