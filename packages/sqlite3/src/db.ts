@@ -1,5 +1,12 @@
 import type { Database } from 'better-sqlite3';
 
+type SqliteParams = readonly unknown[];
+type SqliteRunResult = {
+  readonly lastID: number;
+  readonly lastInsertRowId: number;
+  readonly changes: number;
+};
+
 export interface SqliteDbOptions {
   database: Database;
 }
@@ -82,29 +89,37 @@ export class SqliteDb {
     this.root.db.exec(sql);
   }
 
-  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+  async run(sql: string, params: SqliteParams = []): Promise<SqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    const result = this.root.db.prepare(sql).run(params);
+    const result = this.root.db.prepare(sql).run(...params);
+    const lastInsertRowId = Number(result.lastInsertRowid);
     return {
-      lastID: Number(result.lastInsertRowid),
+      lastID: lastInsertRowId,
+      lastInsertRowId,
       changes: result.changes,
     };
   }
 
-  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+  async get<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: SqliteParams = [],
+  ): Promise<Row | undefined> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return this.root.db.prepare(sql).get(params) as T | undefined;
+    return this.root.db.prepare(sql).get(...params) as Row | undefined;
   }
 
-  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+  async all<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: SqliteParams = [],
+  ): Promise<Row[]> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
-    return this.root.db.prepare(sql).all(params) as T[];
+    return this.root.db.prepare(sql).all(...params) as Row[];
   }
 
   /**

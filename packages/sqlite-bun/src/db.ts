@@ -1,5 +1,12 @@
 import type { Database, Statement } from 'bun:sqlite';
 
+type SqliteParams = readonly unknown[];
+type SqliteRunResult = {
+  readonly lastID: number;
+  readonly lastInsertRowId: number;
+  readonly changes: number;
+};
+
 export interface SqliteDbOptions {
   database: Database;
 }
@@ -106,7 +113,7 @@ export class SqliteDb {
     });
   }
 
-  async run(sql: string, params: any[] = []): Promise<{ lastID: number; changes: number }> {
+  async run(sql: string, params: SqliteParams = []): Promise<SqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
@@ -114,8 +121,10 @@ export class SqliteDb {
       try {
         const statement = this.getCachedStatement(sql);
         const result = statement.run(...params);
+        const lastInsertRowId = Number(result.lastInsertRowid);
         resolve({
-          lastID: Number(result.lastInsertRowid),
+          lastID: lastInsertRowId,
+          lastInsertRowId,
           changes: result.changes,
         });
       } catch (err) {
@@ -124,14 +133,17 @@ export class SqliteDb {
     });
   }
 
-  async get<T = unknown>(sql: string, params: any[] = []): Promise<T | undefined> {
+  async get<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: SqliteParams = [],
+  ): Promise<Row | undefined> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
-        const result = statement.get(...params) as T | undefined;
+        const result = statement.get(...params) as Row | undefined;
         resolve(result);
       } catch (err) {
         reject(err);
@@ -139,14 +151,17 @@ export class SqliteDb {
     });
   }
 
-  async all<T = unknown>(sql: string, params: any[] = []): Promise<T[]> {
+  async all<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: SqliteParams = [],
+  ): Promise<Row[]> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
     return new Promise((resolve, reject) => {
       try {
         const statement = this.getCachedStatement(sql);
-        const result = statement.all(...params) as T[];
+        const result = statement.all(...params) as Row[];
         resolve(result);
       } catch (err) {
         reject(err);

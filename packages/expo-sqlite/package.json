@@ -15,7 +15,8 @@
     "README.md"
   ],
   "devDependencies": {
-    "@cashu/coco-adapter-tests": "1.0.0"
+    "@cashu/coco-adapter-tests": "1.0.0",
+    "@cashu/coco-sql-storage": "1.0.0"
   },
   "exports": {
     ".": {

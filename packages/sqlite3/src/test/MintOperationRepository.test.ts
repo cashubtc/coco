@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
 import { Amount } from '@cashu/coco-core';
+import { ensureSchema } from '@cashu/coco-sql-storage';
 import { SqliteDb } from '../db.ts';
-import { ensureSchema } from '../schema.ts';
 import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
 
 describe('SqliteMintOperationRepository', () => {

@@ -20,3 +20,6 @@ export interface SqlDatabase {
   ): Promise<Row[]>;
   transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
 }
+
+export { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from './schema.ts';
+export type { Migration } from './schema.ts';

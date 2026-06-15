@@ -58,6 +58,7 @@
       "version": "1.0.0",
       "devDependencies": {
         "@cashu/coco-adapter-tests": "1.0.0",
+        "@cashu/coco-sql-storage": "1.0.0",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "4.5",
@@ -115,6 +116,7 @@
       "name": "@cashu/coco-sql-storage",
       "version": "1.0.0",
       "peerDependencies": {
+        "@cashu/coco-core": "1.0.0",
         "typescript": "^5",
       },
     },
@@ -123,6 +125,7 @@
       "version": "1.0.0",
       "devDependencies": {
         "@cashu/coco-adapter-tests": "1.0.0",
+        "@cashu/coco-sql-storage": "1.0.0",
       },
       "peerDependencies": {
         "@cashu/cashu-ts": "4.5",
@@ -138,6 +141,7 @@
       },
       "devDependencies": {
         "@cashu/coco-adapter-tests": "1.0.0",
+        "@cashu/coco-sql-storage": "1.0.0",
         "@types/better-sqlite3": "^7.6.12",
         "vitest": "^2.1.9",
       },

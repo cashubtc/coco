@@ -17,8 +17,9 @@ import type {
   ReceiveOperationRepository,
   RepositoryTransactionScope,
 } from '@cashu/coco-core';
+import { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from '@cashu/coco-sql-storage';
+import type { Migration } from '@cashu/coco-sql-storage';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
-import { ensureSchema, ensureSchemaUpTo, MIGRATIONS, type Migration } from './schema.ts';
 import { ExpoMintRepository } from './repositories/MintRepository.ts';
 import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
 import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
