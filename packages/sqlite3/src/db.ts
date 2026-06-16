@@ -1,10 +1,8 @@
 import type { Database } from 'better-sqlite3';
+import type { SqlDatabase, SqlParams, SqlRunResult } from '@cashu/coco-sql-storage';
 
-type SqliteParams = readonly unknown[];
-type SqliteRunResult = {
+type SqliteRunResult = SqlRunResult & {
   readonly lastID: number;
-  readonly lastInsertRowId: number;
-  readonly changes: number;
 };
 
 export interface SqliteDbOptions {
@@ -36,7 +34,7 @@ interface SqliteDbRootState {
  * - Concurrent transactions from different scopes are queued and executed serially
  * - Each top-level transaction gets a unique scope token for identification
  */
-export class SqliteDb {
+export class SqliteDb implements SqlDatabase {
   private readonly root: SqliteDbRootState;
   /** Unique identifier for this instance's transaction scope (null for root instances) */
   private readonly scopeToken: symbol | null;
@@ -89,7 +87,7 @@ export class SqliteDb {
     this.root.db.exec(sql);
   }
 
-  async run(sql: string, params: SqliteParams = []): Promise<SqliteRunResult> {
+  async run(sql: string, params: SqlParams = []): Promise<SqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
@@ -104,7 +102,7 @@ export class SqliteDb {
 
   async get<Row extends object = Record<string, unknown>>(
     sql: string,
-    params: SqliteParams = [],
+    params: SqlParams = [],
   ): Promise<Row | undefined> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
@@ -114,7 +112,7 @@ export class SqliteDb {
 
   async all<Row extends object = Record<string, unknown>>(
     sql: string,
-    params: SqliteParams = [],
+    params: SqlParams = [],
   ): Promise<Row[]> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
