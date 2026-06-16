@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 // @ts-ignore bun:sqlite types are provided by the runtime in this workspace.
 import { Database } from 'bun:sqlite';
 import { Amount, type PendingSendOperation, type RollingBackSendOperation } from '@cashu/coco-core';
-import { ExpoSqliteRepositories, type ExpoSqliteRepositoriesOptions } from '../index.ts';
+import { SqliteRepositories, type SqliteRepositoriesOptions } from '../index.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 
@@ -100,12 +100,12 @@ function makePendingP2pkOperation(): PendingSendOperation {
 
 describe('ExpoSendOperationRepository', () => {
   let database: BunExpoSqliteDatabaseShim;
-  let repositories: ExpoSqliteRepositories;
+  let repositories: SqliteRepositories;
 
   beforeEach(async () => {
     database = new BunExpoSqliteDatabaseShim();
-    repositories = new ExpoSqliteRepositories({
-      database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+    repositories = new SqliteRepositories({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
     });
     await repositories.init();
   });

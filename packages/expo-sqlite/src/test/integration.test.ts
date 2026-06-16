@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { runIntegrationTests } from '@cashu/coco-adapter-tests';
-import { ExpoSqliteRepositories } from '../index.ts';
-import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
+import { SqliteRepositories } from '../index.ts';
+import type { SqliteRepositoriesOptions } from '../index.ts';
 import { ConsoleLogger, type Logger } from '@cashu/coco-core';
 
 const mintUrl = process.env.MINT_URL;
@@ -73,8 +73,8 @@ class BunExpoSqliteDatabaseShim {
 
 async function createRepositories() {
   const database = new BunExpoSqliteDatabaseShim();
-  const repositories = new ExpoSqliteRepositories({
-    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+  const repositories = new SqliteRepositories({
+    database: database as unknown as SqliteRepositoriesOptions['database'],
   });
   await repositories.init();
   return {

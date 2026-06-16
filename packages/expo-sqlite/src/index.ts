@@ -1,143 +1,87 @@
-import type {
-  Repositories,
-  MintRepository,
-  KeysetRepository,
-  KeyRingRepository,
-  CounterRepository,
-  ProofRepository,
-  MeltQuoteRepository,
-  MintQuoteRepository,
-  LegacyMintQuoteRepository,
-  SendOperationRepository,
-  MeltOperationRepository,
-  AuthSessionRepository,
-  MintOperationRepository,
-  PaymentRequestReceiveAttemptRepository,
-  PaymentRequestReceiveOperationRepository,
-  ReceiveOperationRepository,
-  RepositoryTransactionScope,
-} from '@cashu/coco-core';
-import { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from '@cashu/coco-sql-storage';
+import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core';
+import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
 import type { Migration } from '@cashu/coco-sql-storage';
 import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
-import { ExpoMintRepository } from './repositories/MintRepository.ts';
-import { ExpoKeysetRepository } from './repositories/KeysetRepository.ts';
-import { ExpoKeyRingRepository } from './repositories/KeyRingRepository.ts';
-import { ExpoCounterRepository } from './repositories/CounterRepository.ts';
-import { ExpoProofRepository } from './repositories/ProofRepository.ts';
-import { ExpoMeltQuoteRepository } from './repositories/MeltQuoteRepository.ts';
-import { ExpoMintQuoteRepository } from './repositories/MintQuoteRepository.ts';
-import { ExpoLegacyMintQuoteRepository } from './repositories/LegacyMintQuoteRepository.ts';
-import { ExpoHistoryRepository } from './repositories/HistoryRepository.ts';
-import { ExpoSendOperationRepository } from './repositories/SendOperationRepository.ts';
-import { ExpoMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
-import { ExpoAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
-import { ExpoMintOperationRepository } from './repositories/MintOperationRepository.ts';
-import { ExpoReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
-import {
-  ExpoPaymentRequestReceiveAttemptRepository,
-  ExpoPaymentRequestReceiveOperationRepository,
-} from './repositories/PaymentRequestReceiveRepository.ts';
 
-export interface ExpoSqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
+export interface SqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
 
-export class ExpoSqliteRepositories implements Repositories {
-  readonly mintRepository: MintRepository;
-  readonly keyRingRepository: KeyRingRepository;
-  readonly counterRepository: CounterRepository;
-  readonly keysetRepository: KeysetRepository;
-  readonly proofRepository: ProofRepository;
-  readonly meltQuoteRepository: MeltQuoteRepository;
-  readonly mintQuoteRepository: MintQuoteRepository;
-  readonly legacyMintQuoteRepository: LegacyMintQuoteRepository;
-  readonly historyRepository: ExpoHistoryRepository;
-  readonly sendOperationRepository: SendOperationRepository;
-  readonly meltOperationRepository: MeltOperationRepository;
-  readonly authSessionRepository: AuthSessionRepository;
-  readonly mintOperationRepository: MintOperationRepository;
-  readonly receiveOperationRepository: ReceiveOperationRepository;
-  readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
-  readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+export class SqliteRepositories implements Repositories {
+  readonly mintRepository: Repositories['mintRepository'];
+  readonly keyRingRepository: Repositories['keyRingRepository'];
+  readonly counterRepository: Repositories['counterRepository'];
+  readonly keysetRepository: Repositories['keysetRepository'];
+  readonly proofRepository: Repositories['proofRepository'];
+  readonly meltQuoteRepository: Repositories['meltQuoteRepository'];
+  readonly mintQuoteRepository: Repositories['mintQuoteRepository'];
+  readonly legacyMintQuoteRepository: Repositories['legacyMintQuoteRepository'];
+  readonly historyRepository: Repositories['historyRepository'];
+  readonly sendOperationRepository: Repositories['sendOperationRepository'];
+  readonly meltOperationRepository: Repositories['meltOperationRepository'];
+  readonly authSessionRepository: Repositories['authSessionRepository'];
+  readonly mintOperationRepository: Repositories['mintOperationRepository'];
+  readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
+  readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
+  readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
   readonly db: ExpoSqliteDb;
 
-  constructor(options: ExpoSqliteRepositoriesOptions) {
+  private readonly repositories: SqlStorageRepositories;
+
+  constructor(options: SqliteRepositoriesOptions) {
     this.db = new ExpoSqliteDb(options);
-    this.mintRepository = new ExpoMintRepository(this.db);
-    this.keyRingRepository = new ExpoKeyRingRepository(this.db);
-    this.counterRepository = new ExpoCounterRepository(this.db);
-    this.keysetRepository = new ExpoKeysetRepository(this.db);
-    this.proofRepository = new ExpoProofRepository(this.db);
-    this.meltQuoteRepository = new ExpoMeltQuoteRepository(this.db);
-    this.mintQuoteRepository = new ExpoMintQuoteRepository(this.db);
-    this.legacyMintQuoteRepository = new ExpoLegacyMintQuoteRepository(this.db);
-    this.historyRepository = new ExpoHistoryRepository(this.db);
-    this.sendOperationRepository = new ExpoSendOperationRepository(this.db);
-    this.meltOperationRepository = new ExpoMeltOperationRepository(this.db);
-    this.authSessionRepository = new ExpoAuthSessionRepository(this.db);
-    this.mintOperationRepository = new ExpoMintOperationRepository(this.db);
-    this.receiveOperationRepository = new ExpoReceiveOperationRepository(this.db);
+    this.repositories = new SqlStorageRepositories({ database: this.db });
+    this.mintRepository = this.repositories.mintRepository;
+    this.keyRingRepository = this.repositories.keyRingRepository;
+    this.counterRepository = this.repositories.counterRepository;
+    this.keysetRepository = this.repositories.keysetRepository;
+    this.proofRepository = this.repositories.proofRepository;
+    this.meltQuoteRepository = this.repositories.meltQuoteRepository;
+    this.mintQuoteRepository = this.repositories.mintQuoteRepository;
+    this.legacyMintQuoteRepository = this.repositories.legacyMintQuoteRepository;
+    this.historyRepository = this.repositories.historyRepository;
+    this.sendOperationRepository = this.repositories.sendOperationRepository;
+    this.meltOperationRepository = this.repositories.meltOperationRepository;
+    this.authSessionRepository = this.repositories.authSessionRepository;
+    this.mintOperationRepository = this.repositories.mintOperationRepository;
+    this.receiveOperationRepository = this.repositories.receiveOperationRepository;
     this.paymentRequestReceiveOperationRepository =
-      new ExpoPaymentRequestReceiveOperationRepository(this.db);
-    this.paymentRequestReceiveAttemptRepository = new ExpoPaymentRequestReceiveAttemptRepository(
-      this.db,
-    );
+      this.repositories.paymentRequestReceiveOperationRepository;
+    this.paymentRequestReceiveAttemptRepository =
+      this.repositories.paymentRequestReceiveAttemptRepository;
   }
 
   async init(): Promise<void> {
-    await ensureSchema(this.db);
+    await this.repositories.init();
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return this.db.transaction(async (txDb) => {
-      const scopedRepositories: RepositoryTransactionScope = {
-        mintRepository: new ExpoMintRepository(txDb),
-        keyRingRepository: new ExpoKeyRingRepository(txDb),
-        counterRepository: new ExpoCounterRepository(txDb),
-        keysetRepository: new ExpoKeysetRepository(txDb),
-        proofRepository: new ExpoProofRepository(txDb),
-        meltQuoteRepository: new ExpoMeltQuoteRepository(txDb),
-        mintQuoteRepository: new ExpoMintQuoteRepository(txDb),
-        legacyMintQuoteRepository: new ExpoLegacyMintQuoteRepository(txDb),
-        historyRepository: new ExpoHistoryRepository(txDb),
-        sendOperationRepository: new ExpoSendOperationRepository(txDb),
-        meltOperationRepository: new ExpoMeltOperationRepository(txDb),
-        authSessionRepository: new ExpoAuthSessionRepository(txDb),
-        mintOperationRepository: new ExpoMintOperationRepository(txDb),
-        receiveOperationRepository: new ExpoReceiveOperationRepository(txDb),
-        paymentRequestReceiveOperationRepository: new ExpoPaymentRequestReceiveOperationRepository(
-          txDb,
-        ),
-        paymentRequestReceiveAttemptRepository: new ExpoPaymentRequestReceiveAttemptRepository(
-          txDb,
-        ),
-      };
-
-      return fn(scopedRepositories);
-    });
+    return this.repositories.withTransaction(fn);
   }
 }
 
+export type ExpoSqliteRepositoriesOptions = SqliteRepositoriesOptions;
+export { SqliteRepositories as ExpoSqliteRepositories };
+
+export { ExpoSqliteDb };
 export {
-  ExpoSqliteDb,
   ensureSchema,
   ensureSchemaUpTo,
   MIGRATIONS,
-  ExpoMintRepository,
-  ExpoKeyRingRepository,
-  ExpoKeysetRepository,
-  ExpoCounterRepository,
-  ExpoProofRepository,
-  ExpoMeltQuoteRepository,
-  ExpoMintQuoteRepository,
-  ExpoLegacyMintQuoteRepository,
-  ExpoHistoryRepository,
-  ExpoSendOperationRepository,
-  ExpoMeltOperationRepository,
-  ExpoAuthSessionRepository,
-  ExpoMintOperationRepository,
-  ExpoReceiveOperationRepository,
-  ExpoPaymentRequestReceiveOperationRepository,
-  ExpoPaymentRequestReceiveAttemptRepository,
-};
+  SqliteMintRepository as ExpoMintRepository,
+  SqliteKeyRingRepository as ExpoKeyRingRepository,
+  SqliteKeysetRepository as ExpoKeysetRepository,
+  SqliteCounterRepository as ExpoCounterRepository,
+  SqliteProofRepository as ExpoProofRepository,
+  SqliteMeltQuoteRepository as ExpoMeltQuoteRepository,
+  SqliteMintQuoteRepository as ExpoMintQuoteRepository,
+  SqliteLegacyMintQuoteRepository as ExpoLegacyMintQuoteRepository,
+  SqliteHistoryRepository as ExpoHistoryRepository,
+  SqliteSendOperationRepository as ExpoSendOperationRepository,
+  SqliteMeltOperationRepository as ExpoMeltOperationRepository,
+  SqliteAuthSessionRepository as ExpoAuthSessionRepository,
+  SqliteMintOperationRepository as ExpoMintOperationRepository,
+  SqliteReceiveOperationRepository as ExpoReceiveOperationRepository,
+  SqlitePaymentRequestReceiveOperationRepository as ExpoPaymentRequestReceiveOperationRepository,
+  SqlitePaymentRequestReceiveAttemptRepository as ExpoPaymentRequestReceiveAttemptRepository,
+} from '@cashu/coco-sql-storage';
 
 export type { Migration };

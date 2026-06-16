@@ -14,8 +14,9 @@ import {
   createDummyKeyset,
   createDummyProof,
 } from '@cashu/coco-adapter-tests';
-import { ExpoSqliteRepositories as Repositories } from '../index.ts';
-import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
+import { ExpoSqliteDb, SqliteRepositories as Repositories } from '../index.ts';
+import type { SqliteRepositoriesOptions } from '../index.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 
@@ -101,7 +102,7 @@ function createDeferred<T = void>() {
 async function createRepositories() {
   const database = new BunExpoSqliteDatabaseShim();
   const repositories = new Repositories({
-    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+    database: database as unknown as SqliteRepositoriesOptions['database'],
   });
   await repositories.init();
   return {
@@ -111,6 +112,25 @@ async function createRepositories() {
     },
   } as const;
 }
+
+runSqlDatabaseContract(
+  {
+    createDatabase() {
+      const rawDatabase = new BunExpoSqliteDatabaseShim();
+      const database = new ExpoSqliteDb({
+        database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
+      });
+
+      return {
+        database,
+        dispose: async () => {
+          await database.raw.closeAsync?.();
+        },
+      };
+    },
+  },
+  { describe, it, expect },
+);
 
 async function expectRejects(fn: () => Promise<void>) {
   let didThrow = false;
@@ -308,7 +328,7 @@ describe('expo-sqlite web transaction compatibility', () => {
 
     const database = new WebExpoSqliteDatabaseShim();
     const repositories = new Repositories({
-      database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+      database: database as unknown as SqliteRepositoriesOptions['database'],
     });
 
     try {
