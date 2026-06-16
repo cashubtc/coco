@@ -89,6 +89,35 @@ class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
   }
 }
 
+class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
+  exclusiveTransactionCalls = 0;
+  transactionCalls = 0;
+
+  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
+    this.exclusiveTransactionCalls++;
+    await this.execAsync('BEGIN');
+    try {
+      await fn(this);
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+
+  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
+    this.transactionCalls++;
+    await this.execAsync('BEGIN');
+    try {
+      await fn();
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -347,6 +376,31 @@ describe('expo-sqlite web transaction compatibility', () => {
       await repositories.db.raw.closeAsync?.();
       restoreGlobalProperty('window', windowDescriptor);
       restoreGlobalProperty('document', documentDescriptor);
+    }
+  });
+});
+
+describe('expo-sqlite native transaction compatibility', () => {
+  it('uses exclusive transactions when available outside web', async () => {
+    const database = new NativeExpoSqliteDatabaseShim();
+    const repositories = new Repositories({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await repositories.init();
+      database.exclusiveTransactionCalls = 0;
+      database.transactionCalls = 0;
+
+      await repositories.withTransaction(async (tx) => {
+        await tx.mintRepository.addOrUpdateMint(createDummyMint());
+      });
+
+      expect(database.exclusiveTransactionCalls).toBe(1);
+      expect(database.transactionCalls).toBe(0);
+      await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
+    } finally {
+      await repositories.db.raw.closeAsync?.();
     }
   });
 });
