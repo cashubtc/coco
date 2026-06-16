@@ -8,7 +8,7 @@ import {
   type MeltQuoteRepository,
   type QuoteIdentity,
 } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 type MeltQuoteRow = {
   mintUrl: string;
@@ -79,7 +79,7 @@ function rowToQuote(row: MeltQuoteRow): MeltQuote {
 }
 
 export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
-  constructor(private readonly db: SqliteDb) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null> {
     const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);

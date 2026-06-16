@@ -1,6 +1,6 @@
 import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
 import { deserializeAmount } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 interface AuthSessionRow {
   mintUrl: string;
@@ -32,9 +32,9 @@ function rowToSession(row: AuthSessionRow): AuthSession {
 }
 
 export class SqliteAuthSessionRepository implements AuthSessionRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

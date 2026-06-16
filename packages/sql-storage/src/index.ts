@@ -21,5 +21,25 @@ export interface SqlDatabase {
   transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
 }
 
+export {
+  SqlStorageRepositories,
+  SqliteMintRepository,
+  SqliteKeyRingRepository,
+  SqliteKeysetRepository,
+  SqliteCounterRepository,
+  SqliteProofRepository,
+  SqliteMeltQuoteRepository,
+  SqliteMintQuoteRepository,
+  SqliteLegacyMintQuoteRepository,
+  SqliteHistoryRepository,
+  SqliteSendOperationRepository,
+  SqliteMeltOperationRepository,
+  SqliteAuthSessionRepository,
+  SqliteMintOperationRepository,
+  SqliteReceiveOperationRepository,
+  SqlitePaymentRequestReceiveOperationRepository,
+  SqlitePaymentRequestReceiveAttemptRepository,
+} from './repositories.ts';
+export type { SqlStorageRepositoriesOptions } from './repositories.ts';
 export { ensureSchema, ensureSchemaUpTo, MIGRATIONS } from './schema.ts';
 export type { Migration } from './schema.ts';

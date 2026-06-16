@@ -11,7 +11,8 @@ import {
   serializeAmount,
   stringifyJson,
 } from '@cashu/coco-core';
-import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
+import type { SqlDatabase, SqlValue } from '../index.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 interface SendOperationRow {
   id: string;
@@ -105,7 +106,7 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   }
 }
 
-function operationToParams(op: SendOperation): unknown[] {
+function operationToParams(op: SendOperation): SqlValue[] {
   const createdAtSeconds = Math.floor(op.createdAt / 1000);
   const updatedAtSeconds = Math.floor(op.updatedAt / 1000);
 
@@ -152,9 +153,9 @@ function operationToParams(op: SendOperation): unknown[] {
 }
 
 export class SqliteSendOperationRepository implements SendOperationRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

@@ -4,7 +4,8 @@ import type {
   ReceiveOperationState,
 } from '@cashu/coco-core';
 import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
-import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
+import type { SqlDatabase, SqlValue } from '../index.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 function getOperationUnit(op: ReceiveOperation): string {
   return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
@@ -71,7 +72,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 }
 
-function operationToParams(op: ReceiveOperation): unknown[] {
+function operationToParams(op: ReceiveOperation): SqlValue[] {
   const createdAtSeconds = Math.floor(op.createdAt / 1000);
   const updatedAtSeconds = Math.floor(op.updatedAt / 1000);
 
@@ -109,9 +110,9 @@ function operationToParams(op: ReceiveOperation): unknown[] {
 }
 
 export class SqliteReceiveOperationRepository implements ReceiveOperationRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

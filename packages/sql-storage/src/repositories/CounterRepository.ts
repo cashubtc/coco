@@ -1,10 +1,10 @@
 import type { CounterRepository, Counter } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 export class SqliteCounterRepository implements CounterRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

@@ -8,7 +8,8 @@ import {
   type CoreProof,
   type ProofState,
 } from '@cashu/coco-core';
-import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
+import type { SqlDatabase, SqlValue } from '../index.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 interface ProofRow {
   mintUrl: string;
@@ -39,11 +40,12 @@ function getUnitFilter(filter?: ProofUnitFilter): string[] | undefined {
   return Array.from(new Set(units.map((unit) => normalizeUnit(unit))));
 }
 
-function appendUnitFilter(sql: string, params: unknown[], filter?: ProofUnitFilter): string {
+function appendUnitFilter(sql: string, params: SqlValue[], filter?: ProofUnitFilter): string {
   const units = getUnitFilter(filter);
   if (!units || units.length === 0) return sql;
   if (units.length === 1) {
-    params.push(units[0]);
+    const [unit] = units as [string];
+    params.push(unit);
     return `${sql} AND unit = ?`;
   }
   params.push(...units);
@@ -70,9 +72,9 @@ function rowToProof(r: ProofRow): CoreProof {
 }
 
 export class SqliteProofRepository implements ProofRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 
@@ -116,7 +118,7 @@ export class SqliteProofRepository implements ProofRepository {
   }
 
   async getReadyProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: unknown[] = [mintUrl];
+    const params: SqlValue[] = [mintUrl];
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready'`,
@@ -130,7 +132,7 @@ export class SqliteProofRepository implements ProofRepository {
 
   async getInflightProofs(mintUrls?: string[], filter?: ProofUnitFilter): Promise<CoreProof[]> {
     if (!mintUrls || mintUrls.length === 0) {
-      const params: unknown[] = [];
+      const params: SqlValue[] = [];
       const rows = await this.db.all<ProofRow>(
         appendUnitFilter(
           `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight'`,
@@ -145,7 +147,7 @@ export class SqliteProofRepository implements ProofRepository {
     if (mintUrlList.length === 0) return [];
     const uniqueMintUrls = Array.from(new Set(mintUrlList));
     const placeholders = uniqueMintUrls.map(() => '?').join(', ');
-    const params: unknown[] = uniqueMintUrls;
+    const params: SqlValue[] = uniqueMintUrls;
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'inflight' AND mintUrl IN (${placeholders})`,
@@ -158,7 +160,7 @@ export class SqliteProofRepository implements ProofRepository {
   }
 
   async getAllReadyProofs(filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE state = 'ready'`,
@@ -175,7 +177,7 @@ export class SqliteProofRepository implements ProofRepository {
     keysetId: string,
     filter?: ProofUnitFilter,
   ): Promise<CoreProof[]> {
-    const params: unknown[] = [mintUrl, keysetId];
+    const params: SqlValue[] = [mintUrl, keysetId];
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND id = ? AND state = 'ready'`,
@@ -317,7 +319,7 @@ export class SqliteProofRepository implements ProofRepository {
   }
 
   async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
-    const params: unknown[] = [mintUrl];
+    const params: SqlValue[] = [mintUrl];
     const rows = await this.db.all<ProofRow>(
       appendUnitFilter(
         `SELECT ${PROOF_COLUMNS} FROM coco_cashu_proofs WHERE mintUrl = ? AND state = 'ready' AND usedByOperationId IS NULL`,

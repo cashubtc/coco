@@ -1,5 +1,5 @@
 import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
@@ -21,9 +21,9 @@ function rowToKeypair(row: KeypairRow): Keypair {
 }
 
 export class SqliteKeyRingRepository implements KeyRingRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 
