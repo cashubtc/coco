@@ -1,29 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
 import { Amount } from '@cashu/coco-core';
-import { ensureSchema } from '@cashu/coco-sql-storage';
-import { SqliteDb } from '../db.ts';
-import { SqliteMintOperationRepository } from '../repositories/MintOperationRepository.ts';
+import { SqliteRepositories } from '../index.ts';
 
 describe('SqliteMintOperationRepository', () => {
   const quoteExpiry = 1_730_000_000;
   let database: BetterSqlite3Database;
-  let db: SqliteDb;
-  let repository: SqliteMintOperationRepository;
+  let repositories: SqliteRepositories;
 
   beforeEach(async () => {
     database = new Database(':memory:');
-    db = new SqliteDb({ database });
-    await ensureSchema(db);
-    repository = new SqliteMintOperationRepository(db);
+    repositories = new SqliteRepositories({ database });
+    await repositories.init();
   });
 
   afterEach(async () => {
-    await db.close();
+    await repositories.db.close();
   });
 
   it('persists and loads supported mint operation states', async () => {
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-init',
@@ -37,7 +33,7 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
     });
 
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-pending',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-pending',
@@ -54,7 +50,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-finalized',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-finalized',
@@ -71,7 +67,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-failed',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-failed',
@@ -92,7 +88,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await expect(repository.getById('mint-op-init')).resolves.toEqual({
+    await expect(repositories.mintOperationRepository.getById('mint-op-init')).resolves.toEqual({
       id: 'mint-op-init',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-init',
@@ -106,7 +102,7 @@ describe('SqliteMintOperationRepository', () => {
       unit: 'sat',
     });
 
-    await expect(repository.getById('mint-op-pending')).resolves.toEqual({
+    await expect(repositories.mintOperationRepository.getById('mint-op-pending')).resolves.toEqual({
       id: 'mint-op-pending',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-pending',
@@ -124,7 +120,9 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await expect(repository.getById('mint-op-finalized')).resolves.toEqual({
+    await expect(
+      repositories.mintOperationRepository.getById('mint-op-finalized'),
+    ).resolves.toEqual({
       id: 'mint-op-finalized',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-finalized',
@@ -142,7 +140,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await expect(repository.getById('mint-op-failed')).resolves.toEqual({
+    await expect(repositories.mintOperationRepository.getById('mint-op-failed')).resolves.toEqual({
       id: 'mint-op-failed',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-failed',
@@ -166,7 +164,7 @@ describe('SqliteMintOperationRepository', () => {
   });
 
   it('returns only pending and executing work from getPending', async () => {
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-pending',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-pending',
@@ -183,7 +181,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-executing',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-executing',
@@ -200,7 +198,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    await repository.create({
+    await repositories.mintOperationRepository.create({
       id: 'mint-op-finalized',
       mintUrl: 'https://mint.test',
       quoteId: 'quote-finalized',
@@ -217,7 +215,7 @@ describe('SqliteMintOperationRepository', () => {
       outputData: { keep: [], send: [] },
     });
 
-    const pending = await repository.getPending();
+    const pending = await repositories.mintOperationRepository.getPending();
 
     expect(pending).toHaveLength(2);
     expect(pending.map((operation) => operation.state).sort()).toEqual(['executing', 'pending']);
