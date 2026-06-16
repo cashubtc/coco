@@ -12,7 +12,7 @@ import {
   parseHistoryEntryId,
   projectLegacyHistoryRow,
 } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 type HistoryProjectionRow = {
   source: 'operation' | 'legacy';
@@ -251,9 +251,9 @@ function parseReceiveSourceMetadata(sourceJson: string | null): Record<string, s
 }
 
 export class SqliteHistoryRepository implements HistoryRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

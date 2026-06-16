@@ -8,7 +8,8 @@ import type {
   PaymentRequestReceiveTransport,
 } from '@cashu/coco-core';
 import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
-import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
+import type { SqlDatabase, SqlValue } from '../index.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 interface OperationRow {
   id: string;
@@ -139,7 +140,7 @@ function rowToAttempt(row: AttemptRow): PaymentRequestReceiveAttempt {
 }
 
 export class SqlitePaymentRequestReceiveOperationRepository implements PaymentRequestReceiveOperationRepository {
-  constructor(private readonly db: SqliteDb) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async create(operation: PaymentRequestReceiveOperation): Promise<void> {
     const row = operationToRow(operation);
@@ -216,7 +217,7 @@ export class SqlitePaymentRequestReceiveOperationRepository implements PaymentRe
 }
 
 export class SqlitePaymentRequestReceiveAttemptRepository implements PaymentRequestReceiveAttemptRepository {
-  constructor(private readonly db: SqliteDb) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async create(attempt: PaymentRequestReceiveAttempt): Promise<void> {
     const row = attemptToRow(attempt);

@@ -4,10 +4,10 @@ import {
   type LegacyMintQuoteRepository,
   type MintQuote,
 } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 export class SqliteLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
-  constructor(private readonly db: SqliteDb) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async getPendingLegacyMintQuotes(mintUrl?: string): Promise<MintQuote[]> {
     const normalizedMintUrl = mintUrl ? normalizeMintUrl(mintUrl) : undefined;

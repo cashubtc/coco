@@ -6,7 +6,8 @@ import {
   serializeAmount,
   stringifyJson,
 } from '@cashu/coco-core';
-import { SqliteDb, getUnixTimeSeconds } from '../db.ts';
+import type { SqlDatabase, SqlValue } from '../index.ts';
+import { getUnixTimeSeconds } from '../utils.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
@@ -111,7 +112,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
   return operation as MeltOperation;
 };
 
-const operationToParams = (operation: MeltOperation): unknown[] => {
+const operationToParams = (operation: MeltOperation): SqlValue[] => {
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
   const methodDataJson = stringifyJson(operation.methodData);
@@ -182,9 +183,9 @@ const operationToParams = (operation: MeltOperation): unknown[] => {
 };
 
 export class SqliteMeltOperationRepository implements MeltOperationRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

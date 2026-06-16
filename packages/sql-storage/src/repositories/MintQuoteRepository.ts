@@ -13,7 +13,7 @@ import {
   type MintQuoteRepository,
   type QuoteIdentity,
 } from '@cashu/coco-core';
-import { SqliteDb } from '../db.ts';
+import type { SqlDatabase } from '../index.ts';
 
 type MintQuoteRow = {
   mintUrl: string;
@@ -123,9 +123,9 @@ function serializeQuoteData(quote: MintQuote): string {
 }
 
 export class SqliteMintQuoteRepository implements MintQuoteRepository {
-  private readonly db: SqliteDb;
+  private readonly db: SqlDatabase;
 
-  constructor(db: SqliteDb) {
+  constructor(db: SqlDatabase) {
     this.db = db;
   }
 

@@ -14,7 +14,8 @@ import {
   createDummyKeyset,
   createDummyProof,
 } from '@cashu/coco-adapter-tests';
-import { SqliteRepositories as Repositories } from '../index.ts';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
+import { SqliteDb, SqliteRepositories as Repositories } from '../index.ts';
 
 function createDeferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -37,6 +38,21 @@ async function createRepositories() {
     },
   };
 }
+
+runSqlDatabaseContract(
+  {
+    createDatabase() {
+      const rawDatabase = new Database(':memory:');
+      const database = new SqliteDb({ database: rawDatabase });
+
+      return {
+        database,
+        dispose: () => database.close(),
+      };
+    },
+  },
+  { describe, it, expect },
+);
 
 async function expectRejects(fn: () => Promise<void>) {
   let didThrow = false;
