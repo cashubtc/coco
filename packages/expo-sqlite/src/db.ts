@@ -2,6 +2,13 @@
 // Consumers pass an already opened database instance
 import type { SQLiteDatabase } from 'expo-sqlite';
 
+type ExpoSqliteParams = readonly unknown[];
+type ExpoSqliteRunResult = {
+  readonly lastID: number;
+  readonly lastInsertRowId: number;
+  readonly changes: number;
+};
+
 export type ExpoSqliteDatabaseLike = SQLiteDatabase;
 
 export interface ExpoSqliteDbOptions {
@@ -96,28 +103,35 @@ export class ExpoSqliteDb {
     await (this.operationDb as any).execAsync(sql);
   }
 
-  async run(sql: string, params: unknown[] = []): Promise<{ lastID: number; changes: number }> {
+  async run(sql: string, params: ExpoSqliteParams = []): Promise<ExpoSqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
     const result = await (this.operationDb as any).runAsync(sql, ...(params ?? []));
-    return { lastID: result.lastInsertRowId ?? 0, changes: result.changes ?? 0 };
+    const lastInsertRowId = result.lastInsertRowId ?? 0;
+    return { lastID: lastInsertRowId, lastInsertRowId, changes: result.changes ?? 0 };
   }
 
-  async get<T = unknown>(sql: string, params: unknown[] = []): Promise<T | undefined> {
+  async get<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: ExpoSqliteParams = [],
+  ): Promise<Row | undefined> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
     const row = await (this.operationDb as any).getFirstAsync(sql, ...(params ?? []));
-    return (row ?? undefined) as T | undefined;
+    return (row ?? undefined) as Row | undefined;
   }
 
-  async all<T = unknown>(sql: string, params: unknown[] = []): Promise<T[]> {
+  async all<Row extends object = Record<string, unknown>>(
+    sql: string,
+    params: ExpoSqliteParams = [],
+  ): Promise<Row[]> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
     const rows = await (this.operationDb as any).getAllAsync(sql, ...(params ?? []));
-    return (rows ?? []) as T[];
+    return (rows ?? []) as Row[];
   }
 
   /**

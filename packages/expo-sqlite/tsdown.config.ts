@@ -7,5 +7,9 @@ export default defineConfig([
     target: 'esnext',
     dts: true,
     format: ['esm'],
+    alias: {
+      '@cashu/coco-sql-storage': '../sql-storage/src/index.ts',
+    },
+    noExternal: ['@cashu/coco-sql-storage'],
   },
 ]);

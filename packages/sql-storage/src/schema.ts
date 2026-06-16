@@ -1,10 +1,10 @@
-import { ExpoSqliteDb, getUnixTimeSeconds } from './db.ts';
 import { normalizeMintUrl } from '@cashu/coco-core';
+import type { SqlDatabase } from './index.ts';
 
-interface Migration {
+export interface Migration {
   id: string;
   sql?: string;
-  run?: (db: ExpoSqliteDb) => Promise<void>;
+  run?: (db: SqlDatabase) => Promise<void>;
 }
 
 type TableInfoRow = {
@@ -21,7 +21,11 @@ const RECEIVE_OPERATION_MIGRATION_IDS = [
   '012_receive_operations',
 ] as const;
 
-async function tableExists(db: ExpoSqliteDb, tableName: string): Promise<boolean> {
+function getUnixTimeSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+async function tableExists(db: SqlDatabase, tableName: string): Promise<boolean> {
   const row = await db.get<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
     [tableName],
@@ -30,12 +34,12 @@ async function tableExists(db: ExpoSqliteDb, tableName: string): Promise<boolean
   return !!row;
 }
 
-async function getTableColumns(db: ExpoSqliteDb, tableName: string): Promise<Set<string>> {
+async function getTableColumns(db: SqlDatabase, tableName: string): Promise<Set<string>> {
   const rows = await db.all<TableInfoRow>(`PRAGMA table_info(${tableName})`);
   return new Set(rows.map((row) => row.name));
 }
 
-async function insertMigrationIds(db: ExpoSqliteDb, ids: readonly string[]): Promise<void> {
+async function insertMigrationIds(db: SqlDatabase, ids: readonly string[]): Promise<void> {
   const appliedAt = getUnixTimeSeconds();
 
   for (const id of ids) {
@@ -46,7 +50,7 @@ async function insertMigrationIds(db: ExpoSqliteDb, ids: readonly string[]): Pro
   }
 }
 
-async function addSendOperationMethodColumns(db: ExpoSqliteDb): Promise<void> {
+async function addSendOperationMethodColumns(db: SqlDatabase): Promise<void> {
   const columns = await getTableColumns(db, 'coco_cashu_send_operations');
 
   if (!columns.has('method')) {
@@ -62,7 +66,7 @@ async function addSendOperationMethodColumns(db: ExpoSqliteDb): Promise<void> {
   }
 }
 
-async function addProofUnitColumn(db: ExpoSqliteDb): Promise<void> {
+async function addProofUnitColumn(db: SqlDatabase): Promise<void> {
   const columns = await getTableColumns(db, 'coco_cashu_proofs');
 
   if (!columns.has('unit')) {
@@ -98,7 +102,7 @@ async function addProofUnitColumn(db: ExpoSqliteDb): Promise<void> {
   );
 }
 
-async function addSendOperationUnitColumn(db: ExpoSqliteDb): Promise<void> {
+async function addSendOperationUnitColumn(db: SqlDatabase): Promise<void> {
   const columns = await getTableColumns(db, 'coco_cashu_send_operations');
 
   if (!columns.has('unit')) {
@@ -113,7 +117,7 @@ async function addSendOperationUnitColumn(db: ExpoSqliteDb): Promise<void> {
   await db.run('UPDATE coco_cashu_send_operations SET unit = LOWER(TRIM(unit))');
 }
 
-async function backfillSendOperationTokensFromHistory(db: ExpoSqliteDb): Promise<void> {
+async function backfillSendOperationTokensFromHistory(db: SqlDatabase): Promise<void> {
   await db.run(`
     UPDATE coco_cashu_send_operations
     SET tokenJson = (
@@ -138,7 +142,7 @@ async function backfillSendOperationTokensFromHistory(db: ExpoSqliteDb): Promise
    `);
 }
 
-async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
+async function migrateAmountColumnsToText(db: SqlDatabase): Promise<void> {
   if (await tableExists(db, 'coco_cashu_proofs')) {
     await db.exec(`
       ALTER TABLE coco_cashu_proofs RENAME TO coco_cashu_proofs_legacy_amounts;
@@ -490,7 +494,7 @@ async function migrateAmountColumnsToText(db: ExpoSqliteDb): Promise<void> {
   }
 }
 
-async function reconcileMigrationAliases(db: ExpoSqliteDb): Promise<void> {
+async function reconcileMigrationAliases(db: SqlDatabase): Promise<void> {
   if (await tableExists(db, 'coco_cashu_send_operations')) {
     const sendColumns = await getTableColumns(db, 'coco_cashu_send_operations');
     if (sendColumns.has('method') && sendColumns.has('methodDataJson')) {
@@ -648,7 +652,7 @@ const MIGRATIONS: readonly Migration[] = [
   },
   {
     id: '007_normalize_mint_urls',
-    run: async (db: ExpoSqliteDb) => {
+    run: async (db: SqlDatabase) => {
       // Get all distinct mintUrls from the mints table
       const mints = await db.all<{ mintUrl: string }>('SELECT mintUrl FROM coco_cashu_mints');
 
@@ -732,7 +736,7 @@ const MIGRATIONS: readonly Migration[] = [
   },
   {
     id: '010_rename_completed_to_finalized',
-    run: async (db: ExpoSqliteDb) => {
+    run: async (db: SqlDatabase) => {
       // Update history entries from 'completed' to 'finalized' for send type
       // (history table has no CHECK constraint on state, so this is safe)
       await db.run(
@@ -1446,12 +1450,11 @@ const MIGRATIONS: readonly Migration[] = [
 
 // Export for testing
 export { MIGRATIONS };
-export type { Migration };
 
 /**
  * Ensures the database schema is up to date by running all pending migrations.
  */
-export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {
+export async function ensureSchema(db: SqlDatabase): Promise<void> {
   await ensureSchemaUpTo(db);
 }
 
@@ -1460,7 +1463,7 @@ export async function ensureSchema(db: ExpoSqliteDb): Promise<void> {
  * If stopBeforeId is not provided, runs all migrations.
  * Used for testing migration behavior.
  */
-export async function ensureSchemaUpTo(db: ExpoSqliteDb, stopBeforeId?: string): Promise<void> {
+export async function ensureSchemaUpTo(db: SqlDatabase, stopBeforeId?: string): Promise<void> {
   // Ensure pragmas for current connection and create migrations tracking table
   await db.exec(`
     PRAGMA foreign_keys = ON;

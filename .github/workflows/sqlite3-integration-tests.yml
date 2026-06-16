@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'packages/sqlite3/**'
+      - 'packages/sql-storage/**'
       - 'packages/adapter-tests/**'
       - 'packages/core/**'
       - 'scripts/test-integration.sh'
@@ -27,7 +28,13 @@ jobs:
       - name: Build local test dependencies
         run: |
           cd packages/core && bun run build && cd ../..
+          cd packages/sql-storage && bun run build && cd ../..
           cd packages/adapter-tests && bun run build && cd ../..
+
+      - name: Run shared SQL storage tests
+        run: |
+          cd packages/sql-storage
+          bun test
 
       - name: Run sqlite3 local adapter tests
         run: |
@@ -36,8 +43,7 @@ jobs:
             src/test/MintOperationRepository.test.ts \
             src/test/SendOperationRepository.test.ts \
             src/test/MeltOperationRepository.test.ts \
-            src/test/contract.test.ts \
-            src/test/schema.test.ts
+            src/test/contract.test.ts
 
       - name: Run sqlite3 integration tests
         run: ./scripts/test-integration.sh sqlite3
