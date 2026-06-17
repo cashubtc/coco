@@ -486,6 +486,49 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('returns only pending and executing work from getPending', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const pending = createDummyMintOperation({
+          id: 'mint-op-pending',
+          quoteId: 'quote-pending',
+          createdAt: 1_000,
+        });
+        const executing = {
+          ...createDummyMintOperation({
+            id: 'mint-op-executing',
+            quoteId: 'quote-executing',
+            createdAt: 2_000,
+          }),
+          state: 'executing',
+        } satisfies MintOperation;
+        const finalized = {
+          ...createDummyMintOperation({
+            id: 'mint-op-finalized',
+            quoteId: 'quote-finalized',
+            createdAt: 3_000,
+          }),
+          state: 'finalized',
+        } satisfies MintOperation;
+
+        await repositories.mintOperationRepository.create(pending);
+        await repositories.mintOperationRepository.create(executing);
+        await repositories.mintOperationRepository.create(finalized);
+
+        const inFlight = await repositories.mintOperationRepository.getPending();
+
+        expect(inFlight).toHaveLength(2);
+        expect(inFlight.map((operation) => operation.state).sort().join(',')).toBe(
+          'executing,pending',
+        );
+        expect(inFlight.map((operation) => operation.id).sort().join(',')).toBe(
+          'mint-op-executing,mint-op-pending',
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('returns sibling mint operations by full quote identity in deterministic order', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
