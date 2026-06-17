@@ -518,12 +518,18 @@ export async function runMintOperationRepositoryContract(
         const inFlight = await repositories.mintOperationRepository.getPending();
 
         expect(inFlight).toHaveLength(2);
-        expect(inFlight.map((operation) => operation.state).sort().join(',')).toBe(
-          'executing,pending',
-        );
-        expect(inFlight.map((operation) => operation.id).sort().join(',')).toBe(
-          'mint-op-executing,mint-op-pending',
-        );
+        expect(
+          inFlight
+            .map((operation) => operation.state)
+            .sort()
+            .join(','),
+        ).toBe('executing,pending');
+        expect(
+          inFlight
+            .map((operation) => operation.id)
+            .sort()
+            .join(','),
+        ).toBe('mint-op-executing,mint-op-pending');
       } finally {
         await dispose();
       }
