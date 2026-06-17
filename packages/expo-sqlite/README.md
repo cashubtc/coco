@@ -16,11 +16,11 @@ npx expo install expo-sqlite
 
 ```ts
 import { initializeCoco } from '@cashu/coco-core';
-import { ExpoSqliteRepositories } from '@cashu/coco-expo-sqlite';
+import { SqliteRepositories } from '@cashu/coco-expo-sqlite';
 import { openDatabaseAsync } from 'expo-sqlite';
 
 const database = await openDatabaseAsync('coco.db');
-const repositories = new ExpoSqliteRepositories({ database });
+const repositories = new SqliteRepositories({ database });
 await repositories.init();
 
 const manager = await initializeCoco({
@@ -33,3 +33,4 @@ const manager = await initializeCoco({
 
 - Pass an already opened `expo-sqlite` database instance via the `database` option.
 - The adapter ensures schema creation and migrations when you call `init()`.
+- `ExpoSqliteRepositories` remains available as a migration alias.

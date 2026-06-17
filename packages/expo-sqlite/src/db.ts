@@ -1,12 +1,10 @@
 // Minimal promise-based wrapper for expo-sqlite's async API
 // Consumers pass an already opened database instance
 import type { SQLiteDatabase } from 'expo-sqlite';
+import type { SqlDatabase, SqlParams, SqlRunResult } from '@cashu/coco-sql-storage';
 
-type ExpoSqliteParams = readonly unknown[];
-type ExpoSqliteRunResult = {
+type ExpoSqliteRunResult = SqlRunResult & {
   readonly lastID: number;
-  readonly lastInsertRowId: number;
-  readonly changes: number;
 };
 
 export type ExpoSqliteDatabaseLike = SQLiteDatabase;
@@ -45,7 +43,7 @@ interface ExpoSqliteDbRootState {
  * - Concurrent transactions from different scopes are queued and executed serially
  * - Each top-level transaction gets a unique scope token for identification
  */
-export class ExpoSqliteDb {
+export class ExpoSqliteDb implements SqlDatabase {
   private readonly root: ExpoSqliteDbRootState;
   private readonly operationDb: ExpoSqliteDatabaseLike;
   /** Unique identifier for this instance's transaction scope (null for root instances) */
@@ -103,7 +101,7 @@ export class ExpoSqliteDb {
     await (this.operationDb as any).execAsync(sql);
   }
 
-  async run(sql: string, params: ExpoSqliteParams = []): Promise<ExpoSqliteRunResult> {
+  async run(sql: string, params: SqlParams = []): Promise<ExpoSqliteRunResult> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
     }
@@ -114,7 +112,7 @@ export class ExpoSqliteDb {
 
   async get<Row extends object = Record<string, unknown>>(
     sql: string,
-    params: ExpoSqliteParams = [],
+    params: SqlParams = [],
   ): Promise<Row | undefined> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();
@@ -125,7 +123,7 @@ export class ExpoSqliteDb {
 
   async all<Row extends object = Record<string, unknown>>(
     sql: string,
-    params: ExpoSqliteParams = [],
+    params: SqlParams = [],
   ): Promise<Row[]> {
     if (this.shouldWaitForTransaction()) {
       await this.waitForActiveTransaction();

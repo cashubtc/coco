@@ -14,8 +14,9 @@ import {
   createDummyKeyset,
   createDummyProof,
 } from '@cashu/coco-adapter-tests';
-import { ExpoSqliteRepositories as Repositories } from '../index.ts';
-import type { ExpoSqliteRepositoriesOptions } from '../index.ts';
+import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
+import { ExpoSqliteDb, SqliteRepositories as Repositories } from '../index.ts';
+import type { SqliteRepositoriesOptions } from '../index.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 
@@ -88,6 +89,35 @@ class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
   }
 }
 
+class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
+  exclusiveTransactionCalls = 0;
+  transactionCalls = 0;
+
+  async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
+    this.exclusiveTransactionCalls++;
+    await this.execAsync('BEGIN');
+    try {
+      await fn(this);
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+
+  async withTransactionAsync(fn: () => Promise<void>): Promise<void> {
+    this.transactionCalls++;
+    await this.execAsync('BEGIN');
+    try {
+      await fn();
+      await this.execAsync('COMMIT');
+    } catch (error) {
+      await this.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -101,7 +131,7 @@ function createDeferred<T = void>() {
 async function createRepositories() {
   const database = new BunExpoSqliteDatabaseShim();
   const repositories = new Repositories({
-    database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+    database: database as unknown as SqliteRepositoriesOptions['database'],
   });
   await repositories.init();
   return {
@@ -111,6 +141,25 @@ async function createRepositories() {
     },
   } as const;
 }
+
+runSqlDatabaseContract(
+  {
+    createDatabase() {
+      const rawDatabase = new BunExpoSqliteDatabaseShim();
+      const database = new ExpoSqliteDb({
+        database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
+      });
+
+      return {
+        database,
+        dispose: async () => {
+          await database.raw.closeAsync?.();
+        },
+      };
+    },
+  },
+  { describe, it, expect },
+);
 
 async function expectRejects(fn: () => Promise<void>) {
   let didThrow = false;
@@ -308,7 +357,7 @@ describe('expo-sqlite web transaction compatibility', () => {
 
     const database = new WebExpoSqliteDatabaseShim();
     const repositories = new Repositories({
-      database: database as unknown as ExpoSqliteRepositoriesOptions['database'],
+      database: database as unknown as SqliteRepositoriesOptions['database'],
     });
 
     try {
@@ -327,6 +376,31 @@ describe('expo-sqlite web transaction compatibility', () => {
       await repositories.db.raw.closeAsync?.();
       restoreGlobalProperty('window', windowDescriptor);
       restoreGlobalProperty('document', documentDescriptor);
+    }
+  });
+});
+
+describe('expo-sqlite native transaction compatibility', () => {
+  it('uses exclusive transactions when available outside web', async () => {
+    const database = new NativeExpoSqliteDatabaseShim();
+    const repositories = new Repositories({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await repositories.init();
+      database.exclusiveTransactionCalls = 0;
+      database.transactionCalls = 0;
+
+      await repositories.withTransaction(async (tx) => {
+        await tx.mintRepository.addOrUpdateMint(createDummyMint());
+      });
+
+      expect(database.exclusiveTransactionCalls).toBe(1);
+      expect(database.transactionCalls).toBe(0);
+      await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
+    } finally {
+      await repositories.db.raw.closeAsync?.();
     }
   });
 });
