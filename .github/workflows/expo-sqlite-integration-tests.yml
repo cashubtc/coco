@@ -39,11 +39,7 @@ jobs:
       - name: Run expo-sqlite local adapter tests
         run: |
           cd packages/expo-sqlite
-          bun test \
-            src/test/MintOperationRepository.test.ts \
-            src/test/SendOperationRepository.test.ts \
-            src/test/MeltOperationRepository.test.ts \
-            src/test/contract.test.ts
+          bun test src/test/contract.test.ts
 
       - name: Run expo-sqlite integration tests
         run: ./scripts/test-integration.sh expo-sqlite
