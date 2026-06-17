@@ -21,7 +21,8 @@
     "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
     "paths": {
-      "@cashu/coco-sql-storage": ["../sql-storage/src/index.ts"]
+      "@cashu/coco-sql-storage": ["../sql-storage/src/index.ts"],
+      "@cashu/coco-sql-storage/test": ["../sql-storage/src/test/index.ts"]
     }
   }
 }
