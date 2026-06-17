@@ -88,7 +88,7 @@ describe('ExpoMintOperationRepository', () => {
   });
 
   afterEach(async () => {
-    await repositories.db.raw.closeAsync?.();
+    await database.closeAsync();
   });
 
   it('round-trips quote snapshot fields for pending operations', async () => {

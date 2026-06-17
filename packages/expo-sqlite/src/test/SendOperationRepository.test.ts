@@ -111,7 +111,7 @@ describe('ExpoSendOperationRepository', () => {
   });
 
   afterEach(async () => {
-    await repositories.db.raw.closeAsync?.();
+    await database.closeAsync();
   });
 
   it('loads rolling_back operations from repository read methods', async () => {

@@ -63,7 +63,7 @@ describe('SqliteSendOperationRepository', () => {
   });
 
   afterEach(async () => {
-    await repositories.db.close();
+    database.close();
   });
 
   it('loads rolling_back operations from repository read methods', async () => {

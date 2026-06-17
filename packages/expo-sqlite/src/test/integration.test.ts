@@ -80,7 +80,7 @@ async function createRepositories() {
   return {
     repositories,
     dispose: async () => {
-      await repositories.db.raw.closeAsync?.();
+      await database.closeAsync();
     },
   } as const;
 }

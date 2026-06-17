@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Amount, type MeltOperation } from '@cashu/coco-core';
 import { SqliteRepositories, type SqliteRepositoriesOptions } from '../index.ts';
+import { ExpoSqliteDb } from '../db.ts';
 
 type FinalizedMeltOperation = Extract<MeltOperation, { state: 'finalized' }>;
 
@@ -81,10 +82,14 @@ function makeFinalizedMeltOperation(): FinalizedMeltOperation {
 
 describe('ExpoMeltOperationRepository', () => {
   let database: BunExpoSqliteDatabaseShim;
+  let sqlDatabase: ExpoSqliteDb;
   let repositories: SqliteRepositories;
 
   beforeEach(async () => {
     database = new BunExpoSqliteDatabaseShim();
+    sqlDatabase = new ExpoSqliteDb({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
     repositories = new SqliteRepositories({
       database: database as unknown as SqliteRepositoriesOptions['database'],
     });
@@ -92,7 +97,7 @@ describe('ExpoMeltOperationRepository', () => {
   });
 
   afterEach(async () => {
-    await repositories.db.raw.closeAsync?.();
+    await database.closeAsync();
   });
 
   it('round-trips settlement amounts for finalized operations', async () => {
@@ -104,7 +109,7 @@ describe('ExpoMeltOperationRepository', () => {
   });
 
   it('defaults legacy finalized rows without unit to sat', async () => {
-    await repositories.db.run(
+    await sqlDatabase.run(
       `INSERT INTO coco_cashu_melt_operations
          (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

@@ -31,7 +31,7 @@ async function createRepositories() {
   return {
     repositories,
     dispose: async () => {
-      repositories.db.close();
+      database.close();
     },
   };
 }

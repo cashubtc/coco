@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database, { type Database as BetterSqlite3Database } from 'better-sqlite3';
 import { Amount, type MeltOperation } from '@cashu/coco-core';
 import { SqliteRepositories } from '../index.ts';
+import { SqliteDb } from '../db.ts';
 
 type FinalizedMeltOperation = Extract<MeltOperation, { state: 'finalized' }>;
 
@@ -31,16 +32,18 @@ function makeFinalizedMeltOperation(): FinalizedMeltOperation {
 
 describe('SqliteMeltOperationRepository', () => {
   let database: BetterSqlite3Database;
+  let sqlDatabase: SqliteDb;
   let repositories: SqliteRepositories;
 
   beforeEach(async () => {
     database = new Database(':memory:');
+    sqlDatabase = new SqliteDb({ database });
     repositories = new SqliteRepositories({ database });
     await repositories.init();
   });
 
   afterEach(async () => {
-    await repositories.db.close();
+    database.close();
   });
 
   it('round-trips settlement amounts for finalized operations', async () => {
@@ -54,7 +57,7 @@ describe('SqliteMeltOperationRepository', () => {
   });
 
   it('defaults legacy finalized rows without unit to sat', async () => {
-    await repositories.db.run(
+    await sqlDatabase.run(
       `INSERT INTO coco_cashu_melt_operations
          (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
