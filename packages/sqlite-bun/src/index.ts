@@ -1,9 +1,11 @@
+import type { Database } from 'bun:sqlite';
 import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
-import type { Migration } from '@cashu/coco-sql-storage';
-import { SqliteDb, type SqliteDbOptions } from './db.ts';
+import { SqliteDb } from './db.ts';
 
-export interface SqliteRepositoriesOptions extends SqliteDbOptions {}
+export interface SqliteRepositoriesOptions {
+  database: Database;
+}
 
 export class SqliteRepositories implements Repositories {
   readonly mintRepository: Repositories['mintRepository'];
@@ -22,7 +24,7 @@ export class SqliteRepositories implements Repositories {
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
   readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
-  readonly db: SqliteDb;
+  private readonly db: SqliteDb;
 
   private readonly repositories: SqlStorageRepositories;
 
@@ -57,27 +59,3 @@ export class SqliteRepositories implements Repositories {
     return this.repositories.withTransaction(fn);
   }
 }
-
-export { SqliteDb };
-export {
-  ensureSchema,
-  ensureSchemaUpTo,
-  MIGRATIONS,
-  SqliteMintRepository,
-  SqliteKeyRingRepository,
-  SqliteKeysetRepository,
-  SqliteCounterRepository,
-  SqliteProofRepository,
-  SqliteMeltQuoteRepository,
-  SqliteMintQuoteRepository,
-  SqliteLegacyMintQuoteRepository,
-  SqliteHistoryRepository,
-  SqliteSendOperationRepository,
-  SqliteMeltOperationRepository,
-  SqliteAuthSessionRepository,
-  SqliteMintOperationRepository,
-  SqliteReceiveOperationRepository,
-  SqlitePaymentRequestReceiveOperationRepository,
-  SqlitePaymentRequestReceiveAttemptRepository,
-} from '@cashu/coco-sql-storage';
-export type { Migration };

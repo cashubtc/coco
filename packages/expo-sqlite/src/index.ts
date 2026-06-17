@@ -1,9 +1,11 @@
+import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
-import type { Migration } from '@cashu/coco-sql-storage';
-import { ExpoSqliteDb, type ExpoSqliteDbOptions } from './db.ts';
+import { ExpoSqliteDb } from './db.ts';
 
-export interface SqliteRepositoriesOptions extends ExpoSqliteDbOptions {}
+export interface SqliteRepositoriesOptions {
+  database: SQLiteDatabase;
+}
 
 export class SqliteRepositories implements Repositories {
   readonly mintRepository: Repositories['mintRepository'];
@@ -22,7 +24,7 @@ export class SqliteRepositories implements Repositories {
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
   readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
-  readonly db: ExpoSqliteDb;
+  private readonly db: ExpoSqliteDb;
 
   private readonly repositories: SqlStorageRepositories;
 
@@ -60,28 +62,3 @@ export class SqliteRepositories implements Repositories {
 
 export type ExpoSqliteRepositoriesOptions = SqliteRepositoriesOptions;
 export { SqliteRepositories as ExpoSqliteRepositories };
-
-export { ExpoSqliteDb };
-export {
-  ensureSchema,
-  ensureSchemaUpTo,
-  MIGRATIONS,
-  SqliteMintRepository as ExpoMintRepository,
-  SqliteKeyRingRepository as ExpoKeyRingRepository,
-  SqliteKeysetRepository as ExpoKeysetRepository,
-  SqliteCounterRepository as ExpoCounterRepository,
-  SqliteProofRepository as ExpoProofRepository,
-  SqliteMeltQuoteRepository as ExpoMeltQuoteRepository,
-  SqliteMintQuoteRepository as ExpoMintQuoteRepository,
-  SqliteLegacyMintQuoteRepository as ExpoLegacyMintQuoteRepository,
-  SqliteHistoryRepository as ExpoHistoryRepository,
-  SqliteSendOperationRepository as ExpoSendOperationRepository,
-  SqliteMeltOperationRepository as ExpoMeltOperationRepository,
-  SqliteAuthSessionRepository as ExpoAuthSessionRepository,
-  SqliteMintOperationRepository as ExpoMintOperationRepository,
-  SqliteReceiveOperationRepository as ExpoReceiveOperationRepository,
-  SqlitePaymentRequestReceiveOperationRepository as ExpoPaymentRequestReceiveOperationRepository,
-  SqlitePaymentRequestReceiveAttemptRepository as ExpoPaymentRequestReceiveAttemptRepository,
-} from '@cashu/coco-sql-storage';
-
-export type { Migration };

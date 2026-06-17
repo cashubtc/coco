@@ -19,7 +19,7 @@ describe('SqliteMintOperationRepository', () => {
   });
 
   afterEach(async () => {
-    await repositories.db.close();
+    database.close();
   });
 
   it('persists and loads supported mint operation states', async () => {

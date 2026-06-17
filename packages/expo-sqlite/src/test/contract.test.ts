@@ -15,8 +15,9 @@ import {
   createDummyProof,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
-import { ExpoSqliteDb, SqliteRepositories as Repositories } from '../index.ts';
+import { SqliteRepositories as Repositories } from '../index.ts';
 import type { SqliteRepositoriesOptions } from '../index.ts';
+import { ExpoSqliteDb } from '../db.ts';
 
 type RunResult = { changes: number; lastInsertRowId: number; lastInsertRowid: number };
 
@@ -129,16 +130,20 @@ function createDeferred<T = void>() {
 }
 
 async function createRepositories() {
-  const database = new BunExpoSqliteDatabaseShim();
+  const rawDatabase = new BunExpoSqliteDatabaseShim();
+  const database = new ExpoSqliteDb({
+    database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
+  });
   const repositories = new Repositories({
-    database: database as unknown as SqliteRepositoriesOptions['database'],
+    database: rawDatabase as unknown as SqliteRepositoriesOptions['database'],
   });
   await repositories.init();
   return {
     repositories,
     dispose: async () => {
-      await repositories.db.raw.closeAsync?.();
+      await rawDatabase.closeAsync();
     },
+    database,
   } as const;
 }
 
@@ -172,11 +177,11 @@ async function expectRejects(fn: () => Promise<void>) {
 }
 
 async function insertMintQuoteRow(
-  repositories: Repositories,
+  database: ExpoSqliteDb,
   method: string,
   quoteId: string,
 ): Promise<void> {
-  await repositories.db.run(
+  await database.run(
     `INSERT INTO coco_cashu_canonical_mint_quotes
        (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson, reusable, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -199,11 +204,11 @@ async function insertMintQuoteRow(
 }
 
 async function insertMeltQuoteRow(
-  repositories: Repositories,
+  database: ExpoSqliteDb,
   method: string,
   quoteId: string,
 ): Promise<void> {
-  await repositories.db.run(
+  await database.run(
     `INSERT INTO coco_cashu_melt_quotes
        (mintUrl, method, quoteId, state, request, amount, unit, expiry, fee_reserve, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -237,20 +242,20 @@ runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, i
 
 describe('expo-sqlite quote storage constraints', () => {
   it('rejects persisted mint quote method siblings for one identity', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { database, dispose } = await createRepositories();
     try {
-      await insertMintQuoteRow(repositories, 'bolt11', 'duplicate-mint-quote');
-      await expectRejects(() => insertMintQuoteRow(repositories, 'bolt12', 'duplicate-mint-quote'));
+      await insertMintQuoteRow(database, 'bolt11', 'duplicate-mint-quote');
+      await expectRejects(() => insertMintQuoteRow(database, 'bolt12', 'duplicate-mint-quote'));
     } finally {
       await dispose();
     }
   });
 
   it('rejects persisted melt quote method siblings for one identity', async () => {
-    const { repositories, dispose } = await createRepositories();
+    const { database, dispose } = await createRepositories();
     try {
-      await insertMeltQuoteRow(repositories, 'bolt11', 'duplicate-melt-quote');
-      await expectRejects(() => insertMeltQuoteRow(repositories, 'bolt12', 'duplicate-melt-quote'));
+      await insertMeltQuoteRow(database, 'bolt11', 'duplicate-melt-quote');
+      await expectRejects(() => insertMeltQuoteRow(database, 'bolt12', 'duplicate-melt-quote'));
     } finally {
       await dispose();
     }
@@ -373,7 +378,7 @@ describe('expo-sqlite web transaction compatibility', () => {
       expect(database.transactionCalls).toBe(1);
       await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
     } finally {
-      await repositories.db.raw.closeAsync?.();
+      await database.closeAsync();
       restoreGlobalProperty('window', windowDescriptor);
       restoreGlobalProperty('document', documentDescriptor);
     }
@@ -400,7 +405,7 @@ describe('expo-sqlite native transaction compatibility', () => {
       expect(database.transactionCalls).toBe(0);
       await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
     } finally {
-      await repositories.db.raw.closeAsync?.();
+      await database.closeAsync();
     }
   });
 });
