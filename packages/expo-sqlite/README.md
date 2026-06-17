@@ -5,6 +5,10 @@
 
 Expo SQLite storage adapter for Coco in React Native and Expo applications.
 
+The public entry point is `SqliteRepositories`. Open the `expo-sqlite` database
+in your application, pass that already-opened database instance to the adapter,
+and keep ownership of the database lifecycle.
+
 ## Install
 
 ```bash
@@ -28,6 +32,23 @@ const manager = await initializeCoco({
   seedGetter,
 });
 ```
+
+The adapter does not close a database that it did not open. Keep the Expo
+database lifecycle under your application code.
+
+## Public API
+
+- Import `SqliteRepositories` and `SqliteRepositoriesOptions` from
+  `@cashu/coco-expo-sqlite`.
+- Pass an already-opened `expo-sqlite` database with the `database` option.
+- Call `repositories.init()` before using the manager so schema creation and
+  migrations run.
+- `ExpoSqliteRepositories` remains available as an alias for
+  `SqliteRepositories`.
+- `ExpoSqliteRepositoriesOptions` remains available as an alias for
+  `SqliteRepositoriesOptions`.
+- Migration helpers, database wrapper classes, and individual repository classes
+  are internal implementation details and are not public adapter exports.
 
 ## Notes
 

@@ -142,6 +142,18 @@ The bundled adapters migrate existing data automatically:
 - melt quote rows become method-aware canonical quote rows
 - operation quote lookups become method-aware
 
+The SQLite adapter packages now expose a narrower public surface for the major
+release. Import `SqliteRepositories` from the runtime-specific package
+(`@cashu/coco-sqlite`, `@cashu/coco-sqlite-bun`, or
+`@cashu/coco-expo-sqlite`), pass an already-opened database instance, and call
+`repositories.init()` before using the manager. Migration helpers, database
+wrapper classes, and individual repository classes are no longer public adapter
+exports.
+
+For Expo, `ExpoSqliteRepositories` and `ExpoSqliteRepositoriesOptions` remain
+available as soft-migration aliases for `SqliteRepositories` and
+`SqliteRepositoriesOptions`.
+
 Custom repository implementations must provide the current repository contract:
 
 - `MintQuoteRepository` with `{ mintUrl, quoteId }` identity helpers and

@@ -5,6 +5,10 @@
 
 SQLite adapter for Coco using Bun's built-in `bun:sqlite` module.
 
+The public entry point is `SqliteRepositories`. Open the `bun:sqlite` database
+in your application, pass that already-opened database instance to the adapter,
+and keep ownership of the database lifecycle.
+
 ## Install
 
 ```bash
@@ -27,6 +31,19 @@ const manager = await initializeCoco({
   seedGetter,
 });
 ```
+
+When your application shuts down, close `database` from your own code. The
+adapter does not close a database that it did not open.
+
+## Public API
+
+- Import `SqliteRepositories` and `SqliteRepositoriesOptions` from
+  `@cashu/coco-sqlite-bun`.
+- Pass an already-opened `bun:sqlite` database with the `database` option.
+- Call `repositories.init()` before using the manager so schema creation and
+  migrations run.
+- Migration helpers, database wrapper classes, and individual repository classes
+  are internal implementation details and are not public adapter exports.
 
 ## Notes
 
