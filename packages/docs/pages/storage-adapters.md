@@ -14,6 +14,21 @@ const coco = await initializeCoco({
 
 Some storage implementations are maintained as part of the cashubtc/coco repository, but technically you can use any class that implements the `Repositories` interface.
 
+## SQLite adapter public API
+
+The SQLite adapter packages share the same public shape. Import
+`SqliteRepositories` from the package that matches your runtime, open the
+database with that runtime's SQLite driver, and pass the already-opened database
+instance through the `database` option.
+
+Your application owns the database lifecycle. The Coco adapter creates schema
+and runs migrations when you call `repo.init()`, but it does not open or close
+the underlying database.
+
+The public SQLite adapter packages expose the repository aggregate and its
+option type. Migration helpers, database wrapper classes, and individual
+repository classes are internal implementation details.
+
 ## @cashu/coco-indexeddb
 
 Implements Repositories using the IndexedDB Browser API.
@@ -54,15 +69,19 @@ import { initializeCoco } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-expo-sqlite';
 import { openDatabaseAsync } from 'expo-sqlite';
 
-// First we create an expo-sqlite client
+// Open the Expo SQLite database in your application
 const db = await openDatabaseAsync('coco-demo.db');
-// Then we pass it to our storage implementation
+// Pass the already-opened database to the storage implementation
 const repo = new SqliteRepositories({ database: db });
 const coco = await initializeCoco({
   repo,
   seedGetter,
 });
 ```
+
+`ExpoSqliteRepositories` and `ExpoSqliteRepositoriesOptions` are available as
+soft-migration aliases for `SqliteRepositories` and
+`SqliteRepositoriesOptions`.
 
 ## @cashu/coco-sqlite
 
@@ -80,9 +99,9 @@ import { initializeCoco } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite';
 import Database from 'better-sqlite3';
 
-// First we create a better-sqlite3 client
+// Open the better-sqlite3 database in your application
 const db = new Database('./test.db');
-// Then we pass it to our storage implementation
+// Pass the already-opened database to the storage implementation
 const repo = new SqliteRepositories({ database: db });
 const coco = await initializeCoco({
   repo,
@@ -107,9 +126,9 @@ import { initializeCoco } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 import { Database } from 'bun:sqlite';
 
-// First we create a bun:sqlite client
+// Open the bun:sqlite database in your application
 const db = new Database('./test.db');
-// Then we pass it to our storage implementation
+// Pass the already-opened database to the storage implementation
 const repo = new SqliteRepositories({ database: db });
 const coco = await initializeCoco({
   repo,
