@@ -597,6 +597,13 @@ export class ReceiveOperationService {
           await this.markAsFinalized(executing);
           return;
         }
+        if (recovered.length === 0) {
+          await this.markAsRolledBack(
+            executing,
+            'Recovered: input proofs spent without recoverable outputs',
+          );
+          return;
+        }
         this.logger?.warn('Receive outputs not persisted after recovery attempt', {
           operationId: executing.id,
           mintUrl: executing.mintUrl,

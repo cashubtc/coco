@@ -16,6 +16,7 @@ import type { ProofState as CashuProofState, Proof } from '@cashu/cashu-ts';
 import type { CoreProof } from '../../types';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
+import { ReceiveOpsApi } from '../../api/ReceiveOpsApi.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -33,6 +34,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
   let tokenService: TokenService;
   let eventBus: EventBus<CoreEvents>;
   let service: ReceiveOperationService;
+  let api: ReceiveOpsApi;
 
   let mockCheckProofsStates: Mock<(mintUrl: string, ys: string[]) => Promise<CashuProofState[]>>;
   let mockWalletReceive: Mock<(...args: any[]) => Promise<Proof[]>>;
@@ -135,6 +137,7 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       tokenService,
       eventBus,
     );
+    api = new ReceiveOpsApi(service);
   });
 
   it('cleans up init operations', async () => {
@@ -205,6 +208,23 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
     expect((proofService.recoverProofsFromOutputData as Mock<any>).mock.calls.length).toBe(1);
     expect(mockCheckProofsStates.mock.calls.length).toBeGreaterThan(0);
     expect(mockWalletReceive.mock.calls.length).toBe(0);
+  });
+
+  it('rolls back an executing receive when spent inputs have no recoverable outputs', async () => {
+    const proofs = [makeProof('p1')];
+    const op = makeExecutingOp('exec-op-spent-unrecoverable', proofs);
+    await receiveOpRepo.create(op);
+
+    mockCheckProofsStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map(() => ({ state: 'SPENT' }) as CashuProofState),
+    );
+
+    await api.recovery.run();
+
+    const stored = await api.get(op.id);
+    expect(stored?.state).toBe('rolled_back');
+    expect(stored?.error).toBe('Recovered: input proofs spent without recoverable outputs');
+    expect((await api.listInFlight()).map((operation) => operation.id)).not.toContain(op.id);
   });
 
   it('properly propagates errors from checkProofsStates as executing', async () => {
