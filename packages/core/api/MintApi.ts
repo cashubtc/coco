@@ -1,4 +1,10 @@
-import type { MintService } from '@core/services';
+import type {
+  CheckPaymentMethodCapabilityInput,
+  ListPaymentMethodCapabilitiesInput,
+  MintService,
+  PaymentMethodCapability,
+  PaymentMethodCapabilityCheck,
+} from '@core/services';
 import type { Mint, Keyset } from '@core/models';
 import type { MintInfo } from '@core/types';
 
@@ -17,6 +23,20 @@ export class MintApi {
 
   async getMintInfo(mintUrl: string): Promise<MintInfo> {
     return this.mintService.getMintInfo(mintUrl);
+  }
+
+  /** Check whether a mint supports one method/unit pair for minting or melting. */
+  async checkPaymentMethodCapability(
+    input: CheckPaymentMethodCapabilityInput,
+  ): Promise<PaymentMethodCapabilityCheck> {
+    return this.mintService.checkPaymentMethodCapability(input);
+  }
+
+  /** List enabled Payment Method Capabilities advertised by NUT-04/NUT-05 mint metadata. */
+  async listPaymentMethodCapabilities(
+    input: ListPaymentMethodCapabilitiesInput,
+  ): Promise<PaymentMethodCapability[]> {
+    return this.mintService.listPaymentMethodCapabilities(input);
   }
 
   async isTrustedMint(mintUrl: string): Promise<boolean> {

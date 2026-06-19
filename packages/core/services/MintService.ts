@@ -31,6 +31,42 @@ export interface MethodUnitCapability {
   reason?: string;
 }
 
+/** Operation side for Payment Method Capability discovery. */
+export type PaymentMethodCapabilityOperationKind = 'mint' | 'melt';
+
+/** Input for checking whether one method/unit pair is supported by mint metadata. */
+export interface CheckPaymentMethodCapabilityInput {
+  mintUrl: string;
+  operation: PaymentMethodCapabilityOperationKind;
+  method: string;
+  unit: string;
+}
+
+/** Input for listing actionable Payment Method Capabilities advertised by a mint. */
+export interface ListPaymentMethodCapabilitiesInput {
+  mintUrl: string;
+  operation?: PaymentMethodCapabilityOperationKind;
+  unit?: string;
+}
+
+/** Actionable Payment Method Capability advertised through enabled NUT-04/NUT-05 metadata. */
+export interface PaymentMethodCapability {
+  operation: PaymentMethodCapabilityOperationKind;
+  nut: 4 | 5;
+  method: string;
+  unit: string;
+  minAmount?: Amount | null;
+  maxAmount?: Amount | null;
+  options?: unknown;
+}
+
+/** Result for a single Payment Method Capability check, including unsupported reasons. */
+export interface PaymentMethodCapabilityCheck extends PaymentMethodCapability {
+  supported: boolean;
+  disabled: boolean;
+  reason?: string;
+}
+
 type NutMethodSetting = {
   method: string;
   unit: string;
@@ -185,6 +221,24 @@ export class MintService {
     return mint.mintInfo;
   }
 
+  async checkPaymentMethodCapability(
+    input: CheckPaymentMethodCapabilityInput,
+  ): Promise<PaymentMethodCapabilityCheck> {
+    const operation = this.assertPaymentMethodCapabilityOperation(input.operation);
+    const nut = this.nutForPaymentMethodCapabilityOperation(operation);
+    const capability = await this.getMintMethodUnitCapability(
+      input.mintUrl,
+      nut,
+      input.method,
+      input.unit,
+    );
+
+    return {
+      ...capability,
+      operation,
+    };
+  }
+
   async getMintMethodUnitCapability(
     mintUrl: string,
     nut: 4 | 5,
@@ -196,20 +250,27 @@ export class MintService {
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const mintInfo = await this.getMintInfo(normalizedMintUrl);
     const settings = this.getNutMethodSettings(mintInfo, nut);
+    const nutName = this.formatNut(nut);
 
-    if (
-      !settings ||
-      !settings.methods ||
-      !Array.isArray(settings.methods) ||
-      settings.disabled === true
-    ) {
+    if (settings?.disabled === true) {
       return {
         supported: false,
         disabled: true,
         nut,
         method,
         unit: normalizedUnit,
-        reason: `NUT-${nut} is disabled`,
+        reason: `${nutName} is disabled`,
+      };
+    }
+
+    if (!settings || !Array.isArray(settings.methods)) {
+      return {
+        supported: false,
+        disabled: false,
+        nut,
+        method,
+        unit: normalizedUnit,
+        reason: `${nutName} method metadata is missing`,
       };
     }
 
@@ -228,7 +289,7 @@ export class MintService {
         nut,
         method,
         unit: normalizedUnit,
-        reason: `NUT-${nut} method ${method} does not support unit ${normalizedUnit}`,
+        reason: `${nutName} method ${method} does not support unit ${normalizedUnit}`,
       };
     }
 
@@ -242,6 +303,48 @@ export class MintService {
       maxAmount: this.parseOptionalAmount(matchingMethod.max_amount),
       options: matchingMethod.options,
     };
+  }
+
+  async listPaymentMethodCapabilities(
+    input: ListPaymentMethodCapabilitiesInput,
+  ): Promise<PaymentMethodCapability[]> {
+    const operations =
+      input.operation === undefined
+        ? (['mint', 'melt'] as const)
+        : [this.assertPaymentMethodCapabilityOperation(input.operation)];
+    const unitFilter = input.unit === undefined ? undefined : normalizeUnit(input.unit);
+    const mintInfo = await this.getMintInfo(input.mintUrl);
+    const capabilities: PaymentMethodCapability[] = [];
+
+    for (const operation of operations) {
+      const nut = this.nutForPaymentMethodCapabilityOperation(operation);
+      const settings = this.getNutMethodSettings(mintInfo, nut);
+      if (!settings || settings.disabled === true || !Array.isArray(settings.methods)) {
+        continue;
+      }
+
+      for (const entry of settings.methods) {
+        let unit: string;
+        try {
+          unit = normalizeUnit(entry.unit);
+        } catch {
+          continue;
+        }
+        if (unitFilter !== undefined && unit !== unitFilter) continue;
+
+        capabilities.push({
+          operation,
+          nut,
+          method: entry.method,
+          unit,
+          minAmount: this.parseOptionalAmount(entry.min_amount),
+          maxAmount: this.parseOptionalAmount(entry.max_amount),
+          options: entry.options,
+        });
+      }
+    }
+
+    return capabilities;
   }
 
   async assertMethodUnitSupported(
@@ -262,20 +365,22 @@ export class MintService {
     const capability = await this.getMintMethodUnitCapability(mintUrl, nut, method, unit);
     if (!capability.supported) {
       throw new ProofValidationError(
-        capability.reason ?? `NUT-${nut} method ${method} does not support unit ${capability.unit}`,
+        capability.reason ??
+          `${this.formatNut(nut)} method ${method} does not support unit ${capability.unit}`,
       );
     }
 
     if (requestedAmount === undefined) return;
 
+    const amountRequirement = `${this.formatNut(nut)} method ${method} unit ${capability.unit}`;
     if (capability.minAmount && requestedAmount.lessThan(capability.minAmount)) {
       throw new ProofValidationError(
-        `NUT-${nut} method ${method} unit ${capability.unit} requires amount >= ${capability.minAmount}`,
+        `${amountRequirement} requires amount >= ${capability.minAmount}`,
       );
     }
     if (capability.maxAmount && requestedAmount.greaterThan(capability.maxAmount)) {
       throw new ProofValidationError(
-        `NUT-${nut} method ${method} unit ${capability.unit} requires amount <= ${capability.maxAmount}`,
+        `${amountRequirement} requires amount <= ${capability.maxAmount}`,
       );
     }
   }
@@ -317,6 +422,27 @@ export class MintService {
         `NUT-${nut} does not define method-unit capabilities; use NUT-04 or NUT-05 method metadata`,
       );
     }
+  }
+
+  private formatNut(nut: 4 | 5): string {
+    return `NUT-0${nut}`;
+  }
+
+  private assertPaymentMethodCapabilityOperation(
+    operation: string,
+  ): PaymentMethodCapabilityOperationKind {
+    if (operation !== 'mint' && operation !== 'melt') {
+      throw new ProofValidationError(
+        `Invalid payment method capability operation ${operation}; use mint or melt`,
+      );
+    }
+    return operation;
+  }
+
+  private nutForPaymentMethodCapabilityOperation(
+    operation: PaymentMethodCapabilityOperationKind,
+  ): 4 | 5 {
+    return operation === 'mint' ? 4 : 5;
   }
 
   private parseOptionalAmount(amount: AmountLike | null | undefined): Amount | null {
