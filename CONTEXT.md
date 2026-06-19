@@ -29,6 +29,40 @@ _Avoid_: Added mint, cached mint
 A known mint approved for wallet operations.
 _Avoid_: Active mint
 
+**Built-in Payment Method**:
+A payment method that coco models with method-specific behavior and validation. The built-in payment
+methods are `bolt11`, `bolt12`, and `onchain`.
+_Avoid_: Default method, native method
+
+**Generic Payment Method**:
+A base quote struct compatible payment method that a mint advertises but coco does not model as a
+Built-in Payment Method. Generic Payment Methods preserve the mint's method string; their mint
+quotes are reusable, locked to a wallet-controlled quote key, and claimable according to the paid
+amount that has not yet been issued.
+_Avoid_: Runtime payment method, custom payment method
+
+**Payment Method Handler**:
+A method-specific or generic implementation of coco's quote-backed payment lifecycle. Built-in
+payment methods use dedicated handlers; Generic Payment Methods use generic mint and melt handlers
+while preserving the advertised method string.
+_Avoid_: Payment plugin, method switch
+
+**Quote-backed Operation**:
+A wallet operation whose local lifecycle is anchored to a mint quote. Payment methods can vary in
+quote parameters and endpoint fields, but quote-backed minting and melting share the same durable
+saga shape for outputs, inputs, proof state, and recovery.
+_Avoid_: Method flow, payment workflow
+
+**Payment Method Capability**:
+A mint-advertised statement that a payment method supports a unit for minting or melting. Coco
+derives payment method capabilities from NUT-04 and NUT-05 mint metadata.
+_Avoid_: Payment option, method support flag
+
+**Melt Quote State**:
+The mint's settlement state for a melt quote. `PAID` is terminal, while `PENDING` can return to
+`UNPAID` when settlement fails.
+_Avoid_: Payment status, melt lifecycle
+
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.
 _Avoid_: Recovery, import, restored mint, restored wallet
