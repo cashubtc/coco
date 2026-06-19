@@ -35,9 +35,8 @@ export function isBuiltInMintMethod(method: string): method is BuiltInMintMethod
 }
 
 export function assertGenericMintMethod(method: string): void {
-  if (isBuiltInMintMethod(method)) {
-    throw new Error(`Built-in mint method ${method} must use the built-in mint quote API`);
-  }
+  if (!isBuiltInMintMethod(method)) return;
+  throw new Error(`Built-in mint method ${method} must use the built-in mint quote API`);
 }
 
 export type GenericMintQuoteCreateData = {

@@ -1,8 +1,10 @@
 import { Amount, type MeltQuoteOnchainResponse } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 import {
+  meltQuoteToMethodSnapshot,
   meltQuoteFromOnchainResponse,
   resolveOnchainMeltFeeOption,
+  type GenericMeltQuote,
   type MeltQuote,
 } from '../../models/MeltQuote.ts';
 
@@ -107,5 +109,38 @@ describe('MeltQuote model', () => {
         }),
       ),
     ).toThrow('invalid estimated_blocks');
+  });
+
+  it('projects generic melt quotes into generic method snapshots', () => {
+    const quote: GenericMeltQuote<'gift-card'> = {
+      mintUrl,
+      method: 'gift-card',
+      quoteId: 'generic-melt-quote',
+      quote: 'generic-melt-quote',
+      request: 'gift-card-request',
+      amount: Amount.from(25),
+      unit: 'sat',
+      fee_reserve: Amount.from(2),
+      expiry: 123,
+      state: 'PENDING',
+      payment_preimage: null,
+      rawQuoteData: {
+        provider: 'gift-card-provider',
+      },
+      createdAt: 0,
+      updatedAt: 0,
+    };
+
+    const snapshot = meltQuoteToMethodSnapshot(quote);
+
+    expect(snapshot.quote).toBe('generic-melt-quote');
+    expect(snapshot.request).toBe('gift-card-request');
+    expect(snapshot.amount.equals(Amount.from(25))).toBe(true);
+    expect(snapshot.unit).toBe('sat');
+    expect(Amount.from(snapshot.fee_reserve ?? 0).equals(Amount.from(2))).toBe(true);
+    expect(snapshot.expiry).toBe(123);
+    expect(snapshot.state).toBe('PENDING');
+    expect(snapshot.payment_preimage).toBeNull();
+    expect(snapshot.provider).toBe('gift-card-provider');
   });
 });

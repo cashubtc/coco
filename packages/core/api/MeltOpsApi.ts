@@ -17,6 +17,10 @@ export type PrepareMeltInput<TSupported extends MeltMethod = BuiltInMeltMethod> 
   } & (M extends 'onchain' ? { feeIndex: number } : { feeIndex?: number });
 }[TSupported];
 
+type ExecuteMeltResult<TSupported extends MeltMethod> =
+  | PendingMeltOperation<TSupported>
+  | FinalizedMeltOperation<TSupported>;
+
 export interface MeltRecoveryApi {
   /** Runs the startup-style recovery sweep for melt operations. */
   run(): Promise<void>;
@@ -70,19 +74,18 @@ export class MeltOpsApi<TSupported extends MeltMethod = BuiltInMeltMethod> {
    */
   async execute(
     operationOrId: MeltOperation<TSupported> | string,
-  ): Promise<PendingMeltOperation<TSupported> | FinalizedMeltOperation<TSupported>> {
-    const operation = (await this.resolveOperation(
-      operationOrId as MeltOperation | string,
-    )) as MeltOperation<TSupported>;
+  ): Promise<ExecuteMeltResult<TSupported>>;
+  async execute(
+    operationOrId: MeltOperation<MeltMethod> | string,
+  ): Promise<ExecuteMeltResult<TSupported> | PendingMeltOperation | FinalizedMeltOperation> {
+    const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
       throw new Error(
         `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
 
-    return this.meltOperationService.execute(operation.id) as Promise<
-      PendingMeltOperation<TSupported> | FinalizedMeltOperation<TSupported>
-    >;
+    return this.meltOperationService.execute(operation.id);
   }
 
   /** Returns a melt operation by ID, or `null` when it does not exist. */
@@ -174,7 +177,9 @@ export class MeltOpsApi<TSupported extends MeltMethod = BuiltInMeltMethod> {
     await this.meltOperationService.finalize(operationId);
   }
 
-  private async resolveOperation(operationOrId: MeltOperation | string): Promise<MeltOperation> {
+  private async resolveOperation(
+    operationOrId: MeltOperation<MeltMethod> | string,
+  ): Promise<MeltOperation<MeltMethod>> {
     if (typeof operationOrId === 'string') {
       return this.requireOperation(operationOrId);
     }
