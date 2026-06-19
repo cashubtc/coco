@@ -102,7 +102,7 @@ export interface MeltMethodMeta<M extends MeltMethod = BuiltInMeltMethod> {
   methodData: MeltMethodData<M>;
 }
 
-export function normalizeMeltMethodData<M extends MeltMethod>(
+export function normalizeMeltMethodData<M extends MeltMethod = BuiltInMeltMethod>(
   methodData: MeltMethodInputData<M> | MeltMethodData<M>,
 ): MeltMethodData<M> {
   if (
