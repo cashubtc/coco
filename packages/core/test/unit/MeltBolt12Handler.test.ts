@@ -152,6 +152,7 @@ describe('MeltBolt12Handler', () => {
     const created = await handler.createQuote({
       ...prepareContext(initOperation({ methodData: { offer, amountSats: Amount.from(123) } })),
       mintUrl,
+      method: 'bolt12',
       methodData: { offer, amountSats: Amount.from(123) },
       unit: 'sat',
     });

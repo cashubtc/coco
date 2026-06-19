@@ -16,10 +16,10 @@ export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' 
 import type { Amount } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
-import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
+import type { BuiltInMintMethod, MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
-interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
+interface MintOperationBase<M extends MintMethod = BuiltInMintMethod> extends MintMethodMeta<M> {
   id: string;
   mintUrl: string;
   createdAt: number;
@@ -51,46 +51,46 @@ interface PendingData {
   outputData: SerializedOutputData;
 }
 
-export interface InitMintOperation<M extends MintMethod = MintMethod>
+export interface InitMintOperation<M extends MintMethod = BuiltInMintMethod>
   extends MintOperationBase<M>, MintIntentData {
   state: 'init';
   quoteId: string;
 }
 
-export interface PendingMintOperation<M extends MintMethod = MintMethod>
+export interface PendingMintOperation<M extends MintMethod = BuiltInMintMethod>
   extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'pending';
 }
 
-export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
+export interface ExecutingMintOperation<M extends MintMethod = BuiltInMintMethod>
   extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'executing';
 }
 
-export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
+export interface FinalizedMintOperation<M extends MintMethod = BuiltInMintMethod>
   extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'finalized';
 }
 
-export interface FailedMintOperation<M extends MintMethod = MintMethod>
+export interface FailedMintOperation<M extends MintMethod = BuiltInMintMethod>
   extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
   state: 'failed';
 }
 
-export type MintOperation<M extends MintMethod = MintMethod> =
+export type MintOperation<M extends MintMethod = BuiltInMintMethod> =
   | InitMintOperation<M>
   | PendingMintOperation<M>
   | ExecutingMintOperation<M>
   | FinalizedMintOperation<M>
   | FailedMintOperation<M>;
 
-export type PendingOrLaterOperation<M extends MintMethod = MintMethod> =
+export type PendingOrLaterOperation<M extends MintMethod = BuiltInMintMethod> =
   | PendingMintOperation<M>
   | ExecutingMintOperation<M>
   | FinalizedMintOperation<M>
   | FailedMintOperation<M>;
 
-export type TerminalMintOperation<M extends MintMethod = MintMethod> =
+export type TerminalMintOperation<M extends MintMethod = BuiltInMintMethod> =
   | FinalizedMintOperation<M>
   | FailedMintOperation<M>;
 

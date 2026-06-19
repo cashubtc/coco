@@ -147,7 +147,7 @@ export class MeltOperationService {
         },
         normalizedUnit,
         operationQuoteId ? { quoteId: operationQuoteId } : undefined,
-      );
+      ) as InitMeltOperation;
 
       await this.meltOperationRepository.create(operation);
       return operation;
@@ -238,10 +238,11 @@ export class MeltOperationService {
       case 'bolt12':
         return { offer: quote.request };
       case 'onchain': {
-        const { feeIndex } = resolveOnchainMeltFeeOption(quote, options.feeIndex);
+        const onchainQuote = quote as MeltQuote<'onchain'>;
+        const { feeIndex } = resolveOnchainMeltFeeOption(onchainQuote, options.feeIndex);
         return {
-          address: quote.request,
-          amountSats: quote.amount,
+          address: onchainQuote.request,
+          amountSats: onchainQuote.amount,
           feeIndex,
         };
       }

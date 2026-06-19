@@ -62,6 +62,7 @@ describe('MintOnchainHandler', () => {
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'onchain'> => ({
     mintUrl,
+    method: 'onchain',
     createQuoteData: { unit: 'sat' },
     wallet,
     mintAdapter,

@@ -95,6 +95,7 @@ describe('MintBolt11Handler', () => {
 
   const buildCreateQuoteContext = (): CreateMintQuoteContext<'bolt11'> => ({
     mintUrl,
+    method: 'bolt11',
     createQuoteData: { amount: { amount: Amount.from(10), unit: 'sat' } },
     wallet,
     mintAdapter,

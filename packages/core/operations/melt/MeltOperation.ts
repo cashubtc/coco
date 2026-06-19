@@ -30,7 +30,12 @@ export type MeltOperationState =
 
 import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
-import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
+import type {
+  BuiltInMeltMethod,
+  MeltMethod,
+  MeltMethodData,
+  MeltMethodMeta,
+} from './MeltMethodHandler';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 
 // ============================================================================
@@ -40,7 +45,7 @@ import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 /**
  * Base fields present in all melt operations
  */
-interface MeltOperationBase extends MeltMethodMeta {
+interface MeltOperationBase<M extends MeltMethod = BuiltInMeltMethod> extends MeltMethodMeta<M> {
   /** Unique identifier for this operation */
   id: string;
 
@@ -99,7 +104,7 @@ interface PreparedData {
 /**
  * Method-specific data that may be available once a melt has settled.
  */
-export interface MeltMethodFinalizedDataMap {
+type BuiltInMeltMethodFinalizedDataMap = {
   bolt11: {
     preimage?: string;
     outpoint?: never;
@@ -112,10 +117,16 @@ export interface MeltMethodFinalizedDataMap {
     preimage?: never;
     outpoint?: string;
   };
-}
+};
 
-export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
-  MeltMethodFinalizedDataMap[M];
+export type GenericMeltMethodFinalizedData = {
+  rawFinalResponseData?: Record<string, unknown>;
+};
+
+export type MeltMethodFinalizedData<M extends MeltMethod = BuiltInMeltMethod> =
+  M extends keyof BuiltInMeltMethodFinalizedDataMap
+    ? BuiltInMeltMethodFinalizedDataMap[M]
+    : GenericMeltMethodFinalizedData;
 
 // ============================================================================
 // State-specific Operation Types
@@ -124,7 +135,9 @@ export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
 /**
  * Initial state - operation just created, nothing reserved yet
  */
-export interface InitMeltOperation extends MeltOperationBase {
+export interface InitMeltOperation<
+  M extends MeltMethod = BuiltInMeltMethod,
+> extends MeltOperationBase<M> {
   state: 'init';
   /** Existing canonical quote to prepare against. */
   quoteId?: string;
@@ -133,21 +146,24 @@ export interface InitMeltOperation extends MeltOperationBase {
 /**
  * Prepared state - proofs reserved, outputs calculated, ready to execute
  */
-export interface PreparedMeltOperation extends MeltOperationBase, PreparedData {
+export interface PreparedMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'prepared';
 }
 
 /**
  * Executing state - swap/token creation in progress
  */
-export interface ExecutingMeltOperation extends MeltOperationBase, PreparedData {
+export interface ExecutingMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'executing';
 }
 
 /**
  * Pending state - token returned, awaiting confirmation that proofs are spent
  */
-export interface PendingMeltOperation extends MeltOperationBase, PreparedData {
+export interface PendingMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'pending';
 }
 
@@ -155,7 +171,8 @@ export interface PendingMeltOperation extends MeltOperationBase, PreparedData {
  * Finalized state - sent proofs confirmed spent, operation finalized.
  * Contains actual settlement amounts after the melt is complete.
  */
-interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
+interface FinalizedMeltOperationBase<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'finalized';
 
   /**
@@ -176,15 +193,16 @@ interface FinalizedMeltOperationBase extends MeltOperationBase, PreparedData {
   effectiveFee?: Amount;
 }
 
-export type FinalizedMeltOperation<M extends MeltMethod = MeltMethod> = FinalizedMeltOperationBase &
-  MeltMethodMeta<M> & {
+export type FinalizedMeltOperation<M extends MeltMethod = BuiltInMeltMethod> =
+  FinalizedMeltOperationBase<M> & {
     finalizedData?: MeltMethodFinalizedData<M>;
   };
 
 /**
  * Failed state - melt failed, proofs reclaimed
  */
-export interface FailedMeltOperation extends MeltOperationBase, PreparedData {
+export interface FailedMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'failed';
 }
 
@@ -193,7 +211,8 @@ export interface FailedMeltOperation extends MeltOperationBase, PreparedData {
  * This is a transient state used to prevent race conditions with ProofStateWatcher.
  * Only used when rolling back from 'pending' state (which requires a reclaim swap).
  */
-export interface RollingBackMeltOperation extends MeltOperationBase, PreparedData {
+export interface RollingBackMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'rolling_back';
 }
 
@@ -201,7 +220,8 @@ export interface RollingBackMeltOperation extends MeltOperationBase, PreparedDat
  * Rolled back state - operation cancelled, proofs reclaimed
  * Can be rolled back from prepared, executing, or pending states
  */
-export interface RolledBackMeltOperation extends MeltOperationBase, PreparedData {
+export interface RolledBackMeltOperation<M extends MeltMethod = BuiltInMeltMethod>
+  extends MeltOperationBase<M>, PreparedData {
   state: 'rolled_back';
 }
 
@@ -213,15 +233,15 @@ export interface RolledBackMeltOperation extends MeltOperationBase, PreparedData
  * Discriminated union of all melt operation states.
  * TypeScript will narrow the type based on the `state` field.
  */
-export type MeltOperation =
-  | InitMeltOperation
-  | PreparedMeltOperation
-  | ExecutingMeltOperation
-  | PendingMeltOperation
-  | FinalizedMeltOperation
-  | FailedMeltOperation
-  | RollingBackMeltOperation
-  | RolledBackMeltOperation;
+export type MeltOperation<M extends MeltMethod = BuiltInMeltMethod> =
+  | InitMeltOperation<M>
+  | PreparedMeltOperation<M>
+  | ExecutingMeltOperation<M>
+  | PendingMeltOperation<M>
+  | FinalizedMeltOperation<M>
+  | FailedMeltOperation<M>
+  | RollingBackMeltOperation<M>
+  | RolledBackMeltOperation<M>;
 
 // ============================================================================
 // Utility Types
@@ -230,67 +250,85 @@ export type MeltOperation =
 /**
  * Any operation that has been prepared (has PreparedData)
  */
-export type PreparedOrLaterOperation =
-  | PreparedMeltOperation
-  | ExecutingMeltOperation
-  | PendingMeltOperation
-  | FinalizedMeltOperation
-  | FailedMeltOperation
-  | RollingBackMeltOperation
-  | RolledBackMeltOperation;
+export type PreparedOrLaterOperation<M extends MeltMethod = BuiltInMeltMethod> =
+  | PreparedMeltOperation<M>
+  | ExecutingMeltOperation<M>
+  | PendingMeltOperation<M>
+  | FinalizedMeltOperation<M>
+  | FailedMeltOperation<M>
+  | RollingBackMeltOperation<M>
+  | RolledBackMeltOperation<M>;
 
 /**
  * Terminal states - operation is finished
  * Note: 'rolling_back' is NOT terminal - it's a transient state that needs recovery
  */
-export type TerminalMeltOperation =
-  | FinalizedMeltOperation
-  | RolledBackMeltOperation
-  | FailedMeltOperation;
+export type TerminalMeltOperation<M extends MeltMethod = BuiltInMeltMethod> =
+  | FinalizedMeltOperation<M>
+  | RolledBackMeltOperation<M>
+  | FailedMeltOperation<M>;
 
 // ============================================================================
 // Type Guards
 // ============================================================================
 
-export function isInitOperation(op: MeltOperation): op is InitMeltOperation {
+export function isInitOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is InitMeltOperation<M> {
   return op.state === 'init';
 }
 
-export function isPreparedOperation(op: MeltOperation): op is PreparedMeltOperation {
+export function isPreparedOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is PreparedMeltOperation<M> {
   return op.state === 'prepared';
 }
 
-export function isExecutingOperation(op: MeltOperation): op is ExecutingMeltOperation {
+export function isExecutingOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is ExecutingMeltOperation<M> {
   return op.state === 'executing';
 }
 
-export function isPendingOperation(op: MeltOperation): op is PendingMeltOperation {
+export function isPendingOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is PendingMeltOperation<M> {
   return op.state === 'pending';
 }
 
-export function isFinalizedOperation(op: MeltOperation): op is FinalizedMeltOperation {
+export function isFinalizedOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is FinalizedMeltOperation<M> {
   return op.state === 'finalized';
 }
 
-export function isRollingBackOperation(op: MeltOperation): op is RollingBackMeltOperation {
+export function isRollingBackOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is RollingBackMeltOperation<M> {
   return op.state === 'rolling_back';
 }
 
-export function isRolledBackOperation(op: MeltOperation): op is RolledBackMeltOperation {
+export function isRolledBackOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is RolledBackMeltOperation<M> {
   return op.state === 'rolled_back';
 }
 
 /**
  * Check if operation has PreparedData (any state after init)
  */
-export function hasPreparedData(op: MeltOperation): op is PreparedOrLaterOperation {
+export function hasPreparedData<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is PreparedOrLaterOperation<M> {
   return op.state !== 'init';
 }
 
 /**
  * Check if operation is in a terminal state
  */
-export function isTerminalOperation(op: MeltOperation): op is TerminalMeltOperation {
+export function isTerminalOperation<M extends MeltMethod>(
+  op: MeltOperation<M>,
+): op is TerminalMeltOperation<M> {
   return op.state === 'finalized' || op.state === 'rolled_back' || op.state === 'failed';
 }
 
@@ -301,13 +339,13 @@ export function isTerminalOperation(op: MeltOperation): op is TerminalMeltOperat
 /**
  * Creates a new SendOperation in init state
  */
-export function createMeltOperation(
+export function createMeltOperation<M extends MeltMethod>(
   id: string,
   mintUrl: string,
-  meta: MeltMethodMeta,
+  meta: MeltMethodMeta<M>,
   unit = DEFAULT_UNIT,
   options?: { quoteId?: string },
-): InitMeltOperation {
+): InitMeltOperation<M> {
   const now = Date.now();
   return {
     ...meta,

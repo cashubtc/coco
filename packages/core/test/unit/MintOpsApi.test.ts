@@ -44,6 +44,23 @@ type _AssertListByQuoteUsesQuoteIdentity = Assert<
 type _AssertDefaultAllowsBolt12Mint = Assert<
   'bolt12' extends PrepareMintInput['quote']['method'] ? true : false
 >;
+type GenericPrepareMintInput = Parameters<MintOpsApi<'fedimint'>['prepare']>[0];
+type GenericPrepareMintReturn = Awaited<ReturnType<MintOpsApi<'fedimint'>['prepare']>>;
+type _AssertGenericMintPrepareAcceptsArbitraryMethod = Assert<
+  GenericPrepareMintInput extends {
+    quote: {
+      mintUrl: string;
+      quoteId: string;
+      method: 'fedimint';
+    };
+    amount: unknown;
+  }
+    ? true
+    : false
+>;
+type _AssertGenericMintPrepareReturnPreservesMethod = Assert<
+  GenericPrepareMintReturn extends PendingMintOperation<'fedimint'> ? true : false
+>;
 
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',

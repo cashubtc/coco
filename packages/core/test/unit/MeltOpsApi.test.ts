@@ -65,6 +65,23 @@ type _AssertGetByQuoteUsesObjectInput = Assert<
     ? true
     : false
 >;
+type GenericPrepareMeltInput = Parameters<MeltOpsApi<'gift-card'>['prepare']>[0];
+type GenericPrepareMeltReturn = Awaited<ReturnType<MeltOpsApi<'gift-card'>['prepare']>>;
+type _AssertGenericMeltPrepareAcceptsArbitraryMethod = Assert<
+  GenericPrepareMeltInput extends {
+    quote: {
+      mintUrl: string;
+      quoteId: string;
+      method: 'gift-card';
+    };
+    feeIndex?: number;
+  }
+    ? true
+    : false
+>;
+type _AssertGenericMeltPrepareReturnPreservesMethod = Assert<
+  GenericPrepareMeltReturn extends PreparedMeltOperation<'gift-card'> ? true : false
+>;
 
 const supportedPrepareInput: PrepareMeltInput = {
   quote: {

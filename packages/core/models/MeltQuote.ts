@@ -8,12 +8,14 @@ import {
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
   MeltMethod,
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
 } from '../operations/melt/MeltMethodHandler';
 
-type BoltMeltMethod = Extract<MeltMethod, 'bolt11' | 'bolt12'>;
+type BoltMeltMethod = 'bolt11' | 'bolt12';
 
 interface MeltQuoteBase<M extends MeltMethod> {
   mintUrl: string;
@@ -46,11 +48,19 @@ export interface OnchainMeltQuote extends MeltQuoteBase<'onchain'> {
   outpoint?: string;
 }
 
-export type MeltQuote<M extends MeltMethod = MeltMethod> = M extends 'onchain'
+export interface GenericMeltQuote<M extends string = string> extends MeltQuoteBase<
+  GenericMeltMethod<M>
+> {
+  fee_reserve: Amount;
+  payment_preimage?: string | null;
+  rawQuoteData?: Record<string, unknown>;
+}
+
+export type MeltQuote<M extends MeltMethod = BuiltInMeltMethod> = M extends 'onchain'
   ? OnchainMeltQuote
   : M extends BoltMeltMethod
     ? BoltMeltQuote<M>
-    : never;
+    : GenericMeltQuote<Extract<M, string>>;
 
 type BoltMeltQuoteResponse = MeltQuoteBolt11Response | MeltQuoteBolt12Response;
 
@@ -128,30 +138,48 @@ export function meltQuoteToMethodSnapshot<M extends MeltMethod>(
   quote: MeltQuote<M>,
 ): MeltMethodQuoteSnapshot<M> {
   if (quote.method === 'onchain') {
+    const onchainQuote = quote as MeltQuote<'onchain'>;
     return {
-      quote: quote.quoteId,
-      request: quote.request,
-      amount: quote.amount,
-      unit: quote.unit,
-      fee_options: quote.fee_options,
+      quote: onchainQuote.quoteId,
+      request: onchainQuote.request,
+      amount: onchainQuote.amount,
+      unit: onchainQuote.unit,
+      fee_options: onchainQuote.fee_options,
       selected_fee_index: null,
-      outpoint: quote.outpoint ?? null,
-      expiry: quote.expiry,
-      state: quote.state,
-      change: quote.change,
+      outpoint: onchainQuote.outpoint ?? null,
+      expiry: onchainQuote.expiry,
+      state: onchainQuote.state,
+      change: onchainQuote.change,
     } as MeltMethodQuoteSnapshot<M>;
   }
 
+  if (quote.method === 'bolt11' || quote.method === 'bolt12') {
+    const boltQuote = quote as BoltMeltQuote;
+    return {
+      quote: boltQuote.quoteId,
+      request: boltQuote.request,
+      amount: boltQuote.amount,
+      unit: boltQuote.unit,
+      fee_reserve: boltQuote.fee_reserve,
+      expiry: boltQuote.expiry,
+      state: boltQuote.state,
+      payment_preimage: boltQuote.payment_preimage ?? null,
+      change: boltQuote.change,
+    } as MeltMethodQuoteSnapshot<M>;
+  }
+
+  const genericQuote = quote as GenericMeltQuote;
   return {
-    quote: quote.quoteId,
-    request: quote.request,
-    amount: quote.amount,
-    unit: quote.unit,
-    fee_reserve: quote.fee_reserve,
-    expiry: quote.expiry,
-    state: quote.state,
-    payment_preimage: quote.payment_preimage ?? null,
-    change: quote.change,
+    quote: genericQuote.quoteId,
+    request: genericQuote.request,
+    amount: genericQuote.amount,
+    unit: genericQuote.unit,
+    fee_reserve: genericQuote.fee_reserve,
+    expiry: genericQuote.expiry,
+    state: genericQuote.state,
+    payment_preimage: genericQuote.payment_preimage ?? null,
+    change: genericQuote.change,
+    ...(genericQuote.rawQuoteData ?? {}),
   } as MeltMethodQuoteSnapshot<M>;
 }
 

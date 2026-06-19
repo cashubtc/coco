@@ -2,7 +2,6 @@ import type { Amount } from '@cashu/cashu-ts';
 import type {
   ExecutingMeltOperation,
   FinalizeResult,
-  MeltMethodMeta,
   MeltMethod,
   ExecutionResult,
 } from '@core/operations/melt';
@@ -61,7 +60,7 @@ export function getSwapSendSecrets(swapOutputData: SerializedOutputData): string
  * Used when the melt completed successfully.
  */
 export function buildPaidResult<M extends MeltMethod>(
-  operation: ExecutingMeltOperation & MeltMethodMeta<M>,
+  operation: ExecutingMeltOperation<M>,
   finalizeResult: FinalizeResult<M>,
 ): ExecutionResult<M> {
   return {
@@ -80,7 +79,7 @@ export function buildPaidResult<M extends MeltMethod>(
  * Used when the melt is in-flight and awaiting confirmation.
  */
 export function buildPendingResult<M extends MeltMethod>(
-  operation: ExecutingMeltOperation & MeltMethodMeta<M>,
+  operation: ExecutingMeltOperation<M>,
 ): ExecutionResult<M> {
   return {
     status: 'PENDING',
@@ -93,7 +92,7 @@ export function buildPendingResult<M extends MeltMethod>(
  * Used when the melt failed and proofs need recovery.
  */
 export function buildFailedResult<M extends MeltMethod>(
-  operation: ExecutingMeltOperation & MeltMethodMeta<M>,
+  operation: ExecutingMeltOperation<M>,
   error?: string,
 ): ExecutionResult<M> {
   return {

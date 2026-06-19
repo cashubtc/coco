@@ -98,6 +98,7 @@ describe('MeltOnchainHandler', () => {
     const ctx = {
       ...baseDeps(),
       mintUrl,
+      method: 'onchain',
       methodData: { address: 'bc1ptest', amountSats: Amount.from(21) },
       unit: 'sat',
       wallet,

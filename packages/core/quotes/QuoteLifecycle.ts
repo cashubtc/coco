@@ -42,6 +42,7 @@ import type {
 import { normalizeMeltMethodData } from '../operations/melt/MeltMethodHandler';
 import type { InitMintOperation, PendingOrLaterOperation } from '../operations/mint/MintOperation';
 import type {
+  BuiltInMintMethod,
   MintMethod,
   MintMethodCreateQuoteData,
   MintMethodQuoteSnapshot,
@@ -242,13 +243,15 @@ export class QuoteLifecycle {
     const quote = await handler.createQuote({
       ...this.buildDeps(),
       mintUrl,
+      method,
       createQuoteData,
       wallet,
     } as any);
 
-    await this.mintQuoteRepository.upsertMintQuote(quote);
+    await this.mintQuoteRepository.upsertMintQuote(quote as MintQuote);
     const persistedQuote =
-      (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
+      (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ??
+      (quote as MintQuote);
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
       quoteId: persistedQuote.quoteId,
@@ -262,7 +265,7 @@ export class QuoteLifecycle {
       quoteId: persistedQuote.quoteId,
       quote: persistedQuote,
     });
-    return persistedQuote;
+    return persistedQuote as MintQuote;
   }
 
   getMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote | null> {
@@ -369,7 +372,7 @@ export class QuoteLifecycle {
     return mintQuoteToMethodSnapshot(quote);
   }
 
-  async importMintQuote<M extends MintMethod>(
+  async importMintQuote<M extends BuiltInMintMethod>(
     mintUrl: string,
     method: M,
     quote: MintMethodQuoteSnapshot<M>,
@@ -392,7 +395,7 @@ export class QuoteLifecycle {
 
   private async resolveAndPersistMintQuoteSnapshot(
     mintUrl: string,
-    method: MintMethod,
+    method: BuiltInMintMethod,
     quote: MintMethodQuoteSnapshot,
     beforePersist?: (quote: MintQuote) => Promise<void>,
   ): Promise<{ quote: MintQuote; remoteStateChanged: boolean }> {
@@ -450,17 +453,22 @@ export class QuoteLifecycle {
       };
     }
     if (existing?.reusable && canonicalQuote.reusable) {
+      const reusableExisting = existing as Extract<MintQuote, { reusable: true }>;
+      const reusableCanonicalQuote = canonicalQuote as Extract<MintQuote, { reusable: true }>;
       canonicalQuote = {
-        ...canonicalQuote,
+        ...reusableCanonicalQuote,
         quoteData: {
-          ...canonicalQuote.quoteData,
-          amountPaid: maxAmount(existing.quoteData.amountPaid, canonicalQuote.quoteData.amountPaid),
+          ...reusableCanonicalQuote.quoteData,
+          amountPaid: maxAmount(
+            reusableExisting.quoteData.amountPaid,
+            reusableCanonicalQuote.quoteData.amountPaid,
+          ),
           amountIssued: maxAmount(
-            existing.quoteData.amountIssued,
-            canonicalQuote.quoteData.amountIssued,
+            reusableExisting.quoteData.amountIssued,
+            reusableCanonicalQuote.quoteData.amountIssued,
           ),
         },
-      };
+      } as MintQuote;
     }
 
     const remoteStateChanged = getRemoteStateChange(existing, canonicalQuote, quote);
@@ -471,7 +479,7 @@ export class QuoteLifecycle {
 
   async recordMintQuoteSnapshot(
     mintUrl: string,
-    method: MintMethod,
+    method: BuiltInMintMethod,
     snapshot: MintMethodQuoteSnapshot,
   ): Promise<MintQuote> {
     const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
@@ -551,6 +559,7 @@ export class QuoteLifecycle {
     const quote = await handler.createQuote({
       ...this.buildDeps(),
       mintUrl,
+      method,
       methodData: normalizedMethodData,
       unit: normalizedUnit,
       wallet,
@@ -561,9 +570,10 @@ export class QuoteLifecycle {
       );
     }
 
-    await this.meltQuoteRepository.upsertMeltQuote(quote);
+    await this.meltQuoteRepository.upsertMeltQuote(quote as MeltQuote);
     const persistedQuote =
-      (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
+      (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ??
+      (quote as MeltQuote);
     return persistedQuote as MeltQuote<M>;
   }
 
@@ -736,23 +746,24 @@ export class QuoteLifecycle {
       );
     }
 
+    const bolt11Operation = operation as PendingOrLaterOperation<'bolt11'>;
     await this.mintQuoteRepository.upsertMintQuote({
-      mintUrl: operation.mintUrl,
-      method: operation.method,
-      quoteId: operation.quoteId,
-      quote: operation.quoteId,
-      request: operation.request,
-      unit: operation.unit,
-      amount: operation.amount,
-      expiry: operation.expiry,
-      pubkey: operation.pubkey,
+      mintUrl: bolt11Operation.mintUrl,
+      method: 'bolt11',
+      quoteId: bolt11Operation.quoteId,
+      quote: bolt11Operation.quoteId,
+      request: bolt11Operation.request,
+      unit: bolt11Operation.unit,
+      amount: bolt11Operation.amount,
+      expiry: bolt11Operation.expiry,
+      pubkey: bolt11Operation.pubkey,
       state: 'UNPAID',
       reusable: false,
       quoteData: {
-        amount: operation.amount,
+        amount: bolt11Operation.amount,
       },
-      createdAt: operation.createdAt,
-      updatedAt: operation.updatedAt,
+      createdAt: bolt11Operation.createdAt,
+      updatedAt: bolt11Operation.updatedAt,
     });
   }
 }

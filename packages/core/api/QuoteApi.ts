@@ -1,15 +1,22 @@
-import type { MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethodQuoteSnapshot } from '@core/operations/mint';
+import type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
+  MeltMethodInputData,
+} from '@core/operations/melt';
+import { assertGenericMeltMethod } from '@core/operations/melt';
+import type {
+  BuiltInMintMethod,
+  GenericMintMethod,
+  MintMethodQuoteSnapshot,
+} from '@core/operations/mint';
+import { assertGenericMintMethod } from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
-import type { MeltQuote } from '../models/MeltQuote';
-import type { MintQuote } from '../models/MintQuote';
+import type { GenericMeltQuote, MeltQuote } from '../models/MeltQuote';
+import type { GenericMintQuote, MintQuote } from '../models/MintQuote';
 import type { QuoteIdentity } from '../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
-import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
-export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain' | 'bolt12';
-
-export type CreateMintQuoteInput =
+export type CreateMintQuoteInput<M extends BuiltInMintMethod = BuiltInMintMethod> = Extract<
   | {
       mintUrl: string;
       method: 'bolt11';
@@ -27,7 +34,17 @@ export type CreateMintQuoteInput =
       unit?: string;
       amount?: UnitAmountLike;
       description?: string;
-    };
+    },
+  { method: M }
+>;
+
+export type CreateGenericMintQuoteInput<M extends string = string> = {
+  mintUrl: string;
+  method: GenericMintMethod<M>;
+  amount: UnitAmountLike;
+  unit?: string;
+  payload?: Record<string, unknown>;
+};
 
 export type ImportMintQuoteInput = {
   /** Mint that issued the existing quote. */
@@ -39,12 +56,10 @@ export type ImportMintQuoteInput = {
 };
 
 export type ListPendingMintQuotesInput = {
-  method?: DefaultSupportedMintQuoteMethod;
+  method?: BuiltInMintMethod;
 };
 
-export type CreateMeltQuoteInput<
-  TSupported extends DefaultSupportedMeltMethod = DefaultSupportedMeltMethod,
-> = {
+export type CreateMeltQuoteInput<TSupported extends BuiltInMeltMethod = BuiltInMeltMethod> = {
   [M in TSupported]: {
     mintUrl: string;
     method: M;
@@ -53,14 +68,26 @@ export type CreateMeltQuoteInput<
   };
 }[TSupported];
 
+export type CreateGenericMeltQuoteInput<M extends string = string> = {
+  mintUrl: string;
+  method: GenericMeltMethod<M>;
+  request: string;
+  unit?: string;
+  payload?: Record<string, unknown>;
+};
+
 export type ListPendingMeltQuotesInput = {
-  method?: DefaultSupportedMeltMethod;
+  method?: BuiltInMeltMethod;
 };
 
 export class MintQuoteApi {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
-  async create(input: CreateMintQuoteInput): Promise<MintQuote> {
+  async create(input: CreateMintQuoteInput<'bolt11'>): Promise<MintQuote<'bolt11'>>;
+  async create(input: CreateMintQuoteInput<'onchain'>): Promise<MintQuote<'onchain'>>;
+  async create(input: CreateMintQuoteInput<'bolt12'>): Promise<MintQuote<'bolt12'>>;
+  async create(input: CreateMintQuoteInput): Promise<MintQuote<BuiltInMintMethod>>;
+  async create(input: CreateMintQuoteInput): Promise<MintQuote<BuiltInMintMethod>> {
     if (input.method === 'bolt11') {
       const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
       return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
@@ -86,6 +113,18 @@ export class MintQuoteApi {
     });
   }
 
+  async createGeneric<M extends string>(
+    input: CreateGenericMintQuoteInput<M>,
+  ): Promise<GenericMintQuote<M>> {
+    assertGenericMintMethod(input.method);
+    const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
+    return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
+      amount: parsed,
+      unit: parsed.unit,
+      payload: input.payload,
+    }) as Promise<GenericMintQuote<M>>;
+  }
+
   get(input: QuoteIdentity): Promise<MintQuote | null> {
     return this.quoteLifecycle.getMintQuoteById(input);
   }
@@ -106,15 +145,28 @@ export class MintQuoteApi {
 export class MeltQuoteApi {
   constructor(private readonly quoteLifecycle: QuoteLifecycle) {}
 
-  create<M extends DefaultSupportedMeltMethod>(
-    input: CreateMeltQuoteInput<M>,
-  ): Promise<MeltQuote<M>> {
+  create<M extends BuiltInMeltMethod>(input: CreateMeltQuoteInput<M>): Promise<MeltQuote<M>> {
     return this.quoteLifecycle.createMeltQuote(
       input.mintUrl,
       input.method,
       input.methodData,
       input.unit,
     );
+  }
+
+  async createGeneric<M extends string>(
+    input: CreateGenericMeltQuoteInput<M>,
+  ): Promise<GenericMeltQuote<M>> {
+    assertGenericMeltMethod(input.method);
+    return this.quoteLifecycle.createMeltQuote(
+      input.mintUrl,
+      input.method,
+      {
+        request: input.request,
+        payload: input.payload,
+      } as MeltMethodInputData<GenericMeltMethod<M>>,
+      input.unit,
+    ) as Promise<GenericMeltQuote<M>>;
   }
 
   get(input: QuoteIdentity): Promise<MeltQuote | null> {

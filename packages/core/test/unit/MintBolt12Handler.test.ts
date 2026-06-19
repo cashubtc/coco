@@ -157,6 +157,7 @@ describe('MintBolt12Handler', () => {
     const result = await handler.createQuote({
       ...buildPrepareContext(),
       mintUrl,
+      method: 'bolt12',
       createQuoteData: {
         unit: 'sat',
         amount: { amount: Amount.from(10), unit: 'sat' },
@@ -182,6 +183,7 @@ describe('MintBolt12Handler', () => {
       handler.createQuote({
         ...buildPrepareContext(),
         mintUrl,
+        method: 'bolt12',
         createQuoteData: {
           unit: 'sat',
           amount: { amount: Amount.from(10), unit: 'sat' },
@@ -199,6 +201,7 @@ describe('MintBolt12Handler', () => {
       handler.createQuote({
         ...buildPrepareContext(),
         mintUrl,
+        method: 'bolt12',
         createQuoteData: {
           unit: 'sat',
           amount: { amount: Amount.from(10), unit: 'sat' },
@@ -216,6 +219,7 @@ describe('MintBolt12Handler', () => {
       handler.createQuote({
         ...buildPrepareContext(),
         mintUrl,
+        method: 'bolt12',
         createQuoteData: {
           unit: 'sat',
           amount: { amount: Amount.from(10), unit: 'sat' },
@@ -232,6 +236,7 @@ describe('MintBolt12Handler', () => {
     const result = await handler.createQuote({
       ...buildPrepareContext(),
       mintUrl,
+      method: 'bolt12',
       createQuoteData: {
         unit: 'sat',
         description: 'pay any amount',

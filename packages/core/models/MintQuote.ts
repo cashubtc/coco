@@ -5,6 +5,8 @@ import {
   type MintQuoteBolt12Response,
 } from '@cashu/cashu-ts';
 import type {
+  BuiltInMintMethod,
+  GenericMintMethod,
   MintMethod,
   MintMethodQuoteData,
   MintMethodQuoteSnapshot,
@@ -56,13 +58,22 @@ export type Bolt12MintQuote = MintQuoteBase<'bolt12'> & {
   reusable: true;
 };
 
-export type MintQuote<M extends MintMethod = MintMethod> = M extends 'bolt11'
+export type GenericMintQuote<M extends string = string> = MintQuoteBase<GenericMintMethod<M>> & {
+  amount?: never;
+  state?: never;
+  lastObservedRemoteState?: never;
+  lastObservedRemoteStateAt?: number;
+  reusable: true;
+  rawQuoteData?: Record<string, unknown>;
+};
+
+export type MintQuote<M extends MintMethod = BuiltInMintMethod> = M extends 'bolt11'
   ? Bolt11MintQuote
   : M extends 'onchain'
     ? OnchainMintQuote
     : M extends 'bolt12'
       ? Bolt12MintQuote
-      : never;
+      : GenericMintQuote<Extract<M, string>>;
 
 export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt11'> {
   return quote.method === 'bolt11';
@@ -194,37 +205,54 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
   quote: MintQuote<M>,
 ): MintMethodQuoteSnapshot<M> {
   if (quote.method === 'bolt11') {
+    const bolt11Quote = quote as MintQuote<'bolt11'>;
     return {
-      quote: quote.quoteId,
-      request: quote.request,
-      amount: quote.amount,
-      unit: quote.unit,
-      expiry: quote.expiry,
-      pubkey: quote.pubkey,
-      state: quote.state,
+      quote: bolt11Quote.quoteId,
+      request: bolt11Quote.request,
+      amount: bolt11Quote.amount,
+      unit: bolt11Quote.unit,
+      expiry: bolt11Quote.expiry,
+      pubkey: bolt11Quote.pubkey,
+      state: bolt11Quote.state,
     } as MintMethodQuoteSnapshot<M>;
   }
 
   if (quote.method === 'onchain') {
+    const onchainQuote = quote as MintQuote<'onchain'>;
     return {
-      quote: quote.quoteId,
-      request: quote.request,
-      unit: quote.unit,
-      expiry: quote.expiry,
-      pubkey: quote.quoteData.pubkey,
-      amount_paid: quote.quoteData.amountPaid,
-      amount_issued: quote.quoteData.amountIssued,
+      quote: onchainQuote.quoteId,
+      request: onchainQuote.request,
+      unit: onchainQuote.unit,
+      expiry: onchainQuote.expiry,
+      pubkey: onchainQuote.quoteData.pubkey,
+      amount_paid: onchainQuote.quoteData.amountPaid,
+      amount_issued: onchainQuote.quoteData.amountIssued,
     } as MintMethodQuoteSnapshot<M>;
   }
 
+  if (quote.method === 'bolt12') {
+    const bolt12Quote = quote as MintQuote<'bolt12'>;
+    return {
+      quote: bolt12Quote.quoteId,
+      request: bolt12Quote.request,
+      amount: bolt12Quote.amount,
+      unit: bolt12Quote.unit,
+      expiry: bolt12Quote.expiry,
+      pubkey: bolt12Quote.quoteData.pubkey,
+      amount_paid: bolt12Quote.quoteData.amountPaid,
+      amount_issued: bolt12Quote.quoteData.amountIssued,
+    } as MintMethodQuoteSnapshot<M>;
+  }
+
+  const genericQuote = quote as GenericMintQuote;
   return {
-    quote: quote.quoteId,
-    request: quote.request,
-    amount: quote.amount,
-    unit: quote.unit,
-    expiry: quote.expiry,
-    pubkey: quote.quoteData.pubkey,
-    amount_paid: quote.quoteData.amountPaid,
-    amount_issued: quote.quoteData.amountIssued,
+    quote: genericQuote.quoteId,
+    request: genericQuote.request,
+    unit: genericQuote.unit,
+    expiry: genericQuote.expiry,
+    pubkey: genericQuote.quoteData.pubkey,
+    amount_paid: genericQuote.quoteData.amountPaid,
+    amount_issued: genericQuote.quoteData.amountIssued,
+    ...(genericQuote.rawQuoteData ?? {}),
   } as MintMethodQuoteSnapshot<M>;
 }

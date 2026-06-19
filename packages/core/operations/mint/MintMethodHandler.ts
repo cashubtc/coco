@@ -1,5 +1,6 @@
 import type {
   Amount,
+  AmountLike,
   MintQuoteBolt11Response,
   MintQuoteOnchainResponse,
   MintQuoteBolt12Response,
@@ -23,11 +24,45 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
 import type { MintQuote } from '../../models/MintQuote';
 
-/**
- * Registry of supported mint methods and payload shapes.
- * Extend via declaration merging to support additional methods.
- */
-export interface MintMethodDefinitions {
+export type BuiltInMintMethod = 'bolt11' | 'onchain' | 'bolt12';
+export type MintMethod = BuiltInMintMethod | (string & {});
+export type GenericMintMethod<M extends string = string> = M extends BuiltInMintMethod ? never : M;
+
+export const BUILT_IN_MINT_METHODS = ['bolt11', 'onchain', 'bolt12'] as const;
+
+export function isBuiltInMintMethod(method: string): method is BuiltInMintMethod {
+  return (BUILT_IN_MINT_METHODS as readonly string[]).includes(method);
+}
+
+export function assertGenericMintMethod(method: string): void {
+  if (isBuiltInMintMethod(method)) {
+    throw new Error(`Built-in mint method ${method} must use the built-in mint quote API`);
+  }
+}
+
+export type GenericMintQuoteCreateData = {
+  amount: UnitAmount;
+  unit: string;
+  payload?: Record<string, unknown>;
+};
+
+export type GenericMintQuoteData = {
+  pubkey?: string;
+  amountPaid: Amount;
+  amountIssued: Amount;
+};
+
+export type GenericMintQuoteSnapshot = {
+  quote: string;
+  request: string;
+  unit: string;
+  expiry?: number | null;
+  pubkey?: string;
+  amount_paid: AmountLike;
+  amount_issued: AmountLike;
+} & Record<string, unknown>;
+
+type BuiltInMintMethodMap = {
   bolt11: {
     methodData: Record<string, never>;
     createQuoteData: { amount: UnitAmount };
@@ -66,21 +101,32 @@ export interface MintMethodDefinitions {
     remoteState: never;
     quote: MintQuoteBolt12Response;
   };
-}
+};
 
-export type MintMethod = keyof MintMethodDefinitions;
-export type MintMethodData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['methodData'];
-export type MintMethodCreateQuoteData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['createQuoteData'];
-export type MintMethodQuoteData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['quoteData'];
-export type MintMethodRemoteState<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['remoteState'];
-export type MintMethodQuoteSnapshot<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['quote'];
+type GenericMintMethodDefinition = {
+  methodData: Record<string, unknown>;
+  createQuoteData: GenericMintQuoteCreateData;
+  quoteData: GenericMintQuoteData;
+  remoteState: never;
+  quote: GenericMintQuoteSnapshot;
+};
 
-export interface MintMethodMeta<M extends MintMethod = MintMethod> {
+type MintMethodDefinition<M extends MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodMap[M]
+  : GenericMintMethodDefinition;
+
+export type MintMethodData<M extends MintMethod = BuiltInMintMethod> =
+  MintMethodDefinition<M>['methodData'];
+export type MintMethodCreateQuoteData<M extends MintMethod = BuiltInMintMethod> =
+  MintMethodDefinition<M>['createQuoteData'];
+export type MintMethodQuoteData<M extends MintMethod = BuiltInMintMethod> =
+  MintMethodDefinition<M>['quoteData'];
+export type MintMethodRemoteState<M extends MintMethod = BuiltInMintMethod> =
+  MintMethodDefinition<M>['remoteState'];
+export type MintMethodQuoteSnapshot<M extends MintMethod = BuiltInMintMethod> =
+  MintMethodDefinition<M>['quote'];
+
+export interface MintMethodMeta<M extends MintMethod = BuiltInMintMethod> {
   method: M;
   methodData: MintMethodData<M>;
 }
@@ -95,37 +141,40 @@ export interface BaseHandlerDeps {
   logger?: Logger;
 }
 
-export interface CreateMintQuoteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface CreateMintQuoteContext<
+  M extends MintMethod = BuiltInMintMethod,
+> extends BaseHandlerDeps {
   mintUrl: string;
+  method: M;
   createQuoteData: MintMethodCreateQuoteData<M>;
   wallet: Wallet;
 }
 
 export interface FetchRemoteMintQuoteContext<
-  M extends MintMethod = MintMethod,
+  M extends MintMethod = BuiltInMintMethod,
 > extends BaseHandlerDeps {
   quote: MintQuote<M>;
 }
 
-export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface PrepareContext<M extends MintMethod = BuiltInMintMethod> extends BaseHandlerDeps {
   operation: InitMintOperation<M>;
   wallet: Wallet;
   importedQuote?: MintMethodQuoteSnapshot<M>;
 }
 
-export interface ExecuteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface ExecuteContext<M extends MintMethod = BuiltInMintMethod> extends BaseHandlerDeps {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
 }
 
 export interface RecoverExecutingContext<
-  M extends MintMethod = MintMethod,
+  M extends MintMethod = BuiltInMintMethod,
 > extends BaseHandlerDeps {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
 }
 
-export interface PendingContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface PendingContext<M extends MintMethod = BuiltInMintMethod> extends BaseHandlerDeps {
   operation: PendingMintOperation<M>;
   wallet: Wallet;
 }
@@ -150,7 +199,7 @@ export type RecoverExecutingResult =
 
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
-export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
+export interface PendingMintCheckResult<M extends MintMethod = BuiltInMintMethod> {
   observedRemoteState?: MintMethodRemoteState<M>;
   observedRemoteStateAt: number;
   quoteSnapshot?: MintMethodQuoteSnapshot<M>;
@@ -158,7 +207,7 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
   terminalFailure?: MintOperationFailure;
 }
 
-export interface MintMethodHandler<M extends MintMethod = MintMethod> {
+export interface MintMethodHandler<M extends MintMethod = BuiltInMintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
@@ -169,5 +218,5 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
 }
 
 export type MintMethodHandlerRegistry = {
-  [M in MintMethod]: MintMethodHandler<M>;
+  [M in BuiltInMintMethod]: MintMethodHandler<M>;
 };

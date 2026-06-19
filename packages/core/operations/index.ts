@@ -1,9 +1,17 @@
 export type { MeltOperation, MeltOperationState } from './melt/MeltOperation.ts';
-export type { MeltMethod, MeltMethodData, MeltMethodInputData } from './melt/MeltMethodHandler.ts';
+export type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
+  MeltMethod,
+  MeltMethodData,
+  MeltMethodInputData,
+} from './melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './melt/MeltMethodHandler.ts';
 export { MeltOperationService } from './melt/MeltOperationService.ts';
 export type { MintOperation, MintOperationState } from './mint/MintOperation.ts';
 export type {
+  BuiltInMintMethod,
+  GenericMintMethod,
   MintMethod,
   MintMethodData,
   MintMethodRemoteState,

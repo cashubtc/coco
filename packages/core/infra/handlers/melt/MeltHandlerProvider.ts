@@ -1,15 +1,18 @@
 import type {
+  BuiltInMeltMethod,
   MeltMethod,
   MeltMethodHandler,
   MeltMethodHandlerRegistry,
 } from '../../../operations/melt/MeltMethodHandler';
+import { isBuiltInMeltMethod } from '../../../operations/melt/MeltMethodHandler';
 
 /**
  * Runtime registry for melt method handlers.
  * Keeps wiring concerns out of the core melt domain.
  */
 export class MeltHandlerProvider {
-  private registry: Partial<MeltMethodHandlerRegistry> = {};
+  private registry: Partial<Record<BuiltInMeltMethod, MeltMethodHandler<any>>> = {};
+  private genericHandler?: MeltMethodHandler<any>;
 
   constructor(initialHandlers?: Partial<MeltMethodHandlerRegistry>) {
     if (initialHandlers) {
@@ -21,8 +24,12 @@ export class MeltHandlerProvider {
     this.set(method, handler);
   }
 
+  registerGeneric(handler: MeltMethodHandler<any>): void {
+    this.genericHandler = handler;
+  }
+
   registerMany(handlers: Partial<MeltMethodHandlerRegistry>): void {
-    for (const method of Object.keys(handlers) as MeltMethod[]) {
+    for (const method of Object.keys(handlers) as BuiltInMeltMethod[]) {
       const handler = handlers[method];
       if (handler) {
         this.set(method, handler as MeltMethodHandler<typeof method>);
@@ -31,7 +38,7 @@ export class MeltHandlerProvider {
   }
 
   get<M extends MeltMethod>(method: M): MeltMethodHandler<M> {
-    const handler = this.registry[method];
+    const handler = isBuiltInMeltMethod(method) ? this.registry[method] : this.genericHandler;
     if (!handler) {
       throw new Error(`No melt handler registered for method ${method}`);
     }
@@ -43,6 +50,11 @@ export class MeltHandlerProvider {
   }
 
   private set<M extends MeltMethod>(method: M, handler: MeltMethodHandler<M>): void {
+    if (!isBuiltInMeltMethod(method)) {
+      this.genericHandler = handler;
+      return;
+    }
+
     (this.registry as Partial<Record<M, MeltMethodHandler<M>>>)[method] = handler;
   }
 }

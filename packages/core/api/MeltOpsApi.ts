@@ -1,4 +1,5 @@
 import type {
+  BuiltInMeltMethod,
   FinalizedMeltOperation,
   MeltOperation,
   PendingMeltOperation,
@@ -7,10 +8,9 @@ import type {
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 import type { MeltQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
-/** Melt methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
+export type { BuiltInMeltMethod };
 
-export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
+export type PrepareMeltInput<TSupported extends MeltMethod = BuiltInMeltMethod> = {
   [M in TSupported]: {
     /** Existing canonical melt quote or structural quote reference. */
     quote: MeltQuoteRef<M>;
@@ -36,7 +36,7 @@ export interface MeltDiagnosticsApi {
  * execute it, inspect or refresh its state, and recover or roll it back when
  * allowed by the underlying method.
  */
-export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
+export class MeltOpsApi<TSupported extends MeltMethod = BuiltInMeltMethod> {
   /** Recovery helpers for melt operations. */
   readonly recovery: MeltRecoveryApi = {
     run: async () => this.meltOperationService.recoverPendingOperations(),
@@ -56,10 +56,10 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * Use this to inspect the generated operation and any quote-related data
    * before committing to the external payment.
    */
-  async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation> {
+  async prepare(input: PrepareMeltInput<TSupported>): Promise<PreparedMeltOperation<TSupported>> {
     return this.meltOperationService.prepareExistingQuote(input.quote, {
       feeIndex: input.feeIndex,
-    });
+    }) as Promise<PreparedMeltOperation<TSupported>>;
   }
 
   /**
@@ -69,16 +69,20 @@ export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMeth
    * state is always reloaded before execution.
    */
   async execute(
-    operationOrId: MeltOperation | string,
-  ): Promise<PendingMeltOperation | FinalizedMeltOperation> {
-    const operation = await this.resolveOperation(operationOrId);
+    operationOrId: MeltOperation<TSupported> | string,
+  ): Promise<PendingMeltOperation<TSupported> | FinalizedMeltOperation<TSupported>> {
+    const operation = (await this.resolveOperation(
+      operationOrId as MeltOperation | string,
+    )) as MeltOperation<TSupported>;
     if (operation.state !== 'prepared') {
       throw new Error(
         `Cannot execute operation in state '${operation.state}'. Expected 'prepared'.`,
       );
     }
 
-    return this.meltOperationService.execute(operation.id);
+    return this.meltOperationService.execute(operation.id) as Promise<
+      PendingMeltOperation<TSupported> | FinalizedMeltOperation<TSupported>
+    >;
   }
 
   /** Returns a melt operation by ID, or `null` when it does not exist. */

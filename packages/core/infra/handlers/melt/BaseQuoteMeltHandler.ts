@@ -18,7 +18,6 @@ import type {
   FinalizeContext,
   FinalizeResult,
   MeltMethodHandler,
-  MeltMethodMeta,
   MeltMethod,
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
@@ -183,7 +182,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
    *
    * @returns Prepared operation ready for execution
    */
-  async prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>> {
+  async prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation<M>> {
     const { mintUrl, id: operationId } = ctx.operation;
     ctx.logger?.debug(`Preparing ${this.method} melt operation`, { operationId, mintUrl });
 
@@ -247,7 +246,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     ctx: BasePrepareContext<M>,
     quote: MeltQuoteData,
     selectedProofs: Proof[],
-  ): Promise<PreparedMeltOperation & MeltMethodMeta<M>> {
+  ): Promise<PreparedMeltOperation<M>> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
     const inputSecrets = selectedProofs.map((p) => p.secret);
@@ -293,7 +292,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     ctx: BasePrepareContext<M>,
     quote: MeltQuoteData,
     totalAmount: Amount,
-  ): Promise<PreparedMeltOperation & MeltMethodMeta<M>> {
+  ): Promise<PreparedMeltOperation<M>> {
     const { mintUrl, id: operationId } = ctx.operation;
     const { amount, fee_reserve } = quote;
 

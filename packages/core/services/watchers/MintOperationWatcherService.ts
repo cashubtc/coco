@@ -3,7 +3,7 @@ import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
 import type { MintService } from '../MintService';
 import type {
-  MintMethod,
+  BuiltInMintMethod,
   MintMethodQuoteSnapshot,
   MintOperationService,
   PendingMintOperation,
@@ -26,7 +26,7 @@ function isExpiredMintQuoteSnapshot(snapshot: { expiry?: number | null }): boole
   );
 }
 
-interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
+interface MintQuoteWatchPolicy<M extends BuiltInMintMethod = BuiltInMintMethod> {
   subscriptionKind: SubscriptionKind;
   getPayloadQuoteId(payload: MintMethodQuoteSnapshot<M>): string | undefined;
   shouldRecordPayload(payload: MintMethodQuoteSnapshot<M>): boolean;
@@ -35,7 +35,7 @@ interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
 }
 
 const mintQuoteWatchPolicies: {
-  [M in MintMethod]?: MintQuoteWatchPolicy<M>;
+  [M in BuiltInMintMethod]?: MintQuoteWatchPolicy<M>;
 } = {
   bolt11: {
     subscriptionKind: 'bolt11_mint_quote',
@@ -69,7 +69,7 @@ export interface MintOperationWatcherOptions {
   watchExistingPendingQuotesOnStart?: boolean;
 }
 
-type WatchableMintQuote<M extends MintMethod = MintMethod> = Pick<
+type WatchableMintQuote<M extends BuiltInMintMethod = BuiltInMintMethod> = Pick<
   MintQuote<M>,
   'mintUrl' | 'method' | 'quoteId'
 > & {
@@ -83,7 +83,7 @@ interface WatchMintQuoteInterest {
 
 interface QuoteWatchRecord {
   mintUrl: string;
-  method: MintMethod;
+  method: BuiltInMintMethod;
   quoteId: string;
   subscriptionKind: SubscriptionKind;
   canonical: boolean;
@@ -459,7 +459,7 @@ export class MintOperationWatcherService {
     }
   }
 
-  private getPolicy<M extends MintMethod>(method: M): MintQuoteWatchPolicy<M> | undefined {
+  private getPolicy<M extends BuiltInMintMethod>(method: M): MintQuoteWatchPolicy<M> | undefined {
     return mintQuoteWatchPolicies[method] as MintQuoteWatchPolicy<M> | undefined;
   }
 

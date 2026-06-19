@@ -313,6 +313,7 @@ describe('MeltBolt11Handler', () => {
     methodData: { invoice: string; amountSats?: Amount } = { invoice },
   ): CreateMeltQuoteContext<'bolt11'> => ({
     mintUrl,
+    method: 'bolt11',
     methodData,
     unit: 'sat',
     wallet: mockWallet,
