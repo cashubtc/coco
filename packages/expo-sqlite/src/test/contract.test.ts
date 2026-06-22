@@ -243,7 +243,7 @@ describe('hydration corruption guard', () => {
   it('throws when send operation has prepared state but null financial fields', async () => {
     const { repositories, dispose } = await createRepositories();
     try {
-      await repositories.db.run(
+      await (repositories as any).db.run(
         `INSERT INTO coco_cashu_send_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, method, methodDataJson, needsSwap, fee, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -279,7 +279,7 @@ describe('hydration corruption guard', () => {
   it('throws when receive operation has prepared state but null fee', async () => {
     const { repositories, dispose } = await createRepositories();
     try {
-      await repositories.db.run(
+      await (repositories as any).db.run(
         `INSERT INTO coco_cashu_receive_operations
            (id, mintUrl, amount, unit, state, createdAt, updatedAt, fee, inputProofsJson)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -302,7 +302,7 @@ describe('hydration corruption guard', () => {
   it('throws when melt operation has prepared state but null financial fields', async () => {
     const { repositories, dispose } = await createRepositories();
     try {
-      await repositories.db.run(
+      await (repositories as any).db.run(
         `INSERT INTO coco_cashu_melt_operations
            (id, mintUrl, state, createdAt, updatedAt, method, methodDataJson, quoteId, amount, fee_reserve, swap_fee, needsSwap, inputAmount)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
