@@ -1,5 +1,6 @@
 import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type {
+  BuiltInMintMethod,
   MintMethod,
   MintOperation,
   MintOperationService,
@@ -8,10 +9,7 @@ import type {
 } from '@core/operations/mint';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
-/** Mint methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMintMethod = 'bolt11' | 'onchain' | 'bolt12';
-
-export type PrepareMintInput<TSupported extends MintMethod = DefaultSupportedMintMethod> = {
+export type PrepareMintInput<TSupported extends MintMethod = BuiltInMintMethod> = {
   /** Existing canonical mint quote or structural quote reference. */
   quote: MintQuoteRef<TSupported>;
   /** Amount to mint using the canonical quote's stored unit. */
@@ -36,7 +34,7 @@ export interface MintDiagnosticsApi {
  * This API makes the mint lifecycle explicit so callers can move a canonical
  * quote into a durable pending operation, execute it, and inspect its progress.
  */
-export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMethod> {
+export class MintOpsApi<TSupported extends MintMethod = BuiltInMintMethod> {
   /** Recovery helpers for mint operations. */
   readonly recovery: MintRecoveryApi = {
     run: async () => this.mintOperationService.recoverPendingOperations(),

@@ -30,7 +30,13 @@ export type MeltOperationState =
 
 import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
-import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
+import type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
+  MeltMethod,
+  MeltMethodData,
+  MeltMethodMeta,
+} from './MeltMethodHandler';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 
 // ============================================================================
@@ -99,7 +105,7 @@ interface PreparedData {
 /**
  * Method-specific data that may be available once a melt has settled.
  */
-export interface MeltMethodFinalizedDataMap {
+type BuiltInMeltMethodFinalizedDataMap = {
   bolt11: {
     preimage?: string;
     outpoint?: never;
@@ -112,10 +118,17 @@ export interface MeltMethodFinalizedDataMap {
     preimage?: never;
     outpoint?: string;
   };
-}
+};
 
-export type MeltMethodFinalizedData<M extends MeltMethod = MeltMethod> =
-  MeltMethodFinalizedDataMap[M];
+export type GenericMeltFinalizedData = {
+  rawFinalResponseData: Record<string, unknown>;
+};
+
+export type MeltMethodFinalizedData<M extends string = MeltMethod> = M extends BuiltInMeltMethod
+  ? BuiltInMeltMethodFinalizedDataMap[M]
+  : GenericMeltMethod<M> extends never
+    ? never
+    : GenericMeltFinalizedData;
 
 // ============================================================================
 // State-specific Operation Types

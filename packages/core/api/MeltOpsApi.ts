@@ -1,4 +1,5 @@
 import type {
+  BuiltInMeltMethod,
   FinalizedMeltOperation,
   MeltOperation,
   PendingMeltOperation,
@@ -7,10 +8,7 @@ import type {
 import type { MeltMethod, MeltOperationService } from '@core/operations/melt';
 import type { MeltQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
-/** Melt methods supported by the default `Manager` wiring. */
-export type DefaultSupportedMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
-
-export type PrepareMeltInput<TSupported extends MeltMethod = DefaultSupportedMeltMethod> = {
+export type PrepareMeltInput<TSupported extends MeltMethod = BuiltInMeltMethod> = {
   [M in TSupported]: {
     /** Existing canonical melt quote or structural quote reference. */
     quote: MeltQuoteRef<M>;
@@ -36,7 +34,7 @@ export interface MeltDiagnosticsApi {
  * execute it, inspect or refresh its state, and recover or roll it back when
  * allowed by the underlying method.
  */
-export class MeltOpsApi<TSupported extends MeltMethod = DefaultSupportedMeltMethod> {
+export class MeltOpsApi<TSupported extends MeltMethod = BuiltInMeltMethod> {
   /** Recovery helpers for melt operations. */
   readonly recovery: MeltRecoveryApi = {
     run: async () => this.meltOperationService.recoverPendingOperations(),

@@ -23,11 +23,39 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
 import type { MintQuote } from '../../models/MintQuote';
 
-/**
- * Registry of supported mint methods and payload shapes.
- * Extend via declaration merging to support additional methods.
- */
-export interface MintMethodDefinitions {
+export type BuiltInMintMethod = 'bolt11' | 'onchain' | 'bolt12';
+
+export type GenericMintMethod<M extends string = string> = M extends BuiltInMintMethod ? never : M;
+
+export interface GenericMintQuoteSnapshot {
+  quote: string;
+  request: string;
+  unit: string;
+  expiry?: number | null;
+  pubkey: string;
+  amount_paid: Amount;
+  amount_issued: Amount;
+  [key: string]: unknown;
+}
+
+export interface GenericMintQuoteData {
+  pubkey: string;
+  amountPaid: Amount;
+  amountIssued: Amount;
+}
+
+export type GenericMintQuoteCreatePayload = Record<string, unknown> & {
+  amount?: never;
+  unit?: never;
+  pubkey?: never;
+};
+
+export interface GenericMintQuoteCreateData {
+  amount: UnitAmount;
+  payload?: GenericMintQuoteCreatePayload;
+}
+
+type BuiltInMintMethodDefinitions = {
   bolt11: {
     methodData: Record<string, never>;
     createQuoteData: { amount: UnitAmount };
@@ -66,19 +94,34 @@ export interface MintMethodDefinitions {
     remoteState: never;
     quote: MintQuoteBolt12Response;
   };
-}
+};
 
-export type MintMethod = keyof MintMethodDefinitions;
-export type MintMethodData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['methodData'];
-export type MintMethodCreateQuoteData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['createQuoteData'];
-export type MintMethodQuoteData<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['quoteData'];
-export type MintMethodRemoteState<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['remoteState'];
-export type MintMethodQuoteSnapshot<M extends MintMethod = MintMethod> =
-  MintMethodDefinitions[M]['quote'];
+export type MintMethod = BuiltInMintMethod;
+export type MintMethodData<M extends string = MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodDefinitions[M]['methodData']
+  : GenericMintMethod<M> extends never
+    ? never
+    : Record<string, unknown>;
+export type MintMethodCreateQuoteData<M extends string = MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodDefinitions[M]['createQuoteData']
+  : GenericMintMethod<M> extends never
+    ? never
+    : GenericMintQuoteCreateData;
+export type MintMethodQuoteData<M extends string = MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodDefinitions[M]['quoteData']
+  : GenericMintMethod<M> extends never
+    ? never
+    : GenericMintQuoteData;
+export type MintMethodRemoteState<M extends string = MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodDefinitions[M]['remoteState']
+  : GenericMintMethod<M> extends never
+    ? never
+    : never;
+export type MintMethodQuoteSnapshot<M extends string = MintMethod> = M extends BuiltInMintMethod
+  ? BuiltInMintMethodDefinitions[M]['quote']
+  : GenericMintMethod<M> extends never
+    ? never
+    : GenericMintQuoteSnapshot;
 
 export interface MintMethodMeta<M extends MintMethod = MintMethod> {
   method: M;

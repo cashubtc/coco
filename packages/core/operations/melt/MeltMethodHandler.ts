@@ -6,6 +6,7 @@ import {
   type MeltQuoteOnchainResponse,
   type Wallet,
   type Proof,
+  type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
@@ -27,44 +28,76 @@ import type {
 import type { MintAdapter } from '@core/infra';
 import type { MeltQuote } from '../../models/MeltQuote';
 
-/**
- * Registry of supported melt methods and their public input payload shapes.
- * Extend via declaration merging if you need to add methods externally.
- */
-export interface MeltMethodInputDefinitions {
+export type BuiltInMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
+
+export type GenericMeltMethod<M extends string = string> = M extends BuiltInMeltMethod ? never : M;
+
+export type GenericMeltMethodInputData = {
+  request: string;
+  unit?: never;
+} & Record<string, unknown>;
+
+export interface GenericMeltMethodData {
+  request: string;
+  [key: string]: unknown;
+}
+
+export interface GenericMeltQuoteSnapshot {
+  quote: string;
+  request: string;
+  amount: Amount;
+  unit: string;
+  expiry: number;
+  state: 'UNPAID' | 'PENDING' | 'PAID';
+  fee_reserve?: Amount;
+  payment_preimage?: string | null;
+  change?: SerializedBlindedSignature[];
+  [key: string]: unknown;
+}
+
+type BuiltInMeltMethodInputDefinitions = {
   bolt11: { invoice: string; amountSats?: AmountLike };
   bolt12: { offer: string; amountSats?: AmountLike };
   onchain: { address: string; amountSats: AmountLike };
-}
+};
 
-/**
- * Registry of supported melt methods and their normalized operation payload shapes.
- * Amount values are normalized at the operation boundary.
- */
-export interface MeltMethodDefinitions {
+type BuiltInMeltMethodDefinitions = {
   bolt11: { invoice: string; amountSats?: Amount };
   bolt12: { offer: string; amountSats?: Amount };
   onchain: { address: string; amountSats: Amount; feeIndex?: number };
-}
+};
 
-export type MeltMethod = keyof MeltMethodDefinitions;
+export type MeltMethod = BuiltInMeltMethod;
 
-export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefinitions[M];
+export type MeltMethodData<M extends string = MeltMethod> = M extends BuiltInMeltMethod
+  ? BuiltInMeltMethodDefinitions[M]
+  : GenericMeltMethod<M> extends never
+    ? never
+    : GenericMeltMethodData;
 
-export interface MeltMethodQuoteDefinitions {
+type BuiltInMeltMethodQuoteDefinitions = {
   bolt11: MeltQuoteBolt11Response;
   bolt12: MeltQuoteBolt12Response;
   onchain: MeltQuoteOnchainResponse;
-}
+};
 
-export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =
-  M extends keyof MeltMethodInputDefinitions ? MeltMethodInputDefinitions[M] : never;
+export type MeltMethodInputData<M extends string = MeltMethod> = M extends BuiltInMeltMethod
+  ? BuiltInMeltMethodInputDefinitions[M]
+  : GenericMeltMethod<M> extends never
+    ? never
+    : GenericMeltMethodInputData;
 
-export type MeltMethodRemoteState<M extends MeltMethod = MeltMethod> =
-  MeltMethodQuoteDefinitions[M]['state'];
+export type MeltMethodRemoteState<M extends string = MeltMethod> = M extends BuiltInMeltMethod
+  ? BuiltInMeltMethodQuoteDefinitions[M]['state']
+  : GenericMeltMethod<M> extends never
+    ? never
+    : GenericMeltQuoteSnapshot['state'];
 
-export type MeltMethodQuoteSnapshot<M extends MeltMethod = MeltMethod> =
-  MeltMethodQuoteDefinitions[M];
+export type MeltMethodQuoteSnapshot<M extends string = MeltMethod> = M extends BuiltInMeltMethod
+  ? BuiltInMeltMethodQuoteDefinitions[M]
+  : GenericMeltMethod<M> extends never
+    ? never
+    : GenericMeltQuoteSnapshot;
 
 export interface MeltMethodMeta<M extends MeltMethod = MeltMethod> {
   method: M;

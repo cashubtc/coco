@@ -5,7 +5,8 @@ import {
   type MintQuoteBolt12Response,
 } from '@cashu/cashu-ts';
 import type {
-  MintMethod,
+  BuiltInMintMethod,
+  GenericMintMethod,
   MintMethodQuoteData,
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
@@ -13,7 +14,7 @@ import type {
 
 export type MintQuoteOnchainResponse = MintMethodQuoteSnapshot<'onchain'>;
 
-interface MintQuoteBase<M extends MintMethod> {
+interface MintQuoteBase<M extends string> {
   mintUrl: string;
   method: M;
   quoteId: string;
@@ -56,13 +57,24 @@ export type Bolt12MintQuote = MintQuoteBase<'bolt12'> & {
   reusable: true;
 };
 
-export type MintQuote<M extends MintMethod = MintMethod> = M extends 'bolt11'
+export type GenericMintQuote<M extends string = string> = MintQuoteBase<GenericMintMethod<M>> & {
+  amount?: never;
+  state?: never;
+  lastObservedRemoteState?: never;
+  lastObservedRemoteStateAt?: number;
+  reusable: true;
+  rawQuoteData: Record<string, unknown>;
+};
+
+export type MintQuote<M extends string = BuiltInMintMethod> = M extends 'bolt11'
   ? Bolt11MintQuote
   : M extends 'onchain'
     ? OnchainMintQuote
     : M extends 'bolt12'
       ? Bolt12MintQuote
-      : never;
+      : GenericMintMethod<M> extends never
+        ? never
+        : GenericMintQuote<GenericMintMethod<M>>;
 
 export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt11'> {
   return quote.method === 'bolt11';
@@ -190,7 +202,7 @@ export function mintQuoteFromBolt12Response(
   };
 }
 
-export function mintQuoteToMethodSnapshot<M extends MintMethod>(
+export function mintQuoteToMethodSnapshot<M extends BuiltInMintMethod>(
   quote: MintQuote<M>,
 ): MintMethodQuoteSnapshot<M> {
   if (quote.method === 'bolt11') {

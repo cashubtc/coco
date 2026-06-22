@@ -1,8 +1,24 @@
 import type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
   MeltMethod,
   MeltMethodHandler,
   MeltMethodHandlerRegistry,
 } from '../../../operations/melt/MeltMethodHandler';
+
+const BUILT_IN_MELT_METHODS = new Set<string>(['bolt11', 'bolt12', 'onchain']);
+
+export function isBuiltInMeltMethod(method: string): method is BuiltInMeltMethod {
+  return BUILT_IN_MELT_METHODS.has(method);
+}
+
+export function assertGenericMeltMethod<M extends string>(
+  method: M,
+): asserts method is GenericMeltMethod<M> {
+  if (isBuiltInMeltMethod(method)) {
+    throw new Error(`Built-in melt method ${method} must use its built-in handler path`);
+  }
+}
 
 /**
  * Runtime registry for melt method handlers.

@@ -8,6 +8,8 @@ import {
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type {
+  BuiltInMeltMethod,
+  GenericMeltMethod,
   MeltMethod,
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
@@ -15,7 +17,7 @@ import type {
 
 type BoltMeltMethod = Extract<MeltMethod, 'bolt11' | 'bolt12'>;
 
-interface MeltQuoteBase<M extends MeltMethod> {
+interface MeltQuoteBase<M extends string> {
   mintUrl: string;
   method: M;
   quoteId: string;
@@ -46,11 +48,21 @@ export interface OnchainMeltQuote extends MeltQuoteBase<'onchain'> {
   outpoint?: string;
 }
 
-export type MeltQuote<M extends MeltMethod = MeltMethod> = M extends 'onchain'
+export interface GenericMeltQuote<M extends string = string> extends MeltQuoteBase<
+  GenericMeltMethod<M>
+> {
+  fee_reserve: Amount;
+  payment_preimage?: string | null;
+  rawQuoteData: Record<string, unknown>;
+}
+
+export type MeltQuote<M extends string = BuiltInMeltMethod> = M extends 'onchain'
   ? OnchainMeltQuote
   : M extends BoltMeltMethod
     ? BoltMeltQuote<M>
-    : never;
+    : GenericMeltMethod<M> extends never
+      ? never
+      : GenericMeltQuote<GenericMeltMethod<M>>;
 
 type BoltMeltQuoteResponse = MeltQuoteBolt11Response | MeltQuoteBolt12Response;
 

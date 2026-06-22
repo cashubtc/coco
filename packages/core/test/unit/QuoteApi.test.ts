@@ -1,6 +1,14 @@
 import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { QuoteApi } from '../../api/QuoteApi.ts';
+import {
+  QuoteApi,
+  type CreateGenericMeltQuoteInput,
+  type CreateGenericMintQuoteInput,
+  type CreateMeltQuoteInput,
+  type CreateMintQuoteInput,
+  type GenericMeltQuoteCreateResult,
+  type GenericMintQuoteCreateResult,
+} from '../../api/QuoteApi.ts';
 import type { MeltOpsApi } from '../../api/MeltOpsApi.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
@@ -9,9 +17,60 @@ import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
 
+type Assert<T extends true> = T;
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type IsNever<T> = [T] extends [never] ? true : false;
+
 type MintCreateInput = Parameters<QuoteApi['mint']['create']>[0];
 type MintImportInput = Parameters<QuoteApi['mint']['import']>[0];
 type MeltCreateInput = Parameters<QuoteApi['melt']['create']>[0];
+type _AssertBuiltInMintInputKeepsBolt11Narrowing = Assert<
+  CreateMintQuoteInput<'bolt11'> extends {
+    method: 'bolt11';
+    amount: unknown;
+  }
+    ? true
+    : false
+>;
+type _AssertBuiltInMeltInputKeepsBolt12Narrowing = Assert<
+  CreateMeltQuoteInput<'bolt12'> extends {
+    method: 'bolt12';
+    methodData: { offer: string; invoice?: never };
+  }
+    ? true
+    : false
+>;
+type _AssertArbitraryGenericMintIsNotNever = Assert<
+  IsNever<GenericMintQuoteCreateResult<'nostr-zap'>> extends false ? true : false
+>;
+type _AssertArbitraryGenericMintIsNotAny = Assert<
+  IsAny<GenericMintQuoteCreateResult<'nostr-zap'>> extends false ? true : false
+>;
+type _AssertArbitraryGenericMeltIsNotNever = Assert<
+  IsNever<GenericMeltQuoteCreateResult<'lnurl-pay'>> extends false ? true : false
+>;
+type _AssertArbitraryGenericMeltIsNotAny = Assert<
+  IsAny<GenericMeltQuoteCreateResult<'lnurl-pay'>> extends false ? true : false
+>;
+type _AssertBuiltInMintRejectedFromGenericShape = Assert<
+  CreateGenericMintQuoteInput<'bolt11'>['method'] extends never ? true : false
+>;
+type _AssertBuiltInMeltRejectedFromGenericShape = Assert<
+  CreateGenericMeltQuoteInput<'onchain'>['method'] extends never ? true : false
+>;
+
+const genericMintInput: CreateGenericMintQuoteInput<'nostr-zap'> = {
+  mintUrl,
+  method: 'nostr-zap',
+  amount: Amount.from(21),
+  payload: { recipient: 'npub1test' },
+};
+const genericMeltInput: CreateGenericMeltQuoteInput<'lnurl-pay'> = {
+  mintUrl,
+  method: 'lnurl-pay',
+  methodData: { request: 'lnurl1test', callback: 'https://example.test/pay' },
+};
+void [genericMintInput, genericMeltInput];
 
 function assertMethodRequirementsRemain(): void {
   // @ts-expect-error Mint quote creation still requires method.

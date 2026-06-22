@@ -444,12 +444,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
    */
   private async handleMeltResponse(
     ctx: ExecuteContext<M>,
-    response: {
-      state: 'PAID' | 'UNPAID' | 'PENDING';
-      change?: SerializedBlindedSignature[];
-      payment_preimage?: string | null;
-      outpoint?: string | null;
-    },
+    response: QuoteMeltResponse<M>,
     proofsToMelt: Proof[],
   ): Promise<ExecutionResult<M>> {
     const { mintUrl } = ctx.operation;
