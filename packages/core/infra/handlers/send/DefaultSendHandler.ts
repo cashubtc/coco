@@ -7,6 +7,7 @@ import type {
   RollbackContext,
   RecoverExecutingContext,
   ExecutionResult,
+  RecoveryResult,
 } from '../../../operations/send/SendMethodHandler';
 import type {
   PreparedSendOperation,
@@ -323,7 +324,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
   /**
    * Recover an executing operation that failed mid-execution.
    */
-  async recoverExecuting(ctx: RecoverExecutingContext): Promise<ExecutionResult> {
+  async recoverExecuting(ctx: RecoverExecutingContext): Promise<RecoveryResult> {
     const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // Case: Exact match - no mint interaction, always safe to rollback

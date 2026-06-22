@@ -7,6 +7,7 @@ import type {
   RollbackContext,
   RecoverExecutingContext,
   ExecutionResult,
+  RecoveryResult,
 } from '../../../operations/send/SendMethodHandler';
 import type {
   PreparedSendOperation,
@@ -245,7 +246,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
   /**
    * Recover an executing operation that failed mid-execution.
    */
-  async recoverExecuting(ctx: RecoverExecutingContext): Promise<ExecutionResult> {
+  async recoverExecuting(ctx: RecoverExecutingContext): Promise<RecoveryResult> {
     const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // P2PK always requires swap - check with mint

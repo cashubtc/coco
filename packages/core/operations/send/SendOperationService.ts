@@ -280,8 +280,8 @@ export class SendOperationService {
 
         if (result.status === 'PENDING') {
           const resolvedToken = options?.memo
-            ? this.applyTokenMemo(result.token!, options.memo)
-            : result.token!;
+            ? this.applyTokenMemo(result.token, options.memo)
+            : result.token;
           const pendingWithMemo: PendingSendOperation = { ...result.pending, token: resolvedToken };
           // Save the pending operation to the repository
           await this.sendOperationRepository.update(pendingWithMemo);
