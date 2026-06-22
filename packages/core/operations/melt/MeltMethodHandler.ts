@@ -30,7 +30,28 @@ import type { MeltQuote } from '../../models/MeltQuote';
 
 export type BuiltInMeltMethod = 'bolt11' | 'bolt12' | 'onchain';
 
-export type GenericMeltMethod<M extends string = string> = M extends BuiltInMeltMethod ? never : M;
+declare const validatedGenericMeltMethodBrand: unique symbol;
+
+export type ValidatedGenericMeltMethod = string & {
+  readonly [validatedGenericMeltMethodBrand]: true;
+};
+
+export type GenericMeltMethod<M extends string = ValidatedGenericMeltMethod> =
+  M extends ValidatedGenericMeltMethod
+    ? M
+    : string extends M
+      ? never
+      : Extract<M, BuiltInMeltMethod> extends never
+        ? M
+        : never;
+
+export type GenericMeltMethodValue<M extends string> = M extends ValidatedGenericMeltMethod
+  ? M
+  : Extract<M, BuiltInMeltMethod> extends never
+    ? string extends M
+      ? ValidatedGenericMeltMethod
+      : GenericMeltMethod<M>
+    : never;
 
 export type GenericMeltMethodInputData = {
   request: string;

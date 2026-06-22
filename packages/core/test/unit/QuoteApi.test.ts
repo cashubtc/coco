@@ -8,10 +8,19 @@ import {
   type CreateMintQuoteInput,
   type GenericMeltQuoteCreateResult,
   type GenericMintQuoteCreateResult,
+  type GenericQuoteApiShapes,
 } from '../../api/QuoteApi.ts';
 import type { MeltOpsApi } from '../../api/MeltOpsApi.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
+import type {
+  GenericMeltMethod,
+  ValidatedGenericMeltMethod,
+} from '../../operations/melt/MeltMethodHandler.ts';
+import type {
+  GenericMintMethod,
+  ValidatedGenericMintMethod,
+} from '../../operations/mint/MintMethodHandler.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 const mintUrl = 'https://mint.test';
@@ -58,6 +67,18 @@ type _AssertBuiltInMintRejectedFromGenericShape = Assert<
 type _AssertBuiltInMeltRejectedFromGenericShape = Assert<
   CreateGenericMeltQuoteInput<'onchain'>['method'] extends never ? true : false
 >;
+type _AssertBroadMintStringRejectedAsGenericMethod = Assert<
+  GenericMintMethod<string> extends never ? true : false
+>;
+type _AssertBroadMeltStringRejectedAsGenericMethod = Assert<
+  GenericMeltMethod<string> extends never ? true : false
+>;
+type _AssertBroadMintInputRequiresValidatedMethod = Assert<
+  CreateGenericMintQuoteInput<string>['method'] extends ValidatedGenericMintMethod ? true : false
+>;
+type _AssertBroadMeltInputRequiresValidatedMethod = Assert<
+  CreateGenericMeltQuoteInput<string>['method'] extends ValidatedGenericMeltMethod ? true : false
+>;
 
 const genericMintInput: CreateGenericMintQuoteInput<'nostr-zap'> = {
   mintUrl,
@@ -68,6 +89,18 @@ const genericMintInput: CreateGenericMintQuoteInput<'nostr-zap'> = {
 const genericMeltInput: CreateGenericMeltQuoteInput<'lnurl-pay'> = {
   mintUrl,
   method: 'lnurl-pay',
+  methodData: { request: 'lnurl1test', callback: 'https://example.test/pay' },
+};
+const validatedMintMethod = 'nostr-zap' as ValidatedGenericMintMethod;
+const validatedMeltMethod = 'lnurl-pay' as ValidatedGenericMeltMethod;
+const validatedGenericMintInput: CreateGenericMintQuoteInput<string> = {
+  mintUrl,
+  method: validatedMintMethod,
+  amount: Amount.from(21),
+};
+const validatedGenericMeltInput: CreateGenericMeltQuoteInput<string> = {
+  mintUrl,
+  method: validatedMeltMethod,
   methodData: { request: 'lnurl1test', callback: 'https://example.test/pay' },
 };
 // @ts-expect-error Generic mint inputs require a concrete non-built-in method literal.
@@ -82,7 +115,58 @@ const untypedGenericMeltInput: CreateGenericMeltQuoteInput = {
   method: 'onchain',
   methodData: { request: 'lnurl1test' },
 };
-void [genericMintInput, genericMeltInput, untypedGenericMintInput, untypedGenericMeltInput];
+const runtimeMintMethod: string = 'nostr-zap';
+const runtimeMeltMethod: string = 'lnurl-pay';
+const broadStringGenericMintInput: CreateGenericMintQuoteInput<string> = {
+  mintUrl,
+  // @ts-expect-error Broad runtime strings must be validated before generic mint quote use.
+  method: runtimeMintMethod,
+  amount: Amount.from(21),
+};
+const broadStringGenericMeltInput: CreateGenericMeltQuoteInput<string> = {
+  mintUrl,
+  // @ts-expect-error Broad runtime strings must be validated before generic melt quote use.
+  method: runtimeMeltMethod,
+  methodData: { request: 'lnurl1test' },
+};
+
+function assertGenericQuoteApiShapes(
+  api: GenericQuoteApiShapes,
+  rawMethod: string,
+  validatedMint: ValidatedGenericMintMethod,
+  validatedMelt: ValidatedGenericMeltMethod,
+): void {
+  void api.createMint({ mintUrl, method: 'nostr-zap', amount: Amount.from(21) });
+  void api.createMelt({
+    mintUrl,
+    method: 'lnurl-pay',
+    methodData: { request: 'lnurl1test' },
+  });
+  void api.createMint({ mintUrl, method: validatedMint, amount: Amount.from(21) });
+  void api.createMelt({
+    mintUrl,
+    method: validatedMelt,
+    methodData: { request: 'lnurl1test' },
+  });
+  // @ts-expect-error Broad runtime strings must be validated before generic quote use.
+  void api.createMint({ mintUrl, method: rawMethod, amount: Amount.from(21) });
+  // @ts-expect-error Built-in methods must use the built-in quote API.
+  void api.createMint({ mintUrl, method: 'bolt11', amount: Amount.from(21) });
+  // @ts-expect-error Built-in methods must use the built-in quote API.
+  void api.createMelt({ mintUrl, method: 'onchain', methodData: { request: 'bc1test' } });
+}
+
+void [
+  genericMintInput,
+  genericMeltInput,
+  validatedGenericMintInput,
+  validatedGenericMeltInput,
+  untypedGenericMintInput,
+  untypedGenericMeltInput,
+  broadStringGenericMintInput,
+  broadStringGenericMeltInput,
+  assertGenericQuoteApiShapes,
+];
 
 function assertMethodRequirementsRemain(): void {
   // @ts-expect-error Mint quote creation still requires method.

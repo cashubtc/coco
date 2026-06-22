@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'bun:test';
-import { assertGenericMeltMethod, isBuiltInMeltMethod } from '../../infra/handlers/melt';
-import { assertGenericMintMethod, isBuiltInMintMethod } from '../../infra/handlers/mint';
+import {
+  assertGenericMeltMethod,
+  isBuiltInMeltMethod,
+  toGenericMeltMethod,
+} from '../../infra/handlers/melt';
+import {
+  assertGenericMintMethod,
+  isBuiltInMintMethod,
+  toGenericMintMethod,
+} from '../../infra/handlers/mint';
 
 describe('payment method routing guards', () => {
   it('identifies built-in mint and melt methods', () => {
@@ -25,5 +33,17 @@ describe('payment method routing guards', () => {
 
     expect(() => assertGenericMintMethod('nostr-zap')).not.toThrow();
     expect(() => assertGenericMeltMethod('lnurl-pay')).not.toThrow();
+  });
+
+  it('converts non-built-in method strings into validated generic methods', () => {
+    expect(toGenericMintMethod('nostr-zap') as string).toBe('nostr-zap');
+    expect(toGenericMeltMethod('lnurl-pay') as string).toBe('lnurl-pay');
+
+    expect(() => toGenericMintMethod('bolt12')).toThrow(
+      'Built-in mint method bolt12 must use its built-in handler path',
+    );
+    expect(() => toGenericMeltMethod('bolt11')).toThrow(
+      'Built-in melt method bolt11 must use its built-in handler path',
+    );
   });
 });

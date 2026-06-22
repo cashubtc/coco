@@ -4,6 +4,7 @@ import type {
   MintMethod,
   MintMethodHandler,
   MintMethodHandlerRegistry,
+  ValidatedGenericMintMethod,
 } from '../../../operations/mint/MintMethodHandler';
 
 const BUILT_IN_MINT_METHODS = new Set<string>(['bolt11', 'onchain', 'bolt12']);
@@ -18,6 +19,11 @@ export function assertGenericMintMethod<M extends string>(
   if (isBuiltInMintMethod(method)) {
     throw new Error(`Built-in mint method ${method} must use its built-in handler path`);
   }
+}
+
+export function toGenericMintMethod(method: string): ValidatedGenericMintMethod {
+  assertGenericMintMethod(method);
+  return method as ValidatedGenericMintMethod;
 }
 
 /**

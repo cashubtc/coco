@@ -1,11 +1,13 @@
 import type {
   BuiltInMeltMethod,
   GenericMeltMethod,
+  GenericMeltMethodValue,
   MeltMethodInputData,
 } from '@core/operations/melt';
 import type {
   BuiltInMintMethod,
   GenericMintMethod,
+  GenericMintMethodValue,
   GenericMintQuoteCreatePayload,
   MintMethodQuoteSnapshot,
 } from '@core/operations/mint';
@@ -39,7 +41,7 @@ export type CreateMintQuoteInput<M extends BuiltInMintMethod = BuiltInMintMethod
 
 export type CreateGenericMintQuoteInput<M extends string> = {
   mintUrl: string;
-  method: GenericMintMethod<M>;
+  method: GenericMintMethodValue<M>;
   amount: UnitAmountLike;
   unit?: string;
   payload?: GenericMintQuoteCreatePayload;
@@ -47,16 +49,16 @@ export type CreateGenericMintQuoteInput<M extends string> = {
 
 export type CreateGenericMeltQuoteInput<M extends string> = {
   mintUrl: string;
-  method: GenericMeltMethod<M>;
-  methodData: MeltMethodInputData<GenericMeltMethod<M>>;
+  method: GenericMeltMethodValue<M>;
+  methodData: MeltMethodInputData<GenericMeltMethodValue<M>>;
   unit?: string;
 };
 
 export type GenericMintQuoteCreateResult<M extends string> =
-  GenericMintMethod<M> extends never ? never : GenericMintQuote<GenericMintMethod<M>>;
+  GenericMintMethodValue<M> extends never ? never : GenericMintQuote<GenericMintMethodValue<M>>;
 
 export type GenericMeltQuoteCreateResult<M extends string> =
-  GenericMeltMethod<M> extends never ? never : GenericMeltQuote<GenericMeltMethod<M>>;
+  GenericMeltMethodValue<M> extends never ? never : GenericMeltQuote<GenericMeltMethodValue<M>>;
 
 export interface GenericQuoteApiShapes {
   createMint<M extends string>(

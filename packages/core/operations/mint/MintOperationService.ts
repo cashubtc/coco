@@ -559,8 +559,8 @@ export class MintOperationService {
     }
   }
 
-  async recoverExecutingOperation(
-    op: ExecutingMintOperation,
+  async recoverExecutingOperation<M extends MintMethod>(
+    op: ExecutingMintOperation<M>,
     options?: { skipLock?: boolean },
   ): Promise<void> {
     const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);

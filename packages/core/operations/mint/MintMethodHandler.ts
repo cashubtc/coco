@@ -25,7 +25,28 @@ import type { MintQuote } from '../../models/MintQuote';
 
 export type BuiltInMintMethod = 'bolt11' | 'onchain' | 'bolt12';
 
-export type GenericMintMethod<M extends string = string> = M extends BuiltInMintMethod ? never : M;
+declare const validatedGenericMintMethodBrand: unique symbol;
+
+export type ValidatedGenericMintMethod = string & {
+  readonly [validatedGenericMintMethodBrand]: true;
+};
+
+export type GenericMintMethod<M extends string = ValidatedGenericMintMethod> =
+  M extends ValidatedGenericMintMethod
+    ? M
+    : string extends M
+      ? never
+      : Extract<M, BuiltInMintMethod> extends never
+        ? M
+        : never;
+
+export type GenericMintMethodValue<M extends string> = M extends ValidatedGenericMintMethod
+  ? M
+  : Extract<M, BuiltInMintMethod> extends never
+    ? string extends M
+      ? ValidatedGenericMintMethod
+      : GenericMintMethod<M>
+    : never;
 
 export interface GenericMintQuoteSnapshot {
   quote: string;
