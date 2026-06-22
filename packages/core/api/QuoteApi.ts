@@ -37,7 +37,7 @@ export type CreateMintQuoteInput<M extends BuiltInMintMethod = BuiltInMintMethod
   { method: M }
 >;
 
-export type CreateGenericMintQuoteInput<M extends string = string> = {
+export type CreateGenericMintQuoteInput<M extends string> = {
   mintUrl: string;
   method: GenericMintMethod<M>;
   amount: UnitAmountLike;
@@ -45,7 +45,7 @@ export type CreateGenericMintQuoteInput<M extends string = string> = {
   payload?: GenericMintQuoteCreatePayload;
 };
 
-export type CreateGenericMeltQuoteInput<M extends string = string> = {
+export type CreateGenericMeltQuoteInput<M extends string> = {
   mintUrl: string;
   method: GenericMeltMethod<M>;
   methodData: MeltMethodInputData<GenericMeltMethod<M>>;

@@ -70,7 +70,19 @@ const genericMeltInput: CreateGenericMeltQuoteInput<'lnurl-pay'> = {
   method: 'lnurl-pay',
   methodData: { request: 'lnurl1test', callback: 'https://example.test/pay' },
 };
-void [genericMintInput, genericMeltInput];
+// @ts-expect-error Generic mint inputs require a concrete non-built-in method literal.
+const untypedGenericMintInput: CreateGenericMintQuoteInput = {
+  mintUrl,
+  method: 'bolt11',
+  amount: Amount.from(21),
+};
+// @ts-expect-error Generic melt inputs require a concrete non-built-in method literal.
+const untypedGenericMeltInput: CreateGenericMeltQuoteInput = {
+  mintUrl,
+  method: 'onchain',
+  methodData: { request: 'lnurl1test' },
+};
+void [genericMintInput, genericMeltInput, untypedGenericMintInput, untypedGenericMeltInput];
 
 function assertMethodRequirementsRemain(): void {
   // @ts-expect-error Mint quote creation still requires method.
