@@ -1,4 +1,6 @@
-import { Amount, initializeCoco, type Repositories } from '@cashu/coco-core';
+import { Amount } from '@cashu/cashu-ts';
+import { initializeCoco } from '@cashu/coco-core';
+import type { Repositories } from '@cashu/coco-core/adapter';
 
 /**
  * Test runner interface for migration tests.

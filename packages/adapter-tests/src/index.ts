@@ -1,5 +1,5 @@
+import { Amount } from '@cashu/cashu-ts';
 import {
-  Amount,
   type Mint,
   type Keyset,
   type CoreProof,
@@ -17,7 +17,7 @@ import {
   type SendOperation,
   type AuthSession,
   QuoteIdentityConflictError,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 
 type TransactionFactory<TRepositories extends Repositories = Repositories> = () => Promise<{
   repositories: TRepositories;

@@ -12,7 +12,7 @@ import {
   type MintQuote,
   type MintQuoteRepository,
   type QuoteIdentity,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 type MintQuoteRow = {

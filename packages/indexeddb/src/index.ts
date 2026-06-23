@@ -16,7 +16,7 @@ import type {
   PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
 import { IdbMintRepository } from './repositories/MintRepository.ts';

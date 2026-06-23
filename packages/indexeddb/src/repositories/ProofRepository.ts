@@ -1,5 +1,5 @@
-import type { ProofRepository, ProofUnitFilter, CoreProof, ProofState } from '@cashu/coco-core';
-import { DEFAULT_UNIT, deserializeAmount, normalizeUnit, serializeAmount } from '@cashu/coco-core';
+import type { ProofRepository, ProofUnitFilter, CoreProof, ProofState } from '@cashu/coco-core/adapter';
+import { DEFAULT_UNIT, deserializeAmount, normalizeUnit, serializeAmount } from '@cashu/coco-core/adapter';
 import type { IdbDb, ProofRow } from '../lib/db.ts';
 
 function normalizeProofUnit(proof: CoreProof): string {

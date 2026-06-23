@@ -5,8 +5,8 @@ import type {
   PaymentRequestReceiveOperation,
   PaymentRequestReceiveOperationRepository,
   PaymentRequestReceiveState,
-} from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
 import type {
   IdbDb,
   PaymentRequestReceiveAttemptRow,

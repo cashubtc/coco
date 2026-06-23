@@ -1,5 +1,5 @@
-import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
-import { deserializeAmount } from '@cashu/coco-core';
+import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core/adapter';
+import { deserializeAmount } from '@cashu/coco-core/adapter';
 import type { IdbDb, AuthSessionRow } from '../lib/db.ts';
 
 function parseBatPool(batPoolJson: string | null): AuthSession['batPool'] {

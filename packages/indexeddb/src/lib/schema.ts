@@ -1,4 +1,4 @@
-import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core';
+import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core/adapter';
 import type { IdbDb } from './db.ts';
 
 function normalizeStoredAmount(value: unknown): string | null | undefined {

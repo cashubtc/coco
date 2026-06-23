@@ -3,7 +3,7 @@ import type {
   HistoryRepository,
   HistoryType,
   LegacyHistoryRowInput,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
 import {
   deserializeAmount,
@@ -11,7 +11,7 @@ import {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 type HistoryProjectionRow = {

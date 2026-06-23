@@ -4,7 +4,7 @@ import type {
   HistoryRepository,
   LegacyHistoryEntry,
   LegacyHistoryRowInput,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
 import {
   compareHistoryEntries,
@@ -13,7 +13,7 @@ import {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type {
   IdbDb,
   MeltOperationRow,

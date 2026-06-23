@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core';
+import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core/adapter';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
 import { SqliteDb } from './db.ts';
 
