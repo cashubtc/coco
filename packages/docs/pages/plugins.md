@@ -87,11 +87,13 @@ Plugins can register custom APIs that become accessible via `manager.ext`. This 
 Use `ctx.registerExtension(key, api)` in your plugin's `onInit` or `onReady` hook:
 
 ```ts
-class MyPluginApi {
-  constructor(private eventBus: EventBus) {}
+import type { CoreEvents, EventBus, Plugin } from '@cashu/coco-core';
 
-  doSomething() {
-    this.eventBus.emit('my-plugin:action', { foo: 'bar' });
+class MyPluginApi {
+  constructor(private eventBus: EventBus<CoreEvents>) {}
+
+  onSubscriptionsResumed(handler: () => void): () => void {
+    return this.eventBus.on('subscriptions:resumed', handler);
   }
 
   async fetchData() {
@@ -122,7 +124,7 @@ const manager = await initializeCoco({
 });
 
 // Access the plugin's API
-manager.ext.myPlugin.doSomething();
+const unsubscribe = manager.ext.myPlugin.onSubscriptionsResumed(() => {});
 const result = await manager.ext.myPlugin.fetchData();
 ```
 
@@ -132,13 +134,13 @@ For full TypeScript autocomplete and type safety, plugin authors should augment 
 
 ```ts
 // my-plugin/index.ts
-import type { Plugin, PluginExtensions } from '@cashu/coco-core';
+import type { CoreEvents, EventBus, Plugin, PluginExtensions } from '@cashu/coco-core';
 
 // Define your API class
 export class MyPluginApi {
-  constructor(private eventBus: EventBus) {}
-  doSomething(): void {
-    /* ... */
+  constructor(private eventBus: EventBus<CoreEvents>) {}
+  onSubscriptionsResumed(handler: () => void): () => void {
+    return this.eventBus.on('subscriptions:resumed', handler);
   }
   async fetchData(): Promise<{ data: string }> {
     /* ... */

@@ -71,7 +71,7 @@ export interface Plugin<Req extends readonly ServiceKey[] = readonly ServiceKey[
  * Plugin authors should augment this interface via module augmentation:
  *
  * @example
- * declare module '@coco/core' {
+ * declare module '@cashu/coco-core' {
  *   interface PluginExtensions {
  *     myPlugin: MyPluginApi;
  *   }

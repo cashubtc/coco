@@ -391,9 +391,15 @@ From the package root:
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `SubscriptionApi`, and the operation-oriented APIs
 - Models, services, operations, and plugin types
+- Events: `CoreEvents`, `EventBus`, `EventBusOptions`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
   `BalancesByMint`, `BalanceBreakdown`, `BalancesBreakdownByMint`
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
 - Infrastructure helpers: `SubscriptionManager`, `WsConnectionManager`,
   `WebSocketLike`, `WebSocketFactory`
+
+The package root (`@cashu/coco-core`) is the supported public import path unless
+`package.json` explicitly lists a subpath export. Documented public symbols must be
+reachable from the root or from a listed subpath. Internal barrels such as source
+folder indexes are private unless the export map and docs explicitly make them public.
