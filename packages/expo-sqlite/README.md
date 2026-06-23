@@ -1,8 +1,5 @@
 # @cashu/coco-expo-sqlite
 
-> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
-> still land before the final 1.0 release. Pin versions in production.
-
 Expo SQLite storage adapter for Coco in React Native and Expo applications.
 
 The public entry point is `SqliteRepositories`. Open the `expo-sqlite` database

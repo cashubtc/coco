@@ -1,8 +1,5 @@
 # @cashu/coco-sqlite-bun
 
-> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
-> still land before the final 1.0 release. Pin versions in production.
-
 SQLite adapter for Coco using Bun's built-in `bun:sqlite` module.
 
 The public entry point is `SqliteRepositories`. Open the `bun:sqlite` database
