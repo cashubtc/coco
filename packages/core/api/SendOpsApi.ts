@@ -6,7 +6,10 @@ import type {
   SendOperation,
 } from '../operations/send/SendOperation';
 import type { SendMethod, SendMethodData } from '../operations/send/SendMethodHandler';
-import type { SendOperationService } from '../operations/send/SendOperationService';
+import type {
+  ExecuteSendOptions,
+  SendOperationService,
+} from '../operations/send/SendOperationService';
 import { parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 
 type NonDefaultSendMethod = Exclude<SendMethod, 'default'>;
@@ -81,10 +84,12 @@ export class SendOpsApi {
    * Executes a prepared send operation and returns the shareable token.
    *
    * Accepts either a prepared operation object or its ID. The latest operation
-   * state is always reloaded before execution.
+   * state is always reloaded before execution. When provided, `options.memo`
+   * is trimmed and persisted on the returned token; whitespace-only memos are omitted.
    */
   async execute(
     operationOrId: SendOperation | string,
+    options?: ExecuteSendOptions,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     const operation = await this.resolveOperation(operationOrId);
     if (operation.state !== 'prepared') {
@@ -93,7 +98,7 @@ export class SendOpsApi {
       );
     }
 
-    return this.sendOperationService.execute(operation);
+    return this.sendOperationService.execute(operation, options);
   }
 
   /** Returns a send operation by ID, or `null` when it does not exist. */

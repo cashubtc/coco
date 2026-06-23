@@ -37,6 +37,14 @@ import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
 /**
+ * Options applied when a prepared send operation is executed.
+ */
+export interface ExecuteSendOptions {
+  /** Optional memo to persist on the shareable token. Whitespace-only memos are ignored. */
+  memo?: string;
+}
+
+/**
  * Service that manages send operations as sagas.
  *
  * This service provides crash recovery and rollback capabilities for send operations
@@ -217,6 +225,8 @@ export class SendOperationService {
   /**
    * Execute the prepared operation.
    * Performs the swap (if needed) and creates the token.
+   * If a memo is provided, trims it and persists it on the token before saving the
+   * pending operation. Whitespace-only memos are omitted.
    *
    * If execution fails after transitioning to 'executing' state,
    * automatically attempts to recover the operation.
@@ -226,6 +236,7 @@ export class SendOperationService {
    */
   async execute(
     operation: PreparedSendOperation,
+    options?: ExecuteSendOptions,
   ): Promise<{ operation: PendingSendOperation; token: Token }> {
     if (!this.handlerProvider) {
       throw new Error('SendHandlerProvider is required');
@@ -241,9 +252,9 @@ export class SendOperationService {
       };
       await this.sendOperationRepository.update(executing);
 
-      let pending: PendingSendOperation | null = null;
-      let token: Token | null = null;
-      let failed: RolledBackSendOperation | null = null;
+      let pending: PendingSendOperation | undefined;
+      let token: Token | undefined;
+      let failed: RolledBackSendOperation | undefined;
       try {
         const handler = this.handlerProvider.get(operation.method);
         if (!handler) {
@@ -274,10 +285,14 @@ export class SendOperationService {
         const result = await handler.execute(ctx);
 
         if (result.status === 'PENDING') {
+          const resolvedToken = options?.memo
+            ? this.applyTokenMemo(result.token, options.memo)
+            : result.token;
+          const pendingWithMemo: PendingSendOperation = { ...result.pending, token: resolvedToken };
           // Save the pending operation to the repository
-          await this.sendOperationRepository.update(result.pending);
-          pending = result.pending;
-          token = result.token ?? null;
+          await this.sendOperationRepository.update(pendingWithMemo);
+          pending = pendingWithMemo;
+          token = resolvedToken;
         } else {
           // Handler returned FAILED - persist the terminal result without re-running recovery
           await this.sendOperationRepository.update(result.failed);
@@ -818,6 +833,16 @@ export class SendOperationService {
     }
 
     return orphanedProofs.length;
+  }
+
+  private normalizeMemo(memo: string): string | undefined {
+    const trimmed = memo.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private applyTokenMemo(token: Token, memo: string): Token {
+    const normalized = this.normalizeMemo(memo);
+    return normalized ? { ...token, memo: normalized } : token;
   }
 
   /**

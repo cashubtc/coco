@@ -79,7 +79,26 @@ export interface RecoverExecutingContext extends BaseHandlerDeps {
   wallet: Wallet;
 }
 
+/**
+ * Result of a normal execution. A pending result must carry the token so the
+ * caller can hand it to the recipient.
+ */
 export type ExecutionResult =
+  | {
+      status: 'PENDING';
+      pending: PendingSendOperation;
+      token: Token;
+    }
+  | {
+      status: 'FAILED';
+      failed: RolledBackSendOperation;
+    };
+
+/**
+ * Result of recovering an executing operation. Recovery may legitimately reach a
+ * pending state without being able to reconstruct the token, so it is optional.
+ */
+export type RecoveryResult =
   | {
       status: 'PENDING';
       pending: PendingSendOperation;
@@ -102,7 +121,7 @@ export interface SendMethodHandler<M extends SendMethod = SendMethod> {
    * Recover an executing operation that failed mid-execution.
    * Handlers must implement this method to handle recovery logic.
    */
-  recoverExecuting(ctx: RecoverExecutingContext): Promise<ExecutionResult>;
+  recoverExecuting(ctx: RecoverExecutingContext): Promise<RecoveryResult>;
 }
 
 export type SendMethodHandlerRegistry = Record<SendMethod, SendMethodHandler<any>>;
