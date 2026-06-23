@@ -2,9 +2,6 @@
 
 A modular, TypeScript-first toolkit for building Cashu wallets and applications.
 
-> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
-> still land before the final 1.0 release. Pin versions in production.
-
 coco provides a complete foundation for Cashu development with a storage-agnostic
 core that handles proof management, mint synchronization, quote lifecycle,
 counter tracking, and state updates through a typed event bus. Published

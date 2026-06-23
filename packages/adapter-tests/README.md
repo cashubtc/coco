@@ -1,8 +1,5 @@
 # @cashu/coco-adapter-tests
 
-> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
-> still land before the final 1.0 release. Pin versions in production.
-
 This package exports reusable test helpers that verify whether a storage adapter
 conforms to the `Repositories` contract from `@cashu/coco-core`.
 

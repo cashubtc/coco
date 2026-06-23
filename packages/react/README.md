@@ -1,8 +1,5 @@
 # @cashu/coco-react
 
-> ⚠️ Release candidate: Coco is stabilizing for v1, but breaking changes may
-> still land before the final 1.0 release. Pin versions in production.
-
 React hooks and providers for integrating a Coco `Manager` into React
 applications.
 
