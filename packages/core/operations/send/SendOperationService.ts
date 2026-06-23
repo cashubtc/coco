@@ -36,7 +36,11 @@ import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { normalizeUnitAmount, type UnitAmount } from '../../amounts.ts';
 
+/**
+ * Options applied when a prepared send operation is executed.
+ */
 export interface ExecuteSendOptions {
+  /** Optional memo to persist on the shareable token. Whitespace-only memos are ignored. */
   memo?: string;
 }
 
@@ -221,6 +225,8 @@ export class SendOperationService {
   /**
    * Execute the prepared operation.
    * Performs the swap (if needed) and creates the token.
+   * If a memo is provided, trims it and persists it on the token before saving the
+   * pending operation. Whitespace-only memos are omitted.
    *
    * If execution fails after transitioning to 'executing' state,
    * automatically attempts to recover the operation.

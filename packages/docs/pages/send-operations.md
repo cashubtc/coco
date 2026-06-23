@@ -37,7 +37,7 @@ init ──► prepared ──► executing ──► pending ──► finalize
 | Action                                  | Valid input state              | Resulting state                        | Use when                                                          |
 | --------------------------------------- | ------------------------------ | -------------------------------------- | ----------------------------------------------------------------- |
 | `prepare({ mintUrl, amount, target? })` | none                           | `prepared`                             | You want to reserve proofs and show fees before creating a token. |
-| `execute(operationOrId)`                | `prepared`                     | `pending`                              | The user confirmed the send and you need the shareable token.     |
+| `execute(operationOrId, options?)`      | `prepared`                     | `pending`                              | The user confirmed the send and you need the shareable token.     |
 | `refresh(operationId)`                  | any, actively checks `pending` | latest stored state                    | You are resuming stale persisted state or building recovery UI.   |
 | `cancel(operationId)`                   | `prepared`                     | `rolled_back`                          | The user abandons the send before a token is created.             |
 | `reclaim(operationId)`                  | `pending`                      | `rolled_back` when reclaim is possible | The token was created but should be reclaimed before receipt.     |
@@ -71,6 +71,18 @@ const { operation, token } = await coco.ops.send.execute(prepared.id);
 // Step 3: Share token with recipient
 shareToken(token);
 ```
+
+To persist a memo with the token and send history entry, pass it when executing
+the prepared send:
+
+```ts
+const { token } = await coco.ops.send.execute(prepared.id, { memo: 'Dinner' });
+
+console.log(token.memo); // "Dinner"
+```
+
+Memos are trimmed before persistence. Whitespace-only memos are treated as
+omitted.
 
 ### Cancelling a Prepared Send
 

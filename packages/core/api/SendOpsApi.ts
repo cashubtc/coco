@@ -84,7 +84,8 @@ export class SendOpsApi {
    * Executes a prepared send operation and returns the shareable token.
    *
    * Accepts either a prepared operation object or its ID. The latest operation
-   * state is always reloaded before execution.
+   * state is always reloaded before execution. When provided, `options.memo`
+   * is trimmed and persisted on the returned token; whitespace-only memos are omitted.
    */
   async execute(
     operationOrId: SendOperation | string,
