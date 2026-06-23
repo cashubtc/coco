@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type Token } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { SendOperationService } from '../../operations/send/SendOperationService';
 import { DefaultSendHandler } from '../../infra/handlers/send/DefaultSendHandler';
@@ -478,7 +478,7 @@ describe('SendOperationService', () => {
     const initOp = await service.init(mintUrl, unitAmount(100));
     const preparedOp = await service.prepare(initOp);
 
-    let eventToken: import('@cashu/cashu-ts').Token | undefined;
+    let eventToken: Token | undefined;
     eventBus.on('send:pending', ({ token }) => {
       eventToken = token;
     });

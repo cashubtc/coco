@@ -32,6 +32,7 @@ describe('HistoryService', () => {
     eventBus = new EventBus<CoreEvents>();
     eventBus.on('history:updated', (payload) => {
       historyUpdateEvents.push(payload);
+      repositoryEntries.set(payload.entry.id, payload.entry);
     });
 
     const historyRepository: HistoryRepository = {
@@ -84,6 +85,27 @@ describe('HistoryService', () => {
       unit: 'usd',
       token: pending.token,
     });
+  });
+
+  it('returns memo-bearing send token projections from paginated history', async () => {
+    const prepared = makePreparedSendOperation('send-op-memo');
+    const pending = {
+      ...prepared,
+      state: 'pending',
+      token: { mint: mintUrl, proofs: receiveProofs, unit: 'usd', memo: 'hello' },
+    } as PendingSendOperation;
+
+    await eventBus.emit('send:pending', {
+      mintUrl,
+      operationId: pending.id,
+      operation: pending,
+      token: pending.token!,
+    });
+
+    const history = await service.getPaginatedHistory(0, 10);
+    const sendEntry = history.find((entry) => entry.type === 'send');
+
+    expect(sendEntry?.token?.memo).toBe('hello');
   });
 
   it('projects melt operation states without mapping them to quote states', async () => {
