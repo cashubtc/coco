@@ -5,6 +5,7 @@ export * from './models/index.ts';
 export * from './api/index.ts';
 export * from './services/index.ts';
 export * from './operations/index.ts';
+export * from './events/index.ts';
 export type {
   CoreProof,
   ProofState,
