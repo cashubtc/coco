@@ -391,7 +391,7 @@ From the package root:
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `SubscriptionApi`, and the operation-oriented APIs
 - Public models, errors, API inputs/results, and operation result types
-- Events: `CoreEvents`, `EventBus`, `EventHandler`
+- Events: `CoreEvents`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
   `BalancesByMint`, `BalanceBreakdown`, `BalancesBreakdownByMint`
 - Logging: `ConsoleLogger`, `Logger`
@@ -406,8 +406,8 @@ From the adapter subpath (`@cashu/coco-core/adapter`):
 
 From the plugin subpath (`@cashu/coco-core/plugin`):
 
-- Plugin author types: `Plugin`, `PluginContext`, `PluginExtensions`, `ServiceKey`,
-  `ServiceMap`, `Cleanup`, `CleanupFn`
+- Plugin author types: `Plugin`, `PluginContext`, `PluginExtensions`, `PluginEventBus`,
+  `ServiceKey`, `ServiceMap`, `Cleanup`, `CleanupFn`
 - Plugin errors: `DuplicatePluginRegistrationError`, `ExtensionRegistrationError`
 
 The package root (`@cashu/coco-core`) is the supported public import path unless

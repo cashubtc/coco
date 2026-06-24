@@ -93,11 +93,10 @@ Plugins can register custom APIs that become accessible via `manager.ext`. This 
 Use `ctx.registerExtension(key, api)` in your plugin's `onInit` or `onReady` hook:
 
 ```ts
-import type { CoreEvents, EventBus } from '@cashu/coco-core';
-import type { Plugin } from '@cashu/coco-core/plugin';
+import type { Plugin, PluginEventBus } from '@cashu/coco-core/plugin';
 
 class MyPluginApi {
-  constructor(private eventBus: EventBus<CoreEvents>) {}
+  constructor(private eventBus: PluginEventBus) {}
 
   onSubscriptionsResumed(handler: () => void): () => void {
     return this.eventBus.on('subscriptions:resumed', handler);
@@ -141,12 +140,11 @@ For full TypeScript autocomplete and type safety, plugin authors should augment 
 
 ```ts
 // my-plugin/index.ts
-import type { CoreEvents, EventBus } from '@cashu/coco-core';
-import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
+import type { Plugin, PluginEventBus, PluginExtensions } from '@cashu/coco-core/plugin';
 
 // Define your API class
 export class MyPluginApi {
-  constructor(private eventBus: EventBus<CoreEvents>) {}
+  constructor(private eventBus: PluginEventBus) {}
   onSubscriptionsResumed(handler: () => void): () => void {
     return this.eventBus.on('subscriptions:resumed', handler);
   }

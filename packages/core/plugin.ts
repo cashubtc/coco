@@ -1,3 +1,5 @@
+import type { ServiceMap } from './plugins/types.ts';
+
 export type {
   Cleanup,
   CleanupFn,
@@ -7,4 +9,5 @@ export type {
   ServiceKey,
   ServiceMap,
 } from './plugins/types.ts';
+export type PluginEventBus = ServiceMap['eventBus'];
 export { DuplicatePluginRegistrationError, ExtensionRegistrationError } from './plugins/types.ts';
