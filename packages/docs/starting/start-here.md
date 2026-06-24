@@ -23,6 +23,27 @@ const total = await coco.wallet.balances.total();
 For lifecycle-oriented operation flows, use `coco.ops.send`, `coco.ops.receive`,
 and `coco.ops.melt`.
 
+## Core import paths
+
+Most applications only need the package root:
+
+```ts
+import { initializeCoco, Amount, type Manager } from '@cashu/coco-core';
+```
+
+Use dedicated subpaths when you build lower-level extensions:
+
+```ts
+// Storage adapter implementations and adapter contract tests
+import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+
+// Plugin authors
+import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
+```
+
+The root API is the stable app-facing surface. The adapter subpath is for
+persistence authors, and the plugin subpath is for extension authors.
+
 ## BIP-39 Seed
 
 In order to work properly coco requires you to supply a BIP39 conforming seed. Coco will never persist that seed, so you need to supply it via a `seedGetter` function. This function is expected to be passed when instantiating coco and will be called automatically when coco needs the key to derive new secrets from it
