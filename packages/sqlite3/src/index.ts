@@ -1,4 +1,4 @@
-import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core';
+import type { Repositories, RepositoryTransactionScope } from '@cashu/coco-core/adapter';
 import type { Database } from 'better-sqlite3';
 import { SqlStorageRepositories } from '@cashu/coco-sql-storage';
 import { SqliteDb } from './db.ts';

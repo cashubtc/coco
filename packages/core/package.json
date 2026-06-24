@@ -23,12 +23,26 @@
     "./plugin": {
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "import": "./dist/adapter.js"
     }
   },
   "files": [
     "dist",
     "README.md"
   ],
+  "typesVersions": {
+    "*": {
+      "adapter": [
+        "dist/adapter.d.ts"
+      ],
+      "plugin": [
+        "dist/plugin.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
@@ -40,13 +54,6 @@
   "sideEffects": false,
   "type": "module",
   "types": "dist/index.d.ts",
-  "typesVersions": {
-    "*": {
-      "plugin": [
-        "dist/plugin.d.ts"
-      ]
-    }
-  },
   "dependencies": {
     "@cashu/cashu-ts": "4.5",
     "@noble/curves": "^2.0.1",

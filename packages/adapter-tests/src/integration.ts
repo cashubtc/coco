@@ -1,4 +1,5 @@
-import type { Repositories, Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import type { Manager, Logger, UnitAmountLike, MintQuote } from '@cashu/coco-core';
+import type { Repositories } from '@cashu/coco-core/adapter';
 import {
   initializeCoco,
   getEncodedToken,

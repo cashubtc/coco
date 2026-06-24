@@ -2,8 +2,8 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperation,
   ReceiveOperationState,
-} from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

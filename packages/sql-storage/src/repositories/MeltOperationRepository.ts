@@ -1,11 +1,11 @@
-import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core';
+import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/adapter';
 import {
   deserializeAmount,
   normalizeMeltMethodData,
   normalizeUnit,
   serializeAmount,
   stringifyJson,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 

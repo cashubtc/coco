@@ -1,5 +1,5 @@
-import type { MintOperationRepository } from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core';
+import type { MintOperationRepository } from '@cashu/coco-core/adapter';
+import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 

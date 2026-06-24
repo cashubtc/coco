@@ -2,8 +2,8 @@ import type {
   ReceiveOperationRepository,
   ReceiveOperation,
   ReceiveOperationState,
-} from '@cashu/coco-core';
-import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
+import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 

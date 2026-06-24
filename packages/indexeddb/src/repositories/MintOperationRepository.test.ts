@@ -2,7 +2,7 @@
 
 // @ts-ignore bun:test types are provided by the test runner in this workspace.
 import { describe, expect, it } from 'bun:test';
-import { Amount } from '@cashu/coco-core';
+import { Amount } from '@cashu/cashu-ts';
 import { IdbMintOperationRepository } from './MintOperationRepository.ts';
 import type { MintOperationRow } from '../lib/db.ts';
 
