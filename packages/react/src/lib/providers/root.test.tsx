@@ -149,9 +149,9 @@ describe('CocoCashuProvider', () => {
     unmount();
 
     await waitForAssertion(() => {
-      expect(manager.pauseSubscriptions).toHaveBeenCalledTimes(1);
       expect(manager.dispose).toHaveBeenCalledTimes(1);
     });
+    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
   });
 
   it('tears down an owned manager that resolves after unmount', async () => {
@@ -177,8 +177,8 @@ describe('CocoCashuProvider', () => {
     });
 
     await waitForAssertion(() => {
-      expect(manager.pauseSubscriptions).toHaveBeenCalledTimes(1);
       expect(manager.dispose).toHaveBeenCalledTimes(1);
     });
+    expect(manager.pauseSubscriptions).not.toHaveBeenCalled();
   });
 });

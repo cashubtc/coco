@@ -396,6 +396,14 @@ export class SubscriptionManager {
     this.subscriptions.clear();
     this.activeByMint.clear();
     this.pendingSubscribeByMint.clear();
+    const injectedTransport = this.transportByMint.get('*');
+    this.transportByMint.clear();
+    if (injectedTransport) {
+      this.transportByMint.set('*', injectedTransport);
+    }
+    this.nextIdByMint.clear();
+    this.messageHandlerByMint.clear();
+    this.openHandlerByMint.clear();
     this.hasOpenedByMint.clear();
   }
 

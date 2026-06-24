@@ -221,6 +221,70 @@ describe('PluginHost', () => {
     expect(order).toEqual(['init', 'ready']);
   });
 
+  it('waits for runtime plugin lifecycle before draining cleanups during disposal', async () => {
+    const calls: string[] = [];
+    let resolveInit!: () => void;
+    let markInitStarted: () => void = () => {};
+    const initStarted = new Promise<void>((resolve) => {
+      markInitStarted = resolve;
+    });
+    const initGate = new Promise<void>((resolve) => {
+      resolveInit = resolve;
+    });
+
+    await host.init(services);
+    await host.ready();
+
+    const plugin: Plugin<['logger']> = {
+      name: 'runtime-async-cleanup',
+      required: ['logger'],
+      onInit: async () => {
+        markInitStarted();
+        await initGate;
+        return () => {
+          calls.push('init-cleanup');
+        };
+      },
+      onReady: () => {
+        calls.push('ready');
+        return () => {
+          calls.push('ready-cleanup');
+        };
+      },
+      onDispose: () => {
+        calls.push('dispose');
+      },
+    };
+
+    host.use(plugin);
+    await initStarted;
+
+    const disposePromise = host.dispose();
+    resolveInit();
+    await disposePromise;
+
+    expect(calls).toContain('ready');
+    expect(calls).toContain('dispose');
+    expect(calls).toContain('init-cleanup');
+    expect(calls).toContain('ready-cleanup');
+  });
+
+  it('rejects runtime plugin registration once disposal starts', async () => {
+    await host.init(services);
+    await host.ready();
+
+    const disposePromise = host.dispose();
+
+    expect(() =>
+      host.use({
+        name: 'too-late',
+        required: [] as const,
+      }),
+    ).toThrow('Cannot register plugin after disposal has started');
+
+    await disposePromise;
+  });
+
   it('calls onDispose and continues running all cleanups', async () => {
     const calls: string[] = [];
     const pluginA: Plugin<['logger']> = {
