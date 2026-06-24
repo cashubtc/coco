@@ -69,7 +69,7 @@ import {
 import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { MintMethodQuoteSnapshot } from './operations/mint';
-import type { Plugin, ServiceMap, PluginExtensions } from './plugins/types.ts';
+import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 import {
   getMintQuoteAmount,

@@ -7,7 +7,7 @@ Coco's plugin system allows you to extend the wallet's functionality by hooking 
 A plugin is an object that implements the `Plugin` interface:
 
 ```ts
-import type { Plugin } from '@cashu/coco-core';
+import type { Plugin } from '@cashu/coco-core/plugin';
 
 const myPlugin: Plugin<['eventBus', 'logger']> = {
   name: 'my-plugin',
@@ -58,25 +58,31 @@ manager.use(myPlugin);
 
 Plugins can request access to internal services by declaring them in the `required` array. The following services are available:
 
-| Service                   | Description                               |
-| ------------------------- | ----------------------------------------- |
-| `mintService`             | Manage mints (add, update, trust/untrust) |
-| `walletService`           | Low-level wallet operations               |
-| `proofService`            | Manage proofs (save, delete, query)       |
-| `keyRingService`          | P2PK key management                       |
-| `seedService`             | Access the wallet seed                    |
-| `walletRestoreService`    | Restore wallet from seed                  |
-| `counterService`          | Keyset counter management                 |
-| `tokenService`            | Token decoding and encoding helpers       |
-| `historyService`          | Transaction history                       |
-| `sendOperationService`    | Send operation lifecycle                  |
-| `receiveOperationService` | Receive operation lifecycle               |
-| `meltOperationService`    | Melt operation lifecycle                  |
-| `mintOperationService`    | Mint operation lifecycle                  |
-| `paymentRequestService`   | Payment request helpers                   |
-| `subscriptions`           | WebSocket subscription manager            |
-| `eventBus`                | Event pub/sub system                      |
-| `logger`                  | Logging interface                         |
+These service keys are the supported plugin service surface. Plugins should import
+`ServiceKey`, `ServiceMap`, `Plugin`, `PluginContext`, and `PluginExtensions` from
+`@cashu/coco-core/plugin` instead of the package root. `PluginHost` is runtime
+implementation wiring and is not needed to author extensions.
+
+| Service                        | Description                                 |
+| ------------------------------ | ------------------------------------------- |
+| `mintService`                  | Manage mints (add, update, trust/untrust)   |
+| `walletService`                | Low-level wallet operations                 |
+| `proofService`                 | Manage proofs (save, delete, query)         |
+| `keyRingService`               | P2PK key management                         |
+| `seedService`                  | Access the wallet seed                      |
+| `walletRestoreService`         | Restore wallet from seed                    |
+| `counterService`               | Keyset counter management                   |
+| `tokenService`                 | Token decoding and encoding helpers         |
+| `historyService`               | Transaction history                         |
+| `sendOperationService`         | Send operation lifecycle                    |
+| `receiveOperationService`      | Receive operation lifecycle                 |
+| `meltOperationService`         | Melt operation lifecycle                    |
+| `mintOperationService`         | Mint operation lifecycle                    |
+| `paymentRequestService`        | Payment request helpers                     |
+| `paymentRequestReceiveService` | Payment request receive operation lifecycle |
+| `subscriptions`                | WebSocket subscription manager              |
+| `eventBus`                     | Event pub/sub system                        |
+| `logger`                       | Logging interface                           |
 
 ## Plugin Extensions
 
@@ -87,7 +93,8 @@ Plugins can register custom APIs that become accessible via `manager.ext`. This 
 Use `ctx.registerExtension(key, api)` in your plugin's `onInit` or `onReady` hook:
 
 ```ts
-import type { CoreEvents, EventBus, Plugin } from '@cashu/coco-core';
+import type { CoreEvents, EventBus } from '@cashu/coco-core';
+import type { Plugin } from '@cashu/coco-core/plugin';
 
 class MyPluginApi {
   constructor(private eventBus: EventBus<CoreEvents>) {}
@@ -134,7 +141,8 @@ For full TypeScript autocomplete and type safety, plugin authors should augment 
 
 ```ts
 // my-plugin/index.ts
-import type { CoreEvents, EventBus, Plugin, PluginExtensions } from '@cashu/coco-core';
+import type { CoreEvents, EventBus } from '@cashu/coco-core';
+import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
 
 // Define your API class
 export class MyPluginApi {
@@ -148,7 +156,7 @@ export class MyPluginApi {
 }
 
 // Augment PluginExtensions for type safety
-declare module '@cashu/coco-core' {
+declare module '@cashu/coco-core/plugin' {
   interface PluginExtensions {
     myPlugin: MyPluginApi;
   }
