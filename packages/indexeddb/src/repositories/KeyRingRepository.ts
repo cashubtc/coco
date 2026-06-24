@@ -1,4 +1,4 @@
-import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 

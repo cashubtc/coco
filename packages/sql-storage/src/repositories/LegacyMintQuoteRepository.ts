@@ -3,7 +3,7 @@ import {
   normalizeMintUrl,
   type LegacyMintQuoteRepository,
   type MintQuote,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 export class SqliteLegacyMintQuoteRepository implements LegacyMintQuoteRepository {

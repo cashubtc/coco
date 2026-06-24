@@ -1,4 +1,4 @@
-import type { CounterRepository, Counter } from '@cashu/coco-core';
+import type { CounterRepository, Counter } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 export class SqliteCounterRepository implements CounterRepository {

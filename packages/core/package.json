@@ -19,12 +19,23 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "import": "./dist/adapter.js"
     }
   },
   "files": [
     "dist",
     "README.md"
   ],
+  "typesVersions": {
+    "*": {
+      "adapter": [
+        "dist/adapter.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",

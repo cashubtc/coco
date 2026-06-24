@@ -1,4 +1,4 @@
-import { normalizeMintUrl } from '@cashu/coco-core';
+import { normalizeMintUrl } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 
 export interface Migration {

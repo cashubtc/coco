@@ -1,5 +1,5 @@
-import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core';
-import { deserializeAmount } from '@cashu/coco-core';
+import type { AuthSessionRepository, AuthSession } from '@cashu/coco-core/adapter';
+import { deserializeAmount } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 
 interface AuthSessionRow {

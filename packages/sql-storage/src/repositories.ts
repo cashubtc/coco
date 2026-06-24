@@ -17,7 +17,7 @@ import type {
   ReceiveOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 import { ensureSchema } from './schema.ts';
 import { SqliteMintRepository } from './repositories/MintRepository.ts';

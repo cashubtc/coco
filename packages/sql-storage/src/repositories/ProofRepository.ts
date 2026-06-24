@@ -7,7 +7,7 @@ import {
   type ProofUnitFilter,
   type CoreProof,
   type ProofState,
-} from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 

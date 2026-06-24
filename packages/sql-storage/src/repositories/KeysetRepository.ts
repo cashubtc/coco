@@ -1,4 +1,4 @@
-import type { KeysetRepository, Keyset } from '@cashu/coco-core';
+import type { KeysetRepository, Keyset } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 

@@ -1,12 +1,12 @@
-import type { MeltQuoteRepository } from '@cashu/coco-core';
+import type { MeltQuoteRepository } from '@cashu/coco-core/adapter';
 import {
   deserializeAmount,
   normalizeMintUrl,
   QuoteIdentityConflictError,
   serializeAmount,
-} from '@cashu/coco-core';
-import type { MeltQuote } from '@cashu/coco-core';
-import type { QuoteIdentity } from '@cashu/coco-core';
+} from '@cashu/coco-core/adapter';
+import type { MeltQuote } from '@cashu/coco-core/adapter';
+import type { QuoteIdentity } from '@cashu/coco-core/adapter';
 import type { IdbDb, MeltQuoteRow } from '../lib/db.ts';
 
 function rowToQuote(row: MeltQuoteRow): MeltQuote {
