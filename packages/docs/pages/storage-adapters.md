@@ -3,6 +3,9 @@
 Coco is built in a platform agnostic way. As we can not assume anything about the presence of a certain storage API (e.g. IndexedDB), coco exposes a storage interface that needs to be satisfied when instantiating.
 
 ```ts
+import { initializeCoco } from '@cashu/coco-core';
+import { SqliteRepositories } from '@cashu/coco-sqlite';
+
 const repo = new SqliteRepositories({ database: db }); // Implements the Repositories interface
 await repo.init(); // Ensures schema and applies migrations
 const coco = await initializeCoco({
@@ -13,6 +16,19 @@ const coco = await initializeCoco({
 ```
 
 Some storage implementations are maintained as part of the cashubtc/coco repository, but technically you can use any class that implements the `Repositories` interface.
+
+App code imports `initializeCoco` and other wallet-facing symbols from
+`@cashu/coco-core`. Adapter implementations and adapter contract tests should
+import repository contracts and serialization helpers from the adapter subpath:
+
+```ts
+import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+```
+
+The adapter subpath is the stable public surface for persistence authors.
+Concrete core services, operation service classes, handler providers, transport
+internals, and individual memory repository classes are not part of the
+app-facing root API.
 
 ## SQLite adapter public API
 

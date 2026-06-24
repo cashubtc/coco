@@ -75,6 +75,42 @@ import { CocoCashuProvider } from 'coco-cashu-react';
 import { CocoCashuProvider } from '@cashu/coco-react';
 ```
 
+### Public core entry points
+
+The current `@cashu/coco-core` package has a narrower root API than the alpha
+packages. Use the package root for application and React code:
+
+```ts
+import { initializeCoco, Amount, type Manager } from '@cashu/coco-core';
+```
+
+If you maintain a storage adapter or adapter contract tests, move repository
+contracts, persisted operation/domain types, and serialization helpers to the
+adapter subpath:
+
+```ts
+// before
+import { type Repositories, serializeAmount } from '@cashu/coco-core';
+
+// after
+import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+```
+
+If you author plugins, move plugin lifecycle types, extension augmentation
+types, service keys, and plugin errors to the plugin subpath:
+
+```ts
+// before
+import type { Plugin, PluginExtensions, ServiceKey } from '@cashu/coco-core';
+
+// after
+import type { Plugin, PluginExtensions, ServiceKey } from '@cashu/coco-core/plugin';
+```
+
+Concrete services, operation service classes, handler providers, transport
+internals, `PluginHost`, and individual memory repository classes are not
+app-facing root API in the current release line.
+
 ## Node users: move from `sqlite3` to `better-sqlite3`
 
 The old `coco-cashu-sqlite3` package has been replaced by
@@ -357,6 +393,8 @@ version strings.
 
 - Replace all `coco-cashu-*` dependencies with `@cashu/*`
 - Rewrite imports to the new namespace
+- Move adapter-facing imports to `@cashu/coco-core/adapter`
+- Move plugin-facing imports to `@cashu/coco-core/plugin`
 - For Node, switch from `sqlite3` to `better-sqlite3`
 - Reinstall dependencies and regenerate the lockfile
 - Replace removed alpha-era manager and `WalletApi` wrappers with

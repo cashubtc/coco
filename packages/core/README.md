@@ -19,6 +19,35 @@ For a real application you will usually install a storage adapter alongside the
 core package, for example `@cashu/coco-sqlite`, `@cashu/coco-indexeddb`, or
 `@cashu/coco-expo-sqlite`. Bun applications can use `@cashu/coco-sqlite-bun`.
 
+## Entry points
+
+`@cashu/coco-core` publishes three stable import surfaces. Pick the narrowest
+one that matches what you are building:
+
+```ts
+// App and React usage
+import { initializeCoco, Amount, type Manager } from '@cashu/coco-core';
+
+// Storage adapter implementations and adapter contract tests
+import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+
+// Plugin authors
+import type { Plugin, PluginExtensions } from '@cashu/coco-core/plugin';
+```
+
+- Use the package root for app-facing wallet setup, manager APIs, public models,
+  errors, amount helpers, events, logging, and config boundary types.
+- Use `@cashu/coco-core/adapter` when you are writing persistence adapters or
+  adapter contract tests. Repository contracts, persisted operation/domain
+  shapes, and serialization helpers live there.
+- Use `@cashu/coco-core/plugin` when you are writing extensions. Plugin
+  lifecycle types, extension augmentation types, plugin service keys, and plugin
+  errors live there.
+
+Concrete services, operation service classes, handler providers, transport
+internals, `PluginHost`, and individual memory repository classes are
+implementation details. They are not app-facing root API.
+
 ## Protocol Support
 
 - [x] NUT-00
@@ -142,21 +171,26 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 
 ## Architecture
 
-- `Manager`: Facade wiring services together; exposes `mint`, `wallet`, `ops`,
-  `quotes`, `paymentRequests`, and `subscription` APIs plus watcher helpers.
-- `MintService`: Fetches `mintInfo`, keysets and persists via repositories.
-- `WalletService`: Caches and constructs `Wallet` from stored keysets.
-- `ProofService`: Manages proofs, selection, states, and counters.
-- Legacy mint quote orchestration has been replaced by `MintOperationService`,
-  `manager.ops.mint`, and canonical quote resurfacing through `manager.quotes.mint`.
-- Legacy melt quote orchestration has been replaced by `MeltOperationService`,
-  `manager.ops.melt`, and canonical quote resurfacing through `manager.quotes.melt`.
-- `CounterService`: Simple per-(mint,keyset) numeric counter with events.
-- `EventBus<CoreEvents>`: Lightweight typed pub/sub used internally (includes `subscriptions:paused` and `subscriptions:resumed`).
+- `Manager` is the app-facing facade. It exposes `mint`, `wallet`, `auth`,
+  `quotes`, `paymentRequests`, `ops`, `subscription`, `history`, and `keyring`
+  APIs plus watcher and processor helpers.
+- `initializeCoco` wires the manager from a `CocoConfig`, including
+  repositories, seed access, logging, subscriptions, plugins, watchers, and
+  processors.
+- `manager.ops.*` is the supported surface for recoverable send, receive, mint,
+  and melt lifecycles.
+- `manager.quotes.mint` and `manager.quotes.melt` expose canonical quote lookup,
+  creation, and refresh workflows.
+- `manager.on(...)` exposes typed `CoreEvents`, including subscription,
+  operation, proof, quote, history, mint, and auth-session events.
 
 ### Repositories
 
 Repository contracts for storage adapters are exported from `@cashu/coco-core/adapter`:
+
+```ts
+import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
+```
 
 - `MintRepository`
 - `KeysetRepository`
@@ -179,14 +213,14 @@ The package root exports `MemoryRepositories` as an in-memory test/example repos
 
 - `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`,
   `subscription`, `history`, and `keyring`
-- `ext: PluginExtensions`
+- `ext: PluginExtensions` from `@cashu/coco-core/plugin`
 - `on/once/off` for `CoreEvents`
 - `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
 - `enableMintOperationProcessor()`, `disableMintOperationProcessor()`,
   `waitForMintOperationProcessor()`
 - `enableProofStateWatcher()`, `disableProofStateWatcher()`
 - `pauseSubscriptions()`, `resumeSubscriptions()`
-- `use(plugin: Plugin): void`
+- `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`
 - `initPlugins(): Promise<void>`
 - `dispose(): Promise<void>`
 
@@ -295,7 +329,10 @@ those details are derived from canonical quote storage.
 
 ### Subscriptions in Node vs browser
 
-`Manager` will auto-detect a global `WebSocket` if available (e.g., browsers). In non-browser environments, provide a `webSocketFactory` to the `Manager` constructor or use the exposed `SubscriptionManager`/`WsConnectionManager` utilities.
+`Manager` will auto-detect a global `WebSocket` if available (e.g., browsers).
+In non-browser environments, provide a `webSocketFactory` through
+`initializeCoco` or `Manager` construction. App code should not need transport
+internals.
 
 ## Core events
 
@@ -384,7 +421,7 @@ await manager.dispose();
 
 ## Exports
 
-From the package root:
+From the package root (`@cashu/coco-core`), for app and React usage:
 
 - `Manager`, `initializeCoco`, `CocoConfig`
 - `MemoryRepositories`
@@ -399,12 +436,13 @@ From the package root:
 - Amount/unit helpers and intentional `@cashu/cashu-ts` re-exports such as `Amount`
 - Config boundary types: `WebSocketLike`, `WebSocketFactory`
 
-From the adapter subpath (`@cashu/coco-core/adapter`):
+From the adapter subpath (`@cashu/coco-core/adapter`), for storage adapter
+implementations and adapter contract tests:
 
 - Repository contracts, transaction scope types, persisted operation/domain types, and
   adapter serialization helpers for storage implementations
 
-From the plugin subpath (`@cashu/coco-core/plugin`):
+From the plugin subpath (`@cashu/coco-core/plugin`), for extension authors:
 
 - Plugin author types: `Plugin`, `PluginContext`, `PluginExtensions`, `PluginEventBus`,
   `ServiceKey`, `ServiceMap`, `Cleanup`, `CleanupFn`

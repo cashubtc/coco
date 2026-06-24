@@ -2,6 +2,11 @@
 
 Coco's plugin system allows you to extend the wallet's functionality by hooking into its lifecycle and registering custom APIs.
 
+Plugin authors should import plugin lifecycle types, extension augmentation
+types, service keys, and plugin errors from `@cashu/coco-core/plugin`.
+Applications still import `initializeCoco` and manager-facing symbols from the
+package root.
+
 ## Basic Plugin Structure
 
 A plugin is an object that implements the `Plugin` interface:
@@ -56,7 +61,7 @@ manager.use(myPlugin);
 
 ## Available Services
 
-Plugins can request access to internal services by declaring them in the `required` array. The following services are available:
+Plugins can request supported service capabilities by declaring them in the `required` array. The following service keys are available:
 
 These service keys are the supported plugin service surface. Plugins should import
 `ServiceKey`, `ServiceMap`, `Plugin`, `PluginContext`, and `PluginExtensions` from

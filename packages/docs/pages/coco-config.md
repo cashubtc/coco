@@ -3,6 +3,10 @@
 Coco can be configured using a configuration object `CocoConfig`
 
 ```ts
+import type { Logger, WebSocketFactory } from '@cashu/coco-core';
+import type { Repositories } from '@cashu/coco-core/adapter';
+import type { Plugin } from '@cashu/coco-core/plugin';
+
 export interface CocoConfig {
   repo: Repositories;
   seedGetter: () => Promise<Uint8Array>;
