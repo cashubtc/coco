@@ -156,7 +156,7 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 
 ### Repositories
 
-Interfaces in `packages/core/repositories/index.ts`:
+Repository contracts for storage adapters are exported from `@cashu/coco-core/adapter`:
 
 - `MintRepository`
 - `KeysetRepository`
@@ -171,7 +171,7 @@ Interfaces in `packages/core/repositories/index.ts`:
 - `MintOperationRepository`
 - `ReceiveOperationRepository`
 
-In-memory reference implementations are provided under `repositories/memory/` for testing.
+The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
 
 ## Public API surface
 
@@ -387,17 +387,22 @@ await manager.dispose();
 From the package root:
 
 - `Manager`, `initializeCoco`, `CocoConfig`
-- Repository interfaces and memory implementations
+- `MemoryRepositories`
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `SubscriptionApi`, and the operation-oriented APIs
-- Models, services, and operations
-- Events: `CoreEvents`, `EventBus`, `EventBusOptions`, `EventHandler`
+- Public models, errors, API inputs/results, and operation result types
+- Events: `CoreEvents`, `EventBus`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
   `BalancesByMint`, `BalanceBreakdown`, `BalancesBreakdownByMint`
 - Logging: `ConsoleLogger`, `Logger`
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
-- Infrastructure helpers: `SubscriptionManager`, `WsConnectionManager`,
-  `WebSocketLike`, `WebSocketFactory`
+- Amount/unit helpers and intentional `@cashu/cashu-ts` re-exports such as `Amount`
+- Config boundary types: `WebSocketLike`, `WebSocketFactory`
+
+From the adapter subpath (`@cashu/coco-core/adapter`):
+
+- Repository contracts, transaction scope types, persisted operation/domain types, and
+  adapter serialization helpers for storage implementations
 
 From the plugin subpath (`@cashu/coco-core/plugin`):
 
