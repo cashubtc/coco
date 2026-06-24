@@ -20,6 +20,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
     "./adapter": {
       "types": "./dist/adapter.d.ts",
       "import": "./dist/adapter.js"
@@ -33,6 +37,9 @@
     "*": {
       "adapter": [
         "dist/adapter.d.ts"
+      ],
+      "plugin": [
+        "dist/plugin.d.ts"
       ]
     }
   },

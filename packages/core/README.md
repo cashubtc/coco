@@ -344,9 +344,9 @@ include:
 ### Types
 
 ```ts
-import type { Plugin, ServiceKey } from '@cashu/coco-core';
+import type { Plugin, ServiceKey } from '@cashu/coco-core/plugin';
 
-// Service keys are derived from the exported ServiceMap type.
+// Service keys are derived from the exported plugin ServiceMap type.
 // Use ServiceKey when you want the current full set without duplicating it here.
 
 const myPlugin: Plugin<['eventBus', 'logger']> = {
@@ -390,7 +390,7 @@ From the package root:
 - Repository interfaces and memory implementations
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
   `SubscriptionApi`, and the operation-oriented APIs
-- Models, services, operations, and plugin types
+- Models, services, and operations
 - Events: `CoreEvents`, `EventBus`, `EventBusOptions`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
   `BalancesByMint`, `BalanceBreakdown`, `BalancesBreakdownByMint`
@@ -398,6 +398,12 @@ From the package root:
 - Helpers: `getEncodedToken`, `getDecodedToken`, `normalizeMintUrl`
 - Infrastructure helpers: `SubscriptionManager`, `WsConnectionManager`,
   `WebSocketLike`, `WebSocketFactory`
+
+From the plugin subpath (`@cashu/coco-core/plugin`):
+
+- Plugin author types: `Plugin`, `PluginContext`, `PluginExtensions`, `ServiceKey`,
+  `ServiceMap`, `Cleanup`, `CleanupFn`
+- Plugin errors: `DuplicatePluginRegistrationError`, `ExtensionRegistrationError`
 
 The package root (`@cashu/coco-core`) is the supported public import path unless
 `package.json` explicitly lists a subpath export. Documented public symbols must be

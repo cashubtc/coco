@@ -22,6 +22,12 @@ import type { ReceiveOperationService } from '../operations/receive/ReceiveOpera
 
 export type ServiceKey = keyof ServiceMap;
 
+/**
+ * Stable service surface available to plugin authors through PluginContext.services.
+ *
+ * Plugins opt into individual services by listing their keys in Plugin.required. Removing,
+ * renaming, or narrowing a key in this map is a public plugin API change.
+ */
 export interface ServiceMap {
   mintService: MintService;
   walletService: WalletService;
@@ -71,7 +77,7 @@ export interface Plugin<Req extends readonly ServiceKey[] = readonly ServiceKey[
  * Plugin authors should augment this interface via module augmentation:
  *
  * @example
- * declare module '@cashu/coco-core' {
+ * declare module '@cashu/coco-core/plugin' {
  *   interface PluginExtensions {
  *     myPlugin: MyPluginApi;
  *   }
