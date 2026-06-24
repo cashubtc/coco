@@ -87,8 +87,4 @@ export {
   serializeOutputData,
   stringifyJson,
 } from './utils.ts';
-export type {
-  SerializedOutput,
-  SerializedOutputData,
-  StoredBlindedMessage,
-} from './utils.ts';
+export type { SerializedOutput, SerializedOutputData, StoredBlindedMessage } from './utils.ts';
