@@ -29,6 +29,13 @@
     "dist",
     "README.md"
   ],
+  "typesVersions": {
+    "*": {
+      "adapter": [
+        "dist/adapter.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
