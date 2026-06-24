@@ -17,10 +17,7 @@ export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
-export type {
-  SendMethod,
-  SendMethodData,
-} from './operations/send/SendMethodHandler.ts';
+export type { SendMethod, SendMethodData } from './operations/send/SendMethodHandler.ts';
 export type {
   InitSendOperation,
   PreparedSendOperation,
@@ -101,8 +98,4 @@ export {
   type AmountLike,
 } from '@cashu/cashu-ts';
 export type { WebSocketLike, WebSocketFactory } from './infra/WsConnectionManager.ts';
-export {
-  normalizeMintUrl,
-  toAmount,
-  sumAmounts,
-} from './utils.ts';
+export { normalizeMintUrl, toAmount, sumAmounts } from './utils.ts';
