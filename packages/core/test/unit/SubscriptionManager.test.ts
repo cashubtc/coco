@@ -304,9 +304,7 @@ describe('SubscriptionManager pause/resume', () => {
     const mintUrl = 'https://mint.example.com';
 
     await subManager.subscribe(mintUrl, 'bolt11_mint_quote', ['quote1']);
-    expect(mockTransport.sentMessages.some((message) => message.method === 'subscribe')).toBe(
-      true,
-    );
+    expect(mockTransport.sentMessages.some((message) => message.method === 'subscribe')).toBe(true);
 
     subManager.closeAll();
     const messageCountAfterClose = mockTransport.sentMessages.length;
