@@ -30,7 +30,7 @@ export function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
-export function requireNumber(
+export function assertFieldPresent(
   value: string | number | null | undefined,
   field: string,
   operationId: string,

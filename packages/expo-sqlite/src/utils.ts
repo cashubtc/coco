@@ -29,14 +29,3 @@ export function bytesToHex(bytes: Uint8Array): string {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
-
-export function requireNumber(
-  value: string | number | null | undefined,
-  field: string,
-  operationId: string,
-): string | number {
-  if (value == null) {
-    throw new Error(`Invalid operation row ${operationId}: missing required field "${field}"`);
-  }
-  return value;
-}

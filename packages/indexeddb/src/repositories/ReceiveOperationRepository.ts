@@ -6,7 +6,7 @@ import type {
 import { deserializeAmount, serializeAmount } from '@cashu/coco-core';
 import type { IdbDb, ReceiveOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
-import { requireNumber } from '../utils.ts';
+import { assertFieldPresent } from '../utils.ts';
 
 function getOperationUnit(op: ReceiveOperation): string {
   return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
@@ -42,7 +42,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 
   const preparedData = {
-    fee: deserializeAmount(requireNumber(row.fee, 'fee', row.id)),
+    fee: deserializeAmount(assertFieldPresent(row.fee, 'fee', row.id)),
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
 
