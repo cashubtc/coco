@@ -45,13 +45,7 @@ const normalizeError = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error));
 
 const teardownOwnedManager = async (manager: Manager): Promise<void> => {
-  // TODO: Replace this bandaid with manager.dispose() once core disposal tears down
-  // watchers, processors, and subscriptions.
-  try {
-    await manager.pauseSubscriptions();
-  } finally {
-    await manager.dispose();
-  }
+  await manager.dispose();
 };
 
 const InitializingCocoCashuProvider = ({

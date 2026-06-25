@@ -590,6 +590,109 @@ describe('initializeCoco', () => {
     });
   });
 
+  describe('dispose', () => {
+    it('should stop owned watchers, processors, and active subscriptions', async () => {
+      const manager = await initializeCoco(baseConfig);
+      const subscriptionInternals = manager.subscriptions as unknown as {
+        subscriptions: Map<string, unknown>;
+        activeByMint: Map<string, Set<string>>;
+        transportByMint: Map<string, unknown>;
+      };
+
+      manager.subscriptions.pause();
+      await manager.subscriptions.subscribe('https://mint.test', 'bolt11_mint_quote', ['quote-1']);
+
+      expect(manager['mintOperationWatcher']?.isRunning()).toBe(true);
+      expect(manager['proofStateWatcher']?.isRunning()).toBe(true);
+      expect(manager['mintOperationProcessor']?.isRunning()).toBe(true);
+      expect(subscriptionInternals.subscriptions.size).toBe(1);
+      expect(subscriptionInternals.activeByMint.size).toBe(1);
+      expect(subscriptionInternals.transportByMint.size).toBe(1);
+
+      await manager.dispose();
+
+      expect(manager['mintOperationWatcher']).toBeUndefined();
+      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['mintOperationProcessor']).toBeUndefined();
+      expect(subscriptionInternals.subscriptions.size).toBe(0);
+      expect(subscriptionInternals.activeByMint.size).toBe(0);
+      expect(subscriptionInternals.transportByMint.size).toBe(0);
+    });
+
+    it('should run plugin disposal and cleanup only once', async () => {
+      const onDispose = mock(() => {});
+      const cleanup = mock(() => {});
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [
+          {
+            name: 'dispose-plugin',
+            required: [] as const,
+            onInit: () => cleanup,
+            onDispose,
+          },
+        ],
+      });
+
+      await manager.dispose();
+      await manager.dispose();
+
+      expect(onDispose).toHaveBeenCalledTimes(1);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not recreate subscription transports during plugin cleanup', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [
+          {
+            name: 'subscription-cleanup-plugin',
+            required: ['subscriptions'] as const,
+            onInit: async ({ services }) => {
+              services.subscriptions.pause();
+              const subscription = await services.subscriptions.subscribe(
+                'https://mint.test',
+                'bolt11_mint_quote',
+                ['quote-plugin'],
+              );
+              return () => subscription.unsubscribe();
+            },
+          },
+        ],
+      });
+      const subscriptionInternals = manager.subscriptions as unknown as {
+        subscriptions: Map<string, unknown>;
+        activeByMint: Map<string, Set<string>>;
+        transportByMint: Map<string, unknown>;
+      };
+
+      expect(subscriptionInternals.subscriptions.size).toBe(1);
+      expect(subscriptionInternals.activeByMint.size).toBe(1);
+      expect(subscriptionInternals.transportByMint.size).toBe(1);
+
+      await manager.dispose();
+
+      expect(subscriptionInternals.subscriptions.size).toBe(0);
+      expect(subscriptionInternals.activeByMint.size).toBe(0);
+      expect(subscriptionInternals.transportByMint.size).toBe(0);
+    });
+
+    it('should not restart background work after disposal', async () => {
+      const manager = await initializeCoco(baseConfig);
+
+      await manager.dispose();
+      await manager.resumeSubscriptions();
+      await manager.enableMintOperationWatcher();
+      await manager.enableProofStateWatcher();
+      await manager.enableMintOperationProcessor();
+
+      expect(manager['mintOperationWatcher']).toBeUndefined();
+      expect(manager['proofStateWatcher']).toBeUndefined();
+      expect(manager['mintOperationProcessor']).toBeUndefined();
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle empty watchers config object', async () => {
       const manager = await initializeCoco({

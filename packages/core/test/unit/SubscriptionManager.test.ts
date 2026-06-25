@@ -299,4 +299,19 @@ describe('SubscriptionManager pause/resume', () => {
     // Should not error
     expect(mockTransport.resumed).toBe(true);
   });
+
+  it('preserves an injected transport after closeAll', async () => {
+    const mintUrl = 'https://mint.example.com';
+
+    await subManager.subscribe(mintUrl, 'bolt11_mint_quote', ['quote1']);
+    expect(mockTransport.sentMessages.some((message) => message.method === 'subscribe')).toBe(true);
+
+    subManager.closeAll();
+    const messageCountAfterClose = mockTransport.sentMessages.length;
+
+    await subManager.subscribe(mintUrl, 'bolt11_mint_quote', ['quote2']);
+
+    const messagesAfterClose = mockTransport.sentMessages.slice(messageCountAfterClose);
+    expect(messagesAfterClose.some((message) => message.method === 'subscribe')).toBe(true);
+  });
 });

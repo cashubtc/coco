@@ -254,6 +254,8 @@ export class Manager {
   private originalProcessorConfig: CocoConfig['processors'];
   private readonly mintRequestProvider: MintRequestProvider;
   private readonly mintAdapter: MintAdapter;
+  private disposed = false;
+  private disposePromise?: Promise<void>;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -386,7 +388,25 @@ export class Manager {
   }
 
   async dispose(): Promise<void> {
+    if (this.disposePromise) {
+      await this.disposePromise;
+      return;
+    }
+    if (this.disposed) return;
+
+    this.disposePromise = this.disposeOwnedResources();
+    await this.disposePromise;
+  }
+
+  private async disposeOwnedResources(): Promise<void> {
+    this.disposed = true;
+    this.subscriptionsPaused = true;
+
+    await this.disableMintOperationWatcher();
+    await this.disableProofStateWatcher();
+    await this.disableMintOperationProcessor();
     await this.pluginHost.dispose();
+    this.subscriptions.closeAll();
   }
 
   off<E extends keyof CoreEvents>(
@@ -400,6 +420,7 @@ export class Manager {
     watchExistingPendingOnStart?: boolean;
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
+    if (this.disposed) return;
     if (this.mintOperationWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'MintOperationWatcherService' })
@@ -432,6 +453,7 @@ export class Manager {
     initialEnqueueDelayMs?: number;
     autoClaimMintQuotes?: boolean;
   }): Promise<boolean> {
+    if (this.disposed) return false;
     if (this.mintOperationProcessor?.isRunning()) return false;
     const processorLogger = this.logger.child
       ? this.logger.child({ module: 'MintOperationProcessor' })
@@ -461,6 +483,7 @@ export class Manager {
   async enableProofStateWatcher(options?: {
     watchExistingInflightOnStart?: boolean;
   }): Promise<void> {
+    if (this.disposed) return;
     if (this.proofStateWatcher?.isRunning()) return;
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'ProofStateWatcherService' })
@@ -585,6 +608,10 @@ export class Manager {
   }
 
   async resumeSubscriptions(): Promise<void> {
+    if (this.disposed) {
+      this.logger.debug('Cannot resume subscriptions after manager disposal');
+      return;
+    }
     this.subscriptionsPaused = false;
     this.logger.info('Resuming subscriptions');
     await this.eventBus.emit('subscriptions:resumed', undefined);

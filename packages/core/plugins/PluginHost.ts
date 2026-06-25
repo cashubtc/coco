@@ -10,11 +10,18 @@ export class PluginHost {
   private readonly readyPlugins = new WeakSet<Plugin>();
   private readonly initPromises = new WeakMap<Plugin, Promise<void>>();
   private readonly readyPromises = new WeakMap<Plugin, Promise<void>>();
+  private readonly lifecyclePromises = new Set<Promise<void>>();
   private services?: ServiceMap;
   private initialized = false;
   private readyPhase = false;
+  private disposed = false;
+  private disposePromise?: Promise<void>;
 
   use(plugin: Plugin): void {
+    if (this.disposePromise || this.disposed) {
+      throw new Error('Cannot register plugin after disposal has started');
+    }
+
     if (this.registeredPlugins.has(plugin)) {
       throw new DuplicatePluginRegistrationError(plugin.name);
     }
@@ -23,14 +30,15 @@ export class PluginHost {
     this.plugins.push(plugin);
     if (this.initialized && this.services) {
       const services = this.services;
-      const initPromise = this.ensureInitialized(plugin, services);
-      if (this.readyPhase) {
-        void initPromise.then(() => this.ensureReady(plugin, services));
-      }
+      void this.trackLifecycle(this.initializeRuntimePlugin(plugin, services));
     }
   }
 
   async init(services: ServiceMap): Promise<void> {
+    if (this.disposePromise || this.disposed) {
+      throw new Error('Cannot initialize plugins after disposal has started');
+    }
+
     this.services = services;
     this.initialized = true;
     for (const p of this.plugins) {
@@ -39,6 +47,10 @@ export class PluginHost {
   }
 
   async ready(): Promise<void> {
+    if (this.disposePromise || this.disposed) {
+      throw new Error('Cannot mark plugins ready after disposal has started');
+    }
+
     if (!this.services) return;
     this.readyPhase = true;
     for (const p of this.plugins) {
@@ -47,6 +59,19 @@ export class PluginHost {
   }
 
   async dispose(): Promise<void> {
+    if (this.disposePromise) {
+      await this.disposePromise;
+      return;
+    }
+    if (this.disposed) return;
+
+    this.disposePromise = this.runDispose();
+    await this.disposePromise;
+  }
+
+  private async runDispose(): Promise<void> {
+    await this.waitForLifecycle();
+
     const errors: unknown[] = [];
     for (const p of this.plugins) {
       try {
@@ -69,6 +94,33 @@ export class PluginHost {
       // eslint-disable-next-line no-console
       console.error('One or more plugin dispose/cleanup handlers failed');
     }
+    this.disposed = true;
+  }
+
+  private async initializeRuntimePlugin(plugin: Plugin, services: ServiceMap): Promise<void> {
+    await this.ensureInitialized(plugin, services);
+    if (this.readyPhase) {
+      await this.ensureReady(plugin, services);
+    }
+  }
+
+  private trackLifecycle(promise: Promise<void>): Promise<void> {
+    this.lifecyclePromises.add(promise);
+    void promise.then(
+      () => {
+        this.lifecyclePromises.delete(promise);
+      },
+      () => {
+        this.lifecyclePromises.delete(promise);
+      },
+    );
+    return promise;
+  }
+
+  private async waitForLifecycle(): Promise<void> {
+    while (this.lifecyclePromises.size > 0) {
+      await Promise.allSettled([...this.lifecyclePromises]);
+    }
   }
 
   /**
@@ -87,13 +139,15 @@ export class PluginHost {
       return;
     }
 
-    const promise = this.runInit(plugin, services)
-      .then(() => {
-        this.initializedPlugins.add(plugin);
-      })
-      .finally(() => {
-        this.initPromises.delete(plugin);
-      });
+    const promise = this.trackLifecycle(
+      this.runInit(plugin, services)
+        .then(() => {
+          this.initializedPlugins.add(plugin);
+        })
+        .finally(() => {
+          this.initPromises.delete(plugin);
+        }),
+    );
 
     this.initPromises.set(plugin, promise);
     await promise;
@@ -109,13 +163,15 @@ export class PluginHost {
       return;
     }
 
-    const promise = this.runReady(plugin, services)
-      .then(() => {
-        this.readyPlugins.add(plugin);
-      })
-      .finally(() => {
-        this.readyPromises.delete(plugin);
-      });
+    const promise = this.trackLifecycle(
+      this.runReady(plugin, services)
+        .then(() => {
+          this.readyPlugins.add(plugin);
+        })
+        .finally(() => {
+          this.readyPromises.delete(plugin);
+        }),
+    );
 
     this.readyPromises.set(plugin, promise);
     await promise;
