@@ -114,10 +114,41 @@ export interface ProofRepository {
   getReservedProofs(): Promise<CoreProof[]>;
 }
 
+/**
+ * Stores canonical mint quotes.
+ *
+ * Public mint quote identity is methodless: `{ mintUrl, quoteId }` after mint URL normalization.
+ * Method-scoped APIs address the concrete storage row once the quote method is known. Adapters must
+ * reject upserts that would create two mint quotes with the same `{ mintUrl, quoteId }` for
+ * different methods at the same normalized mint URL. Melt quotes use a separate identity namespace.
+ */
 export interface MintQuoteRepository {
+  /**
+   * Look up a mint quote by its public methodless identity, normalizing `identity.mintUrl` first.
+   *
+   * Implementations should return the single matching mint quote, return `null` when none exists,
+   * and report a quote identity conflict if stored data contains multiple methods for the same
+   * normalized `{ mintUrl, quoteId }`.
+   */
   getMintQuoteById(identity: QuoteIdentity): Promise<MintQuote | null>;
+
+  /**
+   * Look up the exact method-scoped mint quote row, normalizing `mintUrl` before comparison.
+   */
   getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null>;
+
+  /**
+   * Insert or update the exact method-scoped mint quote row after normalizing `quote.mintUrl`.
+   *
+   * Upserting the same normalized `{ mintUrl, method, quoteId }` updates that quote. Upserting a
+   * different method with the same normalized `{ mintUrl, quoteId }` must fail with a quote
+   * identity conflict instead of creating an ambiguous methodless public identity.
+   */
   upsertMintQuote(quote: MintQuote): Promise<void>;
+
+  /**
+   * Update state for the exact method-scoped mint quote row.
+   */
   setMintQuoteState(
     mintUrl: string,
     method: string,
@@ -132,9 +163,36 @@ export interface LegacyMintQuoteRepository {
   getPendingLegacyMintQuotes(mintUrl?: string): Promise<MintQuote[]>;
 }
 
+/**
+ * Stores canonical melt quotes.
+ *
+ * Public melt quote identity is methodless: `{ mintUrl, quoteId }` after mint URL normalization.
+ * Method-scoped APIs address the concrete storage row once the quote method is known. Adapters must
+ * reject upserts that would create two melt quotes with the same `{ mintUrl, quoteId }` for
+ * different methods at the same normalized mint URL. Mint quotes use a separate identity namespace.
+ */
 export interface MeltQuoteRepository {
+  /**
+   * Look up a melt quote by its public methodless identity, normalizing `identity.mintUrl` first.
+   *
+   * Implementations should return the single matching melt quote, return `null` when none exists,
+   * and report a quote identity conflict if stored data contains multiple methods for the same
+   * normalized `{ mintUrl, quoteId }`.
+   */
   getMeltQuoteById(identity: QuoteIdentity): Promise<MeltQuote | null>;
+
+  /**
+   * Look up the exact method-scoped melt quote row, normalizing `mintUrl` before comparison.
+   */
   getMeltQuote(mintUrl: string, method: string, quoteId: string): Promise<MeltQuote | null>;
+
+  /**
+   * Insert or update the exact method-scoped melt quote row after normalizing `quote.mintUrl`.
+   *
+   * Upserting the same normalized `{ mintUrl, method, quoteId }` updates that quote. Upserting a
+   * different method with the same normalized `{ mintUrl, quoteId }` must fail with a quote
+   * identity conflict instead of creating an ambiguous methodless public identity.
+   */
   upsertMeltQuote(quote: MeltQuote): Promise<void>;
   getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;
 }
