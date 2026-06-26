@@ -68,7 +68,6 @@ import {
   QuoteApi,
   PaymentRequestsApi,
 } from './api';
-import { SubscriptionApi } from './api/SubscriptionApi.ts';
 import { PluginHost } from './plugins/PluginHost.ts';
 import type { MintMethodQuoteSnapshot } from './operations/mint';
 import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
@@ -231,7 +230,6 @@ export class Manager {
   readonly mint: MintApi;
   readonly wallet: WalletApi;
   readonly keyring: KeyRingApi;
-  readonly subscription: SubscriptionApi;
   readonly history: HistoryApi;
   readonly auth: AuthApi;
   readonly ops: OpsApi;
@@ -339,7 +337,6 @@ export class Manager {
     this.mint = apis.mint;
     this.wallet = apis.wallet;
     this.keyring = apis.keyring;
-    this.subscription = apis.subscription;
     this.history = apis.history;
     this.ops = apis.ops;
     this.quotes = apis.quotes;
@@ -1058,7 +1055,6 @@ export class Manager {
     mint: MintApi;
     wallet: WalletApi;
     keyring: KeyRingApi;
-    subscription: SubscriptionApi;
     history: HistoryApi;
     ops: OpsApi;
     quotes: QuoteApi;
@@ -1066,7 +1062,6 @@ export class Manager {
     paymentRequests: PaymentRequestsApi;
   } {
     const walletApiLogger = this.getChildLogger('WalletApi');
-    const subscriptionApiLogger = this.getChildLogger('SubscriptionApi');
     const mint = new MintApi(this.mintService);
     const wallet = new WalletApi(
       this.mintService,
@@ -1078,7 +1073,6 @@ export class Manager {
       walletApiLogger,
     );
     const keyring = new KeyRingApi(this.keyRingService);
-    const subscription = new SubscriptionApi(this.subscriptions, subscriptionApiLogger);
     const history = new HistoryApi(this.historyService);
     const send = new SendOpsApi(this.sendOperationService);
     const receive = new ReceiveOpsApi(this.receiveOperationService);
@@ -1095,7 +1089,6 @@ export class Manager {
       mint,
       wallet,
       keyring,
-      subscription,
       history,
       ops,
       quotes,

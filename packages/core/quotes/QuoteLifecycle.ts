@@ -770,13 +770,19 @@ export class QuoteLifecycle {
       throw new QuoteNotFoundError('melt', identity.mintUrl, identity.quoteId);
     }
 
-    const initial = this.evaluateMeltQuotePaid(quote);
+    let observedPending = quote.state === 'PENDING';
+    const evaluatePaid = (updatedQuote: MeltQuote): QuoteWaitEvaluation<MeltQuote> => {
+      if (updatedQuote.state === 'PENDING') {
+        observedPending = true;
+      }
+      return this.evaluateMeltQuotePaid(updatedQuote, observedPending);
+    };
+
+    const initial = evaluatePaid(quote);
     if (initial.status === 'resolve') return initial.quote;
     if (initial.status === 'reject') throw initial.error;
 
-    return this.waitForMeltQuote(identity, quote, options, (updatedQuote) =>
-      this.evaluateMeltQuotePaid(updatedQuote),
-    );
+    return this.waitForMeltQuote(identity, quote, options, evaluatePaid);
   }
 
   async requireMeltQuoteForPrepare(
@@ -1016,9 +1022,25 @@ export class QuoteLifecycle {
     return { status: 'pending' };
   }
 
-  private evaluateMeltQuotePaid(quote: MeltQuote): QuoteWaitEvaluation<MeltQuote> {
+  private evaluateMeltQuotePaid(
+    quote: MeltQuote,
+    observedPending: boolean,
+  ): QuoteWaitEvaluation<MeltQuote> {
     if (quote.state === 'PAID') {
       return { status: 'resolve', quote };
+    }
+
+    if (quote.state === 'UNPAID' && observedPending) {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'melt',
+          quote.mintUrl,
+          quote.quoteId,
+          quote.state,
+          `Melt quote ${quote.quoteId} at ${quote.mintUrl} returned to UNPAID after pending settlement`,
+        ),
+      };
     }
 
     if (isQuoteExpired(quote)) {

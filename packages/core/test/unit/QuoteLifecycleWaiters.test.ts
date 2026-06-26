@@ -426,6 +426,30 @@ describe('QuoteLifecycle quote waiters', () => {
     await expect(wait).resolves.toMatchObject({ state: 'PAID' });
   });
 
+  it('rejects melt waits when pending settlement returns to unpaid', async () => {
+    await meltQuoteRepository.upsertMeltQuote(makeMeltQuote('UNPAID'));
+
+    const wait = quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId }, { timeoutMs: 100 });
+    await nextTick();
+    await eventBus.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: makeMeltQuote('PENDING'),
+    });
+    await nextTick();
+    await eventBus.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: makeMeltQuote('UNPAID'),
+    });
+
+    await expect(wait).rejects.toThrow(TerminalQuoteStateError);
+    await expect(wait).rejects.toHaveProperty('state', 'UNPAID');
+    expect(listenerCount(eventBus, 'melt-quote:updated')).toBe(0);
+  });
+
   it('rejects expired terminal-not-paid melt quotes', async () => {
     await meltQuoteRepository.upsertMeltQuote(
       makeMeltQuote('UNPAID', { expiry: Math.floor(Date.now() / 1000) - 1 }),

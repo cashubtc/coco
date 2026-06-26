@@ -5,8 +5,7 @@ Modular, storage-agnostic core for working with Cashu mints and wallets.
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
 - **High-level APIs**: `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
-  `SubscriptionApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common
-  flows.
+  `QuoteApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common flows.
 - **Background watchers**: Optional services to track quote/payment and proof states.
 
 ## Install
@@ -179,8 +178,8 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 ## Architecture
 
 - `Manager` is the app-facing facade. It exposes `mint`, `wallet`, `auth`,
-  `quotes`, `paymentRequests`, `ops`, `subscription`, `history`, and `keyring`
-  APIs plus watcher and processor helpers.
+  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus watcher
+  and processor helpers.
 - `initializeCoco` wires the manager from a `CocoConfig`, including
   repositories, seed access, logging, subscriptions, plugins, watchers, and
   processors.
@@ -218,8 +217,8 @@ The package root exports `MemoryRepositories` as an in-memory test/example repos
 
 ### Manager
 
-- `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`,
-  `subscription`, `history`, and `keyring`
+- `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`, `history`, and
+  `keyring`
 - `ext: PluginExtensions` from `@cashu/coco-core/plugin`
 - `on/once/off` for `CoreEvents`
 - `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
@@ -324,11 +323,6 @@ those details are derived from canonical quote storage.
 
 Quote waiters resolve from canonical quote snapshots after checking current
 state, installing a quote update listener, and refreshing once.
-
-### SubscriptionApi
-
-Quote waiting is exposed through `QuoteApi`. Subscription lifecycle controls are
-available on `Manager` through `pauseSubscriptions()` and `resumeSubscriptions()`.
 
 ### HistoryApi
 
@@ -445,7 +439,7 @@ From the package root (`@cashu/coco-core`), for app and React usage:
 - `Manager`, `initializeCoco`, `CocoConfig`
 - `MemoryRepositories`
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
-  `SubscriptionApi`, and the operation-oriented APIs
+  `QuoteApi`, and the operation-oriented APIs
 - Public models, errors, API inputs/results, and operation result types
 - Events: `CoreEvents`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
