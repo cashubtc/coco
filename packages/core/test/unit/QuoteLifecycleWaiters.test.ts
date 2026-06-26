@@ -181,6 +181,26 @@ describe('QuoteLifecycle quote waiters', () => {
     ).rejects.toThrow(QuoteNotFoundError);
   });
 
+  it('requires mint quotes for prepare by method, quote id, and expected unit', async () => {
+    await expect(
+      quoteLifecycle.requireMintQuoteForPrepare(mintUrl, 'bolt11', quoteId),
+    ).rejects.toThrow(`Mint quote ${quoteId} for bolt11 at ${mintUrl} was not found`);
+
+    await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('UNPAID'));
+
+    await expect(
+      quoteLifecycle.requireMintQuoteForPrepare(mintUrl, 'bolt11', quoteId, 'SAT'),
+    ).resolves.toMatchObject({
+      method: 'bolt11',
+      quoteId,
+      unit: 'sat',
+    });
+
+    await expect(
+      quoteLifecycle.requireMintQuoteForPrepare(mintUrl, 'bolt11', quoteId, 'usd'),
+    ).rejects.toThrow(`Mint quote ${quoteId} unit sat does not match requested unit usd`);
+  });
+
   it('resolves mint claimability immediately for claimable BOLT11 and reusable quotes', async () => {
     await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('PAID'));
     await expect(
