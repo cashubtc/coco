@@ -65,6 +65,13 @@ coco.on('mint-op:finalized', (payload) => {
     console.log('This was paid!!');
   }
 });
+
+await coco.quotes.mint.awaitClaimable({
+  mintUrl: 'https://minturl.com',
+  quoteId: pendingMint.quoteId,
+});
+
+await coco.ops.mint.execute(pendingMint.id);
 ```
 
 Reusable onchain and BOLT12 mint quotes are created through the same quote API.
@@ -81,7 +88,7 @@ const quote = await coco.quotes.mint.create({
 
 console.log('fund this: ', quote.request);
 
-const refreshed = await coco.quotes.mint.refresh({
+const refreshed = await coco.quotes.mint.awaitClaimable({
   mintUrl: 'https://minturl.com',
   quoteId: quote.quoteId,
 });
@@ -112,6 +119,11 @@ const offerQuote = await coco.quotes.mint.create({
 });
 
 console.log('pay this offer:', offerQuote.request);
+
+await coco.quotes.mint.awaitNextPayment({
+  mintUrl: 'https://minturl.com',
+  quoteId: offerQuote.quoteId,
+});
 
 const pendingOfferMint = await coco.ops.mint.prepare({
   quote: offerQuote,

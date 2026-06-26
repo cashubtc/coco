@@ -42,6 +42,8 @@ const quoteIdentity = { mintUrl, quoteId: quote.quoteId };
 
 const currentQuote = await coco.quotes.mint.get(quoteIdentity);
 const refreshedQuote = await coco.quotes.mint.refresh(quoteIdentity);
+const claimableQuote = await coco.quotes.mint.awaitClaimable(quoteIdentity, { timeoutMs: 30_000 });
+const nextPaymentQuote = await coco.quotes.mint.awaitNextPayment(quoteIdentity);
 const operations = await coco.ops.mint.listByQuote(quoteIdentity);
 ```
 
@@ -80,6 +82,11 @@ after reload without creating or loading a mint operation:
   `ISSUED`
 - `refresh({ mintUrl, quoteId })` checks the remote quote state and
   persists the canonical quote update before emitting `mint-quote:updated`
+- `awaitClaimable({ mintUrl, quoteId }, { timeoutMs?, signal? })` resolves with
+  a canonical quote snapshot once Coco has locally claimable value
+- `awaitNextPayment({ mintUrl, quoteId }, { timeoutMs?, signal? })` resolves
+  after a later payment observation for reusable quotes, or after a later
+  `PAID`/`ISSUED` BOLT11 transition
 
 `mint-quote:updated` is emitted when a quote is created/imported or remote
 settlement state changes. Stable metadata-only updates do not emit. Importing a

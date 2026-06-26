@@ -4,7 +4,7 @@ import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } fro
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { QuoteIdentity } from '../models/QuoteIdentity';
-import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
+import type { QuoteLifecycle, QuoteWaitOptions } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
 export type DefaultSupportedMintQuoteMethod = 'bolt11' | 'onchain' | 'bolt12';
@@ -101,6 +101,14 @@ export class MintQuoteApi {
   refresh(input: QuoteIdentity): Promise<MintQuote> {
     return this.quoteLifecycle.refreshMintQuoteById(input);
   }
+
+  awaitClaimable(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MintQuote> {
+    return this.quoteLifecycle.awaitMintQuoteClaimable(input, options);
+  }
+
+  awaitNextPayment(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MintQuote> {
+    return this.quoteLifecycle.awaitMintQuoteNextPayment(input, options);
+  }
 }
 
 export class MeltQuoteApi {
@@ -127,6 +135,10 @@ export class MeltQuoteApi {
 
   refresh(input: QuoteIdentity): Promise<MeltQuote> {
     return this.quoteLifecycle.refreshMeltQuoteById(input);
+  }
+
+  awaitPaid(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MeltQuote> {
+    return this.quoteLifecycle.awaitMeltQuoteSettlement(input, options);
   }
 }
 

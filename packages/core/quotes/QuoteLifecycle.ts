@@ -13,6 +13,7 @@ import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
 import {
+  getMintQuoteAvailableAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   mintQuoteFromBolt11Response,
@@ -25,7 +26,11 @@ import {
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
 import {
   ProofValidationError,
+  QuoteNotFoundError,
   QuoteIdentityConflictError,
+  QuoteWaitAbortedError,
+  QuoteWaitTimeoutError,
+  TerminalQuoteStateError,
   UnknownMintError,
 } from '../models/Error';
 import type { MeltQuoteRepository, MintQuoteRepository, ProofRepository } from '../repositories';
@@ -48,6 +53,16 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 import type { MeltQuoteRef, MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
+
+export interface QuoteWaitOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+type QuoteWaitEvaluation<TQuote> =
+  | { status: 'pending' }
+  | { status: 'resolve'; quote: TQuote }
+  | { status: 'reject'; error: Error };
 
 const MINT_QUOTE_STATE_RANK: Record<string, number> = {
   UNPAID: 0,
@@ -191,6 +206,14 @@ function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote):
   }
 
   return changed ? merged : null;
+}
+
+function isQuoteExpired(quote: { expiry: number | null }): boolean {
+  return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
+}
+
+function abortSignalReason(signal: AbortSignal): unknown {
+  return (signal as AbortSignal & { reason?: unknown }).reason;
 }
 
 export interface QuoteLifecycleDeps {
@@ -367,6 +390,80 @@ export class QuoteLifecycle {
     }
 
     return this.refreshResolvedMintQuote(existingQuote);
+  }
+
+  async awaitMintQuoteClaimable(
+    identity: QuoteIdentity,
+    options: QuoteWaitOptions = {},
+  ): Promise<MintQuote> {
+    const quote = await this.mintQuoteRepository.getMintQuoteById(identity);
+    if (!quote) {
+      throw new QuoteNotFoundError('mint', identity.mintUrl, identity.quoteId);
+    }
+
+    const initial = this.evaluateMintQuoteClaimable(quote);
+    if (initial.status === 'resolve') return initial.quote;
+    if (initial.status === 'reject') throw initial.error;
+
+    return this.waitForMintQuote(identity, quote, options, (updatedQuote) =>
+      this.evaluateMintQuoteClaimable(updatedQuote),
+    );
+  }
+
+  async awaitMintQuoteNextPayment(
+    identity: QuoteIdentity,
+    options: QuoteWaitOptions = {},
+  ): Promise<MintQuote> {
+    const quote = await this.mintQuoteRepository.getMintQuoteById(identity);
+    if (!quote) {
+      throw new QuoteNotFoundError('mint', identity.mintUrl, identity.quoteId);
+    }
+
+    const initial = this.evaluateMintQuoteCanObserveNextPayment(quote);
+    if (initial.status === 'reject') throw initial.error;
+
+    if (quote.reusable) {
+      const baselinePaid = quote.quoteData.amountPaid;
+      return this.waitForMintQuote(identity, quote, options, (updatedQuote) => {
+        if (updatedQuote.reusable && updatedQuote.quoteData.amountPaid.greaterThan(baselinePaid)) {
+          return { status: 'resolve', quote: updatedQuote };
+        }
+        if (isQuoteExpired(updatedQuote)) {
+          return {
+            status: 'reject',
+            error: new TerminalQuoteStateError(
+              'mint',
+              updatedQuote.mintUrl,
+              updatedQuote.quoteId,
+              'EXPIRED',
+              `Mint quote ${updatedQuote.quoteId} at ${updatedQuote.mintUrl} is expired`,
+            ),
+          };
+        }
+        return { status: 'pending' };
+      });
+    }
+
+    return this.waitForMintQuote(identity, quote, options, (updatedQuote) => {
+      if (isStatefulMintQuote(updatedQuote)) {
+        if (updatedQuote.state === 'PAID' || updatedQuote.state === 'ISSUED') {
+          return { status: 'resolve', quote: updatedQuote };
+        }
+        if (isQuoteExpired(updatedQuote)) {
+          return {
+            status: 'reject',
+            error: new TerminalQuoteStateError(
+              'mint',
+              updatedQuote.mintUrl,
+              updatedQuote.quoteId,
+              'EXPIRED',
+              `Mint quote ${updatedQuote.quoteId} at ${updatedQuote.mintUrl} is expired`,
+            ),
+          };
+        }
+      }
+      return { status: 'pending' };
+    });
   }
 
   async requireMintQuoteForPrepare(
@@ -668,6 +765,24 @@ export class QuoteLifecycle {
     return this.refreshResolvedMeltQuote(existingQuote);
   }
 
+  async awaitMeltQuoteSettlement(
+    identity: QuoteIdentity,
+    options: QuoteWaitOptions = {},
+  ): Promise<MeltQuote> {
+    const quote = await this.meltQuoteRepository.getMeltQuoteById(identity);
+    if (!quote) {
+      throw new QuoteNotFoundError('melt', identity.mintUrl, identity.quoteId);
+    }
+
+    const initial = this.evaluateMeltQuotePaid(quote);
+    if (initial.status === 'resolve') return initial.quote;
+    if (initial.status === 'reject') throw initial.error;
+
+    return this.waitForMeltQuote(identity, quote, options, (updatedQuote) =>
+      this.evaluateMeltQuotePaid(updatedQuote),
+    );
+  }
+
   async requireMeltQuoteForPrepare(
     mintUrl: string,
     method: MeltMethod,
@@ -838,6 +953,257 @@ export class QuoteLifecycle {
       method: quote.method,
       quoteId: quote.quoteId,
       quote,
+    });
+  }
+
+  private evaluateMintQuoteClaimable(quote: MintQuote): QuoteWaitEvaluation<MintQuote> {
+    if (getMintQuoteAvailableAmount(quote).greaterThan(Amount.zero())) {
+      return { status: 'resolve', quote };
+    }
+
+    if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'mint',
+          quote.mintUrl,
+          quote.quoteId,
+          quote.state,
+          `Mint quote ${quote.quoteId} at ${quote.mintUrl} is already issued`,
+        ),
+      };
+    }
+
+    if (isQuoteExpired(quote)) {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'mint',
+          quote.mintUrl,
+          quote.quoteId,
+          'EXPIRED',
+          `Mint quote ${quote.quoteId} at ${quote.mintUrl} is expired with no claimable value`,
+        ),
+      };
+    }
+
+    return { status: 'pending' };
+  }
+
+  private evaluateMintQuoteCanObserveNextPayment(quote: MintQuote): QuoteWaitEvaluation<MintQuote> {
+    if (isStatefulMintQuote(quote) && (quote.state === 'PAID' || quote.state === 'ISSUED')) {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'mint',
+          quote.mintUrl,
+          quote.quoteId,
+          quote.state,
+          `Mint quote ${quote.quoteId} at ${quote.mintUrl} cannot observe another payment`,
+        ),
+      };
+    }
+
+    if (isQuoteExpired(quote)) {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'mint',
+          quote.mintUrl,
+          quote.quoteId,
+          'EXPIRED',
+          `Mint quote ${quote.quoteId} at ${quote.mintUrl} is expired`,
+        ),
+      };
+    }
+
+    return { status: 'pending' };
+  }
+
+  private evaluateMeltQuotePaid(quote: MeltQuote): QuoteWaitEvaluation<MeltQuote> {
+    if (quote.state === 'PAID') {
+      return { status: 'resolve', quote };
+    }
+
+    if (isQuoteExpired(quote)) {
+      return {
+        status: 'reject',
+        error: new TerminalQuoteStateError(
+          'melt',
+          quote.mintUrl,
+          quote.quoteId,
+          'EXPIRED',
+          `Melt quote ${quote.quoteId} at ${quote.mintUrl} is expired without payment`,
+        ),
+      };
+    }
+
+    return { status: 'pending' };
+  }
+
+  private waitForMintQuote(
+    identity: QuoteIdentity,
+    currentQuote: MintQuote,
+    options: QuoteWaitOptions,
+    evaluate: (quote: MintQuote) => QuoteWaitEvaluation<MintQuote>,
+  ): Promise<MintQuote> {
+    return new Promise<MintQuote>((resolve, reject) => {
+      let settled = false;
+      let unsubscribe: (() => void) | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        unsubscribe?.();
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', onAbort);
+      };
+      const settle = (evaluation: QuoteWaitEvaluation<MintQuote>) => {
+        if (settled || evaluation.status === 'pending') return;
+        settled = true;
+        cleanup();
+        if (evaluation.status === 'resolve') {
+          resolve(evaluation.quote);
+        } else {
+          reject(evaluation.error);
+        }
+      };
+      const rejectWith = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const onAbort = () => {
+        rejectWith(
+          new QuoteWaitAbortedError(
+            'mint',
+            currentQuote.mintUrl,
+            currentQuote.quoteId,
+            options.signal ? abortSignalReason(options.signal) : undefined,
+          ),
+        );
+      };
+
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+
+      unsubscribe = this.eventBus.on(
+        'mint-quote:updated',
+        ({ mintUrl, method, quoteId, quote }) => {
+          if (
+            mintUrl !== currentQuote.mintUrl ||
+            method !== currentQuote.method ||
+            quoteId !== currentQuote.quoteId
+          ) {
+            return;
+          }
+          settle(evaluate(quote));
+        },
+      );
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      if (options.timeoutMs !== undefined) {
+        timeout = setTimeout(() => {
+          rejectWith(
+            new QuoteWaitTimeoutError(
+              'mint',
+              currentQuote.mintUrl,
+              currentQuote.quoteId,
+              options.timeoutMs ?? 0,
+            ),
+          );
+        }, options.timeoutMs);
+      }
+
+      void this.refreshMintQuoteById(identity)
+        .then((quote) => settle(evaluate(quote)))
+        .catch((error: unknown) => {
+          rejectWith(error instanceof Error ? error : new Error(String(error)));
+        });
+    });
+  }
+
+  private waitForMeltQuote(
+    identity: QuoteIdentity,
+    currentQuote: MeltQuote,
+    options: QuoteWaitOptions,
+    evaluate: (quote: MeltQuote) => QuoteWaitEvaluation<MeltQuote>,
+  ): Promise<MeltQuote> {
+    return new Promise<MeltQuote>((resolve, reject) => {
+      let settled = false;
+      let unsubscribe: (() => void) | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        unsubscribe?.();
+        if (timeout) clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', onAbort);
+      };
+      const settle = (evaluation: QuoteWaitEvaluation<MeltQuote>) => {
+        if (settled || evaluation.status === 'pending') return;
+        settled = true;
+        cleanup();
+        if (evaluation.status === 'resolve') {
+          resolve(evaluation.quote);
+        } else {
+          reject(evaluation.error);
+        }
+      };
+      const rejectWith = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const onAbort = () => {
+        rejectWith(
+          new QuoteWaitAbortedError(
+            'melt',
+            currentQuote.mintUrl,
+            currentQuote.quoteId,
+            options.signal ? abortSignalReason(options.signal) : undefined,
+          ),
+        );
+      };
+
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+
+      unsubscribe = this.eventBus.on(
+        'melt-quote:updated',
+        ({ mintUrl, method, quoteId, quote }) => {
+          if (
+            mintUrl !== currentQuote.mintUrl ||
+            method !== currentQuote.method ||
+            quoteId !== currentQuote.quoteId
+          ) {
+            return;
+          }
+          settle(evaluate(quote));
+        },
+      );
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      if (options.timeoutMs !== undefined) {
+        timeout = setTimeout(() => {
+          rejectWith(
+            new QuoteWaitTimeoutError(
+              'melt',
+              currentQuote.mintUrl,
+              currentQuote.quoteId,
+              options.timeoutMs ?? 0,
+            ),
+          );
+        }, options.timeoutMs);
+      }
+
+      void this.refreshMeltQuoteById(identity)
+        .then((quote) => settle(evaluate(quote)))
+        .catch((error: unknown) => {
+          rejectWith(error instanceof Error ? error : new Error(String(error)));
+        });
     });
   }
 

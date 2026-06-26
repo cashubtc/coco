@@ -2,6 +2,10 @@
 
 By default Coco will enable [Watchers & Processors](../pages/watchers-processors.md) when instantiating with the `initializeCoco` helper. Some of these services will try to establish a Websocket connection to the mint to receive live updates. If Websockets are unavailable for whatever reason Coco will fallback to polling.
 
+Subscriptions are background observation controls. To wait for mint or melt
+quote progress in application flows, use `coco.quotes.mint.awaitClaimable`,
+`coco.quotes.mint.awaitNextPayment`, or `coco.quotes.melt.awaitPaid`.
+
 ## Websocket Factory
 
 Coco will try to use the global `WebSocket` object by default. As this is not available in all environments, you can also pass a `WebsocketFactory` via [CocoConfig](../pages/coco-config.md).

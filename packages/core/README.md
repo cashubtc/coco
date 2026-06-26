@@ -114,13 +114,12 @@ const pendingMint = await manager.ops.mint.prepare({
   amount: 100,
 });
 
-// Optionally, wait via subscription API instead of polling
-await manager.subscription.awaitMintQuotePaid(
-  'https://nofees.testnut.cashu.space',
-  pendingMint.quoteId,
-);
+// pay pendingMint.request externally, then wait for canonical quote state
+await manager.quotes.mint.awaitClaimable({
+  mintUrl: 'https://nofees.testnut.cashu.space',
+  quoteId: pendingMint.quoteId,
+});
 
-// pay pendingMint.request externally, then:
 await manager.ops.mint.execute(pendingMint.id);
 
 // Check balances
@@ -317,10 +316,19 @@ those details are derived from canonical quote storage.
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
+### QuoteApi
+
+- `mint.awaitClaimable({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MintQuote>`
+- `mint.awaitNextPayment({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MintQuote>`
+- `melt.awaitPaid({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MeltQuote>`
+
+Quote waiters resolve from canonical quote snapshots after checking current
+state, installing a quote update listener, and refreshing once.
+
 ### SubscriptionApi
 
-- `awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
-- `awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
+Quote waiting is exposed through `QuoteApi`. Subscription lifecycle controls are
+available on `Manager` through `pauseSubscriptions()` and `resumeSubscriptions()`.
 
 ### HistoryApi
 
@@ -361,6 +369,7 @@ include:
 - `proofs:reserved` → `{ mintUrl, operationId, secrets, amount }`
 - `proofs:released` → `{ mintUrl, secrets }`
 - `mint-quote:updated` → `{ mintUrl, method, quoteId, quote }`
+- `melt-quote:updated` → `{ mintUrl, method, quoteId, quote }`
 - `mint-op:pending` → `{ mintUrl, operationId, operation }`
 - `mint-op:requeue` → `{ mintUrl, operationId, operation }`
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`

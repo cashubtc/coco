@@ -403,7 +403,7 @@ async function getLatestPendingMintOperation(
   return operation;
 }
 
-async function awaitMintQuotePaid(
+async function awaitMintQuoteReadyFromEvents(
   manager: Manager,
   pendingMint: PreparedMintOperation,
 ): Promise<MintQuote | null> {
@@ -441,7 +441,7 @@ async function awaitMintQuotePaid(
   return paidEventPromise;
 }
 
-async function awaitMintQuotePaidWithSubscription(
+async function awaitMintQuotePaidWithQuoteApi(
   manager: Manager,
   mintUrl: string,
   pendingMint: PreparedMintOperation,
@@ -451,10 +451,10 @@ async function awaitMintQuotePaidWithSubscription(
     return initialQuote;
   }
 
-  const paidNotificationPromise = manager.subscription.awaitMintQuotePaid(
+  const paidNotificationPromise = manager.quotes.mint.awaitNextPayment({
     mintUrl,
-    pendingMint.quoteId,
-  );
+    quoteId: pendingMint.quoteId,
+  });
 
   const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
   const latestQuote = latestPendingMint
@@ -470,7 +470,7 @@ async function awaitMintQuotePaidWithSubscription(
 
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
   const pendingMint = await prepareMintOperation(manager, mintUrl, amount, unit);
-  await awaitMintQuotePaidWithSubscription(manager, mintUrl, pendingMint);
+  await awaitMintQuotePaidWithQuoteApi(manager, mintUrl, pendingMint);
   await executeMintOperation(manager, pendingMint.id);
   return pendingMint;
 }
@@ -661,7 +661,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(pendingEvent.mintUrl).toBe(mintUrl);
           expect(pendingEvent.operation.quoteId).toBe(pendingMint.quoteId);
 
-          const paidQuote = await awaitMintQuotePaid(mgr!, pendingMint);
+          const paidQuote = await awaitMintQuoteReadyFromEvents(mgr!, pendingMint);
           expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           expect(paidQuote?.state).toBe('PAID');
 
@@ -706,7 +706,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 50, testUnit);
 
-          const paidQuote = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
+          const paidQuote = await awaitMintQuotePaidWithQuoteApi(mgr!, mintUrl, pendingMint);
           expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           await executeMintOperation(mgr!, pendingMint.id);
 

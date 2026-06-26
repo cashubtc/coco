@@ -23,10 +23,13 @@ payment requests without treating that quote as a wallet activity yet:
 - `manager.quotes.mint.get({ mintUrl, quoteId })`
 - `manager.quotes.mint.listPending({ method? })`
 - `manager.quotes.mint.refresh({ mintUrl, quoteId })`
+- `manager.quotes.mint.awaitClaimable({ mintUrl, quoteId }, { timeoutMs?, signal? })`
+- `manager.quotes.mint.awaitNextPayment({ mintUrl, quoteId }, { timeoutMs?, signal? })`
 - `manager.quotes.melt.create({ mintUrl, method, methodData, unit? })`
 - `manager.quotes.melt.get({ mintUrl, quoteId })`
 - `manager.quotes.melt.listPending({ method? })`
 - `manager.quotes.melt.refresh({ mintUrl, quoteId })`
+- `manager.quotes.melt.awaitPaid({ mintUrl, quoteId }, { timeoutMs?, signal? })`
 
 For BOLT11 quotes, the invoice is exposed as `quote.request`.
 
@@ -84,6 +87,38 @@ watching through `mint-quote:updated`, but it does not create a mint operation o
 history entry. Mint operations no longer mirror quote remote state; listen for
 `mint-quote:updated` or call `manager.quotes.mint.get(...)` when you need quote
 payment state.
+
+## Quote waiter migration
+
+The public subscription quote waiters were removed because they returned raw
+transport notification payloads and their names implied stronger domain
+guarantees than they provided.
+
+Before:
+
+```ts
+await manager.subscription.awaitMintQuotePaid(mintUrl, quoteId);
+await manager.subscription.awaitMeltQuotePaid(mintUrl, quoteId);
+```
+
+After:
+
+```ts
+await manager.quotes.mint.awaitClaimable({ mintUrl, quoteId });
+await manager.quotes.mint.awaitNextPayment({ mintUrl, quoteId });
+await manager.quotes.melt.awaitPaid({ mintUrl, quoteId });
+```
+
+Use `awaitClaimable` when you need locally claimable mint value. Use
+`awaitNextPayment` when a reusable quote should observe a later incoming payment
+or when BOLT11 auto-claim races can move the quote directly to `ISSUED`. Use
+`awaitPaid` for melt settlement.
+
+All quote waiters require an existing canonical quote identity and return the
+updated canonical quote snapshot. They check the current snapshot, install a
+canonical quote update listener, refresh once, and then wait for a matching
+quote update, timeout, or abort signal. Keep subscription processing enabled or
+refresh quote state yourself when you need realtime remote observation.
 
 ## Melt quote migration
 

@@ -30,8 +30,11 @@ if (result.state === 'finalized') {
 }
 
 if (result.state === 'pending') {
-  const refreshed = await coco.ops.melt.refresh(result.id);
-  console.log('Updated state:', refreshed.state);
+  const paidQuote = await coco.quotes.melt.awaitPaid({
+    mintUrl,
+    quoteId: prepared.quoteId,
+  });
+  console.log('Updated state:', paidQuote.state);
 }
 ```
 
@@ -93,8 +96,11 @@ const prepared = await coco.ops.melt.prepare({
 const executed = await coco.ops.melt.execute(prepared.id);
 
 if (executed.state === 'pending') {
-  const refreshed = await coco.ops.melt.refresh(executed.id);
-  console.log('Updated state:', refreshed.state);
+  const paidQuote = await coco.quotes.melt.awaitPaid({
+    mintUrl,
+    quoteId: prepared.quoteId,
+  });
+  console.log('Updated state:', paidQuote.state);
 }
 ```
 
