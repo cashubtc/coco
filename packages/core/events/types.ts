@@ -36,8 +36,6 @@ export interface CoreEvents {
   'send:prepared': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is executed (token created) */
   'send:pending': { mintUrl: string; operationId: string; operation: SendOperation; token: Token };
-  /** Emitted when send operation is executed (token created) this one should be cleaned up in the future */
-  'send:created': { mintUrl: string; token: Token };
   /** Emitted when send operation is finalized (proofs confirmed spent) */
   'send:finalized': { mintUrl: string; operationId: string; operation: SendOperation };
   /** Emitted when send operation is rolled back */
