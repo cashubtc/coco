@@ -109,6 +109,52 @@ function getRemoteStateChange(
   return false;
 }
 
+function serializeMeltChange(change: MeltQuote['change']): unknown {
+  return change ?? [];
+}
+
+function getMeaningfulMeltQuoteFields(quote: MeltQuote): unknown {
+  const base = {
+    method: quote.method,
+    quoteId: quote.quoteId,
+    request: quote.request,
+    amount: quote.amount.toString(),
+    unit: quote.unit,
+    expiry: quote.expiry,
+    state: quote.state,
+    change: serializeMeltChange(quote.change),
+  };
+
+  if (quote.method === 'onchain') {
+    return {
+      ...base,
+      fee_options: quote.fee_options.map((option) => ({
+        fee_index: option.fee_index,
+        fee_reserve: option.fee_reserve.toString(),
+        estimated_blocks: option.estimated_blocks,
+      })),
+      outpoint: quote.outpoint ?? null,
+    };
+  }
+
+  return {
+    ...base,
+    fee_reserve: quote.fee_reserve.toString(),
+    payment_preimage: quote.payment_preimage ?? null,
+  };
+}
+
+function getMeltQuoteChange(existing: MeltQuote | null, incoming: MeltQuote): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  return (
+    JSON.stringify(getMeaningfulMeltQuoteFields(existing)) !==
+    JSON.stringify(getMeaningfulMeltQuoteFields(incoming))
+  );
+}
+
 export interface QuoteLifecycleDeps {
   mintHandlerProvider: MintHandlerProvider;
   meltHandlerProvider: MeltHandlerProvider;
@@ -182,17 +228,7 @@ export class QuoteLifecycle {
       quote: existingQuote,
     });
 
-    await this.meltQuoteRepository.upsertMeltQuote(refreshed);
-    const quote = await this.meltQuoteRepository.getMeltQuote(
-      existingQuote.mintUrl,
-      existingQuote.method,
-      existingQuote.quoteId,
-    );
-    if (!quote) {
-      throw new Error(
-        `Cannot refresh quote: melt quote ${existingQuote.quoteId} was not found after persistence`,
-      );
-    }
+    const quote = await this.recordMeltQuoteObservation(refreshed);
     return quote;
   }
 
@@ -561,10 +597,7 @@ export class QuoteLifecycle {
       );
     }
 
-    await this.meltQuoteRepository.upsertMeltQuote(quote);
-    const persistedQuote =
-      (await this.meltQuoteRepository.getMeltQuote(mintUrl, method, quote.quoteId)) ?? quote;
-    return persistedQuote as MeltQuote<M>;
+    return (await this.recordMeltQuoteObservation(quote)) as MeltQuote<M>;
   }
 
   getMeltQuote(mintUrl: string, method: MeltMethod, quoteId: string): Promise<MeltQuote | null> {
@@ -664,6 +697,45 @@ export class QuoteLifecycle {
     return meltQuoteToMethodSnapshot(quote);
   }
 
+  /**
+   * Records a canonical melt quote observation and emits `melt-quote:updated` only when storage
+   * changed meaningfully.
+   */
+  async recordMeltQuoteObservation(canonicalQuote: MeltQuote): Promise<MeltQuote> {
+    const { quote, remoteQuoteChanged } =
+      await this.resolveAndPersistMeltQuoteObservation(canonicalQuote);
+    await this.emitMeltQuoteUpdatedIfNeeded(quote, remoteQuoteChanged);
+    return quote;
+  }
+
+  private async resolveAndPersistMeltQuoteObservation(
+    canonicalQuote: MeltQuote,
+  ): Promise<{ quote: MeltQuote; remoteQuoteChanged: boolean }> {
+    const existing = await this.meltQuoteRepository.getMeltQuote(
+      canonicalQuote.mintUrl,
+      canonicalQuote.method,
+      canonicalQuote.quoteId,
+    );
+
+    if (existing?.state === 'PAID' && canonicalQuote.state !== 'PAID') {
+      return {
+        quote: existing,
+        remoteQuoteChanged: false,
+      };
+    }
+
+    const remoteQuoteChanged = getMeltQuoteChange(existing, canonicalQuote);
+    if (!remoteQuoteChanged && existing) {
+      return {
+        quote: existing,
+        remoteQuoteChanged: false,
+      };
+    }
+
+    const persisted = await this.persistCanonicalMeltQuote(canonicalQuote);
+    return { quote: persisted, remoteQuoteChanged };
+  }
+
   private async persistCanonicalMintQuote(canonicalQuote: MintQuote): Promise<MintQuote> {
     await this.mintQuoteRepository.upsertMintQuote(canonicalQuote);
     return (
@@ -684,6 +756,37 @@ export class QuoteLifecycle {
     }
 
     await this.eventBus.emit('mint-quote:updated', {
+      mintUrl: quote.mintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      quote,
+    });
+  }
+
+  private async persistCanonicalMeltQuote(canonicalQuote: MeltQuote): Promise<MeltQuote> {
+    await this.meltQuoteRepository.upsertMeltQuote(canonicalQuote);
+    const quote = await this.meltQuoteRepository.getMeltQuote(
+      canonicalQuote.mintUrl,
+      canonicalQuote.method,
+      canonicalQuote.quoteId,
+    );
+    if (!quote) {
+      throw new Error(
+        `Cannot persist quote observation: melt quote ${canonicalQuote.quoteId} for ${canonicalQuote.method} at ${canonicalQuote.mintUrl} was not found after persistence`,
+      );
+    }
+    return quote;
+  }
+
+  private async emitMeltQuoteUpdatedIfNeeded(
+    quote: MeltQuote,
+    remoteQuoteChanged: boolean,
+  ): Promise<void> {
+    if (!remoteQuoteChanged) {
+      return;
+    }
+
+    await this.eventBus.emit('melt-quote:updated', {
       mintUrl: quote.mintUrl,
       method: quote.method,
       quoteId: quote.quoteId,
