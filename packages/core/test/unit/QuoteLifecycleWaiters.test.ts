@@ -1,5 +1,5 @@
 import { Amount } from '@cashu/cashu-ts';
-import { beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
@@ -17,8 +17,14 @@ import {
   type MintQuote,
 } from '../../models/MintQuote.ts';
 import { meltQuoteFromBolt11Response, type MeltQuote } from '../../models/MeltQuote.ts';
-import type { MeltMethodHandler } from '../../operations/melt/MeltMethodHandler.ts';
-import type { MintMethodHandler } from '../../operations/mint/MintMethodHandler.ts';
+import type {
+  FetchRemoteMeltQuoteContext,
+  MeltMethodHandler,
+} from '../../operations/melt/MeltMethodHandler.ts';
+import type {
+  FetchRemoteMintQuoteContext,
+  MintMethodHandler,
+} from '../../operations/mint/MintMethodHandler.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MemoryMeltQuoteRepository } from '../../repositories/memory/MemoryMeltQuoteRepository.ts';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository.ts';
@@ -31,6 +37,13 @@ const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
 
 const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+function listenerCount(eventBus: EventBus<CoreEvents>, event: keyof CoreEvents): number {
+  const { listeners } = eventBus as unknown as {
+    listeners: Map<keyof CoreEvents, Set<unknown>>;
+  };
+  return listeners.get(event)?.size ?? 0;
+}
 
 describe('QuoteLifecycle quote waiters', () => {
   let eventBus: EventBus<CoreEvents>;
@@ -252,6 +265,27 @@ describe('QuoteLifecycle quote waiters', () => {
     await expect(wait).resolves.toMatchObject({ quoteId, method: 'onchain' });
   });
 
+  it('rejects next-payment waits when later reusable payment updates arrive after expiry', async () => {
+    await mintQuoteRepository.upsertMintQuote(
+      makeReusableMintQuote(Amount.from(10), Amount.zero()),
+    );
+
+    const wait = quoteLifecycle.awaitMintQuoteNextPayment({ mintUrl, quoteId }, { timeoutMs: 100 });
+    await nextTick();
+
+    await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: quoteId,
+      request: 'bc1ptest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(11),
+      amount_issued: Amount.zero(),
+    });
+
+    await expect(wait).rejects.toThrow(TerminalQuoteStateError);
+  });
+
   it('rejects next-payment waits for terminal BOLT11 quotes at call time', async () => {
     await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('PAID'));
 
@@ -289,12 +323,36 @@ describe('QuoteLifecycle quote waiters', () => {
     await expect(issuedWait).resolves.toMatchObject({ state: 'ISSUED' });
   });
 
-  it('times out and aborts mint waits with typed errors', async () => {
+  it('rejects BOLT11 next-payment waits when later paid updates arrive after expiry', async () => {
+    await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('UNPAID'));
+
+    const wait = quoteLifecycle.awaitMintQuoteNextPayment({ mintUrl, quoteId }, { timeoutMs: 100 });
+    await nextTick();
+
+    await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'bolt11', {
+      quote: quoteId,
+      request: 'lnbc1mint',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      state: 'PAID',
+    });
+
+    await expect(wait).rejects.toThrow(TerminalQuoteStateError);
+  });
+
+  it('times out and aborts mint waits with typed errors and listener cleanup', async () => {
     await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('UNPAID'));
 
     await expect(
       quoteLifecycle.awaitMintQuoteClaimable({ mintUrl, quoteId }, { timeoutMs: 1 }),
     ).rejects.toThrow(QuoteWaitTimeoutError);
+    expect(listenerCount(eventBus, 'mint-quote:updated')).toBe(0);
+
+    await expect(
+      quoteLifecycle.awaitMintQuoteNextPayment({ mintUrl, quoteId }, { timeoutMs: 1 }),
+    ).rejects.toThrow(QuoteWaitTimeoutError);
+    expect(listenerCount(eventBus, 'mint-quote:updated')).toBe(0);
 
     const reason = new Error('screen closed');
     const controller = new AbortController();
@@ -303,10 +361,26 @@ describe('QuoteLifecycle quote waiters', () => {
       { signal: controller.signal },
     );
     await nextTick();
+    expect(listenerCount(eventBus, 'mint-quote:updated')).toBe(1);
     controller.abort(reason);
 
     await expect(wait).rejects.toThrow(QuoteWaitAbortedError);
     await expect(wait).rejects.toHaveProperty('cause', reason);
+    expect(listenerCount(eventBus, 'mint-quote:updated')).toBe(0);
+  });
+
+  it('rejects mint waits with refresh failures and cleans up listeners', async () => {
+    const refreshFailure = new Error('mint refresh failed');
+    await mintQuoteRepository.upsertMintQuote(makeBolt11MintQuote('UNPAID'));
+    mintHandler.fetchRemoteQuote = mock(async (_ctx: FetchRemoteMintQuoteContext) => {
+      throw refreshFailure;
+    }) as MintMethodHandler['fetchRemoteQuote'];
+
+    const wait = quoteLifecycle.awaitMintQuoteClaimable({ mintUrl, quoteId });
+    const rejection = expect(wait).rejects.toBe(refreshFailure);
+
+    await rejection;
+    expect(listenerCount(eventBus, 'mint-quote:updated')).toBe(0);
   });
 
   it('emits canonical melt quote update events after persistence on create and refresh', async () => {
@@ -322,9 +396,9 @@ describe('QuoteLifecycle quote waiters', () => {
 
     await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', { invoice: 'lnbc1melt' });
     await meltQuoteRepository.upsertMeltQuote(makeMeltQuote('UNPAID'));
-    (meltHandler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(async ({ quote }: any) =>
+    meltHandler.fetchRemoteQuote = mock(async ({ quote }: FetchRemoteMeltQuoteContext<'bolt11'>) =>
       makeMeltQuote('PAID', { quoteId: quote.quoteId }),
-    );
+    ) as MeltMethodHandler['fetchRemoteQuote'];
     await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId });
 
     expect(seen).toEqual(['created-melt:UNPAID', 'quote-1:PAID']);
@@ -360,5 +434,42 @@ describe('QuoteLifecycle quote waiters', () => {
     await expect(quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId })).rejects.toThrow(
       TerminalQuoteStateError,
     );
+  });
+
+  it('times out and aborts melt waits with typed errors and listener cleanup', async () => {
+    await meltQuoteRepository.upsertMeltQuote(makeMeltQuote('UNPAID'));
+
+    await expect(
+      quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId }, { timeoutMs: 1 }),
+    ).rejects.toThrow(QuoteWaitTimeoutError);
+    expect(listenerCount(eventBus, 'melt-quote:updated')).toBe(0);
+
+    const reason = new Error('screen closed');
+    const controller = new AbortController();
+    const wait = quoteLifecycle.awaitMeltQuoteSettlement(
+      { mintUrl, quoteId },
+      { signal: controller.signal },
+    );
+    await nextTick();
+    expect(listenerCount(eventBus, 'melt-quote:updated')).toBe(1);
+    controller.abort(reason);
+
+    await expect(wait).rejects.toThrow(QuoteWaitAbortedError);
+    await expect(wait).rejects.toHaveProperty('cause', reason);
+    expect(listenerCount(eventBus, 'melt-quote:updated')).toBe(0);
+  });
+
+  it('rejects melt waits with refresh failures and cleans up listeners', async () => {
+    const refreshFailure = new Error('melt refresh failed');
+    await meltQuoteRepository.upsertMeltQuote(makeMeltQuote('UNPAID'));
+    meltHandler.fetchRemoteQuote = mock(async (_ctx: FetchRemoteMeltQuoteContext) => {
+      throw refreshFailure;
+    }) as MeltMethodHandler['fetchRemoteQuote'];
+
+    const wait = quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId });
+    const rejection = expect(wait).rejects.toBe(refreshFailure);
+
+    await rejection;
+    expect(listenerCount(eventBus, 'melt-quote:updated')).toBe(0);
   });
 });

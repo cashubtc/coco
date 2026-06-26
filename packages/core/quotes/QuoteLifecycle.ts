@@ -53,11 +53,7 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 import type { MeltQuoteRef, MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
-
-export interface QuoteWaitOptions {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}
+import type { QuoteWaitOptions } from '../models/QuoteWait';
 
 type QuoteWaitEvaluation<TQuote> =
   | { status: 'pending' }
@@ -425,9 +421,6 @@ export class QuoteLifecycle {
     if (quote.reusable) {
       const baselinePaid = quote.quoteData.amountPaid;
       return this.waitForMintQuote(identity, quote, options, (updatedQuote) => {
-        if (updatedQuote.reusable && updatedQuote.quoteData.amountPaid.greaterThan(baselinePaid)) {
-          return { status: 'resolve', quote: updatedQuote };
-        }
         if (isQuoteExpired(updatedQuote)) {
           return {
             status: 'reject',
@@ -439,6 +432,9 @@ export class QuoteLifecycle {
               `Mint quote ${updatedQuote.quoteId} at ${updatedQuote.mintUrl} is expired`,
             ),
           };
+        }
+        if (updatedQuote.reusable && updatedQuote.quoteData.amountPaid.greaterThan(baselinePaid)) {
+          return { status: 'resolve', quote: updatedQuote };
         }
         return { status: 'pending' };
       });
@@ -446,9 +442,6 @@ export class QuoteLifecycle {
 
     return this.waitForMintQuote(identity, quote, options, (updatedQuote) => {
       if (isStatefulMintQuote(updatedQuote)) {
-        if (updatedQuote.state === 'PAID' || updatedQuote.state === 'ISSUED') {
-          return { status: 'resolve', quote: updatedQuote };
-        }
         if (isQuoteExpired(updatedQuote)) {
           return {
             status: 'reject',
@@ -460,6 +453,9 @@ export class QuoteLifecycle {
               `Mint quote ${updatedQuote.quoteId} at ${updatedQuote.mintUrl} is expired`,
             ),
           };
+        }
+        if (updatedQuote.state === 'PAID' || updatedQuote.state === 'ISSUED') {
+          return { status: 'resolve', quote: updatedQuote };
         }
       }
       return { status: 'pending' };
