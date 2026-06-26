@@ -58,6 +58,11 @@ A mint response that reports the current remote state of a quote and is recorded
 canonical quote row before any Quote-backed Operation is advanced from it.
 _Avoid_: Quote refresh, subscription update
 
+**Quote Identity**:
+A methodless reference to a mint or melt quote by mint URL and quote ID. Mint quote identities and
+melt quote identities are separate namespaces.
+_Avoid_: Canonical quote ID, quote snapshot ID
+
 **Payment Method Capability**:
 A mint-advertised statement that a payment method supports a unit for minting or melting. Coco
 derives payment method capabilities from NUT-04 and NUT-05 mint metadata.
@@ -68,6 +73,28 @@ The mint's settlement state for a melt quote. `PAID` is terminal, while `PENDING
 `UNPAID` when settlement fails; a newer `UNPAID` observation can therefore be more accurate than an
 older `PENDING` observation.
 _Avoid_: Payment status, melt lifecycle
+
+**Mint Quote Claimability**:
+Whether a mint quote currently has paid value that coco can claim into proofs. BOLT11 mint quotes
+are claimable when their state is `PAID`; reusable mint quotes are claimable when their paid amount
+exceeds their issued amount.
+_Avoid_: Mint quote paid state, payment status
+
+**Mint Quote Payment Observation**:
+A newly observed increase in paid value for a mint quote. It is distinct from Mint Quote
+Claimability because reusable mint quotes can already be claimable before another payment arrives.
+_Avoid_: Mint quote paid state, payment status
+
+**Quote Expiry**:
+The time after which a quote can no longer receive a new payment. Expiry does not prevent claiming
+value that was already paid before expiry.
+_Avoid_: Claim deadline, quote invalidity
+
+**Background Watcher**:
+A session-scoped automatic observer that keeps wallet state progressing without a direct caller
+waiting on a specific result. Disabling a Background Watcher does not disable explicit caller
+operations for the same domain work.
+_Avoid_: Subscriptions, processors
 
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.
