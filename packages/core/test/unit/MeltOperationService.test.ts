@@ -368,11 +368,32 @@ describe('MeltOperationService', () => {
 
   describe('quotes', () => {
     it('creates and persists a canonical melt quote without creating an operation', async () => {
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      const persistedDuringEvent: Array<string | undefined> = [];
+      eventBus.on('melt-quote:updated', async (event) => {
+        events.push(event);
+        const storedQuote = await meltQuoteRepository.getMeltQuote(
+          event.mintUrl,
+          event.method,
+          event.quoteId,
+        );
+        persistedDuringEvent.push(storedQuote?.quoteId);
+      });
+
       const quote = await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', { invoice });
 
       expect(quote.quoteId).toBe('quote-created');
       expect(handler.createQuote).toHaveBeenCalled();
       expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
+      expect(events).toEqual([
+        {
+          mintUrl,
+          method: 'bolt11',
+          quoteId: 'quote-created',
+          quote,
+        },
+      ]);
+      expect(persistedDuringEvent).toEqual(['quote-created']);
       expect(await meltOperationRepository.getAll()).toHaveLength(0);
     });
 
