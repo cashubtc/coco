@@ -1036,6 +1036,49 @@ describe('MeltOperationService', () => {
   });
 
   describe('checkPendingOperation', () => {
+    it('finalizes from a cached PAID quote without refreshing the remote quote', async () => {
+      const pending = makePendingOp('op-cached-paid-finalize');
+      await meltOperationRepository.create(pending);
+      await meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromBolt11Response(mintUrl, {
+          quote: pending.quoteId,
+          request: invoice,
+          amount: pending.amount,
+          unit: pending.unit,
+          fee_reserve: pending.fee_reserve,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          payment_preimage: 'preimage-cached',
+          change: [],
+        }),
+      );
+
+      (handler.finalize as Mock<any>).mockImplementationOnce(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          expect(canonicalQuote).toMatchObject({
+            state: 'PAID',
+            payment_preimage: 'preimage-cached',
+          });
+          return {
+            changeAmount: Amount.from(0),
+            effectiveFee: Amount.from(1),
+            finalizedData: { preimage: 'preimage-cached' },
+          } as FinalizeResult;
+        },
+      );
+
+      const result = await service.checkPendingOperation(pending.id);
+
+      expect(result).toBe('finalize');
+      expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
+      expect(handler.checkPending).not.toHaveBeenCalled();
+      expect(walletService.getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'finalized',
+        finalizedData: { preimage: 'preimage-cached' },
+      });
+    });
+
     it('records the remote quote observation before finalizing the operation', async () => {
       const pending = makePendingOp('op-observed-finalize');
       await meltOperationRepository.create(pending);

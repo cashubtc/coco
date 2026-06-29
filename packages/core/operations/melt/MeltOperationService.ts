@@ -672,6 +672,16 @@ export class MeltOperationService {
         }'`,
       );
     }
+    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
+      op.mintUrl,
+      op.method,
+      op.quoteId,
+    );
+    if (persistedQuote?.state === 'PAID') {
+      await this.finalize(op.id, { canonicalQuote: persistedQuote });
+      return 'finalize';
+    }
+
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
     const quote = await this.quoteLifecycle.refreshMeltQuoteById({
