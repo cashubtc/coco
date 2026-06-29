@@ -66,6 +66,30 @@ function isMeltQuoteState(value: unknown): value is MeltQuote['state'] {
   return value === 'UNPAID' || value === 'PENDING' || value === 'PAID';
 }
 
+function hasFullMeltQuotePayload(method: MeltMethod, payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) {
+    return false;
+  }
+
+  const quote = payload as Record<string, unknown>;
+  if (
+    typeof quote.quote !== 'string' ||
+    typeof quote.request !== 'string' ||
+    quote.amount === undefined ||
+    typeof quote.unit !== 'string' ||
+    typeof quote.expiry !== 'number' ||
+    !isMeltQuoteState(quote.state)
+  ) {
+    return false;
+  }
+
+  if (method === 'onchain') {
+    return Array.isArray(quote.fee_options);
+  }
+
+  return quote.fee_reserve !== undefined;
+}
+
 const CANONICAL_INTEREST: WatchInterest = { kind: 'canonical', id: 'canonical' };
 
 const meltQuoteWatchPolicies: {
@@ -452,7 +476,7 @@ export class MeltQuoteWatcherService {
   ): Promise<MeltQuote | undefined> {
     const policy = this.getPolicy(record.method);
 
-    if (typeof payload === 'object' && payload !== null && policy.getPayloadQuoteId(payload)) {
+    if (hasFullMeltQuotePayload(record.method, payload) && policy.getPayloadQuoteId(payload)) {
       return this.quoteLifecycle.recordMeltQuoteObservation(
         policy.toCanonicalQuote(
           record.mintUrl,

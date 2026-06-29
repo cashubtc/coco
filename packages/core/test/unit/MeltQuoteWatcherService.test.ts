@@ -23,9 +23,7 @@ describe('MeltQuoteWatcherService', () => {
   let bus: EventBus<CoreEvents>;
   let subscribe: Mock<any>;
   let unsubscribe: Mock<any>;
-  let callbacks: Array<
-    (payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string) => Promise<void>
-  >;
+  let callbacks: Array<(payload: unknown) => Promise<void>>;
 
   const futureExpiry = () => Math.floor(Date.now() / 1000) + 3600;
   const pastExpiry = () => Math.floor(Date.now() / 1000) - 1;
@@ -120,7 +118,7 @@ describe('MeltQuoteWatcherService', () => {
           payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
         ) => Promise<void>,
       ) => {
-        callbacks.push(next);
+        callbacks.push(next as (payload: unknown) => Promise<void>);
         return { subId: `sub-${callbacks.length}`, unsubscribe };
       },
     );
@@ -270,6 +268,36 @@ describe('MeltQuoteWatcherService', () => {
       expect.objectContaining({ quoteId, state: 'UNPAID' }),
     );
     expect(forbiddenMutation).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
+  it('records quote-id state object payloads through the state observation path', async () => {
+    const existing = makeBolt11Quote({ state: 'PENDING' });
+    const getMeltQuote = mock(async () => existing);
+    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
+        getMeltQuote,
+        recordMeltQuoteObservation,
+      }),
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote: existing,
+    });
+
+    await callbacks[0]?.({ quote: quoteId, state: 'UNPAID' });
+
+    expect(getMeltQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', quoteId);
+    expect(recordMeltQuoteObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ quoteId, state: 'UNPAID' }),
+    );
 
     await watcher.stop();
   });
