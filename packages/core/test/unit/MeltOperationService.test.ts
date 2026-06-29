@@ -28,7 +28,11 @@ import type {
   PendingCheckResult,
   FinalizeResult,
 } from '../../operations/melt/MeltMethodHandler.ts';
-import { meltQuoteFromBolt11Response, type MeltQuote } from '../../models/MeltQuote.ts';
+import {
+  meltQuoteFromBolt11Response,
+  meltQuoteFromOnchainResponse,
+  type MeltQuote,
+} from '../../models/MeltQuote.ts';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -1270,6 +1274,138 @@ describe('MeltOperationService', () => {
       await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
         state: 'finalized',
         changeAmount: Amount.from(5),
+      });
+    });
+
+    it('copies a remote BOLT preimage when enriching a cached PAID quote before finalizing', async () => {
+      const pending = makePendingOp('op-cached-paid-missing-preimage');
+      const changeSignatures = [{ id: keysetId, amount: Amount.from(5), C_: 'C_change' }];
+      await meltOperationRepository.create(pending);
+      await meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromBolt11Response(mintUrl, {
+          quote: pending.quoteId,
+          request: invoice,
+          amount: pending.amount,
+          unit: pending.unit,
+          fee_reserve: pending.fee_reserve,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          payment_preimage: null,
+        }),
+      );
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: 'preimage-remote',
+            change: changeSignatures,
+          }),
+      );
+      (handler.finalize as Mock<any>).mockImplementationOnce(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          expect(canonicalQuote).toMatchObject({
+            state: 'PAID',
+            payment_preimage: 'preimage-remote',
+          });
+          expect(canonicalQuote?.change).toHaveLength(1);
+          return {
+            changeAmount: Amount.from(5),
+            effectiveFee: Amount.from(6),
+            finalizedData: { preimage: 'preimage-remote' },
+          } as FinalizeResult;
+        },
+      );
+
+      const result = await service.checkPendingOperation(pending.id);
+      const storedQuote = await meltQuoteRepository.getMeltQuote(
+        mintUrl,
+        'bolt11',
+        pending.quoteId,
+      );
+
+      expect(result).toBe('finalize');
+      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
+      expect(storedQuote).toMatchObject({ state: 'PAID', payment_preimage: 'preimage-remote' });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'finalized',
+        finalizedData: { preimage: 'preimage-remote' },
+      });
+    });
+
+    it('copies a remote onchain outpoint when enriching a cached PAID quote', async () => {
+      const pending = makePendingOp('op-cached-paid-missing-outpoint', {
+        method: 'onchain',
+        methodData: { address: 'bc1ptest', amountSats: Amount.from(21), feeIndex: 1 },
+        quoteId: 'onchain-paid-quote',
+        amount: Amount.from(21),
+        fee_reserve: Amount.from(1),
+        inputAmount: Amount.from(27),
+      });
+      const feeOptions = [{ fee_index: 1, fee_reserve: Amount.from(1), estimated_blocks: 12 }];
+      const changeSignatures = [{ id: keysetId, amount: Amount.from(5), C_: 'C_change' }];
+      await meltOperationRepository.create(pending);
+      await meltQuoteRepository.upsertMeltQuote(
+        meltQuoteFromOnchainResponse(mintUrl, {
+          quote: pending.quoteId,
+          request: 'bc1ptest',
+          amount: pending.amount,
+          unit: pending.unit,
+          fee_options: feeOptions,
+          selected_fee_index: null,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          outpoint: null,
+        }),
+      );
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'onchain'> }) =>
+          meltQuoteFromOnchainResponse(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_options: quote.fee_options,
+            selected_fee_index: null,
+            expiry: quote.expiry,
+            state: 'PAID',
+            outpoint: 'txid:vout',
+            change: changeSignatures,
+          }),
+      );
+      (handler.finalize as Mock<any>).mockImplementationOnce(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          expect(canonicalQuote).toMatchObject({
+            state: 'PAID',
+            outpoint: 'txid:vout',
+          });
+          expect(canonicalQuote?.change).toHaveLength(1);
+          return {
+            changeAmount: Amount.from(5),
+            effectiveFee: Amount.from(1),
+            finalizedData: { outpoint: 'txid:vout' },
+          } as FinalizeResult;
+        },
+      );
+
+      const result = await service.checkPendingOperation(pending.id);
+      const storedQuote = await meltQuoteRepository.getMeltQuote(
+        mintUrl,
+        'onchain',
+        pending.quoteId,
+      );
+
+      expect(result).toBe('finalize');
+      expect(handler.fetchRemoteQuote).toHaveBeenCalled();
+      expect(storedQuote).toMatchObject({ state: 'PAID', outpoint: 'txid:vout' });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'finalized',
+        finalizedData: { outpoint: 'txid:vout' },
       });
     });
 

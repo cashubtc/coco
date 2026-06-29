@@ -155,13 +155,42 @@ function getMeltQuoteChange(existing: MeltQuote | null, incoming: MeltQuote): bo
   );
 }
 
-function shouldEnrichPaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote): boolean {
-  return (
-    existing.state === 'PAID' &&
-    incoming.state === 'PAID' &&
-    !Array.isArray(existing.change) &&
-    Array.isArray(incoming.change)
-  );
+function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote): MeltQuote | null {
+  if (
+    existing.state !== 'PAID' ||
+    incoming.state !== 'PAID' ||
+    existing.method !== incoming.method
+  ) {
+    return null;
+  }
+
+  let changed = false;
+  let merged = {
+    ...existing,
+    lastObservedRemoteState: incoming.lastObservedRemoteState ?? existing.lastObservedRemoteState,
+    lastObservedRemoteStateAt:
+      incoming.lastObservedRemoteStateAt ?? existing.lastObservedRemoteStateAt,
+    updatedAt: incoming.updatedAt,
+  } as MeltQuote;
+
+  if (!Array.isArray(existing.change) && Array.isArray(incoming.change)) {
+    merged = { ...merged, change: incoming.change } as MeltQuote;
+    changed = true;
+  }
+
+  if (existing.method === 'onchain' && incoming.method === 'onchain') {
+    if (existing.outpoint == null && incoming.outpoint != null) {
+      merged = { ...merged, outpoint: incoming.outpoint } as MeltQuote;
+      changed = true;
+    }
+  } else if (existing.method !== 'onchain' && incoming.method !== 'onchain') {
+    if (existing.payment_preimage == null && incoming.payment_preimage != null) {
+      merged = { ...merged, payment_preimage: incoming.payment_preimage } as MeltQuote;
+      changed = true;
+    }
+  }
+
+  return changed ? merged : null;
 }
 
 export interface QuoteLifecycleDeps {
@@ -727,16 +756,9 @@ export class QuoteLifecycle {
     );
 
     if (existing?.state === 'PAID') {
-      if (shouldEnrichPaidMeltQuoteSettlement(existing, canonicalQuote)) {
-        const persisted = await this.persistCanonicalMeltQuote({
-          ...existing,
-          change: canonicalQuote.change,
-          lastObservedRemoteState:
-            canonicalQuote.lastObservedRemoteState ?? existing.lastObservedRemoteState,
-          lastObservedRemoteStateAt:
-            canonicalQuote.lastObservedRemoteStateAt ?? existing.lastObservedRemoteStateAt,
-          updatedAt: canonicalQuote.updatedAt,
-        } as MeltQuote);
+      const enrichedQuote = mergePaidMeltQuoteSettlement(existing, canonicalQuote);
+      if (enrichedQuote) {
+        const persisted = await this.persistCanonicalMeltQuote(enrichedQuote);
         return {
           quote: persisted,
           remoteQuoteChanged: true,
