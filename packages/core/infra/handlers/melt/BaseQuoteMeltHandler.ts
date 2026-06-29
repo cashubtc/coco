@@ -148,21 +148,23 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
   }
 
   private getPersistedSettlementResponse(quote?: MeltQuote<M>): QuoteMeltResponse<M> | null {
-    if (!quote || quote.state !== 'PAID' || quote.change === undefined) {
+    if (!quote || quote.state !== 'PAID') {
       return null;
     }
+
+    const change = quote.change ?? [];
 
     if (quote.method === 'onchain') {
       return {
         state: quote.state,
-        change: quote.change,
+        change,
         outpoint: quote.outpoint ?? null,
       } as QuoteMeltResponse<M>;
     }
 
     return {
       state: quote.state,
-      change: quote.change,
+      change,
       payment_preimage: quote.payment_preimage ?? null,
     } as QuoteMeltResponse<M>;
   }

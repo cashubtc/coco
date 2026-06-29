@@ -1049,7 +1049,6 @@ describe('MeltOperationService', () => {
           expiry: Math.floor(Date.now() / 1000) + 3600,
           state: 'PAID',
           payment_preimage: 'preimage-cached',
-          change: [],
         }),
       );
 
