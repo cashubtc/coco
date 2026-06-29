@@ -53,6 +53,11 @@ quote parameters and endpoint fields, but quote-backed minting and melting share
 saga shape for outputs, inputs, proof state, and recovery.
 _Avoid_: Method flow, payment workflow
 
+**Quote Observation**:
+A mint response that reports the current remote state of a quote and is recorded into Coco's
+canonical quote row before any Quote-backed Operation is advanced from it.
+_Avoid_: Quote refresh, subscription update
+
 **Payment Method Capability**:
 A mint-advertised statement that a payment method supports a unit for minting or melting. Coco
 derives payment method capabilities from NUT-04 and NUT-05 mint metadata.
@@ -60,7 +65,8 @@ _Avoid_: Payment option, method support flag
 
 **Melt Quote State**:
 The mint's settlement state for a melt quote. `PAID` is terminal, while `PENDING` can return to
-`UNPAID` when settlement fails.
+`UNPAID` when settlement fails; a newer `UNPAID` observation can therefore be more accurate than an
+older `PENDING` observation.
 _Avoid_: Payment status, melt lifecycle
 
 **Restore**:
