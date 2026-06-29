@@ -1255,7 +1255,11 @@ describe('MeltOperationService', () => {
       );
 
       const result = await service.checkPendingOperation(pending.id);
-      const storedQuote = await meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', pending.quoteId);
+      const storedQuote = await meltQuoteRepository.getMeltQuote(
+        mintUrl,
+        'bolt11',
+        pending.quoteId,
+      );
 
       expect(result).toBe('finalize');
       expect(handler.fetchRemoteQuote).toHaveBeenCalled();
