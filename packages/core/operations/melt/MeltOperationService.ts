@@ -560,10 +560,8 @@ export class MeltOperationService {
       // This prevents releasing proofs that are still inflight with the Lightning network.
       if (operation.state === 'pending') {
         const pendingOp = operation as PendingMeltOperation;
-        const canonicalQuote = await this.resolvePendingSettlementQuote(
-          pendingOp,
-          options.canonicalQuote,
-        );
+        // Re-read the quote while holding the operation lock; a pre-lock snapshot may be stale.
+        const canonicalQuote = await this.resolvePendingSettlementQuote(pendingOp);
         const decision = await handler.checkPending?.({
           ...this.buildDeps(),
           operation: pendingOp,
@@ -728,7 +726,7 @@ export class MeltOperationService {
       await this.finalize(op.id, { canonicalQuote: quote });
       return 'finalize';
     } else if (decision === 'rollback') {
-      await this.rollback(op.id, 'Rollback requested by handler', { canonicalQuote: quote });
+      await this.rollback(op.id, 'Rollback requested by handler');
       return 'rollback';
     } else {
       this.logger?.debug('Pending melt remains pending', { operationId: op.id });

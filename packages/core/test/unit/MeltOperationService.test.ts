@@ -1268,7 +1268,7 @@ describe('MeltOperationService', () => {
       await meltOperationRepository.create(pending);
 
       const order: string[] = [];
-      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementation(
         async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
           meltQuoteFromBolt11Response(quote.mintUrl, {
             quote: quote.quoteId,
@@ -1315,6 +1315,61 @@ describe('MeltOperationService', () => {
       });
       await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
         state: 'rolled_back',
+      });
+    });
+
+    it('re-checks the quote under rollback lock after a pending check requests rollback', async () => {
+      await persistMeltQuote('quote-rollback-race', 'PENDING');
+      const pending = makePendingOp('op-rollback-race', {
+        quoteId: 'quote-rollback-race',
+      });
+      await meltOperationRepository.create(pending);
+
+      (handler.fetchRemoteQuote as Mock<any>)
+        .mockImplementationOnce(async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'UNPAID',
+            payment_preimage: null,
+          }),
+        )
+        .mockImplementationOnce(async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: 'preimage-race',
+            change: [],
+          }),
+        );
+      (handler.checkPending as Mock<any>).mockImplementation(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) =>
+          canonicalQuote?.state === 'UNPAID' ? 'rollback' : 'finalize',
+      );
+
+      await expect(service.checkPendingOperation(pending.id)).rejects.toThrow(
+        'Cannot rollback pending operation: quote state is not UNPAID (decision: finalize)',
+      );
+
+      expect(handler.fetchRemoteQuote).toHaveBeenCalledTimes(2);
+      expect(handler.rollback).not.toHaveBeenCalled();
+      await expect(
+        meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', pending.quoteId),
+      ).resolves.toMatchObject({
+        state: 'PAID',
+        payment_preimage: 'preimage-race',
+      });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'pending',
       });
     });
 
