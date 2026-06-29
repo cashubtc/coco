@@ -106,6 +106,29 @@ export class MeltOperationService {
     return this.recoveryLock !== null;
   }
 
+  private async resolvePendingSettlementQuote(
+    op: PendingMeltOperation,
+    canonicalQuote?: MeltQuote,
+  ): Promise<MeltQuote> {
+    if (canonicalQuote) {
+      if (canonicalQuote.state === 'PAID' && !Array.isArray(canonicalQuote.change)) {
+        return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
+      }
+      return canonicalQuote;
+    }
+
+    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
+      op.mintUrl,
+      op.method,
+      op.quoteId,
+    );
+    if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
+      return persistedQuote;
+    }
+
+    return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
+  }
+
   async init(
     mintUrl: string,
     method: MeltMethod,
@@ -430,7 +453,10 @@ export class MeltOperationService {
     }
   }
 
-  async finalize(operationId: string): Promise<FinalizeResult> {
+  async finalize(
+    operationId: string,
+    options: { canonicalQuote?: MeltQuote } = {},
+  ): Promise<FinalizeResult> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
@@ -459,9 +485,14 @@ export class MeltOperationService {
 
       const pendingOp = operation as PendingMeltOperation;
       const handler = this.handlerProvider.get(pendingOp.method);
+      const canonicalQuote = await this.resolvePendingSettlementQuote(
+        pendingOp,
+        options.canonicalQuote,
+      );
       const finalizeResult = await handler.finalize?.({
         ...this.buildDeps(),
         operation: pendingOp,
+        canonicalQuote,
       });
 
       const finalized: FinalizedMeltOperation = {
@@ -496,7 +527,11 @@ export class MeltOperationService {
     }
   }
 
-  async rollback(operationId: string, reason = 'Rolled back'): Promise<void> {
+  async rollback(
+    operationId: string,
+    reason = 'Rolled back',
+    options: { canonicalQuote?: MeltQuote } = {},
+  ): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
@@ -528,10 +563,13 @@ export class MeltOperationService {
       // This prevents releasing proofs that are still inflight with the Lightning network.
       if (operation.state === 'pending') {
         const pendingOp = operation as PendingMeltOperation;
+        // Re-read the quote while holding the operation lock; a pre-lock snapshot may be stale.
+        const canonicalQuote = await this.resolvePendingSettlementQuote(pendingOp);
         const decision = await handler.checkPending?.({
           ...this.buildDeps(),
           operation: pendingOp,
           wallet,
+          canonicalQuote,
         });
         if (decision !== 'rollback') {
           throw new Error(
@@ -663,17 +701,32 @@ export class MeltOperationService {
         }'`,
       );
     }
+    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
+      op.mintUrl,
+      op.method,
+      op.quoteId,
+    );
+    if (persistedQuote?.state === 'PAID') {
+      await this.finalize(op.id, { canonicalQuote: persistedQuote });
+      return 'finalize';
+    }
+
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
+    const quote = await this.quoteLifecycle.refreshMeltQuoteById({
+      mintUrl: op.mintUrl,
+      quoteId: op.quoteId,
+    });
     const decision: PendingCheckResult =
       (await handler.checkPending?.({
         ...this.buildDeps(),
         operation: op,
         wallet,
+        canonicalQuote: quote,
       })) ?? 'stay_pending';
 
     if (decision === 'finalize') {
-      await this.finalize(op.id);
+      await this.finalize(op.id, { canonicalQuote: quote });
       return 'finalize';
     } else if (decision === 'rollback') {
       await this.rollback(op.id, 'Rollback requested by handler');

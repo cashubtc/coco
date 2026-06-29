@@ -11,6 +11,7 @@ import {
 } from '../../infra/handlers/melt/QuoteMeltHandler.utils';
 import type { Logger } from '../../logging/Logger';
 import { MintOperationError, ProofValidationError } from '../../models/Error';
+import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
 import type {
   BasePrepareContext,
   CreateMeltQuoteContext,
@@ -903,6 +904,41 @@ describe('MeltBolt11Handler', () => {
   // ============================================================================
 
   describe('finalize', () => {
+    it('should finalize a pending operation from persisted canonical settlement fields', async () => {
+      const operation = makePendingOp('op-canonical-finalize', {
+        needsSwap: false,
+        inputProofSecrets: ['input-1'],
+      });
+      const changeSignatures: SerializedBlindedSignature[] = [
+        { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
+      ];
+      const quote = meltQuoteFromBolt11Response(mintUrl, {
+        quote: operation.quoteId,
+        request: invoice,
+        amount: operation.amount,
+        unit: operation.unit,
+        fee_reserve: operation.fee_reserve,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        payment_preimage: 'preimage-canonical',
+        change: changeSignatures,
+      });
+
+      const result = await handler.finalize({
+        ...buildFinalizeContext(operation),
+        canonicalQuote: quote,
+      });
+
+      expect(mintAdapter.checkMeltQuote).not.toHaveBeenCalled();
+      expect(proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['input-1'], 'spent');
+      expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
+      expect(result).toEqual({
+        changeAmount: Amount.from(5),
+        effectiveFee: Amount.from(5),
+        finalizedData: { preimage: 'preimage-canonical' },
+      });
+    });
+
     it('should finalize a pending operation by fetching change', async () => {
       const operation = makePendingOp('op-1', {
         needsSwap: false,
@@ -931,6 +967,71 @@ describe('MeltBolt11Handler', () => {
         effectiveFee: Amount.from(5),
         finalizedData: { preimage: 'preimage-123' },
       });
+    });
+
+    it('should fetch full settlement when a PAID canonical quote omits change', async () => {
+      const operation = makePendingOp('op-partial-canonical', {
+        needsSwap: false,
+        inputProofSecrets: ['input-1'],
+      });
+      const changeSignatures: SerializedBlindedSignature[] = [
+        { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
+      ];
+      const quote = meltQuoteFromBolt11Response(mintUrl, {
+        quote: operation.quoteId,
+        request: invoice,
+        amount: operation.amount,
+        unit: operation.unit,
+        fee_reserve: operation.fee_reserve,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        payment_preimage: 'preimage-partial',
+      });
+      (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+        Promise.resolve({
+          state: 'PAID',
+          change: changeSignatures,
+          payment_preimage: 'preimage-remote',
+        }),
+      );
+
+      const result = await handler.finalize({
+        ...buildFinalizeContext(operation),
+        canonicalQuote: quote,
+      });
+
+      expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, operation.quoteId);
+      expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
+      expect(result).toEqual({
+        changeAmount: Amount.from(5),
+        effectiveFee: Amount.from(5),
+        finalizedData: { preimage: 'preimage-remote' },
+      });
+    });
+
+    it('should not re-check the mint when a supplied canonical quote is not PAID', async () => {
+      const operation = makePendingOp('op-canonical-pending');
+      const quote = meltQuoteFromBolt11Response(mintUrl, {
+        quote: operation.quoteId,
+        request: invoice,
+        amount: operation.amount,
+        unit: operation.unit,
+        fee_reserve: operation.fee_reserve,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PENDING',
+        payment_preimage: null,
+      });
+      (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+        Promise.resolve({ state: 'PAID', change: [], payment_preimage: 'preimage-remote' }),
+      );
+
+      await expect(
+        handler.finalize({
+          ...buildFinalizeContext(operation),
+          canonicalQuote: quote,
+        }),
+      ).rejects.toThrow('Cannot finalize: melt quote quote-123 is PENDING, expected PAID');
+      expect(mintAdapter.checkMeltQuote).not.toHaveBeenCalled();
     });
 
     it('should throw if quote is not PAID', async () => {
