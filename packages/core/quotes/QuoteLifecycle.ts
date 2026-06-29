@@ -109,7 +109,7 @@ function getRemoteStateChange(
   return false;
 }
 
-function serializeMeltChange(change: MeltQuote['change']): unknown {
+function serializeMeltChange(change: MeltQuote['change']): NonNullable<MeltQuote['change']> {
   return change ?? [];
 }
 
