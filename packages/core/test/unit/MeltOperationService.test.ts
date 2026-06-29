@@ -28,7 +28,7 @@ import type {
   PendingCheckResult,
   FinalizeResult,
 } from '../../operations/melt/MeltMethodHandler.ts';
-import { meltQuoteFromBolt11Response } from '../../models/MeltQuote.ts';
+import { meltQuoteFromBolt11Response, type MeltQuote } from '../../models/MeltQuote.ts';
 import {
   UnknownMintError,
   ProofValidationError,
@@ -368,11 +368,32 @@ describe('MeltOperationService', () => {
 
   describe('quotes', () => {
     it('creates and persists a canonical melt quote without creating an operation', async () => {
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      const persistedDuringEvent: Array<string | undefined> = [];
+      eventBus.on('melt-quote:updated', async (event) => {
+        events.push(event);
+        const storedQuote = await meltQuoteRepository.getMeltQuote(
+          event.mintUrl,
+          event.method,
+          event.quoteId,
+        );
+        persistedDuringEvent.push(storedQuote?.quoteId);
+      });
+
       const quote = await quoteLifecycle.createMeltQuote(mintUrl, 'bolt11', { invoice });
 
       expect(quote.quoteId).toBe('quote-created');
       expect(handler.createQuote).toHaveBeenCalled();
       expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-created')).toBeDefined();
+      expect(events).toEqual([
+        {
+          mintUrl,
+          method: 'bolt11',
+          quoteId: 'quote-created',
+          quote,
+        },
+      ]);
+      expect(persistedDuringEvent).toEqual(['quote-created']);
       expect(await meltOperationRepository.getAll()).toHaveLength(0);
     });
 
@@ -419,6 +440,161 @@ describe('MeltOperationService', () => {
       expect(handler.fetchRemoteQuote).toHaveBeenCalled();
       expect(quote.state).toBe('PENDING');
       expect(await quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-1')).toEqual(quote);
+    });
+
+    it('refreshMeltQuote persists the canonical quote before emitting melt-quote:updated', async () => {
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: 'preimage-paid',
+          }),
+      );
+
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      const persistedDuringEvent: Array<string | undefined> = [];
+      eventBus.on('melt-quote:updated', async (event) => {
+        events.push(event);
+        const storedQuote = await meltQuoteRepository.getMeltQuote(
+          event.mintUrl,
+          event.method,
+          event.quoteId,
+        );
+        persistedDuringEvent.push(storedQuote?.state);
+      });
+
+      const refreshed = await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+
+      expect(refreshed.state).toBe('PAID');
+      if (refreshed.method === 'onchain') throw new Error('Expected BOLT melt quote');
+      expect(refreshed.payment_preimage).toBe('preimage-paid');
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        mintUrl,
+        method: 'bolt11',
+        quoteId: 'quote-1',
+        quote: refreshed,
+      });
+      expect(persistedDuringEvent).toEqual(['PAID']);
+    });
+
+    it('suppresses duplicate melt quote observations without meaningful stored changes', async () => {
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      eventBus.on('melt-quote:updated', (event) => {
+        events.push(event);
+      });
+
+      await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+      await quoteLifecycle.refreshMeltQuoteById({ mintUrl, quoteId: 'quote-1' });
+
+      expect(events.map((event) => event.quote.state)).toEqual(['PENDING']);
+    });
+
+    it('persists PENDING to UNPAID melt quote observations', async () => {
+      await persistMeltQuote('quote-pending-to-unpaid', 'PENDING');
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'UNPAID',
+            payment_preimage: null,
+          }),
+      );
+
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      eventBus.on('melt-quote:updated', (event) => {
+        events.push(event);
+      });
+
+      const refreshed = await quoteLifecycle.refreshMeltQuoteById({
+        mintUrl,
+        quoteId: 'quote-pending-to-unpaid',
+      });
+
+      expect(refreshed.state).toBe('UNPAID');
+      expect(events.map((event) => event.quote.state)).toEqual(['UNPAID']);
+      await expect(
+        quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-pending-to-unpaid'),
+      ).resolves.toMatchObject({ state: 'UNPAID' });
+    });
+
+    it('does not downgrade terminal PAID melt quotes from stale observations', async () => {
+      await persistMeltQuote('quote-terminal-paid', 'PAID');
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'UNPAID',
+            payment_preimage: null,
+          }),
+      );
+
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      eventBus.on('melt-quote:updated', (event) => {
+        events.push(event);
+      });
+
+      const refreshed = await quoteLifecycle.refreshMeltQuoteById({
+        mintUrl,
+        quoteId: 'quote-terminal-paid',
+      });
+
+      expect(refreshed.state).toBe('PAID');
+      expect(events).toHaveLength(0);
+      await expect(
+        quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-terminal-paid'),
+      ).resolves.toMatchObject({ state: 'PAID', payment_preimage: 'preimage-123' });
+    });
+
+    it('ignores later PAID melt quote observations after terminal settlement', async () => {
+      await persistMeltQuote('quote-terminal-paid-repeat', 'PAID');
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: null,
+          }),
+      );
+
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      eventBus.on('melt-quote:updated', (event) => {
+        events.push(event);
+      });
+
+      const refreshed = await quoteLifecycle.refreshMeltQuoteById({
+        mintUrl,
+        quoteId: 'quote-terminal-paid-repeat',
+      });
+
+      expect(refreshed.state).toBe('PAID');
+      if (refreshed.method === 'onchain') throw new Error('Expected BOLT melt quote');
+      expect(refreshed.payment_preimage).toBe('preimage-123');
+      expect(events).toHaveLength(0);
+      await expect(
+        quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-terminal-paid-repeat'),
+      ).resolves.toMatchObject({ state: 'PAID', payment_preimage: 'preimage-123' });
     });
   });
 

@@ -1,6 +1,7 @@
 import type { Token } from '@cashu/cashu-ts';
-import type { MeltOperation } from '@core/operations/melt';
+import type { MeltMethod, MeltOperation } from '@core/operations/melt';
 import type { MintOperation, MintMethod } from '@core/operations/mint';
+import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { UnitAmount } from '../amounts.ts';
 import type { Counter } from '../models/Counter';
@@ -69,6 +70,12 @@ export interface CoreEvents {
     method: MintMethod;
     quoteId: string;
     quote: MintQuote;
+  };
+  'melt-quote:updated': {
+    mintUrl: string;
+    method: MeltMethod;
+    quoteId: string;
+    quote: MeltQuote;
   };
   'mint-op:requeue': { mintUrl: string; operationId: string; operation: MintOperation };
   'mint-op:executing': { mintUrl: string; operationId: string; operation: MintOperation };
