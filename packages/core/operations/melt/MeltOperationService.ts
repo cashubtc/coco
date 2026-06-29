@@ -111,6 +111,9 @@ export class MeltOperationService {
     canonicalQuote?: MeltQuote,
   ): Promise<MeltQuote> {
     if (canonicalQuote) {
+      if (canonicalQuote.state === 'PAID' && !Array.isArray(canonicalQuote.change)) {
+        return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
+      }
       return canonicalQuote;
     }
 
@@ -119,7 +122,7 @@ export class MeltOperationService {
       op.method,
       op.quoteId,
     );
-    if (persistedQuote?.state === 'PAID') {
+    if (persistedQuote?.state === 'PAID' && Array.isArray(persistedQuote.change)) {
       return persistedQuote;
     }
 

@@ -155,6 +155,15 @@ function getMeltQuoteChange(existing: MeltQuote | null, incoming: MeltQuote): bo
   );
 }
 
+function shouldEnrichPaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote): boolean {
+  return (
+    existing.state === 'PAID' &&
+    incoming.state === 'PAID' &&
+    !Array.isArray(existing.change) &&
+    Array.isArray(incoming.change)
+  );
+}
+
 export interface QuoteLifecycleDeps {
   mintHandlerProvider: MintHandlerProvider;
   meltHandlerProvider: MeltHandlerProvider;
@@ -718,6 +727,22 @@ export class QuoteLifecycle {
     );
 
     if (existing?.state === 'PAID') {
+      if (shouldEnrichPaidMeltQuoteSettlement(existing, canonicalQuote)) {
+        const persisted = await this.persistCanonicalMeltQuote({
+          ...existing,
+          change: canonicalQuote.change,
+          lastObservedRemoteState:
+            canonicalQuote.lastObservedRemoteState ?? existing.lastObservedRemoteState,
+          lastObservedRemoteStateAt:
+            canonicalQuote.lastObservedRemoteStateAt ?? existing.lastObservedRemoteStateAt,
+          updatedAt: canonicalQuote.updatedAt,
+        } as MeltQuote);
+        return {
+          quote: persisted,
+          remoteQuoteChanged: true,
+        };
+      }
+
       return {
         quote: existing,
         remoteQuoteChanged: false,

@@ -152,7 +152,11 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
       return null;
     }
 
-    const change = quote.change ?? [];
+    if (!Array.isArray(quote.change)) {
+      return null;
+    }
+
+    const change = quote.change;
 
     if (quote.method === 'onchain') {
       return {
@@ -593,7 +597,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
 
     const persistedSettlement = this.getPersistedSettlementResponse(ctx.canonicalQuote);
-    if (ctx.canonicalQuote && !persistedSettlement) {
+    if (ctx.canonicalQuote && ctx.canonicalQuote.state !== 'PAID') {
       throw new Error(
         `Cannot finalize: melt quote ${quoteId} is ${ctx.canonicalQuote.state}, expected PAID`,
       );

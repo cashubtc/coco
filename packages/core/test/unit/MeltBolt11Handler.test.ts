@@ -969,11 +969,14 @@ describe('MeltBolt11Handler', () => {
       });
     });
 
-    it('should treat a PAID canonical quote without change as terminal no-change settlement', async () => {
+    it('should fetch full settlement when a PAID canonical quote omits change', async () => {
       const operation = makePendingOp('op-partial-canonical', {
         needsSwap: false,
         inputProofSecrets: ['input-1'],
       });
+      const changeSignatures: SerializedBlindedSignature[] = [
+        { id: keysetId, amount: Amount.from(5), C_: 'C_change' },
+      ];
       const quote = meltQuoteFromBolt11Response(mintUrl, {
         quote: operation.quoteId,
         request: invoice,
@@ -984,17 +987,25 @@ describe('MeltBolt11Handler', () => {
         state: 'PAID',
         payment_preimage: 'preimage-partial',
       });
+      (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+        Promise.resolve({
+          state: 'PAID',
+          change: changeSignatures,
+          payment_preimage: 'preimage-remote',
+        }),
+      );
 
       const result = await handler.finalize({
         ...buildFinalizeContext(operation),
         canonicalQuote: quote,
       });
 
-      expect(mintAdapter.checkMeltQuote).not.toHaveBeenCalled();
+      expect(mintAdapter.checkMeltQuote).toHaveBeenCalledWith(mintUrl, operation.quoteId);
+      expect(proofService.unblindAndSaveChangeProofs).toHaveBeenCalled();
       expect(result).toEqual({
-        changeAmount: Amount.from(0),
-        effectiveFee: Amount.from(10),
-        finalizedData: { preimage: 'preimage-partial' },
+        changeAmount: Amount.from(5),
+        effectiveFee: Amount.from(5),
+        finalizedData: { preimage: 'preimage-remote' },
       });
     });
 
