@@ -561,6 +561,41 @@ describe('MeltOperationService', () => {
         quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-terminal-paid'),
       ).resolves.toMatchObject({ state: 'PAID', payment_preimage: 'preimage-123' });
     });
+
+    it('ignores later PAID melt quote observations after terminal settlement', async () => {
+      await persistMeltQuote('quote-terminal-paid-repeat', 'PAID');
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: null,
+          }),
+      );
+
+      const events: Array<CoreEvents['melt-quote:updated']> = [];
+      eventBus.on('melt-quote:updated', (event) => {
+        events.push(event);
+      });
+
+      const refreshed = await quoteLifecycle.refreshMeltQuoteById({
+        mintUrl,
+        quoteId: 'quote-terminal-paid-repeat',
+      });
+
+      expect(refreshed.state).toBe('PAID');
+      if (refreshed.method === 'onchain') throw new Error('Expected BOLT melt quote');
+      expect(refreshed.payment_preimage).toBe('preimage-123');
+      expect(events).toHaveLength(0);
+      await expect(
+        quoteLifecycle.getMeltQuote(mintUrl, 'bolt11', 'quote-terminal-paid-repeat'),
+      ).resolves.toMatchObject({ state: 'PAID', payment_preimage: 'preimage-123' });
+    });
   });
 
   describe('prepare', () => {

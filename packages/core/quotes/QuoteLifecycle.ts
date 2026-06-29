@@ -717,7 +717,7 @@ export class QuoteLifecycle {
       canonicalQuote.quoteId,
     );
 
-    if (existing?.state === 'PAID' && canonicalQuote.state !== 'PAID') {
+    if (existing?.state === 'PAID') {
       return {
         quote: existing,
         remoteQuoteChanged: false,
