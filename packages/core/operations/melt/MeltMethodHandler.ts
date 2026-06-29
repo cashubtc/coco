@@ -136,10 +136,12 @@ export interface ExecuteContext<M extends MeltMethod = MeltMethod> extends BaseH
 export interface PendingContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PendingMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
+  canonicalQuote?: MeltQuote<M>;
 }
 
 export interface FinalizeContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PendingMeltOperation & MeltMethodMeta<M>;
+  canonicalQuote?: MeltQuote<M>;
 }
 
 export type FinalizeResult<M extends MeltMethod = MeltMethod> = {

@@ -147,6 +147,26 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
     return { changeAmount, effectiveFee };
   }
 
+  private getPersistedSettlementResponse(quote?: MeltQuote<M>): QuoteMeltResponse<M> | null {
+    if (!quote || quote.state !== 'PAID' || quote.change === undefined) {
+      return null;
+    }
+
+    if (quote.method === 'onchain') {
+      return {
+        state: quote.state,
+        change: quote.change,
+        outpoint: quote.outpoint ?? null,
+      } as QuoteMeltResponse<M>;
+    }
+
+    return {
+      state: quote.state,
+      change: quote.change,
+      payment_preimage: quote.payment_preimage ?? null,
+    } as QuoteMeltResponse<M>;
+  }
+
   /**
    * Returns the amount of proofs that were actually sent to the melt call.
    * For swap melts this excludes proofs kept locally after the pre-swap.
@@ -570,8 +590,8 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
 
-    // Fetch current melt quote state from mint to get change signatures
-    const res = await this.checkMeltQuote(ctx);
+    const res =
+      this.getPersistedSettlementResponse(ctx.canonicalQuote) ?? (await this.checkMeltQuote(ctx));
 
     if (res.state !== 'PAID') {
       throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
@@ -649,7 +669,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     ctx.logger?.debug('Checking pending melt operation', { operationId, quoteId });
 
-    const state = await this.checkMeltQuoteState(ctx);
+    const state = ctx.canonicalQuote?.state ?? (await this.checkMeltQuoteState(ctx));
 
     ctx.logger?.debug('Pending melt quote state', { operationId, quoteId, state });
 

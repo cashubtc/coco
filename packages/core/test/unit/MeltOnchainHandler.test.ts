@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 import { MeltOnchainHandler } from '../../infra/handlers/melt/MeltOnchainHandler.ts';
+import { meltQuoteFromOnchainResponse } from '../../models/MeltQuote.ts';
 import type {
   BasePrepareContext,
   CreateMeltQuoteContext,
@@ -236,5 +237,27 @@ describe('MeltOnchainHandler', () => {
 
     expect(deps.mintAdapter.checkMeltQuoteOnchain).toHaveBeenCalledWith(mintUrl, quoteId);
     expect(result.finalizedData).toBeUndefined();
+  });
+
+  it('finalizes pending onchain melt quotes from persisted canonical settlement fields', async () => {
+    const handler = new MeltOnchainHandler();
+    const deps = baseDeps();
+    const quote = meltQuoteFromOnchainResponse(mintUrl, {
+      ...remoteQuote,
+      state: 'PAID',
+      outpoint: 'txid:0',
+      change: [],
+    });
+
+    const result = await handler.finalize({
+      ...deps,
+      operation: buildPendingOperation(),
+      wallet: {},
+      canonicalQuote: quote,
+    } as unknown as FinalizeContext<'onchain'>);
+
+    expect(deps.mintAdapter.checkMeltQuoteOnchain).not.toHaveBeenCalled();
+    expect(deps.proofService.setProofState).toHaveBeenCalledWith(mintUrl, ['secret-1'], 'spent');
+    expect(result.finalizedData).toEqual({ outpoint: 'txid:0' });
   });
 });

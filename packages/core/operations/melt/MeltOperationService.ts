@@ -430,7 +430,10 @@ export class MeltOperationService {
     }
   }
 
-  async finalize(operationId: string): Promise<FinalizeResult> {
+  async finalize(
+    operationId: string,
+    options: { canonicalQuote?: MeltQuote } = {},
+  ): Promise<FinalizeResult> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
@@ -462,6 +465,7 @@ export class MeltOperationService {
       const finalizeResult = await handler.finalize?.({
         ...this.buildDeps(),
         operation: pendingOp,
+        canonicalQuote: options.canonicalQuote,
       });
 
       const finalized: FinalizedMeltOperation = {
@@ -496,7 +500,11 @@ export class MeltOperationService {
     }
   }
 
-  async rollback(operationId: string, reason = 'Rolled back'): Promise<void> {
+  async rollback(
+    operationId: string,
+    reason = 'Rolled back',
+    options: { canonicalQuote?: MeltQuote } = {},
+  ): Promise<void> {
     const releaseLock = await this.acquireOperationLock(operationId);
     try {
       const operation = await this.meltOperationRepository.getById(operationId);
@@ -532,6 +540,7 @@ export class MeltOperationService {
           ...this.buildDeps(),
           operation: pendingOp,
           wallet,
+          canonicalQuote: options.canonicalQuote,
         });
         if (decision !== 'rollback') {
           throw new Error(
@@ -665,18 +674,23 @@ export class MeltOperationService {
     }
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
+    const quote = await this.quoteLifecycle.refreshMeltQuoteById({
+      mintUrl: op.mintUrl,
+      quoteId: op.quoteId,
+    });
     const decision: PendingCheckResult =
       (await handler.checkPending?.({
         ...this.buildDeps(),
         operation: op,
         wallet,
+        canonicalQuote: quote,
       })) ?? 'stay_pending';
 
     if (decision === 'finalize') {
-      await this.finalize(op.id);
+      await this.finalize(op.id, { canonicalQuote: quote });
       return 'finalize';
     } else if (decision === 'rollback') {
-      await this.rollback(op.id, 'Rollback requested by handler');
+      await this.rollback(op.id, 'Rollback requested by handler', { canonicalQuote: quote });
       return 'rollback';
     } else {
       this.logger?.debug('Pending melt remains pending', { operationId: op.id });

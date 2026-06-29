@@ -1036,6 +1036,157 @@ describe('MeltOperationService', () => {
   });
 
   describe('checkPendingOperation', () => {
+    it('records the remote quote observation before finalizing the operation', async () => {
+      const pending = makePendingOp('op-observed-finalize');
+      await meltOperationRepository.create(pending);
+
+      const order: string[] = [];
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PAID',
+            payment_preimage: 'preimage-observed',
+            change: [],
+          }),
+      );
+      (handler.checkPending as Mock<any>).mockImplementationOnce(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          order.push(`decision:${canonicalQuote?.state ?? 'missing'}`);
+          return canonicalQuote?.state === 'PAID' ? 'finalize' : 'stay_pending';
+        },
+      );
+
+      eventBus.on('melt-quote:updated', async () => {
+        const stored = await meltOperationRepository.getById(pending.id);
+        order.push(`quote-updated:${stored?.state ?? 'missing'}`);
+      });
+      eventBus.on('melt-op:finalized', () => {
+        order.push('operation-finalized');
+      });
+
+      const result = await service.checkPendingOperation(pending.id);
+
+      expect(result).toBe('finalize');
+      expect(order).toEqual(['quote-updated:pending', 'decision:PAID', 'operation-finalized']);
+      await expect(
+        meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', pending.quoteId),
+      ).resolves.toMatchObject({
+        state: 'PAID',
+        payment_preimage: 'preimage-observed',
+      });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'finalized',
+      });
+    });
+
+    it('records the remote quote observation before leaving the operation pending', async () => {
+      const pending = makePendingOp('op-observed-pending');
+      await meltOperationRepository.create(pending);
+
+      const order: string[] = [];
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'PENDING',
+            payment_preimage: null,
+          }),
+      );
+      (handler.checkPending as Mock<any>).mockImplementationOnce(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          order.push(`decision:${canonicalQuote?.state ?? 'missing'}`);
+          return 'stay_pending';
+        },
+      );
+
+      eventBus.on('melt-quote:updated', async () => {
+        const stored = await meltOperationRepository.getById(pending.id);
+        order.push(`quote-updated:${stored?.state ?? 'missing'}`);
+      });
+
+      const result = await service.checkPendingOperation(pending.id);
+
+      expect(result).toBe('stay_pending');
+      expect(order).toEqual(['quote-updated:pending', 'decision:PENDING']);
+      await expect(
+        meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', pending.quoteId),
+      ).resolves.toMatchObject({
+        state: 'PENDING',
+      });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'pending',
+      });
+    });
+
+    it('records the remote quote observation before rolling back the operation', async () => {
+      await persistMeltQuote('quote-observed-rollback', 'PENDING');
+      const pending = makePendingOp('op-observed-rollback', {
+        quoteId: 'quote-observed-rollback',
+      });
+      await meltOperationRepository.create(pending);
+
+      const order: string[] = [];
+      (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(
+        async ({ quote }: { quote: MeltQuote<'bolt11'> }) =>
+          meltQuoteFromBolt11Response(quote.mintUrl, {
+            quote: quote.quoteId,
+            request: quote.request,
+            amount: quote.amount,
+            unit: quote.unit,
+            fee_reserve: quote.fee_reserve,
+            expiry: quote.expiry,
+            state: 'UNPAID',
+            payment_preimage: null,
+          }),
+      );
+      (handler.checkPending as Mock<any>).mockImplementation(
+        async ({ canonicalQuote }: { canonicalQuote?: MeltQuote }) => {
+          order.push(
+            `decision:${canonicalQuote?.quoteId ?? 'missing'}:${canonicalQuote?.state ?? 'missing'}`,
+          );
+          return 'rollback';
+        },
+      );
+
+      eventBus.on('melt-quote:updated', async () => {
+        const stored = await meltOperationRepository.getById(pending.id);
+        order.push(`quote-updated:${stored?.state ?? 'missing'}`);
+      });
+      eventBus.on('melt-op:rolled-back', () => {
+        order.push('operation-rolled-back');
+      });
+
+      const result = await service.checkPendingOperation(pending.id);
+
+      expect(result).toBe('rollback');
+      expect(order).toEqual([
+        'quote-updated:pending',
+        'decision:quote-observed-rollback:UNPAID',
+        'decision:quote-observed-rollback:UNPAID',
+        'operation-rolled-back',
+      ]);
+      expect(handler.checkPending).toHaveBeenCalledTimes(2);
+      await expect(
+        meltQuoteRepository.getMeltQuote(mintUrl, 'bolt11', pending.quoteId),
+      ).resolves.toMatchObject({
+        state: 'UNPAID',
+      });
+      await expect(meltOperationRepository.getById(pending.id)).resolves.toMatchObject({
+        state: 'rolled_back',
+      });
+    });
+
     it('delegates to finalize when handler returns finalize', async () => {
       const pending = makePendingOp('op-11');
       await meltOperationRepository.create(pending);
@@ -1046,7 +1197,9 @@ describe('MeltOperationService', () => {
       const result = await service.checkPendingOperation('op-11');
 
       expect(result).toBe('finalize');
-      expect((service as any).finalize).toHaveBeenCalledWith('op-11');
+      expect((service as any).finalize).toHaveBeenCalledWith('op-11', {
+        canonicalQuote: expect.objectContaining({ quoteId: 'quote-1', state: 'PENDING' }),
+      });
     });
   });
 
