@@ -106,6 +106,26 @@ export class MeltOperationService {
     return this.recoveryLock !== null;
   }
 
+  private async resolvePendingSettlementQuote(
+    op: PendingMeltOperation,
+    canonicalQuote?: MeltQuote,
+  ): Promise<MeltQuote> {
+    if (canonicalQuote) {
+      return canonicalQuote;
+    }
+
+    const persistedQuote = await this.quoteLifecycle.getMeltQuote(
+      op.mintUrl,
+      op.method,
+      op.quoteId,
+    );
+    if (persistedQuote?.state === 'PAID') {
+      return persistedQuote;
+    }
+
+    return this.quoteLifecycle.refreshMeltQuote(op.mintUrl, op.method, op.quoteId);
+  }
+
   async init(
     mintUrl: string,
     method: MeltMethod,
@@ -462,10 +482,14 @@ export class MeltOperationService {
 
       const pendingOp = operation as PendingMeltOperation;
       const handler = this.handlerProvider.get(pendingOp.method);
+      const canonicalQuote = await this.resolvePendingSettlementQuote(
+        pendingOp,
+        options.canonicalQuote,
+      );
       const finalizeResult = await handler.finalize?.({
         ...this.buildDeps(),
         operation: pendingOp,
-        canonicalQuote: options.canonicalQuote,
+        canonicalQuote,
       });
 
       const finalized: FinalizedMeltOperation = {
@@ -536,11 +560,15 @@ export class MeltOperationService {
       // This prevents releasing proofs that are still inflight with the Lightning network.
       if (operation.state === 'pending') {
         const pendingOp = operation as PendingMeltOperation;
+        const canonicalQuote = await this.resolvePendingSettlementQuote(
+          pendingOp,
+          options.canonicalQuote,
+        );
         const decision = await handler.checkPending?.({
           ...this.buildDeps(),
           operation: pendingOp,
           wallet,
-          canonicalQuote: options.canonicalQuote,
+          canonicalQuote,
         });
         if (decision !== 'rollback') {
           throw new Error(

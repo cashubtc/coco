@@ -998,6 +998,31 @@ describe('MeltBolt11Handler', () => {
       });
     });
 
+    it('should not re-check the mint when a supplied canonical quote is not PAID', async () => {
+      const operation = makePendingOp('op-canonical-pending');
+      const quote = meltQuoteFromBolt11Response(mintUrl, {
+        quote: operation.quoteId,
+        request: invoice,
+        amount: operation.amount,
+        unit: operation.unit,
+        fee_reserve: operation.fee_reserve,
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PENDING',
+        payment_preimage: null,
+      });
+      (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>
+        Promise.resolve({ state: 'PAID', change: [], payment_preimage: 'preimage-remote' }),
+      );
+
+      await expect(
+        handler.finalize({
+          ...buildFinalizeContext(operation),
+          canonicalQuote: quote,
+        }),
+      ).rejects.toThrow('Cannot finalize: melt quote quote-123 is PENDING, expected PAID');
+      expect(mintAdapter.checkMeltQuote).not.toHaveBeenCalled();
+    });
+
     it('should throw if quote is not PAID', async () => {
       const operation = makePendingOp('op-1');
       (mintAdapter.checkMeltQuote as Mock<any>).mockImplementation(() =>

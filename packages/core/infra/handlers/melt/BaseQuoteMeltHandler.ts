@@ -592,8 +592,14 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     ctx.logger?.debug('Finalizing pending melt operation', { operationId, quoteId });
 
-    const res =
-      this.getPersistedSettlementResponse(ctx.canonicalQuote) ?? (await this.checkMeltQuote(ctx));
+    const persistedSettlement = this.getPersistedSettlementResponse(ctx.canonicalQuote);
+    if (ctx.canonicalQuote && !persistedSettlement) {
+      throw new Error(
+        `Cannot finalize: melt quote ${quoteId} is ${ctx.canonicalQuote.state}, expected PAID`,
+      );
+    }
+
+    const res = persistedSettlement ?? (await this.checkMeltQuote(ctx));
 
     if (res.state !== 'PAID') {
       throw new Error(`Cannot finalize: melt quote ${quoteId} is ${res.state}, expected PAID`);
