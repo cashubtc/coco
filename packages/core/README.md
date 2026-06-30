@@ -145,12 +145,18 @@ await manager.enableMintOperationWatcher({ watchExistingPendingOnStart: true });
 // Process queued mint operations from live events (auto-enabled by initializeCoco)
 await manager.enableMintOperationProcessor({ processIntervalMs: 3000 });
 
+// Watch canonical melt quote updates and settle pending melt operations
+await manager.enableMeltQuoteWatcher();
+await manager.enableMeltSettlementProcessor();
+
 // Watch proof state updates (e.g., to move inflight proofs to spent)
 await manager.enableProofStateWatcher();
 
 // Later, you can stop them
 await manager.disableMintOperationWatcher();
 await manager.disableMintOperationProcessor();
+await manager.disableMeltQuoteWatcher();
+await manager.disableMeltSettlementProcessor();
 await manager.disableProofStateWatcher();
 ```
 
@@ -163,8 +169,10 @@ await manager.disableProofStateWatcher();
 - `logger`: optional logger (defaults to `NullLogger`)
 - `webSocketFactory`: optional WebSocket factory
 - `plugins`: optional plugin list
-- `watchers`: enable/disable watcher services (`mintOperationWatcher`, `proofStateWatcher`)
-- `processors`: enable/disable processors (`mintOperationProcessor`) and tune intervals
+- `watchers`: enable/disable watcher services (`mintOperationWatcher`, `meltQuoteWatcher`,
+  `proofStateWatcher`)
+- `processors`: enable/disable processors (`mintOperationProcessor`, `meltSettlementProcessor`)
+  and tune intervals
 - `subscriptions`: polling intervals for hybrid WebSocket + polling (`slowPollingIntervalMs`, `fastPollingIntervalMs`)
 
 If you prefer manual wiring, construct `Manager` directly and call `initPlugins()` before enabling watchers/processors.
@@ -218,6 +226,8 @@ The package root exports `MemoryRepositories` as an in-memory test/example repos
 - `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
 - `enableMintOperationProcessor()`, `disableMintOperationProcessor()`,
   `waitForMintOperationProcessor()`
+- `enableMeltQuoteWatcher()`, `disableMeltQuoteWatcher()`
+- `enableMeltSettlementProcessor()`, `disableMeltSettlementProcessor()`
 - `enableProofStateWatcher()`, `disableProofStateWatcher()`
 - `pauseSubscriptions()`, `resumeSubscriptions()`
 - `use(plugin: Plugin): void` with `Plugin` from `@cashu/coco-core/plugin`

@@ -17,9 +17,15 @@ export interface CocoConfig {
     mintOperationWatcher?: {
       disabled?: boolean;
       watchExistingPendingOnStart?: boolean;
+      watchExistingPendingQuotesOnStart?: boolean;
     };
     proofStateWatcher?: {
       disabled?: boolean;
+      watchExistingInflightOnStart?: boolean;
+    };
+    meltQuoteWatcher?: {
+      disabled?: boolean;
+      watchExistingPendingQuotesOnStart?: boolean;
     };
   };
   processors?: {
@@ -29,6 +35,11 @@ export interface CocoConfig {
       maxRetries?: number;
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
+      autoClaimMintQuotes?: boolean;
+    };
+    meltSettlementProcessor?: {
+      disabled?: boolean;
+      initializeExistingPendingOperationsOnStart?: boolean;
     };
   };
 }
