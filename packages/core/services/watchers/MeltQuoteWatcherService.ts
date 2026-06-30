@@ -488,8 +488,11 @@ export class MeltQuoteWatcherService {
         return;
       }
 
-      if (isExpiredMeltQuote(quote) && !this.interests.hasKind(key, 'operation')) {
-        await this.stopWatching(key);
+      if (isExpiredMeltQuote(quote)) {
+        this.interests.remove(key, CANONICAL_INTEREST);
+        if (!this.interests.hasKind(key, 'operation')) {
+          await this.stopWatching(key);
+        }
       }
     } catch (err) {
       this.logger?.error('Failed to persist melt quote update from remote update', {

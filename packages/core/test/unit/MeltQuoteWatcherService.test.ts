@@ -460,6 +460,49 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
+  it('drops canonical interest after subscription observes an expired quote', async () => {
+    const quote = makeBolt11Quote();
+    const watcher = makeWatcher({
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+      quote,
+    });
+    await watcher.registerOperationInterest({
+      operationId: 'melt-op-1',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await callbacks[0]?.({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: '10',
+      unit: 'sat',
+      fee_reserve: '1',
+      expiry: pastExpiry(),
+      state: 'PENDING',
+      payment_preimage: null,
+      change: [],
+    });
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.removeOperationInterest('melt-op-1');
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
   it('coalesces overlapping watch requests while subscribe is pending', async () => {
     const resolveSubscribe: Array<() => void> = [];
     const firstUnsubscribe = mock(async () => {});
