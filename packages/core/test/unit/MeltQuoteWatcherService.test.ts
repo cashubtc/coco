@@ -227,9 +227,9 @@ describe('MeltQuoteWatcherService', () => {
     await callbacks[0]?.({
       quote: quoteId,
       request: 'lnbc1test',
-      amount: Amount.from(10),
+      amount: '10',
       unit: 'sat',
-      fee_reserve: Amount.from(1),
+      fee_reserve: '1',
       expiry: futureExpiry(),
       state: 'PAID',
       payment_preimage: 'preimage',
@@ -245,6 +245,45 @@ describe('MeltQuoteWatcherService', () => {
         payment_preimage: 'preimage',
       }),
     );
+    const observedQuote = recordMeltQuoteObservation.mock.calls[0]?.[0] as MeltQuote<'bolt11'>;
+    expect(observedQuote.amount.equals(Amount.from(10))).toBe(true);
+    expect(observedQuote.fee_reserve.equals(Amount.from(1))).toBe(true);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
+  it('normalizes onchain full subscription amount payloads', async () => {
+    const recordMeltQuoteObservation = mock(async (quote: MeltQuote) => quote);
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({ recordMeltQuoteObservation }),
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('melt-quote:updated', {
+      mintUrl,
+      method: 'onchain',
+      quoteId,
+      quote: makeOnchainQuote(),
+    });
+
+    await callbacks[0]?.({
+      quote: quoteId,
+      request: 'bc1ptest',
+      amount: '10',
+      unit: 'sat',
+      fee_options: [{ fee_index: 0, fee_reserve: '2', estimated_blocks: 2 }],
+      selected_fee_index: null,
+      outpoint: null,
+      expiry: futureExpiry(),
+      state: 'PAID',
+      change: [],
+    });
+
+    const observedQuote = recordMeltQuoteObservation.mock.calls[0]?.[0] as MeltQuote<'onchain'>;
+    expect(observedQuote.amount.equals(Amount.from(10))).toBe(true);
+    expect(observedQuote.fee_options[0]?.fee_reserve.equals(Amount.from(2))).toBe(true);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
