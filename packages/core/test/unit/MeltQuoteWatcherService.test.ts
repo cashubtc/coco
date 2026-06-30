@@ -503,6 +503,89 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
+  it('does not subscribe if stopped while trust check is pending', async () => {
+    let resolveTrusted: ((trusted: boolean) => void) | undefined;
+    const isTrustedMint = mock(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveTrusted = resolve;
+        }),
+    );
+    const watcher = makeWatcher({
+      mintService: { isTrustedMint } as unknown as MintService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    const watch = watcher.registerOperationInterest({
+      operationId: 'melt-op-1',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+    await flushPromises();
+
+    expect(isTrustedMint).toHaveBeenCalledWith(mintUrl);
+    expect(subscribe).not.toHaveBeenCalled();
+
+    const stop = watcher.stop();
+    await flushPromises();
+    if (!resolveTrusted) {
+      throw new Error('Expected trust check to be waiting');
+    }
+    resolveTrusted(true);
+
+    await Promise.all([watch, stop]);
+
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it('waits for pending subscription cleanup before stop resolves', async () => {
+    const resolveSubscribe: Array<() => void> = [];
+    const pendingUnsubscribe = mock(async () => {});
+    subscribe = mock(
+      (
+        _mintUrl: string,
+        _kind: string,
+        _filters: string[],
+        next: (
+          payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
+        ) => Promise<void>,
+      ) => {
+        callbacks.push(next as (payload: unknown) => Promise<void>);
+        return new Promise<{ subId: string; unsubscribe: () => Promise<void> }>((resolve) => {
+          resolveSubscribe.push(() => resolve({ subId: 'sub-1', unsubscribe: pendingUnsubscribe }));
+        });
+      },
+    );
+    const watcher = makeWatcher({
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    const watch = watcher.registerOperationInterest({
+      operationId: 'melt-op-1',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+    await waitForSubscribeCalls(1);
+
+    let stopped = false;
+    const stop = watcher.stop().then(() => {
+      stopped = true;
+    });
+    await flushPromises();
+
+    expect(stopped).toBe(false);
+
+    resolveSubscribe[0]?.();
+    await Promise.all([watch, stop]);
+
+    expect(pendingUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('coalesces overlapping watch requests while subscribe is pending', async () => {
     const resolveSubscribe: Array<() => void> = [];
     const firstUnsubscribe = mock(async () => {});

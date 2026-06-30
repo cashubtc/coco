@@ -432,6 +432,10 @@ export class MeltQuoteWatcherService {
         return;
       }
 
+      if (!this.running || this.watchRecordByKey.get(key) !== record) {
+        return;
+      }
+
       const subscription = await this.subs.subscribe(
         record.mintUrl,
         policy.subscriptionKind,
@@ -563,12 +567,12 @@ export class MeltQuoteWatcherService {
       return;
     }
 
+    this.removeWatchRecord(key);
     try {
+      await record.start;
       await record.stop?.();
     } catch (err) {
       this.logger?.warn('Unsubscribe melt quote watcher failed', { key, err });
-    } finally {
-      this.removeWatchRecord(key);
     }
   }
 
