@@ -359,13 +359,11 @@ export class MeltQuoteWatcherService {
         await this.stopWatching(key);
         continue;
       }
-      if (
-        interest.kind === 'canonical' &&
-        quote.quote &&
-        isExpiredMeltQuote(quote.quote) &&
-        !this.interests.hasKind(key, 'operation')
-      ) {
-        await this.stopWatching(key);
+      if (interest.kind === 'canonical' && quote.quote && isExpiredMeltQuote(quote.quote)) {
+        this.interests.remove(key, CANONICAL_INTEREST);
+        if (!this.interests.hasKind(key, 'operation')) {
+          await this.stopWatching(key);
+        }
         continue;
       }
 

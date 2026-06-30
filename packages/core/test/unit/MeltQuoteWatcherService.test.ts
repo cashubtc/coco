@@ -423,6 +423,43 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.stop();
   });
 
+  it('drops expired canonical startup interest while operation watch continues', async () => {
+    let resolvePendingQuotes: ((quotes: MeltQuote[]) => void) | undefined;
+    const getPendingMeltQuotes = mock(
+      () =>
+        new Promise<MeltQuote[]>((resolve) => {
+          resolvePendingQuotes = resolve;
+        }),
+    );
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({ getPendingMeltQuotes }),
+    });
+
+    const start = watcher.start();
+    await watcher.registerOperationInterest({
+      operationId: 'melt-op-1',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    if (!resolvePendingQuotes) {
+      throw new Error('Expected startup pending quote load to be waiting');
+    }
+
+    resolvePendingQuotes([makeBolt11Quote({ expiry: pastExpiry() })]);
+    await start;
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.removeOperationInterest('melt-op-1');
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
   it('coalesces overlapping watch requests while subscribe is pending', async () => {
     const resolveSubscribe: Array<() => void> = [];
     const firstUnsubscribe = mock(async () => {});
