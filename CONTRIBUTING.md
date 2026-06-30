@@ -195,6 +195,31 @@ Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
 
+Stable and prerelease npm publishes both expect package versions and changelogs to
+be committed before the GitHub Release is published. The publish workflow builds
+and publishes the tagged commit; it does not create release commits in CI.
+
+For a stable release, run:
+
+```bash
+bunx changeset version
+```
+
+Commit the generated package and changelog changes, tag that commit, and publish
+a non-prerelease GitHub Release. The workflow publishes to the default npm dist-tag.
+
+For an RC release, run:
+
+```bash
+bunx changeset pre enter rc
+bunx changeset version
+bun scripts/prepare-rc-release.ts
+```
+
+Commit the generated package and changelog changes, tag that commit, and publish
+a GitHub Release marked as a prerelease. The workflow verifies the committed
+`X.Y.Z-rc.N` versions and publishes to the `rc` npm dist-tag.
+
 ## Good contributions
 
 The fastest way to get a PR reviewed is to keep it easy to understand:

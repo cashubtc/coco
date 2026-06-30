@@ -67,12 +67,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Version RC packages
-        run: |
-          bunx changeset pre enter rc
-          bunx changeset version
-          bun scripts/prepare-rc-release.ts
-          rm .changeset/pre.json
+      - name: Check RC versions
+        run: bun scripts/check-prerelease-release.ts
 
       - name: Build packages
         run: bun run build
