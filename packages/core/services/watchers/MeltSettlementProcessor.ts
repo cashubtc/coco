@@ -8,6 +8,19 @@ import { normalizeMintUrl } from '../../utils.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
+interface OperationQuoteInterest {
+  id: string;
+  mintUrl: string;
+  method: MeltMethod;
+  quoteId: string;
+}
+
+interface OperationCheckContext {
+  mintUrl: string;
+  method: MeltMethod;
+  quoteId: string;
+}
+
 interface OperationInterestRegistrar {
   registerOperationInterest(interest: MeltQuoteOperationInterest): Promise<void>;
   removeOperationInterest(operationId: string): Promise<void>;
@@ -30,7 +43,7 @@ class MeltSettlementInterestRegistry {
   private readonly operationIdsByQuoteKey = new Map<QuoteKey, Set<string>>();
   private readonly quoteKeyByOperationId = new Map<string, QuoteKey>();
 
-  add(operation: PendingMeltOperation): boolean {
+  add(operation: OperationQuoteInterest): boolean {
     const key = toKey(operation.mintUrl, operation.method, operation.quoteId);
     const existingKey = this.quoteKeyByOperationId.get(operation.id);
     if (existingKey === key) {
@@ -67,6 +80,10 @@ class MeltSettlementInterestRegistry {
     return true;
   }
 
+  has(operationId: string): boolean {
+    return this.quoteKeyByOperationId.has(operationId);
+  }
+
   getOperationIds(mintUrl: string, method: MeltMethod, quoteId: string): string[] {
     return Array.from(this.operationIdsByQuoteKey.get(toKey(mintUrl, method, quoteId)) ?? []);
   }
@@ -90,6 +107,8 @@ export class MeltSettlementProcessor {
   private offRolledBack?: () => void;
   private readonly interests = new MeltSettlementInterestRegistry();
   private readonly inFlightOperationIds = new Set<string>();
+  private readonly followUpCheckByOperationId = new Map<string, OperationCheckContext>();
+  private readonly registeredOperationInterestIds = new Set<string>();
   private readonly inFlightChecks = new Set<Promise<void>>();
 
   constructor(
@@ -185,13 +204,22 @@ export class MeltSettlementProcessor {
       await this.removeOperationInterest(operationId);
     }
     this.inFlightOperationIds.clear();
+    this.followUpCheckByOperationId.clear();
+    this.registeredOperationInterestIds.clear();
     this.logger?.info('MeltSettlementProcessor stopped');
   }
 
   private async initializeExistingPendingOperations(): Promise<void> {
     try {
       const operations = await this.meltOperations.getPendingOperations();
+      if (!this.running) {
+        return;
+      }
+
       for (const operation of operations) {
+        if (!this.running) {
+          return;
+        }
         if (isPendingMeltOperation(operation)) {
           await this.registerOperationInterest(operation);
         }
@@ -202,34 +230,61 @@ export class MeltSettlementProcessor {
   }
 
   private async registerOperationInterest(operation: PendingMeltOperation): Promise<void> {
-    const added = this.interests.add(operation);
+    if (!this.running) {
+      return;
+    }
+
+    const mintUrl = normalizeMintUrl(operation.mintUrl);
+    const interest = {
+      operationId: operation.id,
+      mintUrl,
+      method: operation.method,
+      quoteId: operation.quoteId,
+    };
+    const added = this.interests.add({
+      id: operation.id,
+      mintUrl,
+      method: operation.method,
+      quoteId: operation.quoteId,
+    });
     if (!added) {
       return;
     }
 
     this.logger?.debug('Registered melt settlement interest', {
       operationId: operation.id,
-      mintUrl: operation.mintUrl,
+      mintUrl,
       method: operation.method,
       quoteId: operation.quoteId,
     });
 
     try {
-      await this.interestRegistrar?.registerOperationInterest({
-        operationId: operation.id,
-        mintUrl: operation.mintUrl,
-        method: operation.method,
-        quoteId: operation.quoteId,
-      });
+      await this.interestRegistrar?.registerOperationInterest(interest);
+      if (this.interestRegistrar) {
+        this.registeredOperationInterestIds.add(operation.id);
+      }
     } catch (err) {
+      this.interests.remove(operation.id);
       this.logger?.warn('Failed to register melt quote operation watch interest', {
         operationId: operation.id,
-        mintUrl: operation.mintUrl,
+        mintUrl,
         method: operation.method,
         quoteId: operation.quoteId,
         err,
       });
+      return;
     }
+
+    if (!this.running || !this.interests.has(operation.id)) {
+      await this.removeRegisteredOperationInterest(operation.id);
+      return;
+    }
+
+    await this.checkInterestedOperation(operation.id, {
+      mintUrl,
+      method: operation.method,
+      quoteId: operation.quoteId,
+    });
   }
 
   private async removeOperationInterest(operationId: string): Promise<void> {
@@ -238,7 +293,17 @@ export class MeltSettlementProcessor {
       return;
     }
 
+    this.followUpCheckByOperationId.delete(operationId);
     this.logger?.debug('Removed melt settlement interest', { operationId });
+
+    await this.removeRegisteredOperationInterest(operationId);
+  }
+
+  private async removeRegisteredOperationInterest(operationId: string): Promise<void> {
+    const wasRegistered = this.registeredOperationInterestIds.delete(operationId);
+    if (!wasRegistered) {
+      return;
+    }
 
     try {
       await this.interestRegistrar?.removeOperationInterest(operationId);
@@ -254,37 +319,65 @@ export class MeltSettlementProcessor {
     operationId: string,
     quote: { mintUrl: string; method: MeltMethod; quoteId: string },
   ): Promise<void> {
+    const context = {
+      mintUrl: normalizeMintUrl(quote.mintUrl),
+      method: quote.method,
+      quoteId: quote.quoteId,
+    };
+
     if (this.inFlightOperationIds.has(operationId)) {
+      this.followUpCheckByOperationId.set(operationId, context);
       this.logger?.debug('Melt settlement check already in flight', {
         operationId,
-        mintUrl: quote.mintUrl,
-        method: quote.method,
-        quoteId: quote.quoteId,
+        mintUrl: context.mintUrl,
+        method: context.method,
+        quoteId: context.quoteId,
       });
       return Promise.resolve();
     }
 
-    this.inFlightOperationIds.add(operationId);
-    const check = (async () => {
-      try {
-        await this.meltOperations.checkPendingOperation(operationId);
-      } catch (err) {
-        this.logger?.warn('Failed to settle pending melt operation', {
-          operationId,
-          mintUrl: quote.mintUrl,
-          method: quote.method,
-          quoteId: quote.quoteId,
-          err,
-        });
-      } finally {
-        this.inFlightOperationIds.delete(operationId);
-      }
-    })();
+    const check = this.runOperationCheckLoop(operationId, context);
 
     this.inFlightChecks.add(check);
     check.finally(() => {
       this.inFlightChecks.delete(check);
     });
     return check;
+  }
+
+  private async runOperationCheckLoop(
+    operationId: string,
+    initialContext: OperationCheckContext,
+  ): Promise<void> {
+    this.inFlightOperationIds.add(operationId);
+    let nextContext: OperationCheckContext | undefined = initialContext;
+
+    try {
+      while (nextContext) {
+        const context = nextContext;
+        nextContext = undefined;
+
+        try {
+          await this.meltOperations.checkPendingOperation(operationId);
+        } catch (err) {
+          this.logger?.warn('Failed to settle pending melt operation', {
+            operationId,
+            mintUrl: context.mintUrl,
+            method: context.method,
+            quoteId: context.quoteId,
+            err,
+          });
+        }
+
+        const followUpContext = this.followUpCheckByOperationId.get(operationId);
+        if (followUpContext) {
+          this.followUpCheckByOperationId.delete(operationId);
+          nextContext = followUpContext;
+        }
+      }
+    } finally {
+      this.inFlightOperationIds.delete(operationId);
+      this.followUpCheckByOperationId.delete(operationId);
+    }
   }
 }
