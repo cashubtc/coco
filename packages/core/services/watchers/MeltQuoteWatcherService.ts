@@ -39,6 +39,7 @@ interface QuoteWatchRecord {
   method: MeltMethod;
   quoteId: string;
   subscriptionKind: SubscriptionKind;
+  start?: Promise<void>;
   stop?: UnsubscribeHandler;
 }
 
@@ -369,48 +370,24 @@ export class MeltQuoteWatcherService {
       }
 
       const existing = this.watchRecordByKey.get(key);
-      if (existing?.stop) {
+      if (existing) {
         this.interests.add(key, interest);
-        continue;
-      }
-
-      const trusted = await this.mintService.isTrustedMint(quote.mintUrl);
-      if (!trusted) {
-        this.logger?.debug('Skipping melt quote watch for untrusted mint', {
-          mintUrl: quote.mintUrl,
-          quoteId: quote.quoteId,
-        });
+        await existing.start;
         continue;
       }
 
       const policy = this.getPolicy(quote.method);
       const record = this.ensureWatchRecord(quote, policy);
-      let unsubscribe: UnsubscribeHandler | undefined;
-      try {
-        const subscription = await this.subs.subscribe(
-          quote.mintUrl,
-          policy.subscriptionKind,
-          [quote.quoteId],
-          async (payload) => {
-            await this.handleSubscriptionPayload(record, payload);
-          },
-        );
-        unsubscribe = subscription.unsubscribe;
-      } catch (err) {
-        this.removeWatchRecord(key);
-        throw err;
-      }
-
-      record.stop = async () => {
-        await unsubscribe?.();
-      };
       this.interests.add(key, interest);
 
-      this.logger?.debug('Watching melt quote', {
-        mintUrl: quote.mintUrl,
-        method: quote.method,
-        quoteId: quote.quoteId,
-      });
+      record.start = this.startWatchingRecord(record, policy);
+      try {
+        await record.start;
+      } finally {
+        if (this.watchRecordByKey.get(key) === record) {
+          record.start = undefined;
+        }
+      }
     }
   }
 
@@ -435,6 +412,62 @@ export class MeltQuoteWatcherService {
     }
 
     return record;
+  }
+
+  private async startWatchingRecord(
+    record: QuoteWatchRecord,
+    policy: MeltQuoteWatchPolicy,
+  ): Promise<void> {
+    const key = toKey(record.mintUrl, record.method, record.quoteId);
+
+    let unsubscribe: UnsubscribeHandler | undefined;
+    try {
+      const trusted = await this.mintService.isTrustedMint(record.mintUrl);
+      if (!trusted) {
+        this.logger?.debug('Skipping melt quote watch for untrusted mint', {
+          mintUrl: record.mintUrl,
+          quoteId: record.quoteId,
+        });
+        if (this.watchRecordByKey.get(key) === record) {
+          this.removeWatchRecord(key);
+        }
+        return;
+      }
+
+      const subscription = await this.subs.subscribe(
+        record.mintUrl,
+        policy.subscriptionKind,
+        [record.quoteId],
+        async (payload) => {
+          await this.handleSubscriptionPayload(record, payload);
+        },
+      );
+      unsubscribe = subscription.unsubscribe;
+    } catch (err) {
+      if (this.watchRecordByKey.get(key) === record) {
+        this.removeWatchRecord(key);
+      }
+      throw err;
+    }
+
+    if (this.watchRecordByKey.get(key) !== record) {
+      try {
+        await unsubscribe?.();
+      } catch (err) {
+        this.logger?.warn('Unsubscribe melt quote watcher failed', { key, err });
+      }
+      return;
+    }
+
+    record.stop = async () => {
+      await unsubscribe?.();
+    };
+
+    this.logger?.debug('Watching melt quote', {
+      mintUrl: record.mintUrl,
+      method: record.method,
+      quoteId: record.quoteId,
+    });
   }
 
   private async handleSubscriptionPayload(

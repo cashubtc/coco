@@ -27,6 +27,18 @@ describe('MeltQuoteWatcherService', () => {
 
   const futureExpiry = () => Math.floor(Date.now() / 1000) + 3600;
   const pastExpiry = () => Math.floor(Date.now() / 1000) - 1;
+  const flushPromises = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  const waitForSubscribeCalls = async (count: number): Promise<void> => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (subscribe.mock.calls.length >= count) return;
+      await flushPromises();
+    }
+    throw new Error(`Expected ${count} subscribe calls, saw ${subscribe.mock.calls.length}`);
+  };
 
   const makeBolt11Quote = (overrides: Partial<MeltQuote<'bolt11'>> = {}): MeltQuote<'bolt11'> => ({
     mintUrl,
@@ -368,6 +380,60 @@ describe('MeltQuoteWatcherService', () => {
     await watcher.removeOperationInterest('melt-op-1');
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+  });
+
+  it('coalesces overlapping watch requests while subscribe is pending', async () => {
+    const resolveSubscribe: Array<() => void> = [];
+    const firstUnsubscribe = mock(async () => {});
+    subscribe = mock(
+      (
+        _mintUrl: string,
+        _kind: string,
+        _filters: string[],
+        next: (
+          payload: MeltQuoteBolt11Response | MeltQuoteOnchainResponse | string,
+        ) => Promise<void>,
+      ) => {
+        const subId = `sub-${callbacks.length + 1}`;
+        callbacks.push(next as (payload: unknown) => Promise<void>);
+        return new Promise<{ subId: string; unsubscribe: () => Promise<void> }>((resolve) => {
+          resolveSubscribe.push(() => resolve({ subId, unsubscribe: firstUnsubscribe }));
+        });
+      },
+    );
+    const watcher = makeWatcher({
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    const firstWatch = watcher.registerOperationInterest({
+      operationId: 'melt-op-1',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+    await waitForSubscribeCalls(1);
+
+    const secondWatch = watcher.registerOperationInterest({
+      operationId: 'melt-op-2',
+      mintUrl,
+      method: 'bolt11',
+      quoteId,
+    });
+    await flushPromises();
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    resolveSubscribe[0]?.();
+    await Promise.all([firstWatch, secondWatch]);
+
+    await watcher.removeOperationInterest('melt-op-1');
+    expect(firstUnsubscribe).not.toHaveBeenCalled();
+
+    await watcher.removeOperationInterest('melt-op-2');
+    expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
   });
