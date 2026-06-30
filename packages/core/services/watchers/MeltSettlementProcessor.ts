@@ -109,6 +109,7 @@ export class MeltSettlementProcessor {
   private readonly inFlightOperationIds = new Set<string>();
   private readonly followUpCheckByOperationId = new Map<string, OperationCheckContext>();
   private readonly registeredOperationInterestIds = new Set<string>();
+  private readonly scheduledInitialCheckOperationIds = new Set<string>();
   private readonly inFlightChecks = new Set<Promise<void>>();
 
   constructor(
@@ -206,6 +207,7 @@ export class MeltSettlementProcessor {
     this.inFlightOperationIds.clear();
     this.followUpCheckByOperationId.clear();
     this.registeredOperationInterestIds.clear();
+    this.scheduledInitialCheckOperationIds.clear();
     this.logger?.info('MeltSettlementProcessor stopped');
   }
 
@@ -247,16 +249,18 @@ export class MeltSettlementProcessor {
       method: operation.method,
       quoteId: operation.quoteId,
     });
-    if (!added) {
+    if (!added && !this.interestRegistrar) {
       return;
     }
 
-    this.logger?.debug('Registered melt settlement interest', {
-      operationId: operation.id,
-      mintUrl,
-      method: operation.method,
-      quoteId: operation.quoteId,
-    });
+    if (added) {
+      this.logger?.debug('Registered melt settlement interest', {
+        operationId: operation.id,
+        mintUrl,
+        method: operation.method,
+        quoteId: operation.quoteId,
+      });
+    }
 
     try {
       await this.interestRegistrar?.registerOperationInterest(interest);
@@ -264,7 +268,9 @@ export class MeltSettlementProcessor {
         this.registeredOperationInterestIds.add(operation.id);
       }
     } catch (err) {
-      this.interests.remove(operation.id);
+      if (added) {
+        this.interests.remove(operation.id);
+      }
       this.logger?.warn('Failed to register melt quote operation watch interest', {
         operationId: operation.id,
         mintUrl,
@@ -280,7 +286,7 @@ export class MeltSettlementProcessor {
       return;
     }
 
-    await this.checkInterestedOperation(operation.id, {
+    this.scheduleInitialOperationCheck(operation.id, {
       mintUrl,
       method: operation.method,
       quoteId: operation.quoteId,
@@ -294,9 +300,28 @@ export class MeltSettlementProcessor {
     }
 
     this.followUpCheckByOperationId.delete(operationId);
+    this.scheduledInitialCheckOperationIds.delete(operationId);
     this.logger?.debug('Removed melt settlement interest', { operationId });
 
     await this.removeRegisteredOperationInterest(operationId);
+  }
+
+  private scheduleInitialOperationCheck(operationId: string, context: OperationCheckContext): void {
+    if (this.scheduledInitialCheckOperationIds.has(operationId)) {
+      return;
+    }
+
+    this.scheduledInitialCheckOperationIds.add(operationId);
+    setTimeout(() => {
+      this.scheduledInitialCheckOperationIds.delete(operationId);
+
+      if (!this.running || !this.interests.has(operationId)) {
+        return;
+      }
+
+      // Pending events are emitted before MeltOperationService releases its per-operation lock.
+      void this.checkInterestedOperation(operationId, context);
+    }, 0);
   }
 
   private async removeRegisteredOperationInterest(operationId: string): Promise<void> {
