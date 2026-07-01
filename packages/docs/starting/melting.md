@@ -30,14 +30,27 @@ if (result.state === 'finalized') {
 }
 
 if (result.state === 'pending') {
-  await new Promise<void>((resolve) => {
-    const off = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+  await new Promise<void>((resolve, reject) => {
+    let offFinalized = () => {};
+    let offRolledBack = () => {};
+    const cleanup = () => {
+      offFinalized();
+      offRolledBack();
+    };
+
+    offFinalized = coco.on('melt-op:finalized', ({ operationId, operation }) => {
       if (operationId !== prepared.id) return;
-      off();
+      cleanup();
       console.log('Updated state:', operation.state);
       console.log('Change returned:', operation.changeAmount);
       console.log('Effective fee:', operation.effectiveFee);
       resolve();
+    });
+
+    offRolledBack = coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
+      if (operationId !== prepared.id) return;
+      cleanup();
+      reject(new Error(operation.error ?? 'Melt operation rolled back'));
     });
   });
 }
@@ -47,9 +60,9 @@ if (result.state === 'pending') {
 
 With the default `initializeCoco()` wiring, `MeltQuoteWatcherService` and
 `MeltSettlementProcessor` settle pending operations in the background. Use
-`melt-op:finalized` for live application flow, or call
-`coco.ops.melt.refresh(prepared.id)` yourself if you disable those services or
-wire `Manager` manually without them.
+`melt-op:finalized` and `melt-op:rolled-back` for live application flow, or
+call `coco.ops.melt.refresh(prepared.id)` yourself if you disable those
+services or wire `Manager` manually without them.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
@@ -107,14 +120,27 @@ const prepared = await coco.ops.melt.prepare({
 const executed = await coco.ops.melt.execute(prepared.id);
 
 if (executed.state === 'pending') {
-  await new Promise<void>((resolve) => {
-    const off = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+  await new Promise<void>((resolve, reject) => {
+    let offFinalized = () => {};
+    let offRolledBack = () => {};
+    const cleanup = () => {
+      offFinalized();
+      offRolledBack();
+    };
+
+    offFinalized = coco.on('melt-op:finalized', ({ operationId, operation }) => {
       if (operationId !== prepared.id) return;
-      off();
+      cleanup();
       console.log('Updated state:', operation.state);
       console.log('Change returned:', operation.changeAmount);
       console.log('Effective fee:', operation.effectiveFee);
       resolve();
+    });
+
+    offRolledBack = coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
+      if (operationId !== prepared.id) return;
+      cleanup();
+      reject(new Error(operation.error ?? 'Melt operation rolled back'));
     });
   });
 }

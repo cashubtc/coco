@@ -36,9 +36,9 @@ preparing a melt operation:
   the canonical quote update
   before emitting `melt-quote:updated`
 
-Use `coco.on('melt-quote:updated', ...)` for live quote state and
-`coco.on('melt-op:finalized', ...)` when the app needs to react to settled
-value movement.
+Use `coco.on('melt-quote:updated', ...)` for live quote state. When the app
+needs to react to terminal value movement, listen for both
+`melt-op:finalized` and `melt-op:rolled-back`.
 
 ## Quote Identity and Refs
 
