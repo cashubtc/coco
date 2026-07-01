@@ -23,13 +23,10 @@ payment requests without treating that quote as a wallet activity yet:
 - `manager.quotes.mint.get({ mintUrl, quoteId })`
 - `manager.quotes.mint.listPending({ method? })`
 - `manager.quotes.mint.refresh({ mintUrl, quoteId })`
-- `manager.quotes.mint.awaitClaimable({ mintUrl, quoteId }, { timeoutMs?, signal? })`
-- `manager.quotes.mint.awaitNextPayment({ mintUrl, quoteId }, { timeoutMs?, signal? })`
 - `manager.quotes.melt.create({ mintUrl, method, methodData, unit? })`
 - `manager.quotes.melt.get({ mintUrl, quoteId })`
 - `manager.quotes.melt.listPending({ method? })`
 - `manager.quotes.melt.refresh({ mintUrl, quoteId })`
-- `manager.quotes.melt.awaitPaid({ mintUrl, quoteId }, { timeoutMs?, signal? })`
 
 For BOLT11 quotes, the invoice is exposed as `quote.request`.
 
@@ -101,24 +98,24 @@ await manager.subscription.awaitMintQuotePaid(mintUrl, quoteId);
 await manager.subscription.awaitMeltQuotePaid(mintUrl, quoteId);
 ```
 
-After:
+After, subscribe to canonical events for live quote state:
 
 ```ts
-await manager.quotes.mint.awaitClaimable({ mintUrl, quoteId });
-await manager.quotes.mint.awaitNextPayment({ mintUrl, quoteId });
-await manager.quotes.melt.awaitPaid({ mintUrl, quoteId });
+const offMint = manager.on('mint-quote:updated', ({ mintUrl, quoteId, quote }) => {
+  if (mintUrl !== expectedMintUrl || quoteId !== expectedQuoteId) return;
+  renderMintQuote(quote);
+});
+
+const offMelt = manager.on('melt-quote:updated', ({ mintUrl, quoteId, quote }) => {
+  if (mintUrl !== expectedMintUrl || quoteId !== expectedQuoteId) return;
+  renderMeltQuote(quote);
+});
 ```
 
-Use `awaitClaimable` when you need locally claimable mint value. Use
-`awaitNextPayment` when a reusable quote should observe a later incoming payment
-or when BOLT11 auto-claim races can move the quote directly to `ISSUED`. Use
-`awaitPaid` for melt settlement.
-
-All quote waiters require an existing canonical quote identity and return the
-updated canonical quote snapshot. They check the current snapshot, install a
-canonical quote update listener, refresh once, and then wait for a matching
-quote update, timeout, or abort signal. Keep subscription processing enabled or
-refresh quote state yourself when you need realtime remote observation.
+Use `manager.quotes.*.refresh({ mintUrl, quoteId })` when resuming or when your
+app wants to explicitly check remote quote state. Use operation APIs and
+operation events such as `mint-op:finalized` or `melt-op:finalized` when the app
+needs to wait for value movement to complete.
 
 ## Melt quote migration
 

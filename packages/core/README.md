@@ -113,13 +113,16 @@ const pendingMint = await manager.ops.mint.prepare({
   amount: 100,
 });
 
-// pay pendingMint.request externally, then wait for canonical quote state
-await manager.quotes.mint.awaitClaimable({
-  mintUrl: 'https://nofees.testnut.cashu.space',
-  quoteId: pendingMint.quoteId,
+const finalized = new Promise<void>((resolve) => {
+  const off = manager.on('mint-op:finalized', ({ operationId }) => {
+    if (operationId !== pendingMint.id) return;
+    off();
+    resolve();
+  });
 });
 
-await manager.ops.mint.execute(pendingMint.id);
+// pay pendingMint.request externally; default processors finalize after payment
+await finalized;
 
 // Check balances
 const balances = await manager.wallet.balances.byMint();
@@ -317,12 +320,14 @@ those details are derived from canonical quote storage.
 
 ### QuoteApi
 
-- `mint.awaitClaimable({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MintQuote>`
-- `mint.awaitNextPayment({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MintQuote>`
-- `melt.awaitPaid({ mintUrl, quoteId }, { timeoutMs?, signal? }): Promise<MeltQuote>`
+- `mint.create(...)`, `mint.import(...)`, `mint.get({ mintUrl, quoteId })`
+- `mint.listPending({ method? })`, `mint.refresh({ mintUrl, quoteId })`
+- `melt.create(...)`, `melt.get({ mintUrl, quoteId })`
+- `melt.listPending({ method? })`, `melt.refresh({ mintUrl, quoteId })`
 
-Quote waiters resolve from canonical quote snapshots after checking current
-state, installing a quote update listener, and refreshing once.
+Quote refreshes persist canonical quote snapshots before emitting
+`mint-quote:updated` or `melt-quote:updated`. Use `manager.on(...)` for live
+application flows and operation APIs when a mint or melt should be finalized.
 
 ### HistoryApi
 

@@ -415,7 +415,11 @@ async function awaitMintQuoteReadyFromEvents(
   let cancelWait: (() => void) | undefined;
   const paidEventPromise = new Promise<MintQuote | null>((resolve) => {
     const off = manager.on('mint-quote:updated', (payload) => {
-      if (payload.quoteId !== pendingMint.quoteId || payload.quote.state !== 'PAID') {
+      if (
+        payload.mintUrl !== pendingMint.mintUrl ||
+        payload.quoteId !== pendingMint.quoteId ||
+        !isMintQuoteReady(payload.quote)
+      ) {
         return;
       }
 
@@ -441,36 +445,9 @@ async function awaitMintQuoteReadyFromEvents(
   return paidEventPromise;
 }
 
-async function awaitMintQuotePaidWithQuoteApi(
-  manager: Manager,
-  mintUrl: string,
-  pendingMint: PreparedMintOperation,
-): Promise<MintQuote | null> {
-  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
-  if (isMintQuoteReady(initialQuote)) {
-    return initialQuote;
-  }
-
-  const paidNotificationPromise = manager.quotes.mint.awaitNextPayment({
-    mintUrl,
-    quoteId: pendingMint.quoteId,
-  });
-
-  const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  const latestQuote = latestPendingMint
-    ? await getMintQuoteForOperation(manager, latestPendingMint)
-    : null;
-  if (isMintQuoteReady(latestQuote)) {
-    return latestQuote;
-  }
-
-  await paidNotificationPromise;
-  return getMintQuoteForOperation(manager, pendingMint);
-}
-
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
   const pendingMint = await prepareMintOperation(manager, mintUrl, amount, unit);
-  await awaitMintQuotePaidWithQuoteApi(manager, mintUrl, pendingMint);
+  await awaitMintQuoteReadyFromEvents(manager, pendingMint);
   await executeMintOperation(manager, pendingMint.id);
   return pendingMint;
 }
@@ -706,7 +683,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 50, testUnit);
 
-          const paidQuote = await awaitMintQuotePaidWithQuoteApi(mgr!, mintUrl, pendingMint);
+          const paidQuote = await awaitMintQuoteReadyFromEvents(mgr!, pendingMint);
           expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           await executeMintOperation(mgr!, pendingMint.id);
 

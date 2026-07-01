@@ -89,13 +89,10 @@ describe('QuoteApi', () => {
       getMintQuoteById: mock(async () => mintQuote),
       getPendingMintQuotes: mock(async () => [mintQuote]),
       refreshMintQuoteById: mock(async () => ({ ...mintQuote, state: 'PAID' })),
-      awaitMintQuoteClaimable: mock(async () => ({ ...mintQuote, state: 'PAID' })),
-      awaitMintQuoteNextPayment: mock(async () => ({ ...mintQuote, state: 'PAID' })),
       createMeltQuote: mock(async () => meltQuote),
       getMeltQuoteById: mock(async () => meltQuote),
       getPendingMeltQuotes: mock(async () => [meltQuote]),
       refreshMeltQuoteById: mock(async () => ({ ...meltQuote, state: 'PENDING' })),
-      awaitMeltQuoteSettlement: mock(async () => ({ ...meltQuote, state: 'PAID' })),
     } as unknown as QuoteLifecycle;
 
     api = new QuoteApi(quoteLifecycle);
@@ -124,16 +121,6 @@ describe('QuoteApi', () => {
     await expect(api.mint.refresh({ mintUrl, quoteId })).resolves.toMatchObject({
       state: 'PAID',
     });
-    await expect(
-      api.mint.awaitClaimable({ mintUrl, quoteId }, { timeoutMs: 100 }),
-    ).resolves.toMatchObject({
-      state: 'PAID',
-    });
-    await expect(
-      api.mint.awaitNextPayment({ mintUrl, quoteId }, { timeoutMs: 200 }),
-    ).resolves.toMatchObject({
-      state: 'PAID',
-    });
 
     expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
       amount: { amount: Amount.from(10), unit: 'sat' },
@@ -149,14 +136,6 @@ describe('QuoteApi', () => {
     expect(quoteLifecycle.getMintQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
     expect(quoteLifecycle.getPendingMintQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMintQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
-    expect(quoteLifecycle.awaitMintQuoteClaimable).toHaveBeenCalledWith(
-      { mintUrl, quoteId },
-      { timeoutMs: 100 },
-    );
-    expect(quoteLifecycle.awaitMintQuoteNextPayment).toHaveBeenCalledWith(
-      { mintUrl, quoteId },
-      { timeoutMs: 200 },
-    );
   });
 
   it('delegates onchain mint quote creation without an amount', async () => {
@@ -224,11 +203,6 @@ describe('QuoteApi', () => {
     await expect(api.melt.refresh({ mintUrl, quoteId })).resolves.toMatchObject({
       state: 'PENDING',
     });
-    await expect(
-      api.melt.awaitPaid({ mintUrl, quoteId }, { timeoutMs: 100 }),
-    ).resolves.toMatchObject({
-      state: 'PAID',
-    });
 
     expect(quoteLifecycle.createMeltQuote).toHaveBeenCalledWith(
       mintUrl,
@@ -239,10 +213,6 @@ describe('QuoteApi', () => {
     expect(quoteLifecycle.getMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
     expect(quoteLifecycle.getPendingMeltQuotes).toHaveBeenCalledWith('bolt11');
     expect(quoteLifecycle.refreshMeltQuoteById).toHaveBeenCalledWith({ mintUrl, quoteId });
-    expect(quoteLifecycle.awaitMeltQuoteSettlement).toHaveBeenCalledWith(
-      { mintUrl, quoteId },
-      { timeoutMs: 100 },
-    );
   });
 
   it('types created BOLT melt quotes as direct prepare inputs', async () => {

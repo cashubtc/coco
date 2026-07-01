@@ -9,4 +9,3 @@ export * from './MeltQuote';
 export * from './MintQuote';
 export * from './MintQuoteState';
 export * from './QuoteIdentity';
-export * from './QuoteWait';

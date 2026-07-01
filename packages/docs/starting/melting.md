@@ -30,28 +30,26 @@ if (result.state === 'finalized') {
 }
 
 if (result.state === 'pending') {
-  const paidQuote = await coco.quotes.melt.awaitPaid({
-    mintUrl,
-    quoteId: prepared.quoteId,
+  await new Promise<void>((resolve) => {
+    const off = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+      if (operationId !== prepared.id) return;
+      off();
+      console.log('Updated state:', operation.state);
+      console.log('Change returned:', operation.changeAmount);
+      console.log('Effective fee:', operation.effectiveFee);
+      resolve();
+    });
   });
-  console.log('Updated state:', paidQuote.state);
-
-  // Only needed if the default melt watcher/settlement processor is disabled.
-  const finalized = await coco.ops.melt.refresh(prepared.id);
-  if (finalized.state === 'finalized') {
-    console.log('Change returned:', finalized.changeAmount);
-    console.log('Effective fee:', finalized.effectiveFee);
-  }
 }
 ```
 
 `coco.quotes.melt.create()` creates the melt quote without creating history. `coco.ops.melt.prepare()` reserves proofs and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
 
-`coco.quotes.melt.awaitPaid()` only waits for the canonical quote to reach
-`PAID`. With the default `initializeCoco()` wiring, `MeltQuoteWatcherService` and
-`MeltSettlementProcessor` settle pending operations in the background. Manual
-`coco.ops.melt.refresh(prepared.id)` is only needed if you disable those services
-or wire `Manager` manually without them.
+With the default `initializeCoco()` wiring, `MeltQuoteWatcherService` and
+`MeltSettlementProcessor` settle pending operations in the background. Use
+`melt-op:finalized` for live application flow, or call
+`coco.ops.melt.refresh(prepared.id)` yourself if you disable those services or
+wire `Manager` manually without them.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
@@ -109,18 +107,16 @@ const prepared = await coco.ops.melt.prepare({
 const executed = await coco.ops.melt.execute(prepared.id);
 
 if (executed.state === 'pending') {
-  const paidQuote = await coco.quotes.melt.awaitPaid({
-    mintUrl,
-    quoteId: prepared.quoteId,
+  await new Promise<void>((resolve) => {
+    const off = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+      if (operationId !== prepared.id) return;
+      off();
+      console.log('Updated state:', operation.state);
+      console.log('Change returned:', operation.changeAmount);
+      console.log('Effective fee:', operation.effectiveFee);
+      resolve();
+    });
   });
-  console.log('Updated state:', paidQuote.state);
-
-  // Only needed if the default melt watcher/settlement processor is disabled.
-  const finalized = await coco.ops.melt.refresh(prepared.id);
-  if (finalized.state === 'finalized') {
-    console.log('Change returned:', finalized.changeAmount);
-    console.log('Effective fee:', finalized.effectiveFee);
-  }
 }
 ```
 

@@ -34,8 +34,11 @@ preparing a melt operation:
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, quoteId })` checks the remote quote state and persists
   the canonical quote update
-- `awaitPaid({ mintUrl, quoteId }, { timeoutMs?, signal? })` resolves with a
-  canonical quote snapshot once the melt quote reaches `PAID`
+  before emitting `melt-quote:updated`
+
+Use `coco.on('melt-quote:updated', ...)` for live quote state and
+`coco.on('melt-op:finalized', ...)` when the app needs to react to settled
+value movement.
 
 ## Quote Identity and Refs
 
@@ -47,7 +50,6 @@ const quoteIdentity = { mintUrl, quoteId: quote.quoteId };
 
 const currentQuote = await coco.quotes.melt.get(quoteIdentity);
 const refreshedQuote = await coco.quotes.melt.refresh(quoteIdentity);
-const paidQuote = await coco.quotes.melt.awaitPaid(quoteIdentity, { timeoutMs: 30_000 });
 const operation = await coco.ops.melt.getByQuote(quoteIdentity);
 const operations = await coco.ops.melt.listByQuote(quoteIdentity);
 ```

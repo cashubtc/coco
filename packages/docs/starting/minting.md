@@ -43,7 +43,7 @@ the BOLT11 payment request that needs to be paid before minting can happen. When
 [Watchers and Processors](../pages/watchers-processors.md) are activated (they
 are by default) Coco will automatically check whether the quote has been paid
 and redeem it automatically.
-You can also execute the pending operation yourself after payment.
+Use operation events to react to completion.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -60,24 +60,45 @@ const pendingMint = await coco.ops.mint.prepare({
 console.log('pay this: ', pendingMint.request);
 console.log('this is the quote id: ', pendingMint.quoteId);
 
-coco.on('mint-op:finalized', (payload) => {
-  if (payload.operationId === pendingMint.id) {
-    console.log('This was paid!!');
-  }
+const finalized = new Promise<void>((resolve) => {
+  const off = coco.on('mint-op:finalized', (payload) => {
+    if (payload.operationId !== pendingMint.id) return;
+    off();
+    resolve();
+  });
 });
 
-await coco.quotes.mint.awaitClaimable({
-  mintUrl: 'https://minturl.com',
-  quoteId: pendingMint.quoteId,
+await finalized;
+```
+
+If you disable the default mint processor and want to finalize manually, listen
+for the quote update and then call the idempotent operation finalizer.
+
+```ts
+const ready = new Promise<void>((resolve) => {
+  const off = coco.on('mint-quote:updated', (payload) => {
+    if (payload.mintUrl !== pendingMint.mintUrl || payload.quoteId !== pendingMint.quoteId) {
+      return;
+    }
+    if (
+      'state' in payload.quote &&
+      (payload.quote.state === 'PAID' || payload.quote.state === 'ISSUED')
+    ) {
+      off();
+      resolve();
+    }
+  });
 });
 
-await coco.ops.mint.execute(pendingMint.id);
+await ready;
+await coco.ops.mint.finalize(pendingMint.id);
 ```
 
 Reusable onchain and BOLT12 mint quotes are created through the same quote API.
 The quote request is the address, offer, or payment request to fund. Refresh the
 quote to observe new incoming amount, then prepare one or more mint operations
-against the same quote ID.
+against the same quote ID. Apps that need live updates can listen for
+`mint-quote:updated` and filter by `{ mintUrl, quoteId }`.
 
 ```ts
 const quote = await coco.quotes.mint.create({
@@ -88,7 +109,7 @@ const quote = await coco.quotes.mint.create({
 
 console.log('fund this: ', quote.request);
 
-const refreshed = await coco.quotes.mint.awaitClaimable({
+const refreshed = await coco.quotes.mint.refresh({
   mintUrl: 'https://minturl.com',
   quoteId: quote.quoteId,
 });
@@ -120,13 +141,13 @@ const offerQuote = await coco.quotes.mint.create({
 
 console.log('pay this offer:', offerQuote.request);
 
-await coco.quotes.mint.awaitNextPayment({
+const refreshedOffer = await coco.quotes.mint.refresh({
   mintUrl: 'https://minturl.com',
   quoteId: offerQuote.quoteId,
 });
 
 const pendingOfferMint = await coco.ops.mint.prepare({
-  quote: offerQuote,
+  quote: refreshedOffer,
   amount: 10,
 });
 ```

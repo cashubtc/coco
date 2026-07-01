@@ -4,7 +4,6 @@ import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } fro
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { QuoteIdentity } from '../models/QuoteIdentity';
-import type { QuoteWaitOptions } from '../models/QuoteWait';
 import type { QuoteLifecycle } from '../quotes/QuoteLifecycle';
 import type { DefaultSupportedMeltMethod } from './MeltOpsApi.ts';
 
@@ -102,20 +101,6 @@ export class MintQuoteApi {
   refresh(input: QuoteIdentity): Promise<MintQuote> {
     return this.quoteLifecycle.refreshMintQuoteById(input);
   }
-
-  /**
-   * Wait until a known mint quote has locally claimable value.
-   */
-  awaitClaimable(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MintQuote> {
-    return this.quoteLifecycle.awaitMintQuoteClaimable(input, options);
-  }
-
-  /**
-   * Wait until a known mint quote observes a later payment.
-   */
-  awaitNextPayment(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MintQuote> {
-    return this.quoteLifecycle.awaitMintQuoteNextPayment(input, options);
-  }
 }
 
 export class MeltQuoteApi {
@@ -142,13 +127,6 @@ export class MeltQuoteApi {
 
   refresh(input: QuoteIdentity): Promise<MeltQuote> {
     return this.quoteLifecycle.refreshMeltQuoteById(input);
-  }
-
-  /**
-   * Wait until a known melt quote reaches paid settlement.
-   */
-  awaitPaid(input: QuoteIdentity, options: QuoteWaitOptions = {}): Promise<MeltQuote> {
-    return this.quoteLifecycle.awaitMeltQuoteSettlement(input, options);
   }
 }
 
