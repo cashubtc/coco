@@ -42,11 +42,13 @@ function isPendingMeltOperation(operation: MeltOperation): operation is PendingM
 class MeltSettlementInterestRegistry {
   private readonly operationIdsByQuoteKey = new Map<QuoteKey, Set<string>>();
   private readonly quoteKeyByOperationId = new Map<string, QuoteKey>();
+  private readonly operationById = new Map<string, OperationQuoteInterest>();
 
   add(operation: OperationQuoteInterest): boolean {
     const key = toKey(operation.mintUrl, operation.method, operation.quoteId);
     const existingKey = this.quoteKeyByOperationId.get(operation.id);
     if (existingKey === key) {
+      this.operationById.set(operation.id, operation);
       return false;
     }
 
@@ -62,6 +64,7 @@ class MeltSettlementInterestRegistry {
 
     operationIds.add(operation.id);
     this.quoteKeyByOperationId.set(operation.id, key);
+    this.operationById.set(operation.id, operation);
     return true;
   }
 
@@ -72,6 +75,7 @@ class MeltSettlementInterestRegistry {
     }
 
     this.quoteKeyByOperationId.delete(operationId);
+    this.operationById.delete(operationId);
     const operationIds = this.operationIdsByQuoteKey.get(key);
     operationIds?.delete(operationId);
     if (operationIds?.size === 0) {
@@ -91,6 +95,10 @@ class MeltSettlementInterestRegistry {
   getAllOperationIds(): string[] {
     return Array.from(this.quoteKeyByOperationId.keys());
   }
+
+  getAllOperations(): OperationQuoteInterest[] {
+    return Array.from(this.operationById.values());
+  }
 }
 
 export class MeltSettlementProcessor {
@@ -98,7 +106,7 @@ export class MeltSettlementProcessor {
   private readonly bus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly options: Required<Omit<MeltSettlementProcessorOptions, 'interestRegistrar'>>;
-  private readonly interestRegistrar?: OperationInterestRegistrar;
+  private interestRegistrar?: OperationInterestRegistrar;
 
   private running = false;
   private offPending?: () => void;
@@ -130,6 +138,31 @@ export class MeltSettlementProcessor {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** @internal Rebinds the watcher that owns operation quote subscriptions. */
+  async setInterestRegistrar(interestRegistrar?: OperationInterestRegistrar): Promise<void> {
+    if (this.interestRegistrar === interestRegistrar) {
+      if (this.running && interestRegistrar) {
+        await this.registerTrackedOperationInterests();
+      }
+      return;
+    }
+
+    const previousRegistrar = this.interestRegistrar;
+    const registeredOperationIds = Array.from(this.registeredOperationInterestIds);
+    this.interestRegistrar = interestRegistrar;
+    this.registeredOperationInterestIds.clear();
+
+    if (previousRegistrar) {
+      for (const operationId of registeredOperationIds) {
+        await this.removeOperationWatchInterest(previousRegistrar, operationId);
+      }
+    }
+
+    if (this.running && this.interestRegistrar) {
+      await this.registerTrackedOperationInterests();
+    }
   }
 
   async start(): Promise<void> {
@@ -237,18 +270,13 @@ export class MeltSettlementProcessor {
     }
 
     const mintUrl = normalizeMintUrl(operation.mintUrl);
-    const interest = {
-      operationId: operation.id,
-      mintUrl,
-      method: operation.method,
-      quoteId: operation.quoteId,
-    };
-    const added = this.interests.add({
+    const operationInterest = {
       id: operation.id,
       mintUrl,
       method: operation.method,
       quoteId: operation.quoteId,
-    });
+    };
+    const added = this.interests.add(operationInterest);
     if (!added && !this.interestRegistrar) {
       return;
     }
@@ -262,23 +290,14 @@ export class MeltSettlementProcessor {
       });
     }
 
-    try {
-      await this.interestRegistrar?.registerOperationInterest(interest);
-      if (this.interestRegistrar) {
-        this.registeredOperationInterestIds.add(operation.id);
+    if (this.interestRegistrar) {
+      const registered = await this.registerOperationWatchInterest(operationInterest);
+      if (!registered) {
+        if (added) {
+          this.interests.remove(operation.id);
+        }
+        return;
       }
-    } catch (err) {
-      if (added) {
-        this.interests.remove(operation.id);
-      }
-      this.logger?.warn('Failed to register melt quote operation watch interest', {
-        operationId: operation.id,
-        mintUrl,
-        method: operation.method,
-        quoteId: operation.quoteId,
-        err,
-      });
-      return;
     }
 
     if (!this.running || !this.interests.has(operation.id)) {
@@ -306,6 +325,46 @@ export class MeltSettlementProcessor {
     await this.removeRegisteredOperationInterest(operationId);
   }
 
+  private async registerTrackedOperationInterests(): Promise<void> {
+    for (const operation of this.interests.getAllOperations()) {
+      if (!this.running) {
+        return;
+      }
+      if (this.registeredOperationInterestIds.has(operation.id)) {
+        continue;
+      }
+      await this.registerOperationWatchInterest(operation);
+    }
+  }
+
+  private async registerOperationWatchInterest(
+    operation: OperationQuoteInterest,
+  ): Promise<boolean> {
+    if (!this.interestRegistrar) {
+      return true;
+    }
+
+    try {
+      await this.interestRegistrar.registerOperationInterest({
+        operationId: operation.id,
+        mintUrl: operation.mintUrl,
+        method: operation.method,
+        quoteId: operation.quoteId,
+      });
+      this.registeredOperationInterestIds.add(operation.id);
+      return true;
+    } catch (err) {
+      this.logger?.warn('Failed to register melt quote operation watch interest', {
+        operationId: operation.id,
+        mintUrl: operation.mintUrl,
+        method: operation.method,
+        quoteId: operation.quoteId,
+        err,
+      });
+      return false;
+    }
+  }
+
   private scheduleInitialOperationCheck(operationId: string, context: OperationCheckContext): void {
     if (this.scheduledInitialCheckOperationIds.has(operationId)) {
       return;
@@ -329,9 +388,19 @@ export class MeltSettlementProcessor {
     if (!wasRegistered) {
       return;
     }
+    if (!this.interestRegistrar) {
+      return;
+    }
 
+    await this.removeOperationWatchInterest(this.interestRegistrar, operationId);
+  }
+
+  private async removeOperationWatchInterest(
+    registrar: OperationInterestRegistrar,
+    operationId: string,
+  ): Promise<void> {
     try {
-      await this.interestRegistrar?.removeOperationInterest(operationId);
+      await registrar.removeOperationInterest(operationId);
     } catch (err) {
       this.logger?.warn('Failed to remove melt quote operation watch interest', {
         operationId,

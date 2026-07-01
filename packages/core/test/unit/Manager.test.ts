@@ -482,6 +482,47 @@ describe('initializeCoco', () => {
       await manager.dispose();
     });
 
+    it('attaches melt quote watching when settlement processing starts first', async () => {
+      await repositories.init();
+      const expiredOperationQuote = makeMeltQuote('melt-expired-operation-first', 'PENDING', {
+        expired: true,
+      });
+      const expiredOperation = makePendingMeltOperation(
+        'melt-op-expired-first',
+        expiredOperationQuote.quoteId,
+      );
+
+      await repositories.meltQuoteRepository.upsertMeltQuote(expiredOperationQuote);
+      await repositories.meltOperationRepository.create(expiredOperation);
+
+      const manager = new Manager(repositories, seedGetter, new NullLogger());
+      await manager.initPlugins();
+      manager.subscriptions.pause();
+      manager['mintService'].isTrustedMint = mock(async () => true);
+      const checkPendingOperation = mock(async () => 'stay_pending' as const);
+      manager['meltOperationService'].checkPendingOperation = checkPendingOperation;
+
+      await manager.enableMeltSettlementProcessor();
+      await manager.enableMeltQuoteWatcher();
+      await flushDeferredInitialChecks();
+
+      const subscriptionInternals = manager.subscriptions as unknown as {
+        subscriptions: Map<string, { kind: string; filters: string[] }>;
+      };
+      const subscriptions = Array.from(subscriptionInternals.subscriptions.values());
+
+      expect(subscriptions).toHaveLength(1);
+      expect(subscriptions.map((subscription) => subscription.kind)).toEqual([
+        'bolt11_melt_quote',
+      ]);
+      expect(subscriptions.map((subscription) => subscription.filters[0])).toEqual([
+        'melt-expired-operation-first',
+      ]);
+      expect(checkPendingOperation).toHaveBeenCalledWith(expiredOperation.id);
+
+      await manager.dispose();
+    });
+
     it('settles a pending melt operation from a canonical melt quote update', async () => {
       const manager = await initializeCoco({
         ...baseConfig,

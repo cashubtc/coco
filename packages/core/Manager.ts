@@ -505,7 +505,10 @@ export class Manager {
     watchExistingPendingQuotesOnStart?: boolean;
   }): Promise<void> {
     if (this.disposed) return;
-    if (this.meltQuoteWatcher?.isRunning()) return;
+    if (this.meltQuoteWatcher?.isRunning()) {
+      await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+      return;
+    }
     const watcherLogger = this.logger.child
       ? this.logger.child({ module: 'MeltQuoteWatcherService' })
       : this.logger;
@@ -520,10 +523,12 @@ export class Manager {
       },
     );
     await this.meltQuoteWatcher.start();
+    await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
   }
 
   async disableMeltQuoteWatcher(): Promise<void> {
     if (!this.meltQuoteWatcher) return;
+    await this.meltSettlementProcessor?.setInterestRegistrar(undefined);
     await this.meltQuoteWatcher.stop();
     this.meltQuoteWatcher = undefined;
   }
