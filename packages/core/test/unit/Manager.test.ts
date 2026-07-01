@@ -1067,6 +1067,106 @@ describe('initializeCoco', () => {
       expect(manager.history).toBeDefined();
       expect(manager.subscriptions).toBeDefined();
     });
+
+    it('exposes typed event subscription helpers and manager-owned event side effects', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+          meltQuoteWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+          meltSettlementProcessor: { disabled: true },
+        },
+      });
+
+      const observedCounters: number[] = [];
+      const onCounter = ({ counter }: CoreEvents['counter:updated']) => {
+        observedCounters.push(counter);
+      };
+      manager.on('counter:updated', onCounter);
+      await manager['eventBus'].emit('counter:updated', {
+        counter: 1,
+        keysetId: 'keyset-1',
+        mintUrl: 'https://mint.test',
+      });
+      manager.off('counter:updated', onCounter);
+      await manager['eventBus'].emit('counter:updated', {
+        counter: 2,
+        keysetId: 'keyset-1',
+        mintUrl: 'https://mint.test',
+      });
+
+      const onceCounters: number[] = [];
+      manager.once('counter:updated', ({ counter }) => {
+        onceCounters.push(counter);
+      });
+      await manager['eventBus'].emit('counter:updated', {
+        counter: 3,
+        keysetId: 'keyset-1',
+        mintUrl: 'https://mint.test',
+      });
+      await manager['eventBus'].emit('counter:updated', {
+        counter: 4,
+        keysetId: 'keyset-1',
+        mintUrl: 'https://mint.test',
+      });
+
+      const closeMint = mock(() => undefined);
+      manager.subscriptions.closeMint = closeMint;
+      const clearCache = mock(() => undefined);
+      manager['walletService'].clearCache = clearCache;
+
+      await manager['eventBus'].emit('mint:untrusted', { mintUrl: 'https://mint.test' });
+      await manager['eventBus'].emit('auth-session:updated', { mintUrl: 'https://mint.test' });
+      await manager['eventBus'].emit('auth-session:deleted', { mintUrl: 'https://mint.test' });
+
+      expect(observedCounters).toEqual([1]);
+      expect(onceCounters).toEqual([3]);
+      expect(closeMint).toHaveBeenCalledWith('https://mint.test');
+      expect(clearCache).toHaveBeenCalledTimes(2);
+      expect(clearCache).toHaveBeenCalledWith('https://mint.test');
+    });
+
+    it('requeues pending mint operations backed by paid canonical quotes', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+          meltQuoteWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+          meltSettlementProcessor: { disabled: true },
+        },
+      });
+      const operation = makePendingMintOperation('mint-op-paid', 'quote-paid');
+      await repositories.mintOperationRepository.create(operation);
+      await repositories.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Response(operation.mintUrl, {
+          quote: operation.quoteId,
+          request: operation.request,
+          amount: operation.amount,
+          unit: operation.unit,
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+        }),
+      );
+
+      manager['mintService'].isTrustedMint = mock(async () => true);
+      const requeuedOperationIds: string[] = [];
+      manager.on('mint-op:requeue', ({ operationId }) => {
+        requeuedOperationIds.push(operationId);
+      });
+
+      const result = await manager.requeuePaidMintQuotes();
+
+      expect(result.requeued).toEqual([operation.quoteId]);
+      expect(requeuedOperationIds).toEqual([operation.id]);
+    });
   });
 
   describe('pause and resume subscriptions', () => {
