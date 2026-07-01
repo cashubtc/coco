@@ -13,6 +13,8 @@ import {
   MintService,
   MintOperationWatcherService,
   MintOperationProcessor,
+  MeltQuoteWatcherService,
+  MeltSettlementProcessor,
   ProofService,
   WalletService,
   SeedService,
@@ -110,6 +112,11 @@ export interface CocoConfig {
       /** When enabled, scan existing inflight proofs on start (default: true) */
       watchExistingInflightOnStart?: boolean;
     };
+    /** Melt quote watcher (enabled by default) */
+    meltQuoteWatcher?: {
+      disabled?: boolean;
+      watchExistingPendingQuotesOnStart?: boolean;
+    };
   };
   /**
    * Processor configuration (all enabled by default)
@@ -126,6 +133,11 @@ export interface CocoConfig {
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
       autoClaimMintQuotes?: boolean;
+    };
+    /** Melt settlement processor (enabled by default) */
+    meltSettlementProcessor?: {
+      disabled?: boolean;
+      initializeExistingPendingOperationsOnStart?: boolean;
     };
   };
   /**
@@ -184,10 +196,20 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     await coco.enableProofStateWatcher(proofStateWatcherConfig);
   }
 
+  const meltQuoteWatcherConfig = config.watchers?.meltQuoteWatcher;
+  if (!meltQuoteWatcherConfig?.disabled) {
+    await coco.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
+  }
+
   // Enable processors (default: all enabled unless explicitly disabled)
   const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
   if (!mintOperationProcessorConfig?.disabled) {
     await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
+  }
+
+  const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
+  if (!meltSettlementProcessorConfig?.disabled) {
+    await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
   }
 
   // Recover any pending send operations from previous session
@@ -226,6 +248,8 @@ export class Manager {
   readonly subscriptions: SubscriptionManager;
   private mintOperationWatcher?: MintOperationWatcherService;
   private mintOperationProcessor?: MintOperationProcessor;
+  private meltQuoteWatcher?: MeltQuoteWatcherService;
+  private meltSettlementProcessor?: MeltSettlementProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
   private proofStateWatcher?: ProofStateWatcherService;
@@ -404,6 +428,8 @@ export class Manager {
 
     await this.disableMintOperationWatcher();
     await this.disableProofStateWatcher();
+    await this.disableMeltSettlementProcessor();
+    await this.disableMeltQuoteWatcher();
     await this.disableMintOperationProcessor();
     await this.pluginHost.dispose();
     this.subscriptions.closeAll();
@@ -473,6 +499,66 @@ export class Manager {
     if (!this.mintOperationProcessor) return;
     await this.mintOperationProcessor.stop();
     this.mintOperationProcessor = undefined;
+  }
+
+  async enableMeltQuoteWatcher(options?: {
+    watchExistingPendingQuotesOnStart?: boolean;
+  }): Promise<void> {
+    if (this.disposed) return;
+    if (this.meltQuoteWatcher?.isRunning()) {
+      await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+      return;
+    }
+    const watcherLogger = this.logger.child
+      ? this.logger.child({ module: 'MeltQuoteWatcherService' })
+      : this.logger;
+    this.meltQuoteWatcher = new MeltQuoteWatcherService(
+      this.subscriptions,
+      this.mintService,
+      this.quoteLifecycle,
+      this.eventBus,
+      watcherLogger,
+      {
+        watchExistingPendingQuotesOnStart: options?.watchExistingPendingQuotesOnStart ?? true,
+      },
+    );
+    await this.meltQuoteWatcher.start();
+    await this.meltSettlementProcessor?.setInterestRegistrar(this.meltQuoteWatcher);
+  }
+
+  async disableMeltQuoteWatcher(): Promise<void> {
+    if (!this.meltQuoteWatcher) return;
+    await this.meltSettlementProcessor?.setInterestRegistrar(undefined);
+    await this.meltQuoteWatcher.stop();
+    this.meltQuoteWatcher = undefined;
+  }
+
+  async enableMeltSettlementProcessor(options?: {
+    initializeExistingPendingOperationsOnStart?: boolean;
+  }): Promise<boolean> {
+    if (this.disposed) return false;
+    if (this.meltSettlementProcessor?.isRunning()) return false;
+    const processorLogger = this.logger.child
+      ? this.logger.child({ module: 'MeltSettlementProcessor' })
+      : this.logger;
+    this.meltSettlementProcessor = new MeltSettlementProcessor(
+      this.meltOperationService,
+      this.eventBus,
+      processorLogger,
+      {
+        initializeExistingPendingOperationsOnStart:
+          options?.initializeExistingPendingOperationsOnStart ?? true,
+        interestRegistrar: this.meltQuoteWatcher,
+      },
+    );
+    await this.meltSettlementProcessor.start();
+    return true;
+  }
+
+  async disableMeltSettlementProcessor(): Promise<void> {
+    if (!this.meltSettlementProcessor) return;
+    await this.meltSettlementProcessor.stop();
+    this.meltSettlementProcessor = undefined;
   }
 
   async waitForMintOperationProcessor(): Promise<void> {
@@ -599,6 +685,8 @@ export class Manager {
     // Disable watchers
     await this.disableMintOperationWatcher();
     await this.disableProofStateWatcher();
+    await this.disableMeltSettlementProcessor();
+    await this.disableMeltQuoteWatcher();
 
     // Disable processor
     await this.disableMintOperationProcessor();
@@ -630,10 +718,20 @@ export class Manager {
       await this.enableProofStateWatcher(proofStateWatcherConfig);
     }
 
+    const meltQuoteWatcherConfig = this.originalWatcherConfig?.meltQuoteWatcher;
+    if (!meltQuoteWatcherConfig?.disabled) {
+      await this.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
+    }
+
     // Re-enable processor based on original configuration (idempotent)
     const mintOperationProcessorConfig = this.originalProcessorConfig?.mintOperationProcessor;
     if (!mintOperationProcessorConfig?.disabled) {
       await this.enableMintOperationProcessor(mintOperationProcessorConfig);
+    }
+
+    const meltSettlementProcessorConfig = this.originalProcessorConfig?.meltSettlementProcessor;
+    if (!meltSettlementProcessorConfig?.disabled) {
+      await this.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
     }
 
     await this.recoverPendingMintOperations();
