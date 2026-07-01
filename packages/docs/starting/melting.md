@@ -35,10 +35,23 @@ if (result.state === 'pending') {
     quoteId: prepared.quoteId,
   });
   console.log('Updated state:', paidQuote.state);
+
+  // Only needed if the default melt watcher/settlement processor is disabled.
+  const finalized = await coco.ops.melt.refresh(prepared.id);
+  if (finalized.state === 'finalized') {
+    console.log('Change returned:', finalized.changeAmount);
+    console.log('Effective fee:', finalized.effectiveFee);
+  }
 }
 ```
 
 `coco.quotes.melt.create()` creates the melt quote without creating history. `coco.ops.melt.prepare()` reserves proofs and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
+
+`coco.quotes.melt.awaitPaid()` only waits for the canonical quote to reach
+`PAID`. With the default `initializeCoco()` wiring, `MeltQuoteWatcherService` and
+`MeltSettlementProcessor` settle pending operations in the background. Manual
+`coco.ops.melt.refresh(prepared.id)` is only needed if you disable those services
+or wire `Manager` manually without them.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
@@ -101,6 +114,13 @@ if (executed.state === 'pending') {
     quoteId: prepared.quoteId,
   });
   console.log('Updated state:', paidQuote.state);
+
+  // Only needed if the default melt watcher/settlement processor is disabled.
+  const finalized = await coco.ops.melt.refresh(prepared.id);
+  if (finalized.state === 'finalized') {
+    console.log('Change returned:', finalized.changeAmount);
+    console.log('Effective fee:', finalized.effectiveFee);
+  }
 }
 ```
 
