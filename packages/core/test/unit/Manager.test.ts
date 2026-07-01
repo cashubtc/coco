@@ -512,9 +512,7 @@ describe('initializeCoco', () => {
       const subscriptions = Array.from(subscriptionInternals.subscriptions.values());
 
       expect(subscriptions).toHaveLength(1);
-      expect(subscriptions.map((subscription) => subscription.kind)).toEqual([
-        'bolt11_melt_quote',
-      ]);
+      expect(subscriptions.map((subscription) => subscription.kind)).toEqual(['bolt11_melt_quote']);
       expect(subscriptions.map((subscription) => subscription.filters[0])).toEqual([
         'melt-expired-operation-first',
       ]);
