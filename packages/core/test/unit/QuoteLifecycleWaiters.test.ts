@@ -242,6 +242,25 @@ describe('QuoteLifecycle quote waiters', () => {
     ).rejects.toThrow(TerminalQuoteStateError);
   });
 
+  it('refreshes stale expired mint quotes before rejecting claimability', async () => {
+    await mintQuoteRepository.upsertMintQuote(
+      makeBolt11MintQuote('UNPAID', { expiry: Math.floor(Date.now() / 1000) - 1 }),
+    );
+    mintHandler.fetchRemoteQuote = mock(async ({ quote }: FetchRemoteMintQuoteContext<'bolt11'>) =>
+      makeBolt11MintQuote('PAID', {
+        quoteId: quote.quoteId,
+        expiry: Math.floor(Date.now() / 1000) - 1,
+      }),
+    ) as MintMethodHandler['fetchRemoteQuote'];
+
+    await expect(
+      quoteLifecycle.awaitMintQuoteClaimable({ mintUrl, quoteId }),
+    ).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    expect(mintHandler.fetchRemoteQuote).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves expired reusable claimability when paid value remains unissued', async () => {
     await mintQuoteRepository.upsertMintQuote(
       makeReusableMintQuote(Amount.from(9), Amount.from(4), {
@@ -540,6 +559,25 @@ describe('QuoteLifecycle quote waiters', () => {
     await expect(quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId })).rejects.toThrow(
       TerminalQuoteStateError,
     );
+  });
+
+  it('refreshes stale expired melt quotes before rejecting paid waits', async () => {
+    await meltQuoteRepository.upsertMeltQuote(
+      makeMeltQuote('UNPAID', { expiry: Math.floor(Date.now() / 1000) - 1 }),
+    );
+    meltHandler.fetchRemoteQuote = mock(async ({ quote }: FetchRemoteMeltQuoteContext<'bolt11'>) =>
+      makeMeltQuote('PAID', {
+        quoteId: quote.quoteId,
+        expiry: Math.floor(Date.now() / 1000) - 1,
+      }),
+    ) as MeltMethodHandler['fetchRemoteQuote'];
+
+    await expect(
+      quoteLifecycle.awaitMeltQuoteSettlement({ mintUrl, quoteId }),
+    ).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    expect(meltHandler.fetchRemoteQuote).toHaveBeenCalledTimes(1);
   });
 
   it('times out and aborts melt waits with typed errors and listener cleanup', async () => {

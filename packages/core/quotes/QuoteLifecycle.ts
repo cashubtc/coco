@@ -208,6 +208,14 @@ function isQuoteExpired(quote: { expiry: number | null }): boolean {
   return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
 }
 
+function isExpiredQuoteRejection<TQuote>(evaluation: QuoteWaitEvaluation<TQuote>): boolean {
+  return (
+    evaluation.status === 'reject' &&
+    evaluation.error instanceof TerminalQuoteStateError &&
+    evaluation.error.state === 'EXPIRED'
+  );
+}
+
 function abortSignalReason(signal: AbortSignal): unknown {
   return (signal as AbortSignal & { reason?: unknown }).reason;
 }
@@ -399,7 +407,9 @@ export class QuoteLifecycle {
 
     const initial = this.evaluateMintQuoteClaimable(quote);
     if (initial.status === 'resolve') return initial.quote;
-    if (initial.status === 'reject') throw initial.error;
+    if (initial.status === 'reject' && !isExpiredQuoteRejection(initial)) {
+      throw initial.error;
+    }
 
     return this.waitForMintQuote(identity, quote, options, (updatedQuote) =>
       this.evaluateMintQuoteClaimable(updatedQuote),
@@ -780,7 +790,9 @@ export class QuoteLifecycle {
 
     const initial = evaluatePaid(quote);
     if (initial.status === 'resolve') return initial.quote;
-    if (initial.status === 'reject') throw initial.error;
+    if (initial.status === 'reject' && !isExpiredQuoteRejection(initial)) {
+      throw initial.error;
+    }
 
     return this.waitForMeltQuote(identity, quote, options, evaluatePaid);
   }
