@@ -376,7 +376,7 @@ async function executeMintOperation(manager: Manager, operationId: string) {
   return manager.ops.mint.execute(operationId);
 }
 
-function isMintQuoteReady(quote: MintQuote | null | undefined): boolean {
+function isMintQuoteReady(quote: MintQuote | null | undefined): quote is MintQuote {
   if (quote?.method !== 'bolt11') {
     return false;
   }
