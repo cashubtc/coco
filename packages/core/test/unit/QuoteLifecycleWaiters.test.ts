@@ -5,6 +5,8 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
+import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
+import { NullLogger } from '../../logging/NullLogger.ts';
 import {
   QuoteNotFoundError,
   QuoteWaitAbortedError,
@@ -32,6 +34,7 @@ import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepo
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
+import { MeltQuoteWatcherService } from '../../services/watchers/MeltQuoteWatcherService.ts';
 
 const mintUrl = 'https://mint.test';
 const quoteId = 'quote-1';
@@ -444,6 +447,65 @@ describe('QuoteLifecycle quote waiters', () => {
     });
 
     await expect(wait).resolves.toMatchObject({ state: 'PAID' });
+  });
+
+  it('resolves melt waits from melt quote watcher subscription observations', async () => {
+    await meltQuoteRepository.upsertMeltQuote(makeMeltQuote('UNPAID'));
+    const callbacks: Array<(payload: unknown) => Promise<void>> = [];
+    const unsubscribe = mock(async () => {});
+    const subscribe = mock(
+      async (
+        _mintUrl: string,
+        _kind: string,
+        _filters: string[],
+        next: (payload: unknown) => Promise<void>,
+      ) => {
+        callbacks.push(next);
+        return { subId: 'sub-1', unsubscribe };
+      },
+    );
+    const watcher = new MeltQuoteWatcherService(
+      { subscribe } as unknown as SubscriptionManager,
+      { isTrustedMint: mock(async () => true) } as unknown as MintService,
+      quoteLifecycle,
+      eventBus,
+      new NullLogger(),
+    );
+
+    await watcher.start();
+    try {
+      expect(subscribe).toHaveBeenCalledWith(
+        mintUrl,
+        'bolt11_melt_quote',
+        [quoteId],
+        expect.any(Function),
+      );
+
+      const wait = quoteLifecycle.awaitMeltQuoteSettlement(
+        { mintUrl, quoteId },
+        { timeoutMs: 100 },
+      );
+      await nextTick();
+
+      await callbacks[0]?.({
+        quote: quoteId,
+        request: 'lnbc1melt',
+        amount: '10',
+        unit: 'sat',
+        fee_reserve: '1',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        payment_preimage: 'preimage',
+        change: [],
+      });
+
+      await expect(wait).resolves.toMatchObject({
+        state: 'PAID',
+        payment_preimage: 'preimage',
+      });
+    } finally {
+      await watcher.stop();
+    }
   });
 
   it('rejects melt waits when pending settlement returns to unpaid', async () => {
