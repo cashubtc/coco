@@ -16,6 +16,7 @@ import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import {
+  KeyPairNotFoundError,
   MintFetchError,
   MintOperationError,
   NetworkError,
@@ -73,6 +74,14 @@ describe('ReceiveOperationService', () => {
     ({
       checkProofStates: mock(() => Promise.resolve([])),
     }) as unknown as MintAdapter;
+
+  const initExpectingInit = async (token: Token | string): Promise<InitReceiveOperation> => {
+    const result = await service.init(token);
+    if (result.state !== 'init') {
+      throw new Error(`Expected init operation, got '${result.state}'`);
+    }
+    return result;
+  };
 
   const prepareExpectingPrepared = async (
     op: InitReceiveOperation,
@@ -168,7 +177,7 @@ describe('ReceiveOperationService', () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
 
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     expect(prepared.state).toBe('prepared');
@@ -179,7 +188,7 @@ describe('ReceiveOperationService', () => {
   it('emits receive-op:prepared after the prepared state is persisted', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
 
@@ -198,7 +207,7 @@ describe('ReceiveOperationService', () => {
   it('emits receive-op:finalized after the finalized state is persisted', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     const prepared = await prepareExpectingPrepared(initOp);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
@@ -218,7 +227,7 @@ describe('ReceiveOperationService', () => {
   it('emits receive-op:rolled-back after the rolled back state is persisted', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     const prepared = await prepareExpectingPrepared(initOp);
     let persistedState: string | undefined;
     let lockedDuringEvent = false;
@@ -238,7 +247,7 @@ describe('ReceiveOperationService', () => {
   it('rollback emits terminal receive history projection', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     const prepared = await prepareExpectingPrepared(initOp);
     const historyRepo = new MemoryHistoryRepository({
       receiveOperationRepository: receiveOpRepo,
@@ -320,7 +329,7 @@ describe('ReceiveOperationService', () => {
   it('prepare defers the operation when fees consume the full amount', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
 
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
       wallet: {
@@ -341,7 +350,7 @@ describe('ReceiveOperationService', () => {
   it('prepare defers as dust and emits receive-op:deferred when fees exceed the amount', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
     let deferredEvent: CoreEvents['receive-op:deferred'] | undefined;
     let persistedState: string | undefined;
 
@@ -369,22 +378,49 @@ describe('ReceiveOperationService', () => {
     expect(stored?.state).toBe('deferred');
   });
 
-  it('init rejects and persists nothing when a P2PK signing key is missing', async () => {
+  it('init defers with raw proofs when the P2PK signing key is missing', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    let deferredEvent: CoreEvents['receive-op:deferred'] | undefined;
+
+    eventBus.on('receive-op:deferred', (payload) => {
+      deferredEvent = payload;
+    });
+
+    (proofService.prepareProofsForReceiving as Mock<any>).mockImplementation(async () => {
+      throw new KeyPairNotFoundError('02abc');
+    });
+
+    const result = await service.init(token);
+
+    expect(result.state).toBe('deferred');
+    if (result.state === 'deferred') {
+      expect(result.deferredReason).toBe('p2pk-unsigned');
+    }
+    // Signing failed, so the operation must hold the raw (witness-less) proofs.
+    expect(result.inputProofs).toEqual(proofs);
+    expect(result.amount).toEqual(Amount.from(10));
+    expect(deferredEvent?.operationId).toBe(result.id);
+    expect((await receiveOpRepo.getById(result.id))?.state).toBe('deferred');
+  });
+
+  it('init still rejects other signing failures', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
 
     (proofService.prepareProofsForReceiving as Mock<any>).mockImplementation(async () => {
-      throw new Error('Key pair not found for public key: 02abc');
+      throw new ProofValidationError('Multisig is not supported');
     });
 
-    await expect(service.init(token)).rejects.toThrow('Key pair not found');
+    await expect(service.init(token)).rejects.toThrow('Multisig is not supported');
     expect(await receiveOpRepo.getByState('init')).toEqual([]);
+    expect(await receiveOpRepo.getByState('deferred')).toEqual([]);
   });
 
   it('prepare defers the operation when the mint is unreachable', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
 
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => {
       throw new MintFetchError('Failed to fetch mint info');
@@ -421,7 +457,7 @@ describe('ReceiveOperationService', () => {
   it('rollback deletes a deferred operation', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
 
     (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
       wallet: {
@@ -442,7 +478,7 @@ describe('ReceiveOperationService', () => {
   it('prepare throws when deterministic outputs are empty', async () => {
     const proofs = [makeProof('p1')];
     const token: Token = { mint: mintUrl, proofs } as Token;
-    const initOp = await service.init(token);
+    const initOp = await initExpectingInit(token);
 
     (proofService.createOutputsAndIncrementCounters as Mock<any>).mockImplementation(async () => ({
       keep: [],
@@ -454,7 +490,7 @@ describe('ReceiveOperationService', () => {
 
   it('execute throws when outputData is missing', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
     const brokenPrepared = {
       ...prepared,
@@ -467,7 +503,7 @@ describe('ReceiveOperationService', () => {
 
   it('rolls back executing receive operations on terminal NUT-03 mint errors', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
     let rolledBackEvent: CoreEvents['receive-op:rolled-back'] | undefined;
 
@@ -490,7 +526,7 @@ describe('ReceiveOperationService', () => {
 
   it('rolls back executing receive operations on terminal NUT-03 keyset errors', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     mockWalletReceive.mockImplementation(async () => {
@@ -506,7 +542,7 @@ describe('ReceiveOperationService', () => {
 
   it('rolls back executing receive operations on generic mint protocol errors', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     mockWalletReceive.mockImplementation(async () => {
@@ -527,7 +563,7 @@ describe('ReceiveOperationService', () => {
     });
     new HistoryService(historyRepo, eventBus);
 
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     expect(await historyRepo.getReceiveHistoryEntry(mintUrl, prepared.id)).toBeNull();
@@ -545,7 +581,7 @@ describe('ReceiveOperationService', () => {
 
   it('keeps executing when receive fails with recovery-sensitive outputs already signed', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     mockWalletReceive.mockImplementation(async () => {
@@ -564,7 +600,7 @@ describe('ReceiveOperationService', () => {
   ]) {
     it(`rolls back when receive fails with non-spendable NUT-03 state ${code}`, async () => {
       const proofs = [makeProof('p1')];
-      const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+      const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
       const prepared = await prepareExpectingPrepared(initOp);
 
       mockWalletReceive.mockImplementation(async () => {
@@ -581,7 +617,7 @@ describe('ReceiveOperationService', () => {
 
   it('keeps executing on local validation failures after the mint call', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     mockWalletReceive.mockImplementation(async () => {
@@ -598,7 +634,7 @@ describe('ReceiveOperationService', () => {
 
   it('keeps executing on transient receive failures', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     mockWalletReceive.mockImplementation(async () => {
@@ -613,7 +649,7 @@ describe('ReceiveOperationService', () => {
 
   it('finalize is idempotent on an already finalized operation', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
     const executing = {
       ...prepared,
@@ -644,7 +680,7 @@ describe('ReceiveOperationService', () => {
 
   it('uses batched proof lookup when checking whether outputs were already saved', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
     const executing = {
       ...prepared,
@@ -681,7 +717,7 @@ describe('ReceiveOperationService', () => {
 
   it('finalize throws when operation is not executing', async () => {
     const proofs = [makeProof('p1')];
-    const initOp = await service.init({ mint: mintUrl, proofs } as Token);
+    const initOp = await initExpectingInit({ mint: mintUrl, proofs } as Token);
     const prepared = await prepareExpectingPrepared(initOp);
 
     expect(service.finalize(prepared.id)).rejects.toThrow('Cannot finalize operation');

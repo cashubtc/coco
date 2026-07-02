@@ -17,6 +17,7 @@ import {
 } from '../../utils';
 import {
   UnknownMintError,
+  KeyPairNotFoundError,
   KeysetSyncError,
   MintFetchError,
   MintOperationError,
@@ -127,11 +128,15 @@ export class ReceiveOperationService {
   /**
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
+   *
+   * When the token is p2pk-locked to a key that is not in the key ring yet,
+   * the operation is persisted directly as deferred with the raw (unsigned)
+   * proofs; signing is re-attempted at redemption time.
    */
   async init(
     token: Token | string,
     source?: ReceiveOperationSource,
-  ): Promise<InitReceiveOperation> {
+  ): Promise<InitReceiveOperation | DeferredReceiveOperation> {
     const mintUrl = this.extractMintUrl(token);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -142,7 +147,22 @@ export class ReceiveOperationService {
     const unit = normalizeUnit(decodedToken.unit, { defaultUnit: DEFAULT_UNIT });
     const proofs = decodedToken.proofs;
 
-    const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
+    let preparedProofs: Proof[];
+    let missingSigningKey = false;
+    try {
+      preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
+    } catch (e) {
+      if (e instanceof KeyPairNotFoundError) {
+        this.logger?.info('P2PK signing key missing, deferring receive', {
+          mintUrl,
+          publicKey: e.publicKey,
+        });
+        missingSigningKey = true;
+        preparedProofs = proofs;
+      } else {
+        throw e;
+      }
+    }
     if (!Array.isArray(preparedProofs) || preparedProofs.length === 0) {
       this.logger?.warn('Token contains no proofs', { mintUrl });
       throw new ProofValidationError('Token contains no proofs');
@@ -164,6 +184,10 @@ export class ReceiveOperationService {
       amount,
       proofCount: preparedProofs.length,
     });
+
+    if (missingSigningKey) {
+      return await this.markAsDeferred(operation, 'p2pk-unsigned');
+    }
 
     return operation;
   }
@@ -358,6 +382,9 @@ export class ReceiveOperationService {
     token: Token | string,
   ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.init(token);
+    if (initOp.state === 'deferred') {
+      return initOp;
+    }
     const preparedOp = await this.prepare(initOp);
     if (preparedOp.state === 'deferred') {
       return preparedOp;
