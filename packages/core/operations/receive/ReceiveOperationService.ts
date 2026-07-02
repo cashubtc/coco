@@ -249,10 +249,7 @@ export class ReceiveOperationService {
     const { mintUrl } = operation;
     let wallet;
     try {
-      ({ wallet } = await this.walletService.getWalletWithActiveKeysetId(
-        mintUrl,
-        operation.unit,
-      ));
+      ({ wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, operation.unit));
     } catch (e) {
       if (this.isMintUnreachableError(e)) {
         return this.markAsDeferred(operation, 'mint-unreachable');
@@ -1059,7 +1056,9 @@ export class ReceiveOperationService {
    * Returns null (member stays deferred) when it is busy, changed state, or
    * its p2pk unlock key is still missing.
    */
-  private async collectBatchMember(candidate: DeferredReceiveOperation): Promise<BatchMember | null> {
+  private async collectBatchMember(
+    candidate: DeferredReceiveOperation,
+  ): Promise<BatchMember | null> {
     if (this.operationIdLock.isLocked(candidate.id)) {
       return null;
     }
@@ -1196,10 +1195,14 @@ export class ReceiveOperationService {
       const allKeepOutputs = executingMembers.flatMap(
         (executing) => deserializeOutputData(executing.outputData).keep,
       );
-      const newProofs = await wallet.receive({ mint: mintUrl, proofs: allInputs, unit }, undefined, {
-        type: 'custom',
-        data: allKeepOutputs,
-      });
+      const newProofs = await wallet.receive(
+        { mint: mintUrl, proofs: allInputs, unit },
+        undefined,
+        {
+          type: 'custom',
+          data: allKeepOutputs,
+        },
+      );
 
       const finalized = await this.finalizeBatchMembers(mintUrl, unit, executingMembers, newProofs);
       return incomingId ? (finalized.get(incomingId) ?? null) : null;
@@ -1443,10 +1446,14 @@ export class ReceiveOperationService {
     });
 
     try {
-      const newProofs = await wallet.receive({ mint: mintUrl, proofs: allInputs, unit }, undefined, {
-        type: 'custom',
-        data: allKeepOutputs,
-      });
+      const newProofs = await wallet.receive(
+        { mint: mintUrl, proofs: allInputs, unit },
+        undefined,
+        {
+          type: 'custom',
+          data: allKeepOutputs,
+        },
+      );
       await this.finalizeBatchMembers(mintUrl, unit, members, newProofs);
     } catch (e) {
       const rollbackReason = this.getRollbackReasonForReceiveFailure(e);

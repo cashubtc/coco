@@ -196,7 +196,10 @@ export function useReceiveOperation(
           return;
         }
 
-        if (operationBeforeCancel?.state === 'init' || operationBeforeCancel?.state === 'deferred') {
+        if (
+          operationBeforeCancel?.state === 'init' ||
+          operationBeforeCancel?.state === 'deferred'
+        ) {
           bindOperation(null, { clearExecuteResult: true });
           return;
         }

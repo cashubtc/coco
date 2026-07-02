@@ -90,8 +90,6 @@ describe('apportionReceiveFee', () => {
     expect(shares.get('a')?.keepAmount).toEqual(Amount.from(5));
 
     expect(apportionReceiveFee([], Amount.zero()).size).toBe(0);
-    expect(() => apportionReceiveFee([], Amount.from(1))).toThrow(
-      'across zero operations',
-    );
+    expect(() => apportionReceiveFee([], Amount.from(1))).toThrow('across zero operations');
   });
 });

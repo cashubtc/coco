@@ -180,7 +180,9 @@ export class MintService {
    * Get a known mint and its cached keysets without any mint interaction.
    * Returns null when the mint is not known locally.
    */
-  async getKnownMintWithKeysets(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] } | null> {
+  async getKnownMintWithKeysets(
+    mintUrl: string,
+  ): Promise<{ mint: Mint; keysets: Keyset[] } | null> {
     mintUrl = normalizeMintUrl(mintUrl);
     const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
     if (!mint) {

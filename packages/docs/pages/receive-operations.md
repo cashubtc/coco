@@ -27,14 +27,14 @@ The canonical API is exposed through `coco.ops.receive`:
 
 Receive operations progress through the following states:
 
-| State         | Description                                                   |
-| ------------- | ------------------------------------------------------------- |
-| `init`        | Token decoded and validated, but outputs are not prepared yet |
-| `prepared`    | Fees calculated, output data persisted, ready to execute      |
-| `executing`   | Receive request is in progress at the mint                    |
+| State         | Description                                                                             |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `init`        | Token decoded and validated, but outputs are not prepared yet                           |
+| `prepared`    | Fees calculated, output data persisted, ready to execute                                |
+| `executing`   | Receive request is in progress at the mint                                              |
 | `deferred`    | Redemption postponed until it can be settled fee-efficiently or its prerequisites exist |
-| `finalized`   | New proofs were saved locally                                 |
-| `rolled_back` | Operation was cancelled or could not be recovered             |
+| `finalized`   | New proofs were saved locally                                                           |
+| `rolled_back` | Operation was cancelled or could not be recovered                                       |
 
 ```
 init -> prepared -> executing -> finalized
