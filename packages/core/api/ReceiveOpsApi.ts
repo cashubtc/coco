@@ -90,7 +90,22 @@ export class ReceiveOpsApi {
     return this.receiveOperationService.getPreparedOperations();
   }
 
-  /** Lists receive operations that are currently in flight. */
+  /** Lists receive operations queued for later redemption. */
+  async listDeferred(): Promise<DeferredReceiveOperation[]> {
+    return this.receiveOperationService.getDeferredOperations();
+  }
+
+  /**
+   * Attempts to redeem deferred receive operations now, batched per mint and
+   * unit. Groups that are still below the swap fee, and members whose p2pk
+   * key is missing, stay deferred. Useful when connectivity returns; the
+   * recovery sweep also runs this automatically.
+   */
+  async redeemDeferred(filter?: { mintUrl?: string; unit?: string }): Promise<void> {
+    return this.receiveOperationService.redeemDeferred(filter);
+  }
+
+  /** Lists receive operations that are currently in flight (executing or deferred). */
   async listInFlight(): Promise<ReceiveOperation[]> {
     return this.receiveOperationService.getPendingOperations();
   }
@@ -114,13 +129,17 @@ export class ReceiveOpsApi {
   /**
    * Cancels a receive operation that has not completed yet.
    *
-   * Only `init` and `prepared` receive operations can be cancelled.
+   * Only `init`, `prepared`, and `deferred` receive operations can be cancelled.
    */
   async cancel(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'init' && operation.state !== 'prepared') {
+    if (
+      operation.state !== 'init' &&
+      operation.state !== 'prepared' &&
+      operation.state !== 'deferred'
+    ) {
       throw new Error(
-        `Cannot cancel operation in state '${operation.state}'. Expected 'init' or 'prepared'.`,
+        `Cannot cancel operation in state '${operation.state}'. Expected 'init', 'prepared', or 'deferred'.`,
       );
     }
 
