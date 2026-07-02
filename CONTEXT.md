@@ -34,17 +34,9 @@ A payment method that coco models with method-specific behavior and validation. 
 methods are `bolt11`, `bolt12`, and `onchain`.
 _Avoid_: Default method, native method
 
-**Generic Payment Method**:
-A base quote struct compatible payment method that a mint advertises but coco does not model as a
-Built-in Payment Method. Generic Payment Methods preserve the mint's method string; their mint
-quotes are reusable, locked to a wallet-controlled quote key, and claimable according to the paid
-amount that has not yet been issued.
-_Avoid_: Runtime payment method, custom payment method
-
 **Payment Method Handler**:
-A method-specific or generic implementation of coco's quote-backed payment lifecycle. Built-in
-payment methods use dedicated handlers; Generic Payment Methods use generic mint and melt handlers
-while preserving the advertised method string.
+A method-specific implementation of coco's quote-backed payment lifecycle. Built-in payment
+methods use dedicated handlers.
 _Avoid_: Payment plugin, method switch
 
 **Quote-backed Operation**:
