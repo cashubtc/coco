@@ -14,6 +14,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   computeYHexForSecrets,
+  type SerializedOutputData,
 } from '../../utils';
 import {
   UnknownMintError,
@@ -46,9 +47,20 @@ import type { ProofService } from '../../services/ProofService';
 import type { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { createReceiveOperation, getOutputProofSecrets } from './ReceiveOperation';
+import { apportionReceiveFee } from './apportionFee';
 import type { ReceiveOperationRepository, ProofRepository } from '../../repositories';
 import { OperationIdLock } from '../OperationIdLock';
+import { MintScopedLock } from '../MintScopedLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+
+/** A deferred (or incoming init) operation participating in a batch redemption. */
+interface BatchMember {
+  operation: InitReceiveOperation | DeferredReceiveOperation;
+  signedProofs: Proof[];
+  /** Reason the member returns to the queue when the batch fails non-fatally. */
+  requeueReason: DeferredReceiveReason;
+  releaseLock: () => void;
+}
 
 const NON_TERMINAL_RECEIVE_MINT_ERROR_CODES = new Set([
   // 11003 is special for receive recovery: the mint may already have accepted and
@@ -81,6 +93,8 @@ export class ReceiveOperationService {
 
   /** In-memory lock to prevent concurrent operations on the same operation ID */
   private readonly operationIdLock = new OperationIdLock();
+  /** Serializes batch redemption per mint */
+  private readonly mintScopedLock = new MintScopedLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
 
@@ -774,16 +788,25 @@ export class ReceiveOperationService {
 
   /**
    * Persist deferred state and emit the operation deferred event.
+   * Accepts executing operations so failed batch members can return to the queue;
+   * prepared data and batch linkage are intentionally dropped in that case.
    */
   private async markAsDeferred(
-    op: InitReceiveOperation,
+    op: InitReceiveOperation | DeferredReceiveOperation | ExecutingReceiveOperation,
     deferredReason: DeferredReceiveReason,
   ): Promise<DeferredReceiveOperation> {
     const deferred: DeferredReceiveOperation = {
-      ...op,
+      id: op.id,
       state: 'deferred',
       deferredReason,
+      mintUrl: op.mintUrl,
+      unit: op.unit,
+      amount: op.amount,
+      inputProofs: op.inputProofs,
+      createdAt: op.createdAt,
       updatedAt: Date.now(),
+      error: op.error,
+      source: op.source,
     };
     await this.receiveOperationRepository.update(deferred);
     await this.eventBus.emit('receive-op:deferred', {
@@ -882,6 +905,333 @@ export class ReceiveOperationService {
   async getDeferredOperations(): Promise<DeferredReceiveOperation[]> {
     const ops = await this.receiveOperationRepository.getByState('deferred');
     return ops.filter((op): op is DeferredReceiveOperation => op.state === 'deferred');
+  }
+
+  /**
+   * Attempt to redeem deferred operations, batched per mint and unit.
+   *
+   * Each viable group (combined amount above the combined fee) is settled with
+   * ONE swap whose single fee is apportioned across the members; every member
+   * still finalizes as its own operation with its own event and history entry.
+   * Groups that stay below the fee, and members whose p2pk key is still
+   * missing, remain deferred. Failures are logged per group and never abort
+   * the sweep.
+   */
+  async redeemDeferred(filter?: { mintUrl?: string; unit?: string }): Promise<void> {
+    const deferredOps = await this.getDeferredOperations();
+    const groups = new Map<string, { mintUrl: string; unit: string }>();
+    for (const op of deferredOps) {
+      if (filter?.mintUrl && normalizeMintUrl(filter.mintUrl) !== op.mintUrl) continue;
+      if (filter?.unit && normalizeUnit(filter.unit) !== op.unit) continue;
+      groups.set(`${op.mintUrl}::${op.unit}`, { mintUrl: op.mintUrl, unit: op.unit });
+    }
+
+    for (const { mintUrl, unit } of groups.values()) {
+      try {
+        await this.redeemDeferredGroup(mintUrl, unit);
+      } catch (e) {
+        this.logger?.warn('Deferred receive redemption failed for group, will retry later', {
+          mintUrl,
+          unit,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+
+  /**
+   * Redeem the deferred operations of one (mintUrl, unit) group in a single
+   * batched swap, optionally including an incoming init operation so a fresh
+   * receive can drain the queue it batches with.
+   *
+   * Returns the incoming operation's outcome when one was provided (finalized,
+   * or deferred when the group is still below the fee), or null when the
+   * incoming operation could not be processed (caller falls back to the solo
+   * path). Without an incoming operation the return value is null.
+   */
+  async redeemDeferredGroup(
+    mintUrl: string,
+    unit: string,
+    incoming?: InitReceiveOperation,
+  ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation | null> {
+    const releaseMintLock = await this.mintScopedLock.acquire(mintUrl);
+    const members: BatchMember[] = [];
+    try {
+      const candidates = (await this.receiveOperationRepository.getByMintUrl(mintUrl))
+        .filter((op): op is DeferredReceiveOperation => op.state === 'deferred')
+        .filter((op) => op.unit === unit)
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+      for (const candidate of candidates) {
+        const member = await this.collectBatchMember(candidate);
+        if (member) {
+          members.push(member);
+        }
+      }
+
+      if (incoming) {
+        const releaseLock = await this.acquireOperationLock(incoming.id);
+        members.push({
+          operation: incoming,
+          signedProofs: incoming.inputProofs,
+          requeueReason: 'dust',
+          releaseLock,
+        });
+      }
+
+      if (members.length === 0) {
+        return null;
+      }
+
+      return await this.executeBatch(mintUrl, unit, members, incoming?.id);
+    } finally {
+      for (const member of members) {
+        member.releaseLock();
+      }
+      releaseMintLock();
+    }
+  }
+
+  /**
+   * Lock and validate one deferred operation for batch membership.
+   * Returns null (member stays deferred) when it is busy, changed state, or
+   * its p2pk unlock key is still missing.
+   */
+  private async collectBatchMember(candidate: DeferredReceiveOperation): Promise<BatchMember | null> {
+    if (this.operationIdLock.isLocked(candidate.id)) {
+      return null;
+    }
+    const releaseLock = await this.acquireOperationLock(candidate.id);
+
+    const current = await this.receiveOperationRepository.getById(candidate.id);
+    if (!current || current.state !== 'deferred') {
+      releaseLock();
+      return null;
+    }
+
+    if (current.deferredReason !== 'p2pk-unsigned') {
+      return {
+        operation: current,
+        signedProofs: current.inputProofs,
+        requeueReason: current.deferredReason,
+        releaseLock,
+      };
+    }
+
+    try {
+      const signedProofs = await this.proofService.prepareProofsForReceiving(current.inputProofs);
+      return { operation: current, signedProofs, requeueReason: 'p2pk-unsigned', releaseLock };
+    } catch (e) {
+      releaseLock();
+      if (e instanceof KeyPairNotFoundError) {
+        this.logger?.debug('P2PK key still missing for deferred receive', {
+          operationId: current.id,
+          publicKey: e.publicKey,
+        });
+      } else {
+        this.logger?.warn('Could not sign deferred p2pk receive, leaving deferred', {
+          operationId: current.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Execute one batched swap for the locked members: apportion the single fee,
+   * create per-member outputs, swap once, then finalize each member.
+   */
+  private async executeBatch(
+    mintUrl: string,
+    unit: string,
+    members: BatchMember[],
+    incomingId?: string,
+  ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation | null> {
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+
+    const allInputs = members.flatMap((member) => member.signedProofs);
+    const totalAmount = Amount.sum(members.map((member) => member.operation.amount));
+    const fee = wallet.getFeesForProofs(allInputs);
+
+    if (totalAmount.lessThanOrEqual(fee)) {
+      this.logger?.debug('Deferred receive group below combined fee, leaving queued', {
+        mintUrl,
+        unit,
+        totalAmount,
+        fee,
+        memberCount: members.length,
+      });
+      const incoming = members.find((member) => member.operation.id === incomingId);
+      if (incoming && incoming.operation.state === 'init') {
+        return await this.markAsDeferred(incoming.operation, 'dust');
+      }
+      return null;
+    }
+
+    const shares = apportionReceiveFee(
+      members.map((member) => ({ id: member.operation.id, amount: member.operation.amount })),
+      fee,
+    );
+
+    const batchId = generateSubId();
+    const executingMembers: ExecutingReceiveOperation[] = [];
+    for (const member of members) {
+      const share = shares.get(member.operation.id);
+      if (!share) {
+        throw new Error(`Missing fee share for batch member ${member.operation.id}`);
+      }
+
+      let outputData: SerializedOutputData;
+      if (share.keepAmount.isZero()) {
+        outputData = serializeOutputData({ keep: [], send: [] });
+      } else {
+        const outputResult = await this.proofService.createOutputsAndIncrementCounters(
+          mintUrl,
+          {
+            keep: { amount: share.keepAmount, unit },
+            send: { amount: Amount.zero(), unit },
+          },
+          {},
+        );
+        if (!outputResult.keep || outputResult.keep.length === 0) {
+          throw new Error('Failed to create deterministic outputs for receive');
+        }
+        outputData = serializeOutputData({ keep: outputResult.keep, send: [] });
+      }
+
+      executingMembers.push({
+        id: member.operation.id,
+        state: 'executing',
+        mintUrl,
+        unit,
+        amount: member.operation.amount,
+        inputProofs: member.signedProofs,
+        createdAt: member.operation.createdAt,
+        updatedAt: Date.now(),
+        error: member.operation.error,
+        source: member.operation.source,
+        fee: share.feeShare,
+        outputData,
+        batchId,
+      });
+    }
+
+    for (const executing of executingMembers) {
+      await this.receiveOperationRepository.update(executing);
+    }
+
+    this.logger?.info('Redeeming deferred receives in one batch', {
+      mintUrl,
+      unit,
+      batchId,
+      memberCount: executingMembers.length,
+      totalAmount,
+      fee,
+    });
+
+    try {
+      const allKeepOutputs = executingMembers.flatMap(
+        (executing) => deserializeOutputData(executing.outputData).keep,
+      );
+      const newProofs = await wallet.receive({ mint: mintUrl, proofs: allInputs, unit }, undefined, {
+        type: 'custom',
+        data: allKeepOutputs,
+      });
+
+      let incomingResult: FinalizedReceiveOperation | null = null;
+      for (const executing of executingMembers) {
+        const memberSecrets = new Set(getOutputProofSecrets(executing));
+        const memberProofs = newProofs.filter((proof) => memberSecrets.has(proof.secret));
+        if (memberProofs.length > 0) {
+          await this.proofService.saveProofs(
+            mintUrl,
+            mapProofToCoreProof(mintUrl, 'ready', memberProofs, {
+              unit,
+              createdByOperationId: executing.id,
+            }),
+          );
+        }
+        const finalized = await this.markAsFinalized(executing);
+        if (executing.id === incomingId) {
+          incomingResult = finalized;
+        }
+      }
+      return incomingResult;
+    } catch (e) {
+      await this.handleBatchFailure(mintUrl, members, executingMembers, e);
+      throw e;
+    }
+  }
+
+  /**
+   * Settle a failed batch swap: on terminal mint errors each member is checked
+   * against the mint (spent inputs settle or roll back individually, unspent
+   * members return to the deferred queue so one poisoned member cannot wedge
+   * it); transient failures keep members executing for crash recovery.
+   */
+  private async handleBatchFailure(
+    mintUrl: string,
+    members: BatchMember[],
+    executingMembers: ExecutingReceiveOperation[],
+    error: unknown,
+  ): Promise<void> {
+    const rollbackReason = this.getRollbackReasonForReceiveFailure(error);
+    if (!rollbackReason) {
+      this.logger?.warn('Batched receive swap failed transiently, members left executing', {
+        mintUrl,
+        batchId: executingMembers[0]?.batchId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const requeueReasons = new Map(
+      members.map((member) => [member.operation.id, member.requeueReason]),
+    );
+    for (const executing of executingMembers) {
+      try {
+        const inputStates = await this.checkProofStatesWithMint(mintUrl, executing.inputProofs);
+        const allSpent =
+          inputStates.length > 0 && inputStates.every((state) => state.state === 'SPENT');
+        if (allSpent) {
+          await this.settleSpentBatchMember(executing, rollbackReason);
+        } else {
+          await this.markAsDeferred(executing, requeueReasons.get(executing.id) ?? 'dust');
+        }
+      } catch (memberError) {
+        this.logger?.warn('Could not settle batch member after failed swap, left executing', {
+          operationId: executing.id,
+          error: memberError instanceof Error ? memberError.message : String(memberError),
+        });
+      }
+    }
+  }
+
+  /**
+   * Settle a batch member whose inputs are spent at the mint: recover its own
+   * outputs when possible, otherwise roll it back.
+   */
+  private async settleSpentBatchMember(
+    executing: ExecutingReceiveOperation,
+    rollbackReason: string,
+  ): Promise<void> {
+    const outputSecrets = getOutputProofSecrets(executing);
+    if (outputSecrets.length === 0) {
+      // Zero-keep member: its whole value was its fee share, nothing to recover.
+      await this.markAsFinalized(executing);
+      return;
+    }
+
+    await this.proofService.recoverProofsFromOutputData(executing.mintUrl, executing.outputData, {
+      unit: executing.unit,
+      createdByOperationId: executing.id,
+    });
+    if (await this.hasSavedOutputs(executing)) {
+      await this.markAsFinalized(executing);
+      return;
+    }
+    await this.markAsRolledBack(executing, rollbackReason);
   }
 
   /**
