@@ -1446,6 +1446,49 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
   },
+  {
+    // SQLite cannot alter a CHECK constraint, so widening the receive state
+    // union to include 'deferred' requires a table rebuild (same pattern as 024).
+    id: '037_receive_operations_deferred',
+    sql: `
+      ALTER TABLE coco_cashu_receive_operations RENAME TO coco_cashu_receive_operations_legacy_states;
+
+      CREATE TABLE coco_cashu_receive_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('init', 'prepared', 'executing', 'deferred', 'finalized', 'rolled_back')),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        fee TEXT,
+        inputProofsJson TEXT NOT NULL,
+        outputDataJson TEXT,
+        unit TEXT NOT NULL DEFAULT 'sat',
+        sourceJson TEXT,
+        deferredReason TEXT,
+        batchId TEXT
+      );
+
+      INSERT INTO coco_cashu_receive_operations (
+        id, mintUrl, amount, state, createdAt, updatedAt, error, fee,
+        inputProofsJson, outputDataJson, unit, sourceJson
+      )
+      SELECT
+        id, mintUrl, amount, state, createdAt, updatedAt, error, fee,
+        inputProofsJson, outputDataJson, unit, sourceJson
+      FROM coco_cashu_receive_operations_legacy_states;
+
+      DROP TABLE coco_cashu_receive_operations_legacy_states;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_state
+        ON coco_cashu_receive_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_mint
+        ON coco_cashu_receive_operations(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_receive_operations_createdAt
+        ON coco_cashu_receive_operations(createdAt DESC, id DESC);
+    `,
+  },
 ];
 
 // Export for testing
