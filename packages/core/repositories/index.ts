@@ -310,7 +310,7 @@ export interface ReceiveOperationRepository {
   /** Get all receive operations in a specific state */
   getByState(state: ReceiveOperationState): Promise<ReceiveOperation[]>;
 
-  /** Get all pending operations (state in ['executing']) */
+  /** Get all pending operations (state in ['executing', 'deferred']) */
   getPending(): Promise<ReceiveOperation[]>;
 
   /** Get all operations for a specific mint */
