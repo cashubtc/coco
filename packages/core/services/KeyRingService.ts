@@ -2,6 +2,7 @@ import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
 import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
+import { KeyPairNotFoundError } from '@core/models/Error';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -122,9 +123,8 @@ export class KeyRingService {
     }
     const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
     if (!keyPair) {
-      const publicKeyPreview = publicKey.substring(0, 8);
       this.logger?.error('Key pair not found', { publicKey });
-      throw new Error(`Key pair not found for public key: ${publicKeyPreview}...`);
+      throw new KeyPairNotFoundError(publicKey);
     }
     const message = new TextEncoder().encode(proof.secret);
     const signature = schnorr.sign(sha256(message), keyPair.secretKey);

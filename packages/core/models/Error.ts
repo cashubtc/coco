@@ -28,6 +28,18 @@ export class KeysetSyncError extends Error {
   }
 }
 
+/**
+ * This error is thrown when a signing key pair is not present in the key ring.
+ */
+export class KeyPairNotFoundError extends Error {
+  readonly publicKey: string;
+  constructor(publicKey: string, message?: string) {
+    super(message ?? `Key pair not found for public key: ${publicKey.substring(0, 8)}...`);
+    this.name = 'KeyPairNotFoundError';
+    this.publicKey = publicKey;
+  }
+}
+
 export class ProofValidationError extends Error {
   constructor(message: string) {
     super(message);
