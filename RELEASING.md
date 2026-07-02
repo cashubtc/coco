@@ -190,8 +190,11 @@ git push origin vX.Y.Z-rc.N
 Publishing the GitHub prerelease runs `.github/workflows/publish.yml`. The
 workflow checks that the tag, GitHub Release prerelease flag, committed package
 versions, internal published package dependencies, and changelogs agree before
-publishing with `bunx changeset publish`. Changesets reads the `rc` npm dist-tag
-from the committed `.changeset/pre.json` prerelease state.
+publishing. The release commit keeps `.changeset/pre.json`, but the workflow
+removes that file only in the CI checkout before running
+`bunx changeset publish --tag rc`; Changesets does not allow `--tag` while pre
+mode is present, and relying on implicit pre-mode tagging can send packages that
+only have prerelease versions to npm's `latest` dist-tag.
 
 10. Verify npm after the workflow succeeds:
 

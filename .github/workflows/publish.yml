@@ -43,5 +43,14 @@ jobs:
       - name: Build packages
         run: bun run build
 
-      - name: Publish to npm
+      - name: Prepare prerelease publish
+        if: ${{ github.event.release.prerelease }}
+        run: rm .changeset/pre.json
+
+      - name: Publish prerelease to npm
+        if: ${{ github.event.release.prerelease }}
+        run: bunx changeset publish --tag rc
+
+      - name: Publish stable to npm
+        if: ${{ github.event.release.prerelease == false }}
         run: bunx changeset publish
