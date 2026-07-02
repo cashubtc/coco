@@ -64,6 +64,8 @@ export type {
   PaymentRequestReceiveOperation,
   PaymentRequestReceiveState,
   PaymentRequestReceiveTransport,
+  DeferredReceiveOperation,
+  DeferredReceiveReason,
   ReceiveOperation,
   ReceiveOperationState,
   SendMethod,

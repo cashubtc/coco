@@ -3,15 +3,35 @@
  *
  * init ──► prepared ──► executing ──► finalized
  *   │         │            │
+ *   │         │            ├──► deferred (batch member returned to queue)
+ *   │         │            │
  *   └─────────┴────────────┴──► rolled_back
+ *   │
+ *   └──► deferred ──► executing (batch redemption)
  *
  * - init: Operation created, token decoded/validated
  * - prepared: Fees calculated, outputs created, ready to execute
  * - executing: Receive in progress (mint interaction)
+ * - deferred: Redemption postponed (dust, missing p2pk key, or unreachable mint)
+ *   until it can be settled fee-efficiently or its prerequisites exist
  * - finalized: Proofs saved, operation complete
  * - rolled_back: Operation failed or aborted before completion
  */
-export type ReceiveOperationState = 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+export type ReceiveOperationState =
+  | 'init'
+  | 'prepared'
+  | 'executing'
+  | 'deferred'
+  | 'finalized'
+  | 'rolled_back';
+
+/**
+ * Why a receive operation was deferred:
+ * - dust: input value does not cover the swap fee on its own
+ * - p2pk-unsigned: the p2pk unlock key is not in the key ring; inputProofs are stored unsigned
+ * - mint-unreachable: mint or keyset data could not be fetched (e.g. offline)
+ */
+export type DeferredReceiveReason = 'dust' | 'p2pk-unsigned' | 'mint-unreachable';
 
 import type { Amount, Proof } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
@@ -64,6 +84,13 @@ interface ReceiveOperationBase {
 
   /** Optional origin metadata for receives created by higher-level sagas. */
   source?: ReceiveOperationSource;
+
+  /**
+   * Groups operations redeemed together in a single batched swap.
+   * Only set once a deferred operation enters batch redemption; batch members
+   * must never be re-executed solo because their fee was apportioned batch-wide.
+   */
+  batchId?: string;
 }
 
 /**
@@ -103,6 +130,18 @@ export interface ExecutingReceiveOperation extends ReceiveOperationBase, Prepare
 }
 
 /**
+ * Deferred state - redemption postponed until it can be settled fee-efficiently
+ * or its prerequisites exist. Carries no PreparedData; fees and outputs are
+ * recomputed at redemption time.
+ */
+export interface DeferredReceiveOperation extends ReceiveOperationBase {
+  state: 'deferred';
+
+  /** Why redemption was postponed */
+  deferredReason: DeferredReceiveReason;
+}
+
+/**
  * Finalized state - proofs saved, operation complete
  */
 export interface FinalizedReceiveOperation extends ReceiveOperationBase, PreparedData {
@@ -127,6 +166,7 @@ export type ReceiveOperation =
   | InitReceiveOperation
   | PreparedReceiveOperation
   | ExecutingReceiveOperation
+  | DeferredReceiveOperation
   | FinalizedReceiveOperation
   | RolledBackReceiveOperation;
 
@@ -164,6 +204,10 @@ export function isExecutingOperation(op: ReceiveOperation): op is ExecutingRecei
   return op.state === 'executing';
 }
 
+export function isDeferredOperation(op: ReceiveOperation): op is DeferredReceiveOperation {
+  return op.state === 'deferred';
+}
+
 export function isFinalizedOperation(op: ReceiveOperation): op is FinalizedReceiveOperation {
   return op.state === 'finalized';
 }
@@ -173,7 +217,7 @@ export function isRolledBackOperation(op: ReceiveOperation): op is RolledBackRec
 }
 
 export function hasPreparedData(op: ReceiveOperation): op is PreparedOrLaterOperation {
-  return op.state !== 'init';
+  return op.state !== 'init' && op.state !== 'deferred';
 }
 
 export function isTerminalOperation(op: ReceiveOperation): op is TerminalReceiveOperation {
