@@ -176,12 +176,14 @@ export class PollingTransport implements RealTimeTransport {
           scheduler.hasProofBatchTask = true;
         }
       } else {
-        const filter = params.filters[0];
-        if (!filter) {
+        const filters = params.filters ?? [];
+        if (filters.length === 0) {
           this.logger?.error('PollingTransport: subscribe with no filter', { mintUrl, req });
           return;
         }
-        scheduler.queue.push({ subId, kind: params.kind, filter });
+        for (const filter of filters) {
+          scheduler.queue.push({ subId, kind: params.kind, filter });
+        }
       }
 
       // Acknowledge subscribe immediately
