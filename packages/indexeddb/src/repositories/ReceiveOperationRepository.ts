@@ -34,10 +34,15 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
     source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
+    batchId: row.batchId ?? undefined,
   };
 
   if (row.state === 'init') {
     return { ...base, state: 'init' };
+  }
+
+  if (row.state === 'deferred') {
+    return { ...base, state: 'deferred', deferredReason: row.deferredReason ?? 'dust' };
   }
 
   const preparedData = {
@@ -63,7 +68,7 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
   const createdAtSeconds = Math.floor(op.createdAt / 1000);
   const updatedAtSeconds = Math.floor(op.updatedAt / 1000);
 
-  if (op.state === 'init') {
+  if (op.state === 'init' || op.state === 'deferred') {
     return {
       id: op.id,
       mintUrl: op.mintUrl,
@@ -77,6 +82,8 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
       inputProofsJson: JSON.stringify(op.inputProofs),
       outputDataJson: null,
       sourceJson: op.source ? JSON.stringify(op.source) : null,
+      deferredReason: op.state === 'deferred' ? op.deferredReason : null,
+      batchId: op.batchId ?? null,
     };
   }
 
@@ -93,6 +100,8 @@ function operationToRow(op: ReceiveOperation): ReceiveOperationRow {
     inputProofsJson: JSON.stringify(op.inputProofs),
     outputDataJson: op.outputData ? JSON.stringify(op.outputData) : null,
     sourceJson: op.source ? JSON.stringify(op.source) : null,
+    deferredReason: null,
+    batchId: op.batchId ?? null,
   };
 }
 
@@ -147,7 +156,7 @@ export class IdbReceiveOperationRepository implements ReceiveOperationRepository
     const rows = (await (this.db as any)
       .table('coco_cashu_receive_operations')
       .where('state')
-      .anyOf(['executing'])
+      .anyOf(['executing', 'deferred'])
       .toArray()) as ReceiveOperationRow[];
     return rows.map(rowToOperation);
   }

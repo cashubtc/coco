@@ -217,7 +217,7 @@ export interface ReceiveOperationRow {
   mintUrl: string;
   unit?: string | null;
   amount: string | number;
-  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  state: 'init' | 'prepared' | 'executing' | 'deferred' | 'finalized' | 'rolled_back';
   createdAt: number;
   updatedAt: number;
   error?: string | null;
@@ -225,6 +225,8 @@ export interface ReceiveOperationRow {
   inputProofsJson?: string | null;
   outputDataJson?: string | null;
   sourceJson?: string | null;
+  deferredReason?: 'dust' | 'p2pk-unsigned' | 'mint-unreachable' | null;
+  batchId?: string | null;
 }
 
 export interface PaymentRequestReceiveOperationRow {
