@@ -44,6 +44,7 @@ type PendingSendOperationRecord = SendExecuteResult['operation'];
 
 type ReceiveOps = Manager['ops']['receive'];
 type ReceivePrepareResult = Awaited<ReturnType<ReceiveOps['prepare']>>;
+type PreparedReceiveRecord = Extract<ReceivePrepareResult, { state: 'prepared' }>;
 type ReceiveExecuteResult = Awaited<ReturnType<ReceiveOps['execute']>>;
 type ReceiveOperationRecord = NonNullable<Awaited<ReturnType<ReceiveOps['get']>>>;
 
@@ -129,6 +130,8 @@ function createReceiveManagerMock() {
     execute: vi.fn(),
     get: vi.fn(),
     listPrepared: vi.fn(),
+    listDeferred: vi.fn(),
+    redeemDeferred: vi.fn(),
     listInFlight: vi.fn(),
     refresh: vi.fn(),
     cancel: vi.fn(),
@@ -270,8 +273,8 @@ function createSendExecuteResult(overrides: Partial<SendExecuteResult> = {}): Se
 }
 
 function createPreparedReceiveOperation(
-  overrides: Partial<ReceivePrepareResult> = {},
-): ReceivePrepareResult {
+  overrides: Partial<PreparedReceiveRecord> = {},
+): PreparedReceiveRecord {
   return {
     id: 'receive-op-1',
     state: 'prepared',
@@ -282,7 +285,7 @@ function createPreparedReceiveOperation(
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
     fee: Amount.zero(),
-    outputData: {} as ReceivePrepareResult['outputData'],
+    outputData: {} as PreparedReceiveRecord['outputData'],
     ...overrides,
   };
 }
@@ -824,6 +827,37 @@ describe('useReceiveOperation', () => {
     expect(receive.execute).toHaveBeenCalledWith(prepared.id);
     expect(result.current.currentOperation).toEqual(finalized);
     expect(result.current.executeResult).toEqual(finalized);
+  });
+
+  it('binds a deferred prepare result and passes deferred list and redemption through', async () => {
+    const { manager, receive } = createReceiveManagerMock();
+    const deferred = {
+      ...createInitReceiveOperation({ id: 'receive-op-deferred' }),
+      state: 'deferred',
+      deferredReason: 'dust',
+    } as ReceiveOperationRecord;
+
+    receive.prepare.mockResolvedValue(deferred);
+    receive.listDeferred.mockResolvedValue([deferred]);
+    receive.redeemDeferred.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useReceiveOperation(), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await act(async () => {
+      await result.current.prepare(RECEIVE_PREPARE_INPUT);
+    });
+
+    expect(result.current.currentOperation).toEqual(deferred);
+
+    await act(async () => {
+      expect(await result.current.listDeferred()).toEqual([deferred]);
+      await result.current.redeemDeferred({ mintUrl: MINT_URL });
+    });
+
+    expect(receive.listDeferred).toHaveBeenCalled();
+    expect(receive.redeemDeferred).toHaveBeenCalledWith({ mintUrl: MINT_URL });
   });
 
   it('accepts an initial operation-id binding, synchronizes after cancel, and surfaces errors after reset', async () => {
