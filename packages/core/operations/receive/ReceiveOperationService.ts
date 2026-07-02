@@ -507,7 +507,17 @@ export class ReceiveOperationService {
       }
 
       const executingOps = await this.receiveOperationRepository.getByState('executing');
+      const soloOps = executingOps.filter((op) => !op.batchId);
+      const batchGroups = new Map<string, ExecutingReceiveOperation[]>();
       for (const op of executingOps) {
+        if (op.state === 'executing' && op.batchId) {
+          const group = batchGroups.get(op.batchId) ?? [];
+          group.push(op);
+          batchGroups.set(op.batchId, group);
+        }
+      }
+
+      for (const op of soloOps) {
         let didRecover = false;
         try {
           const current = await this.receiveOperationRepository.getById(op.id);
@@ -529,6 +539,18 @@ export class ReceiveOperationService {
         }
         if (didRecover) {
           executingCount++;
+        }
+      }
+
+      for (const [batchId, group] of batchGroups) {
+        try {
+          await this.recoverBatchGroup(batchId, group);
+          executingCount += group.length;
+        } catch (e) {
+          this.logger?.error('Error recovering batched receive operations', {
+            batchId,
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       }
 
@@ -612,6 +634,17 @@ export class ReceiveOperationService {
       const allSpent = inputStates.every((s) => s.state === 'SPENT');
 
       if (allUnspent) {
+        if (executing.batchId) {
+          // A batch member must never be re-executed solo: its outputs were
+          // built from a batch-wide fee apportionment and a solo swap would
+          // not balance. The batch group recovery sweep re-executes it.
+          this.logger?.debug('Batched receive member left for batch group recovery', {
+            operationId: executing.id,
+            batchId: executing.batchId,
+          });
+          return;
+        }
+
         if (!executing.outputData) {
           await this.markAsRolledBack(executing, 'Recovered: missing output data for receive');
           return;
@@ -639,6 +672,16 @@ export class ReceiveOperationService {
         this.logger?.warn('Receive operation inputs not conclusively spent, retry later', {
           operationId: executing.id,
         });
+        return;
+      }
+
+      if (executing.batchId) {
+        // Spent batch members settle individually from their own outputData;
+        // zero-keep members finalize without any outputs to recover.
+        await this.settleSpentBatchMember(
+          executing,
+          'Recovered: input proofs spent without recoverable outputs',
+        );
         return;
       }
 
@@ -1139,29 +1182,40 @@ export class ReceiveOperationService {
         data: allKeepOutputs,
       });
 
-      let incomingResult: FinalizedReceiveOperation | null = null;
-      for (const executing of executingMembers) {
-        const memberSecrets = new Set(getOutputProofSecrets(executing));
-        const memberProofs = newProofs.filter((proof) => memberSecrets.has(proof.secret));
-        if (memberProofs.length > 0) {
-          await this.proofService.saveProofs(
-            mintUrl,
-            mapProofToCoreProof(mintUrl, 'ready', memberProofs, {
-              unit,
-              createdByOperationId: executing.id,
-            }),
-          );
-        }
-        const finalized = await this.markAsFinalized(executing);
-        if (executing.id === incomingId) {
-          incomingResult = finalized;
-        }
-      }
-      return incomingResult;
+      const finalized = await this.finalizeBatchMembers(mintUrl, unit, executingMembers, newProofs);
+      return incomingId ? (finalized.get(incomingId) ?? null) : null;
     } catch (e) {
       await this.handleBatchFailure(mintUrl, members, executingMembers, e);
       throw e;
     }
+  }
+
+  /**
+   * Split the proofs returned by a batched swap back to their members by
+   * output secret, save them per member, and finalize each member.
+   */
+  private async finalizeBatchMembers(
+    mintUrl: string,
+    unit: string,
+    executingMembers: ExecutingReceiveOperation[],
+    newProofs: Proof[],
+  ): Promise<Map<string, FinalizedReceiveOperation>> {
+    const finalized = new Map<string, FinalizedReceiveOperation>();
+    for (const executing of executingMembers) {
+      const memberSecrets = new Set(getOutputProofSecrets(executing));
+      const memberProofs = newProofs.filter((proof) => memberSecrets.has(proof.secret));
+      if (memberProofs.length > 0) {
+        await this.proofService.saveProofs(
+          mintUrl,
+          mapProofToCoreProof(mintUrl, 'ready', memberProofs, {
+            unit,
+            createdByOperationId: executing.id,
+          }),
+        );
+      }
+      finalized.set(executing.id, await this.markAsFinalized(executing));
+    }
+    return finalized;
   }
 
   /**
@@ -1232,6 +1286,165 @@ export class ReceiveOperationService {
       return;
     }
     await this.markAsRolledBack(executing, rollbackReason);
+  }
+
+  /**
+   * Recover the still-executing members of an interrupted batch redemption.
+   *
+   * The batch swap is atomic at the mint, so the members' input states decide
+   * together: all spent means the swap happened (restore each member from its
+   * own outputData), all unspent means it did not (re-execute the combined
+   * swap from the stored per-member outputData). Members whose inputs diverge
+   * (e.g. a sender double-spent queued dust) settle or return to the queue
+   * individually.
+   */
+  private async recoverBatchGroup(
+    batchId: string,
+    group: ExecutingReceiveOperation[],
+  ): Promise<void> {
+    const sorted = [...group].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const releases: (() => void)[] = [];
+    try {
+      for (const op of sorted) {
+        if (this.operationIdLock.isLocked(op.id)) {
+          this.logger?.debug('Batch member busy, skipping batch recovery this round', {
+            batchId,
+            operationId: op.id,
+          });
+          return;
+        }
+        releases.push(await this.acquireOperationLock(op.id));
+      }
+
+      const members: ExecutingReceiveOperation[] = [];
+      for (const op of sorted) {
+        const current = await this.receiveOperationRepository.getById(op.id);
+        if (current && current.state === 'executing' && current.batchId === batchId) {
+          members.push(current as ExecutingReceiveOperation);
+        }
+      }
+      if (members.length === 0) {
+        return;
+      }
+
+      const pending: ExecutingReceiveOperation[] = [];
+      for (const member of members) {
+        if (getOutputProofSecrets(member).length > 0 && (await this.hasSavedOutputs(member))) {
+          await this.markAsFinalized(member);
+        } else {
+          pending.push(member);
+        }
+      }
+      if (pending.length === 0) {
+        return;
+      }
+
+      const spent: ExecutingReceiveOperation[] = [];
+      const unspent: ExecutingReceiveOperation[] = [];
+      for (const member of pending) {
+        let inputStates: CashuProofState[];
+        try {
+          inputStates = await this.checkProofStatesWithMint(member.mintUrl, member.inputProofs);
+        } catch (e) {
+          this.logger?.warn('Could not reach mint for batch recovery, will retry later', {
+            batchId,
+            operationId: member.id,
+          });
+          return;
+        }
+        const allSpent =
+          inputStates.length > 0 && inputStates.every((state) => state.state === 'SPENT');
+        const allUnspent = inputStates.every((state) => state.state === 'UNSPENT');
+        if (allSpent) {
+          spent.push(member);
+        } else if (allUnspent) {
+          unspent.push(member);
+        } else {
+          this.logger?.warn('Batch member inputs not conclusive, retry later', {
+            batchId,
+            operationId: member.id,
+          });
+          return;
+        }
+      }
+
+      for (const member of spent) {
+        await this.settleSpentBatchMember(
+          member,
+          'Recovered: batch inputs spent without recoverable outputs',
+        );
+      }
+
+      if (unspent.length === 0) {
+        return;
+      }
+
+      if (spent.length > 0) {
+        // The swap can only have partially spent inputs when a third party
+        // spent some member's inputs; the surviving members return to the
+        // queue and get re-batched with a fresh fee.
+        for (const member of unspent) {
+          await this.markAsDeferred(member, 'dust');
+        }
+        return;
+      }
+
+      await this.reExecuteBatch(batchId, unspent);
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+    }
+  }
+
+  /**
+   * Re-execute an interrupted batch swap from the stored per-member
+   * outputData. The stored outputs still balance because the fee depends only
+   * on the unchanged inputs.
+   */
+  private async reExecuteBatch(
+    batchId: string,
+    members: ExecutingReceiveOperation[],
+  ): Promise<void> {
+    const first = members[0];
+    if (!first) {
+      return;
+    }
+    const { mintUrl, unit } = first;
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+    const allInputs = members.flatMap((member) => member.inputProofs);
+    const allKeepOutputs = members.flatMap(
+      (member) => deserializeOutputData(member.outputData).keep,
+    );
+
+    this.logger?.info('Re-executing interrupted batched receive', {
+      mintUrl,
+      batchId,
+      memberCount: members.length,
+    });
+
+    try {
+      const newProofs = await wallet.receive({ mint: mintUrl, proofs: allInputs, unit }, undefined, {
+        type: 'custom',
+        data: allKeepOutputs,
+      });
+      await this.finalizeBatchMembers(mintUrl, unit, members, newProofs);
+    } catch (e) {
+      const rollbackReason = this.getRollbackReasonForReceiveFailure(e);
+      if (!rollbackReason) {
+        this.logger?.warn('Batch re-execution failed transiently, will retry later', {
+          batchId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      // A terminal failure (e.g. keyset fees changed while interrupted) sends
+      // the members back to the queue; the next round re-batches with fresh
+      // fees and outputs.
+      for (const member of members) {
+        await this.markAsDeferred(member, 'dust');
+      }
+    }
   }
 
   /**
