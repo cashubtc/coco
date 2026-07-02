@@ -42,7 +42,8 @@ create history by itself; history starts when an operation exists.
 - If you use a custom repository implementation, implement the current
   repository aggregate before opening existing wallet data with v2.
 - If your app needs v1-style manual settlement, disable the default melt watcher
-  and settlement processor in `initializeCoco()`.
+  and settlement processor in `initializeCoco()`. This stops ongoing background
+  settlement, but startup recovery still runs before `initializeCoco()` returns.
 
 ## Package and import migration
 
@@ -387,8 +388,9 @@ load the canonical quote first, then pass `quote` to the operation hook.
 melt operations can be checked, finalized, rolled back, persisted, and emitted
 from background settlement without your app manually enabling those services.
 
-This affects apps that expected v1-style manual settlement only. To keep manual
-settlement while migrating, disable the melt watcher and settlement processor:
+This affects apps that expected v1-style manual settlement only. To stop ongoing
+background melt settlement after initialization, disable the melt watcher and
+settlement processor:
 
 ```ts
 const manager = await initializeCoco({
@@ -402,6 +404,13 @@ const manager = await initializeCoco({
   },
 });
 ```
+
+This config does not skip startup recovery. `initializeCoco()` still runs
+`manager.ops.melt.recovery.run()` before it returns. Melt recovery leaves
+`prepared` operations for the app to decide, but it checks `pending` operations
+and recovers `executing` operations. Those checks can finalize or roll back old
+melts from a previous session. The watcher and processor config only controls
+ongoing background settlement after initialization.
 
 When the default settlement services are enabled, register `melt-op:finalized`
 and `melt-op:rolled-back` listeners before calling `manager.ops.melt.execute()`
