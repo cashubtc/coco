@@ -17,7 +17,10 @@ import {
 } from '../../utils';
 import {
   UnknownMintError,
+  KeysetSyncError,
+  MintFetchError,
   MintOperationError,
+  NetworkError,
   ProofValidationError,
   OperationInProgressError,
 } from '../../models/Error';
@@ -27,6 +30,8 @@ import type {
   InitReceiveOperation,
   PreparedReceiveOperation,
   PreparedOrLaterOperation,
+  DeferredReceiveOperation,
+  DeferredReceiveReason,
   ExecutingReceiveOperation,
   FinalizedReceiveOperation,
   RolledBackReceiveOperation,
@@ -166,8 +171,12 @@ export class ReceiveOperationService {
   /**
    * Prepare the operation by calculating fees and creating deterministic outputs.
    * Transitions init -> prepared and stores outputData for crash recovery.
+   * Transitions init -> deferred instead when the receive cannot be settled yet
+   * (dust below the swap fee, or an unreachable mint).
    */
-  async prepare(operation: InitReceiveOperation): Promise<PreparedReceiveOperation> {
+  async prepare(
+    operation: InitReceiveOperation,
+  ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
       const current = await this.receiveOperationRepository.getById(operation.id);
@@ -194,20 +203,28 @@ export class ReceiveOperationService {
   /** Internal prepare logic used by prepare(), separated for error handling. */
   private async prepareInternal(
     operation: InitReceiveOperation,
-  ): Promise<PreparedReceiveOperation> {
+  ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     if (!operation.inputProofs || operation.inputProofs.length === 0) {
       throw new ProofValidationError('Receive operation has no input proofs');
     }
 
     const { mintUrl } = operation;
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
-      mintUrl,
-      operation.unit,
-    );
+    let wallet;
+    try {
+      ({ wallet } = await this.walletService.getWalletWithActiveKeysetId(
+        mintUrl,
+        operation.unit,
+      ));
+    } catch (e) {
+      if (this.isMintUnreachableError(e)) {
+        return this.markAsDeferred(operation, 'mint-unreachable');
+      }
+      throw e;
+    }
     const fee = wallet.getFeesForProofs(operation.inputProofs);
 
     if (operation.amount.lessThanOrEqual(fee)) {
-      throw new ProofValidationError('Receive amount is not sufficient after fees');
+      return this.markAsDeferred(operation, 'dust');
     }
 
     const keepAmount = operation.amount.subtract(fee);
@@ -335,11 +352,17 @@ export class ReceiveOperationService {
   /**
    * High-level receive method that orchestrates init → prepare → execute.
    * This is the primary entry point used by WalletApi.
+   * Returns the deferred operation when the receive cannot be settled yet.
    */
-  async receive(token: Token | string): Promise<void> {
+  async receive(
+    token: Token | string,
+  ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.init(token);
     const preparedOp = await this.prepare(initOp);
-    await this.execute(preparedOp);
+    if (preparedOp.state === 'deferred') {
+      return preparedOp;
+    }
+    return await this.execute(preparedOp);
   }
 
   /**
@@ -713,6 +736,46 @@ export class ReceiveOperationService {
     return finalized;
   }
 
+  /** True for failures that indicate the mint could not be reached at all. */
+  private isMintUnreachableError(error: unknown): boolean {
+    return (
+      error instanceof MintFetchError ||
+      error instanceof KeysetSyncError ||
+      error instanceof NetworkError
+    );
+  }
+
+  /**
+   * Persist deferred state and emit the operation deferred event.
+   */
+  private async markAsDeferred(
+    op: InitReceiveOperation,
+    deferredReason: DeferredReceiveReason,
+  ): Promise<DeferredReceiveOperation> {
+    const deferred: DeferredReceiveOperation = {
+      ...op,
+      state: 'deferred',
+      deferredReason,
+      updatedAt: Date.now(),
+    };
+    await this.receiveOperationRepository.update(deferred);
+    await this.eventBus.emit('receive-op:deferred', {
+      mintUrl: deferred.mintUrl,
+      operationId: deferred.id,
+      operation: deferred,
+    });
+
+    this.logger?.info('Receive operation deferred', {
+      operationId: deferred.id,
+      mintUrl: deferred.mintUrl,
+      deferredReason,
+      amount: deferred.amount,
+      proofCount: deferred.inputProofs.length,
+    });
+
+    return deferred;
+  }
+
   /**
    * Persist rolled back state with error context.
    */
@@ -787,6 +850,14 @@ export class ReceiveOperationService {
   }
 
   /**
+   * Get all deferred operations.
+   */
+  async getDeferredOperations(): Promise<DeferredReceiveOperation[]> {
+    const ops = await this.receiveOperationRepository.getByState('deferred');
+    return ops.filter((op): op is DeferredReceiveOperation => op.state === 'deferred');
+  }
+
+  /**
    * Rollback a receive operation.
    * Only allowed for operations in 'init' or 'prepared' state.
    */
@@ -809,9 +880,11 @@ export class ReceiveOperationService {
           throw new Error(`Cannot rollback operation in state ${operation.state}`);
 
         case 'init':
+        case 'deferred':
           await this.receiveOperationRepository.delete(operation.id);
           this.logger?.info('Receive operation cancelled', {
             operationId,
+            state: operation.state,
             reason: reason ?? 'User cancelled receive operation',
           });
           return;

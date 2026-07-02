@@ -1,5 +1,6 @@
 import type { Token } from '@cashu/cashu-ts';
 import type {
+  DeferredReceiveOperation,
   FinalizedReceiveOperation,
   PreparedReceiveOperation,
   ReceiveOperation,
@@ -47,8 +48,14 @@ export class ReceiveOpsApi {
   /**
    * Decodes and validates a token, then prepares a receive operation without
    * executing it.
+   *
+   * Returns a deferred operation instead when the receive cannot be settled
+   * yet (dust below the swap fee, or an unreachable mint); callers must branch
+   * on `state` before executing.
    */
-  async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {
+  async prepare(
+    input: PrepareReceiveInput,
+  ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.receiveOperationService.init(input.token);
     return this.receiveOperationService.prepare(initOp);
   }

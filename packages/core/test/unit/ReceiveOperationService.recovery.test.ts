@@ -3,6 +3,7 @@ import type {
   InitReceiveOperation,
   PreparedReceiveOperation,
   ExecutingReceiveOperation,
+  ReceiveOperation,
 } from '../../operations/receive/ReceiveOperation';
 import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation';
 import { EventBus } from '../../events/EventBus';
@@ -160,6 +161,21 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
 
     const stored = await receiveOpRepo.getById(op.id);
     expect(stored?.state).toBe('prepared');
+  });
+
+  it('leaves deferred operations untouched by the recovery sweep cleanup', async () => {
+    const proofs = [makeProof('p1')];
+    const op = {
+      ...makeInitOp('deferred-op', proofs),
+      state: 'deferred',
+      deferredReason: 'dust',
+    } as ReceiveOperation;
+    await receiveOpRepo.create(op);
+
+    await service.recoverPendingOperations();
+
+    const stored = await receiveOpRepo.getById(op.id);
+    expect(stored?.state).toBe('deferred');
   });
 
   it('retries executing operations when all inputs are unspent', async () => {

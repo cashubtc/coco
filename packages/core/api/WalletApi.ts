@@ -12,6 +12,10 @@ import type {
   TokenService,
 } from '@core/services';
 import type { ReceiveOperationService } from '../operations/receive/ReceiveOperationService';
+import type {
+  DeferredReceiveOperation,
+  FinalizedReceiveOperation,
+} from '../operations/receive/ReceiveOperation';
 import type { Logger } from '../logging/Logger.ts';
 import { WalletBalancesApi } from './WalletBalancesApi.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitList } from '../amounts.ts';
@@ -64,10 +68,17 @@ export class WalletApi {
   /**
    * Receive a token in one shot.
    *
+   * Returns the finalized operation, or a deferred operation when the receive
+   * cannot be settled yet (dust below the swap fee, missing p2pk key, or an
+   * unreachable mint); deferred receives are redeemed later, batched with other
+   * queued proofs of the same mint and unit.
+   *
    * For a multi-step receive flow (review fees/amounts before committing),
    * use `manager.ops.receive.prepare()` and `manager.ops.receive.execute()`.
    */
-  async receive(token: Token | string): Promise<void> {
+  async receive(
+    token: Token | string,
+  ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation> {
     return this.receiveOperationService.receive(token);
   }
 

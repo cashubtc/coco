@@ -47,6 +47,12 @@ export interface CoreEvents {
     operationId: string;
     operation: ReceiveOperation;
   };
+  /** Emitted when a receive operation is deferred for later redemption */
+  'receive-op:deferred': {
+    mintUrl: string;
+    operationId: string;
+    operation: ReceiveOperation;
+  };
   /** Emitted when receive operation is finalized */
   'receive-op:finalized': {
     mintUrl: string;
