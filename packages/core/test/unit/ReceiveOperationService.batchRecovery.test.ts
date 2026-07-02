@@ -100,8 +100,19 @@ describe('ReceiveOperationService - batch recovery', () => {
       })),
     } as unknown as WalletService;
 
+    let sweepOutputCounter = 0;
     proofService = {
       prepareProofsForReceiving: mock(async (proofs: Proof[]) => proofs),
+      createOutputsAndIncrementCounters: mock(async () => ({
+        keep: [
+          {
+            blindedMessage: { amount: Amount.from(1), id: keysetId, B_: 'B_sweep' },
+            blindingFactor: BigInt(1),
+            secret: new TextEncoder().encode(`sweep-out-${sweepOutputCounter++}`),
+          },
+        ],
+        send: [],
+      })),
       saveProofs: mock(async (targetMintUrl: string, proofs: CoreProof[]) => {
         await proofRepo.saveProofs(targetMintUrl, proofs);
       }),
@@ -212,9 +223,12 @@ describe('ReceiveOperationService - batch recovery', () => {
     await service.recoverPendingOperations();
 
     expect((await receiveOpRepo.getById('op-doublespent'))?.state).toBe('rolled_back');
+    // The survivor returns to the queue and the sweep at the end of the
+    // recovery run re-redeems it in a fresh batch.
     const survivor = await receiveOpRepo.getById('op-survivor');
-    expect(survivor?.state).toBe('deferred');
-    expect(mockWalletReceive).not.toHaveBeenCalled();
+    expect(survivor?.state).toBe('finalized');
+    expect(survivor?.batchId).toBeDefined();
+    expect(survivor?.batchId).not.toBe(batchId);
   });
 
   it('requeues all members when re-execution fails terminally', async () => {

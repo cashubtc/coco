@@ -114,6 +114,9 @@ describe('ReceiveOperationService - recoverPendingOperations', () => {
       getWalletWithActiveKeysetId: mock(async () => ({
         wallet: {
           unit: 'sat',
+          // High fee keeps deferred groups below viability so the redemption
+          // sweep at the end of recovery leaves them queued.
+          getFeesForProofs: mock(() => Amount.from(1000)),
           receive: mockWalletReceive,
         },
       })),

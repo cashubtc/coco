@@ -391,6 +391,10 @@ export class ReceiveOperationService {
    * High-level receive method that orchestrates init → prepare → execute.
    * This is the primary entry point used by WalletApi.
    * Returns the deferred operation when the receive cannot be settled yet.
+   *
+   * When deferred operations are already queued for the same mint and unit,
+   * the incoming receive drains the queue: it settles together with them in
+   * one batched swap (this is also how queued dust becomes redeemable).
    */
   async receive(
     token: Token | string,
@@ -399,6 +403,17 @@ export class ReceiveOperationService {
     if (initOp.state === 'deferred') {
       return initOp;
     }
+
+    const hasQueuedGroupMembers = (
+      await this.receiveOperationRepository.getByMintUrl(initOp.mintUrl)
+    ).some((op) => op.state === 'deferred' && op.unit === initOp.unit);
+    if (hasQueuedGroupMembers) {
+      const batched = await this.redeemDeferredGroup(initOp.mintUrl, initOp.unit, initOp);
+      if (batched) {
+        return batched;
+      }
+    }
+
     const preparedOp = await this.prepare(initOp);
     if (preparedOp.state === 'deferred') {
       return preparedOp;
@@ -553,6 +568,10 @@ export class ReceiveOperationService {
           });
         }
       }
+
+      // Finally attempt to redeem whatever is queued; groups that are still
+      // below the fee or unreachable simply stay deferred.
+      await this.redeemDeferred();
 
       this.logger?.info('Receive recovery completed', {
         initOperations: initCount,

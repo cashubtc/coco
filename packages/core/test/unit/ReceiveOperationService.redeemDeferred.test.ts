@@ -307,6 +307,69 @@ describe('ReceiveOperationService - redeemDeferred', () => {
     expect(zeroKeepProofs.length).toBe(0);
   });
 
+  it('receive() drains the queue by batching with the incoming token', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-dust', 1));
+
+    const proofs = [makeProof('incoming-input', 32)];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const result = await service.receive(token);
+
+    expect(result.state).toBe('finalized');
+    expect(result.batchId).toBeDefined();
+    expect((await receiveOpRepo.getById('op-dust'))?.state).toBe('finalized');
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+  });
+
+  it('receive() defers the incoming token when the drained group is still dust', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-dust', 1));
+    mockGetFees.mockImplementation(() => Amount.from(2));
+
+    const proofs = [makeProof('incoming-input', 1)];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const result = await service.receive(token);
+
+    expect(result.state).toBe('deferred');
+    expect((await receiveOpRepo.getById('op-dust'))?.state).toBe('deferred');
+  });
+
+  it('receive() takes the solo path when the queue is empty', async () => {
+    let preparedEventCount = 0;
+    eventBus.on('receive-op:prepared', () => {
+      preparedEventCount += 1;
+    });
+    mockGetFees.mockImplementation(() => Amount.zero());
+
+    const proofs = [makeProof('incoming-input', 32)];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const result = await service.receive(token);
+
+    expect(result.state).toBe('finalized');
+    expect(result.batchId).toBeUndefined();
+    // The solo saga emits receive-op:prepared; the batch path does not.
+    expect(preparedEventCount).toBe(1);
+  });
+
+  it('recovery sweep redeems viable queued groups and leaves unreachable ones queued', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-a', 5));
+    await receiveOpRepo.create(makeDeferredOp('op-b', 4));
+
+    await service.recoverPendingOperations();
+
+    expect((await receiveOpRepo.getById('op-a'))?.state).toBe('finalized');
+    expect((await receiveOpRepo.getById('op-b'))?.state).toBe('finalized');
+  });
+
+  it('recovery sweep tolerates an unreachable mint', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-a', 5));
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => {
+      throw new NetworkError('offline');
+    });
+
+    await service.recoverPendingOperations();
+
+    expect((await receiveOpRepo.getById('op-a'))?.state).toBe('deferred');
+  });
+
   it('skips deferred operations that are currently locked', async () => {
     await receiveOpRepo.create(makeDeferredOp('op-a', 5));
     await receiveOpRepo.create(makeDeferredOp('op-busy', 4));
