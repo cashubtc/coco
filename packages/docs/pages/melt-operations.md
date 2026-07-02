@@ -34,6 +34,11 @@ preparing a melt operation:
 - `listPending({ method? })` lists canonical quote rows that have not reached `PAID`
 - `refresh({ mintUrl, quoteId })` checks the remote quote state and persists
   the canonical quote update
+  before emitting `melt-quote:updated`
+
+Use `coco.on('melt-quote:updated', ...)` for live quote state. When the app
+needs to react to terminal value movement, listen for both
+`melt-op:finalized` and `melt-op:rolled-back`.
 
 ## Quote Identity and Refs
 

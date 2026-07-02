@@ -89,6 +89,9 @@ type FinalizedReceiveEventPayload = {
   operation: Awaited<ReturnType<Manager['ops']['receive']['execute']>>;
 };
 
+const MINT_QUOTE_READY_TIMEOUT_MS = 20_000;
+const MINT_QUOTE_READY_REFRESH_INTERVAL_MS = 250;
+
 type FetchResponse = {
   ok: boolean;
   status: number;
@@ -373,7 +376,7 @@ async function executeMintOperation(manager: Manager, operationId: string) {
   return manager.ops.mint.execute(operationId);
 }
 
-function isMintQuoteReady(quote: MintQuote | null | undefined): boolean {
+function isMintQuoteReady(quote: MintQuote | null | undefined): quote is MintQuote {
   if (quote?.method !== 'bolt11') {
     return false;
   }
@@ -391,86 +394,75 @@ async function getMintQuoteForOperation(
   });
 }
 
-async function getLatestPendingMintOperation(
-  manager: Manager,
-  operationId: string,
-): Promise<PreparedMintOperation | null> {
-  const operation = await manager.ops.mint.get(operationId);
-  if (!operation || operation.state !== 'pending') {
-    return null;
-  }
-
-  return operation;
-}
-
-async function awaitMintQuotePaid(
+async function awaitMintQuoteReadyFromEvents(
   manager: Manager,
   pendingMint: PreparedMintOperation,
-): Promise<MintQuote | null> {
+): Promise<MintQuote> {
   const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
   if (isMintQuoteReady(initialQuote)) {
     return initialQuote;
   }
 
-  let cancelWait: (() => void) | undefined;
-  const paidEventPromise = new Promise<MintQuote | null>((resolve) => {
-    const off = manager.on('mint-quote:updated', (payload) => {
-      if (payload.quoteId !== pendingMint.quoteId || payload.quote.state !== 'PAID') {
+  let off: (() => void) | undefined;
+  let lastRefreshError: unknown;
+  const readyEventPromise = new Promise<MintQuote>((resolve) => {
+    off = manager.on('mint-quote:updated', (payload) => {
+      if (
+        payload.mintUrl !== pendingMint.mintUrl ||
+        payload.quoteId !== pendingMint.quoteId ||
+        !isMintQuoteReady(payload.quote)
+      ) {
         return;
       }
 
-      off();
+      off?.();
       resolve(payload.quote);
     });
-
-    cancelWait = () => {
-      off();
-      resolve(null);
-    };
   });
 
-  const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  const latestQuote = latestPendingMint
-    ? await getMintQuoteForOperation(manager, latestPendingMint)
-    : null;
-  if (isMintQuoteReady(latestQuote)) {
-    cancelWait?.();
-    return latestQuote;
+  const deadline = Date.now() + MINT_QUOTE_READY_TIMEOUT_MS;
+
+  try {
+    while (Date.now() < deadline) {
+      const latestQuote = await getMintQuoteForOperation(manager, pendingMint);
+      if (isMintQuoteReady(latestQuote)) {
+        return latestQuote;
+      }
+
+      try {
+        const refreshedQuote = await manager.quotes.mint.refresh({
+          mintUrl: pendingMint.mintUrl,
+          quoteId: pendingMint.quoteId,
+        });
+        if (isMintQuoteReady(refreshedQuote)) {
+          return refreshedQuote;
+        }
+      } catch (err) {
+        lastRefreshError = err;
+      }
+
+      const remainingMs = Math.max(0, deadline - Date.now());
+      const refreshDelayMs = Math.min(MINT_QUOTE_READY_REFRESH_INTERVAL_MS, remainingMs);
+      const eventOrTick = await Promise.race([
+        readyEventPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), refreshDelayMs)),
+      ]);
+      if (eventOrTick) {
+        return eventOrTick;
+      }
+    }
+  } finally {
+    off?.();
   }
 
-  return paidEventPromise;
-}
-
-async function awaitMintQuotePaidWithSubscription(
-  manager: Manager,
-  mintUrl: string,
-  pendingMint: PreparedMintOperation,
-): Promise<MintQuote | null> {
-  const initialQuote = await getMintQuoteForOperation(manager, pendingMint);
-  if (isMintQuoteReady(initialQuote)) {
-    return initialQuote;
-  }
-
-  const paidNotificationPromise = manager.subscription.awaitMintQuotePaid(
-    mintUrl,
-    pendingMint.quoteId,
-  );
-
-  const latestPendingMint = await getLatestPendingMintOperation(manager, pendingMint.id);
-  const latestQuote = latestPendingMint
-    ? await getMintQuoteForOperation(manager, latestPendingMint)
-    : null;
-  if (isMintQuoteReady(latestQuote)) {
-    return latestQuote;
-  }
-
-  await paidNotificationPromise;
-  return getMintQuoteForOperation(manager, pendingMint);
+  throw new Error(`Mint quote ${pendingMint.quoteId} did not become ready`, {
+    cause: lastRefreshError,
+  });
 }
 
 async function mintAmount(manager: Manager, mintUrl: string, amount: number, unit = 'sat') {
   const pendingMint = await prepareMintOperation(manager, mintUrl, amount, unit);
-  await awaitMintQuotePaidWithSubscription(manager, mintUrl, pendingMint);
+  await awaitMintQuoteReadyFromEvents(manager, pendingMint);
   await executeMintOperation(manager, pendingMint.id);
   return pendingMint;
 }
@@ -661,7 +653,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(pendingEvent.mintUrl).toBe(mintUrl);
           expect(pendingEvent.operation.quoteId).toBe(pendingMint.quoteId);
 
-          const paidQuote = await awaitMintQuotePaid(mgr!, pendingMint);
+          const paidQuote = await awaitMintQuoteReadyFromEvents(mgr!, pendingMint);
           expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           expect(paidQuote?.state).toBe('PAID');
 
@@ -688,7 +680,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         }
       });
 
-      it('should use subscription API to await mint quote paid', async () => {
+      it('should use events API to await mint quote paid', async () => {
         const { repositories, dispose } = await createRepositories();
         try {
           mgr = await initializeCoco({
@@ -706,7 +698,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
 
           const pendingMint = await prepareMintOperation(mgr!, mintUrl, 50, testUnit);
 
-          const paidQuote = await awaitMintQuotePaidWithSubscription(mgr!, mintUrl, pendingMint);
+          const paidQuote = await awaitMintQuoteReadyFromEvents(mgr!, pendingMint);
           expect(paidQuote?.quoteId).toBe(pendingMint.quoteId);
           await executeMintOperation(mgr!, pendingMint.id);
 

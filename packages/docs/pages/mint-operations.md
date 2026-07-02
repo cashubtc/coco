@@ -85,6 +85,9 @@ after reload without creating or loading a mint operation:
 settlement state changes. Stable metadata-only updates do not emit. Importing a
 quote can therefore start watcher interest, but it does not create history or a
 mint operation; call `coco.ops.mint.prepare(...)` when you want to redeem it.
+Use `coco.on('mint-quote:updated', ...)` for live application quote state, and
+use `mint-op:finalized` or `coco.ops.mint.finalize(...)` for issuance
+completion.
 
 For BOLT11 quotes, the invoice is available at `quote.request`. For reusable
 onchain quotes, the address/payment request is also available at `quote.request`

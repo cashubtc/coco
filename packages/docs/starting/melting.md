@@ -22,20 +22,63 @@ console.log('Amount:', prepared.amount);
 console.log('Fee reserve:', prepared.fee_reserve);
 console.log('Needs swap:', prepared.needsSwap);
 
-const result = await coco.ops.melt.execute(prepared.id);
+let handledTerminalEvent = false;
+let offFinalized = () => {};
+let offRolledBack = () => {};
+const stopWaiting = () => {
+  offFinalized();
+  offRolledBack();
+};
 
-if (result.state === 'finalized') {
-  console.log('Change returned:', result.changeAmount);
-  console.log('Effective fee:', result.effectiveFee);
-}
+const terminalMelt = new Promise<void>((resolve, reject) => {
+  offFinalized = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+    if (operationId !== prepared.id) return;
+    handledTerminalEvent = true;
+    stopWaiting();
+    console.log('Updated state:', operation.state);
+    console.log('Change returned:', operation.changeAmount);
+    console.log('Effective fee:', operation.effectiveFee);
+    resolve();
+  });
 
-if (result.state === 'pending') {
-  const refreshed = await coco.ops.melt.refresh(result.id);
-  console.log('Updated state:', refreshed.state);
+  offRolledBack = coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
+    if (operationId !== prepared.id) return;
+    handledTerminalEvent = true;
+    stopWaiting();
+    reject(new Error(operation.error ?? 'Melt operation rolled back'));
+  });
+});
+
+try {
+  const result = await coco.ops.melt.execute(prepared.id);
+
+  if (result.state === 'finalized') {
+    stopWaiting();
+    if (!handledTerminalEvent) {
+      console.log('Change returned:', result.changeAmount);
+      console.log('Effective fee:', result.effectiveFee);
+    }
+  }
+
+  if (result.state === 'pending') {
+    await terminalMelt;
+  }
+} catch (error) {
+  stopWaiting();
+  throw error;
 }
 ```
 
 `coco.quotes.melt.create()` creates the melt quote without creating history. `coco.ops.melt.prepare()` reserves proofs and calculates any swap fees. `coco.ops.melt.execute()` pays the invoice immediately when possible or returns a `pending` operation that you can refresh later.
+
+With the default `initializeCoco()` wiring, `MeltQuoteWatcherService` and
+`MeltSettlementProcessor` settle pending operations in the background. Use
+`melt-op:finalized` and `melt-op:rolled-back` for live application flow, or
+call `coco.ops.melt.refresh(prepared.id)` yourself if you disable those
+services or wire `Manager` manually without them.
+Register terminal operation listeners before `coco.ops.melt.execute()` when
+default processors are enabled, because a fast settlement can happen while
+`execute()` is emitting `melt-op:pending`.
 
 For newly finalized melts, `changeAmount` and `effectiveFee` show the actual settlement result. Older finalized melt records may not include those fields.
 
@@ -90,11 +133,50 @@ const prepared = await coco.ops.melt.prepare({
   feeIndex: quote.fee_options[0].fee_index,
 });
 
-const executed = await coco.ops.melt.execute(prepared.id);
+let handledTerminalEvent = false;
+let offFinalized = () => {};
+let offRolledBack = () => {};
+const stopWaiting = () => {
+  offFinalized();
+  offRolledBack();
+};
 
-if (executed.state === 'pending') {
-  const refreshed = await coco.ops.melt.refresh(executed.id);
-  console.log('Updated state:', refreshed.state);
+const terminalMelt = new Promise<void>((resolve, reject) => {
+  offFinalized = coco.on('melt-op:finalized', ({ operationId, operation }) => {
+    if (operationId !== prepared.id) return;
+    handledTerminalEvent = true;
+    stopWaiting();
+    console.log('Updated state:', operation.state);
+    console.log('Change returned:', operation.changeAmount);
+    console.log('Effective fee:', operation.effectiveFee);
+    resolve();
+  });
+
+  offRolledBack = coco.on('melt-op:rolled-back', ({ operationId, operation }) => {
+    if (operationId !== prepared.id) return;
+    handledTerminalEvent = true;
+    stopWaiting();
+    reject(new Error(operation.error ?? 'Melt operation rolled back'));
+  });
+});
+
+try {
+  const executed = await coco.ops.melt.execute(prepared.id);
+
+  if (executed.state === 'finalized') {
+    stopWaiting();
+    if (!handledTerminalEvent) {
+      console.log('Change returned:', executed.changeAmount);
+      console.log('Effective fee:', executed.effectiveFee);
+    }
+  }
+
+  if (executed.state === 'pending') {
+    await terminalMelt;
+  }
+} catch (error) {
+  stopWaiting();
+  throw error;
 }
 ```
 

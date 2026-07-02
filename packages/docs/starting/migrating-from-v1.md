@@ -85,6 +85,39 @@ history entry. Mint operations no longer mirror quote remote state; listen for
 `mint-quote:updated` or call `manager.quotes.mint.get(...)` when you need quote
 payment state.
 
+## Quote waiter migration
+
+The public subscription quote waiters were removed because they returned raw
+transport notification payloads and their names implied stronger domain
+guarantees than they provided.
+
+Before:
+
+```ts
+await manager.subscription.awaitMintQuotePaid(mintUrl, quoteId);
+await manager.subscription.awaitMeltQuotePaid(mintUrl, quoteId);
+```
+
+After, subscribe to canonical events for live quote state:
+
+```ts
+const offMint = manager.on('mint-quote:updated', ({ mintUrl, quoteId, quote }) => {
+  if (mintUrl !== expectedMintUrl || quoteId !== expectedQuoteId) return;
+  renderMintQuote(quote);
+});
+
+const offMelt = manager.on('melt-quote:updated', ({ mintUrl, quoteId, quote }) => {
+  if (mintUrl !== expectedMintUrl || quoteId !== expectedQuoteId) return;
+  renderMeltQuote(quote);
+});
+```
+
+Use `manager.quotes.*.refresh({ mintUrl, quoteId })` when resuming or when your
+app wants to explicitly check remote quote state. Use operation APIs and
+operation events such as `mint-op:finalized`, `melt-op:finalized`, or
+`melt-op:rolled-back` when the app needs to wait for value movement to reach a
+terminal state.
+
 ## Melt quote migration
 
 Melt quote creation moved out of `manager.ops.melt.prepare()`. Code that used to

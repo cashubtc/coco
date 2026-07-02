@@ -2,6 +2,19 @@
 
 By default Coco will enable [Watchers & Processors](../pages/watchers-processors.md) when instantiating with the `initializeCoco` helper. Some of these services will try to establish a Websocket connection to the mint to receive live updates. If Websockets are unavailable for whatever reason Coco will fallback to polling.
 
+Subscriptions are background observation controls. Application flows should use
+typed manager events, quote refreshes, or operation APIs rather than raw
+subscription helpers:
+
+```ts
+const off = coco.on('mint-quote:updated', ({ mintUrl, quoteId, quote }) => {
+  if (mintUrl !== expectedMintUrl || quoteId !== expectedQuoteId) return;
+  console.log('Quote updated:', quote);
+});
+
+off();
+```
+
 ## Websocket Factory
 
 Coco will try to use the global `WebSocket` object by default. As this is not available in all environments, you can also pass a `WebsocketFactory` via [CocoConfig](../pages/coco-config.md).

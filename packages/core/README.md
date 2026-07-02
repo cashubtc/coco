@@ -5,8 +5,7 @@ Modular, storage-agnostic core for working with Cashu mints and wallets.
 - **Storage-agnostic**: Repositories are interfaces; bring your own persistence.
 - **Typed Event Bus**: Subscribe to mint, proof, quote, and counter events with strong types.
 - **High-level APIs**: `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
-  `SubscriptionApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common
-  flows.
+  `QuoteApi`, `HistoryApi`, `KeyRingApi`, and `manager.ops.*` for common flows.
 - **Background watchers**: Optional services to track quote/payment and proof states.
 
 ## Install
@@ -114,14 +113,16 @@ const pendingMint = await manager.ops.mint.prepare({
   amount: 100,
 });
 
-// Optionally, wait via subscription API instead of polling
-await manager.subscription.awaitMintQuotePaid(
-  'https://nofees.testnut.cashu.space',
-  pendingMint.quoteId,
-);
+const finalized = new Promise<void>((resolve) => {
+  const off = manager.on('mint-op:finalized', ({ operationId }) => {
+    if (operationId !== pendingMint.id) return;
+    off();
+    resolve();
+  });
+});
 
-// pay pendingMint.request externally, then:
-await manager.ops.mint.execute(pendingMint.id);
+// pay pendingMint.request externally; default processors finalize after payment
+await finalized;
 
 // Check balances
 const balances = await manager.wallet.balances.byMint();
@@ -180,8 +181,8 @@ If you prefer manual wiring, construct `Manager` directly and call `initPlugins(
 ## Architecture
 
 - `Manager` is the app-facing facade. It exposes `mint`, `wallet`, `auth`,
-  `quotes`, `paymentRequests`, `ops`, `subscription`, `history`, and `keyring`
-  APIs plus watcher and processor helpers.
+  `quotes`, `paymentRequests`, `ops`, `history`, and `keyring` APIs plus watcher
+  and processor helpers.
 - `initializeCoco` wires the manager from a `CocoConfig`, including
   repositories, seed access, logging, subscriptions, plugins, watchers, and
   processors.
@@ -219,8 +220,8 @@ The package root exports `MemoryRepositories` as an in-memory test/example repos
 
 ### Manager
 
-- `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`,
-  `subscription`, `history`, and `keyring`
+- `mint`, `wallet`, `auth`, `quotes`, `paymentRequests`, `ops`, `history`, and
+  `keyring`
 - `ext: PluginExtensions` from `@cashu/coco-core/plugin`
 - `on/once/off` for `CoreEvents`
 - `enableMintOperationWatcher()`, `disableMintOperationWatcher()`
@@ -317,10 +318,16 @@ those details are derived from canonical quote storage.
 - `execute(transaction: PreparedPaymentRequest): Promise<PaymentRequestExecutionResult>`
 - `incoming.create(input: CreateIncomingPaymentRequestInput): Promise<PaymentRequestReceiveOperation>`
 
-### SubscriptionApi
+### QuoteApi
 
-- `awaitMintQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
-- `awaitMeltQuotePaid(mintUrl: string, quoteId: string): Promise<unknown>`
+- `mint.create(...)`, `mint.import(...)`, `mint.get({ mintUrl, quoteId })`
+- `mint.listPending({ method? })`, `mint.refresh({ mintUrl, quoteId })`
+- `melt.create(...)`, `melt.get({ mintUrl, quoteId })`
+- `melt.listPending({ method? })`, `melt.refresh({ mintUrl, quoteId })`
+
+Quote refreshes persist canonical quote snapshots before emitting
+`mint-quote:updated` or `melt-quote:updated`. Use `manager.on(...)` for live
+application flows and operation APIs when a mint or melt should be finalized.
 
 ### HistoryApi
 
@@ -361,6 +368,7 @@ include:
 - `proofs:reserved` → `{ mintUrl, operationId, secrets, amount }`
 - `proofs:released` → `{ mintUrl, secrets }`
 - `mint-quote:updated` → `{ mintUrl, method, quoteId, quote }`
+- `melt-quote:updated` → `{ mintUrl, method, quoteId, quote }`
 - `mint-op:pending` → `{ mintUrl, operationId, operation }`
 - `mint-op:requeue` → `{ mintUrl, operationId, operation }`
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
@@ -436,7 +444,7 @@ From the package root (`@cashu/coco-core`), for app and React usage:
 - `Manager`, `initializeCoco`, `CocoConfig`
 - `MemoryRepositories`
 - Public APIs including `MintApi`, `WalletApi`, `AuthApi`, `PaymentRequestsApi`,
-  `SubscriptionApi`, and the operation-oriented APIs
+  `QuoteApi`, and the operation-oriented APIs
 - Public models, errors, API inputs/results, and operation result types
 - Events: `CoreEvents`, `EventHandler`
 - Types: `CoreProof`, `ProofState`, `BalanceQuery`, `BalanceSnapshot`,
