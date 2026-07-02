@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Cut Stable Release'
+  short_description: 'Cut a coco stable package release'
+  default_prompt: 'Use $cut-stable-release to finalize a coco stable release, validate it, commit it, tag it, and push master and the tag.'

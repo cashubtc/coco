@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Cut RC Release'
+  short_description: 'Cut a coco prerelease branch RC'
+  default_prompt: 'Use $cut-rc-release to create or update a coco prerelease branch, version an RC, validate it, commit it, tag it, and push the branch and tag.'
