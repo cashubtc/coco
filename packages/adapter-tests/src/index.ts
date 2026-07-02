@@ -1193,10 +1193,12 @@ export async function runReceiveOperationRepositoryContract(
 
         const pending = await repo.getPending();
 
-        expect(pending.map((op) => op.id).sort()).toEqual([
-          'receive-op-deferred',
-          'receive-op-executing',
-        ]);
+        expect(
+          pending
+            .map((op) => op.id)
+            .sort()
+            .join(','),
+        ).toBe('receive-op-deferred,receive-op-executing');
       } finally {
         await dispose();
       }

@@ -2824,7 +2824,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(allSpent).toBe(true);
       });
 
-      it('should fail to receive P2PK token without the private key', async () => {
+      it('should defer receiving a P2PK token without the private key', async () => {
         // Create a sender wallet with cashu-ts
         const senderSeed = crypto.getRandomValues(new Uint8Array(64));
         const senderWallet = new Wallet(createTestMint(mintUrl), {
@@ -2861,8 +2861,13 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           proofs: p2pkProofs,
         };
 
-        // Should fail because we don't have the private key
-        await expect(mgr!.wallet.receive(p2pkToken)).rejects.toThrow();
+        // Without the private key the receive is queued for later redemption
+        // instead of failing.
+        const result = await mgr!.wallet.receive(p2pkToken);
+        expect(result.state).toBe('deferred');
+        if (result.state === 'deferred') {
+          expect(result.deferredReason).toBe('p2pk-unsigned');
+        }
       });
 
       it('should send P2PK locked tokens using prepareSendP2pk', async () => {
@@ -3039,6 +3044,214 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const amountAfter = await getMintTotalBalance(mgr!, mintUrl, testUnit);
         expect(amountAfter - amountBefore).toBeGreaterThanOrEqual(50); // Allow for fees
       });
+    });
+
+    describe('Deferred Receives', () => {
+      let repositoriesDispose: (() => Promise<void>) | undefined;
+      let repositories: Repositories | undefined;
+
+      beforeEach(async () => {
+        const created = await createRepositories();
+        repositories = created.repositories;
+        repositoriesDispose = created.dispose;
+        mgr = await initializeCoco({
+          repo: created.repositories,
+          seedGetter,
+          logger,
+        });
+
+        await mgr.mint.addMint(mintUrl, { trusted: true });
+        await mintAmount(mgr!, mintUrl, 200, testUnit);
+      });
+
+      afterEach(async () => {
+        if (repositoriesDispose) {
+          await repositoriesDispose();
+          repositoriesDispose = undefined;
+        }
+        repositories = undefined;
+      });
+
+      const sendToken = async (amount: number): Promise<Token> => {
+        const preparedSend = await mgr!.ops.send.prepare({
+          mintUrl,
+          amount: testAmount(amount),
+        });
+        const { token } = await mgr!.ops.send.execute(preparedSend.id);
+        return token;
+      };
+
+      it(
+        'defers a dust token and settles it together with the next receive',
+        async () => {
+          // Send both tokens up front so the spendable balance baseline is
+          // not disturbed between the two receives.
+          const dustToken = await sendToken(1);
+          const secondToken = await sendToken(32);
+          const balanceBefore = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
+
+          const deferredEventPromise = waitForEvent<{
+            operationId: string;
+            operation: { state: string };
+          }>(mgr!, 'receive-op:deferred', (payload) => payload.operation.state === 'deferred');
+
+          const dustResult = await mgr!.wallet.receive(dustToken);
+          if (dustResult.state === 'finalized') {
+            // The mint charges no input fees (e.g. the custom-unit run), so
+            // dust below the fee cannot exist; nothing to assert here.
+            return;
+          }
+
+          expect(dustResult.state).toBe('deferred');
+          expect(dustResult.deferredReason).toBe('dust');
+          const deferredEvent = await deferredEventPromise;
+          expect(deferredEvent.operationId).toBe(dustResult.id);
+
+          const inFlight = await mgr!.ops.receive.listInFlight();
+          expect(inFlight.map((op) => op.id)).toContain(dustResult.id);
+          const queued = await mgr!.ops.receive.listDeferred();
+          expect(queued.map((op) => op.id)).toContain(dustResult.id);
+
+          // No history entry and no balance change while queued.
+          const history = await mgr!.history.getPaginatedHistory(0, 50);
+          expect(
+            history.some((entry) => 'operationId' in entry && entry.operationId === dustResult.id),
+          ).toBe(false);
+          expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceBefore);
+
+          // A second receive for the same mint and unit drains the queue.
+          const finalizedIds = new Set<string>();
+          const bothFinalized = new Promise<void>((resolve) => {
+            const unsubscribe = mgr!.on('receive-op:finalized', ({ operationId }) => {
+              finalizedIds.add(operationId);
+              if (finalizedIds.size >= 2) {
+                unsubscribe();
+                resolve();
+              }
+            });
+          });
+
+          const secondResult = await mgr!.wallet.receive(secondToken);
+          expect(secondResult.state).toBe('finalized');
+          await bothFinalized;
+
+          const dustAfter = await mgr!.ops.receive.get(dustResult.id);
+          expect(dustAfter?.state).toBe('finalized');
+          expect(dustAfter?.batchId).toBeDefined();
+          expect(dustAfter?.batchId).toBe(secondResult.batchId!);
+
+          // Two independent history entries, one per operation.
+          const historyAfter = await mgr!.history.getPaginatedHistory(0, 50);
+          const receiveEntries = historyAfter.filter(
+            (entry) =>
+              'operationId' in entry &&
+              (entry.operationId === dustResult.id || entry.operationId === secondResult.id),
+          );
+          expect(receiveEntries.length).toBe(2);
+
+          // 33 in, one 1-unit batch fee: net +32.
+          expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceBefore + 32);
+        },
+        30000,
+      );
+
+      it(
+        'keeps queued dust across a restart and drains it with a later receive',
+        async () => {
+          const dustToken = await sendToken(1);
+          const laterToken = await sendToken(32);
+          const balanceBefore = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
+
+          const dustResult = await mgr!.wallet.receive(dustToken);
+          if (dustResult.state === 'finalized') {
+            // Fee-free mint: dust cannot exist.
+            return;
+          }
+          expect(dustResult.deferredReason).toBe('dust');
+
+          await mgr!.pauseSubscriptions();
+          await mgr!.dispose();
+
+          // Restarting on the same repositories runs the recovery sweep. A
+          // lone dust operation stays below the fee, so it must survive the
+          // restart still queued rather than being cleaned up or rolled back.
+          mgr = await initializeCoco({
+            repo: repositories!,
+            seedGetter,
+            logger,
+          });
+
+          const afterRestart = await mgr!.ops.receive.get(dustResult.id);
+          expect(afterRestart?.state).toBe('deferred');
+
+          // A fresh receive after the restart drains the persisted queue.
+          const laterResult = await mgr!.wallet.receive(laterToken);
+          expect(laterResult.state).toBe('finalized');
+          expect((await mgr!.ops.receive.get(dustResult.id))?.state).toBe('finalized');
+          expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceBefore + 32);
+        },
+        30000,
+      );
+
+      it(
+        'defers a p2pk token until its key is added, then redeems on demand',
+        async () => {
+          // Compute a pubkey whose secret the receiver does NOT hold yet by
+          // deriving it in a throwaway manager.
+          const secretKey = crypto.getRandomValues(new Uint8Array(32));
+          const throwawayRepos = await createRepositories();
+          let lockedPubkey: string;
+          try {
+            const throwaway = await initializeCoco({
+              repo: throwawayRepos.repositories,
+              seedGetter: await createSeedGetter(),
+              logger,
+            });
+            const keypair = await throwaway.keyring.addKeyPair(secretKey);
+            lockedPubkey = keypair.publicKeyHex;
+            await throwaway.pauseSubscriptions();
+            await throwaway.dispose();
+          } finally {
+            await throwawayRepos.dispose();
+          }
+
+          // Build a p2pk-locked token from an independent sender wallet.
+          const senderWallet = new Wallet(createTestMint(mintUrl), { unit: testUnit });
+          await senderWallet.loadMint();
+          const senderQuote = await senderWallet.createMintQuoteBolt11(100);
+          let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
+          let attempts = 0;
+          while (quoteState.state !== 'PAID' && attempts <= 3) {
+            await delay(500);
+            quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
+            attempts++;
+          }
+          const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
+          const { send: p2pkProofs } = await senderWallet.ops
+            .send(50, senderProofs)
+            .asP2PK({ pubkey: lockedPubkey })
+            .run();
+          const p2pkToken: Token = { mint: mintUrl, proofs: p2pkProofs };
+
+          const result = await mgr!.wallet.receive(p2pkToken);
+          expect(result.state).toBe('deferred');
+          if (result.state !== 'deferred') {
+            return;
+          }
+          expect(result.deferredReason).toBe('p2pk-unsigned');
+
+          // Once the key exists, an explicit redemption settles the receive.
+          await mgr!.keyring.addKeyPair(secretKey);
+          const balanceBefore = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
+          await mgr!.ops.receive.redeemDeferred();
+
+          const after = await mgr!.ops.receive.get(result.id);
+          expect(after?.state).toBe('finalized');
+          const balanceAfter = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
+          expect(balanceAfter).toBeGreaterThan(balanceBefore);
+        },
+        30000,
+      );
     });
 
     describe('Wallet Restore', () => {
