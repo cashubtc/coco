@@ -16,6 +16,7 @@ import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import { OutputData, type Proof, type Token } from '@cashu/cashu-ts';
 import {
+  MintFetchError,
   MintOperationError,
   NetworkError,
   ProofValidationError,
@@ -342,6 +343,60 @@ describe('ReceiveOperationService', () => {
       expect(error).toBeInstanceOf(ProofValidationError);
       expect((error as Error).message).toBe('Receive amount is not sufficient after fees');
     }
+  });
+
+  it('deletes the init operation and emits no events when prepare fails on dust', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+    const emittedEvents: string[] = [];
+
+    eventBus.on('receive-op:prepared', () => {
+      emittedEvents.push('receive-op:prepared');
+    });
+    eventBus.on('receive-op:rolled-back', () => {
+      emittedEvents.push('receive-op:rolled-back');
+    });
+
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => ({
+      wallet: {
+        unit: 'sat',
+        getFeesForProofs: mock(() => initOp.amount),
+        receive: mockWalletReceive,
+      },
+    }));
+
+    await expect(service.prepare(initOp)).rejects.toThrow(
+      'Receive amount is not sufficient after fees',
+    );
+
+    expect(await receiveOpRepo.getById(initOp.id)).toBeNull();
+    expect(emittedEvents).toEqual([]);
+  });
+
+  it('init rejects and persists nothing when a P2PK signing key is missing', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+
+    (proofService.prepareProofsForReceiving as Mock<any>).mockImplementation(async () => {
+      throw new Error('Key pair not found for public key: 02abc');
+    });
+
+    await expect(service.init(token)).rejects.toThrow('Key pair not found');
+    expect(await receiveOpRepo.getByState('init')).toEqual([]);
+  });
+
+  it('deletes the init operation when the mint is unreachable during prepare', async () => {
+    const proofs = [makeProof('p1')];
+    const token: Token = { mint: mintUrl, proofs } as Token;
+    const initOp = await service.init(token);
+
+    (walletService.getWalletWithActiveKeysetId as Mock<any>).mockImplementation(async () => {
+      throw new MintFetchError('Failed to fetch mint info');
+    });
+
+    await expect(service.prepare(initOp)).rejects.toThrow(MintFetchError);
+    expect(await receiveOpRepo.getById(initOp.id)).toBeNull();
   });
 
   it('prepare throws when deterministic outputs are empty', async () => {
