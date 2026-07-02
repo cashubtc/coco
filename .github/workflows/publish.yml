@@ -44,9 +44,4 @@ jobs:
         run: bun run build
 
       - name: Publish to npm
-        if: ${{ !github.event.release.prerelease }}
         run: bunx changeset publish
-
-      - name: Publish RC to npm
-        if: ${{ github.event.release.prerelease }}
-        run: bunx changeset publish --tag rc

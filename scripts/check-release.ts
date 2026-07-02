@@ -11,6 +11,11 @@ type PackageJson = {
   optionalDependencies?: Record<string, string>;
 };
 
+type PreState = {
+  mode?: unknown;
+  tag?: unknown;
+};
+
 type ReleaseKind = 'stable' | 'prerelease';
 
 const prereleaseTag = process.env.PRERELEASE_TAG ?? 'rc';
@@ -19,6 +24,16 @@ const releasePrerelease = parseOptionalBoolean(process.env.RELEASE_PRERELEASE);
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
+}
+
+function readPreState(): PreState | undefined {
+  const path = join('.changeset', 'pre.json');
+
+  if (!existsSync(path)) {
+    return undefined;
+  }
+
+  return readJson<PreState>(path);
 }
 
 function packageJsonPaths(): string[] {
@@ -91,6 +106,7 @@ if (!releaseTagMatch) {
 
 const expectedVersion = releaseTagMatch[1]!;
 const expectedReleaseKind = releaseKind(expectedVersion);
+const preState = readPreState();
 
 if (!expectedReleaseKind) {
   throw new Error(`Release tag ${releaseTag} must be vX.Y.Z or vX.Y.Z-${prereleaseTag}.N`);
@@ -102,6 +118,18 @@ if (releasePrerelease === true && expectedReleaseKind !== 'prerelease') {
 
 if (releasePrerelease === false && expectedReleaseKind !== 'stable') {
   throw new Error(`Stable GitHub releases must use vX.Y.Z tags`);
+}
+
+if (expectedReleaseKind === 'prerelease') {
+  if (preState?.mode !== 'pre' || preState.tag !== prereleaseTag) {
+    throw new Error(
+      `Prerelease tags must commit .changeset/pre.json with mode "pre" and tag "${prereleaseTag}"`,
+    );
+  }
+} else if (preState) {
+  throw new Error(
+    'Stable release tags must not commit .changeset/pre.json; run changeset version after exiting prerelease mode',
+  );
 }
 
 const packages = packageJsonPaths().map((path) => ({

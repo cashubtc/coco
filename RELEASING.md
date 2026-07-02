@@ -190,7 +190,8 @@ git push origin vX.Y.Z-rc.N
 Publishing the GitHub prerelease runs `.github/workflows/publish.yml`. The
 workflow checks that the tag, GitHub Release prerelease flag, committed package
 versions, internal published package dependencies, and changelogs agree before
-publishing with `bunx changeset publish --tag rc`.
+publishing with `bunx changeset publish`. Changesets reads the `rc` npm dist-tag
+from the committed `.changeset/pre.json` prerelease state.
 
 10. Verify npm after the workflow succeeds:
 
