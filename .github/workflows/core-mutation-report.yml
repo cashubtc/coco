@@ -1,0 +1,39 @@
+name: core-mutation-report
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: core-mutation-report
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run core mutation report
+        run: bun run test:mutation:core
+
+      - name: Upload core mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-mutation-report
+          path: |
+            reports/mutation/core-unit/mutation.json
+            reports/mutation/core-unit/index.html
+          if-no-files-found: warn
