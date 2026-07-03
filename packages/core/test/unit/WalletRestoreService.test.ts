@@ -227,7 +227,7 @@ describe('WalletRestoreService', () => {
       Wallet.prototype.batchRestore = mockBatchRestore;
       Wallet.prototype.checkProofsStates = mockCheckProofsStates;
 
-      expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
+      await expect(service.sweepKeyset(mintUrl, keysetId, bip39seed)).rejects.toThrow(
         'Malformed state check',
       );
       expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
@@ -373,7 +373,7 @@ describe('WalletRestoreService', () => {
         }),
       );
 
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Restored less proofs than expected.',
       );
       expect(logger.warn).toHaveBeenCalledWith('Restored fewer proofs than previously stored', {
@@ -389,7 +389,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }]),
       ); // Wrong length
 
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Malformed state check',
       );
       expect(logger.error).toHaveBeenCalledWith('Malformed state check', {
@@ -431,7 +431,7 @@ describe('WalletRestoreService', () => {
         Promise.resolve([{ state: 'UNSPENT' }, { state: 'SPENT' }, { state: 'UNSPENT' }]),
       );
 
-      expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
+      await expect(service.restoreKeyset(mintUrl, mockWallet, keysetId)).rejects.toThrow(
         'Proof not found',
       );
       expect(logger.error).toHaveBeenCalledWith('Proof not found', { mintUrl, keysetId, index: 1 });

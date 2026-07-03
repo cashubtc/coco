@@ -478,7 +478,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
       const encoded = walletApi.encodePaymentRequest(pr);
 
-      expect(encoded).toStartWith('creqA');
+      expect(encoded.startsWith('creqA')).toBe(true);
     });
 
     it('should encode payment request as creqA when specified', () => {
@@ -486,7 +486,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
       const encoded = walletApi.encodePaymentRequest(pr, 'creqA');
 
-      expect(encoded).toStartWith('creqA');
+      expect(encoded.startsWith('creqA')).toBe(true);
     });
 
     it('should encode payment request as creqB when specified', () => {
@@ -494,7 +494,7 @@ describe('WalletApi - Trust Enforcement', () => {
 
       const encoded = walletApi.encodePaymentRequest(pr, 'creqB');
 
-      expect(encoded).toStartWith('CREQB');
+      expect(encoded.startsWith('CREQB')).toBe(true);
     });
   });
 });

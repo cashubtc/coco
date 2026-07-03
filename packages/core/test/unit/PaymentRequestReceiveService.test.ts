@@ -151,7 +151,7 @@ describe('PaymentRequestReceiveService', () => {
     });
 
     expect(operation.state).toBe('active');
-    expect(operation.encodedRequest).toStartWith('CREQB');
+    expect(operation.encodedRequest.startsWith('CREQB')).toBe(true);
     expect(operation.requestId).toBe('request-id');
   });
 

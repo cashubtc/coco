@@ -10,6 +10,10 @@ dist
 coverage
 *.lcov
 
+# mutation testing
+.stryker-tmp
+reports/mutation
+
 # logs
 logs
 _.log

@@ -851,7 +851,7 @@ describe('MeltOperationService', () => {
 
       (handler.prepare as Mock<any>).mockRejectedValue(new Error('prepare failed'));
 
-      expect(service.prepare('op-2')).rejects.toThrow('prepare failed');
+      await expect(service.prepare('op-2')).rejects.toThrow('prepare failed');
       expect(proofService.releaseProofs).toHaveBeenCalledWith(mintUrl, ['reserved']);
       expect(await meltOperationRepository.getById('op-2')).toBeNull();
     });
@@ -868,7 +868,7 @@ describe('MeltOperationService', () => {
       const first = service.prepare('op-3');
       await Promise.resolve();
 
-      expect(service.prepare('op-3')).rejects.toThrow(OperationInProgressError);
+      await expect(service.prepare('op-3')).rejects.toThrow(OperationInProgressError);
 
       releasePrepare!();
       await first;

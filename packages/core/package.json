@@ -10,7 +10,8 @@
   },
   "devDependencies": {
     "@cashu/coco-adapter-tests": "1.0.0",
-    "typescript-eslint": "^8.40.0"
+    "typescript-eslint": "^8.40.0",
+    "vitest": "^4.1.9"
   },
   "peerDependencies": {
     "typescript": "^5"
