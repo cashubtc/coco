@@ -14,9 +14,13 @@ import type { WalletService } from '../../services/WalletService';
 import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type {
+  ExecutingSendOperation,
+  FinalizedSendOperation,
+  InitSendOperation,
   PreparedSendOperation,
   PendingSendOperation,
   RolledBackSendOperation,
+  RollingBackSendOperation,
 } from '../../operations/send/SendOperation';
 import type { SendMethodHandler } from '../../operations/send/SendMethodHandler';
 
@@ -48,6 +52,67 @@ describe('SendOperationService', () => {
   const unitAmount = (amount: number, unit = 'sat') => ({
     amount: Amount.from(amount),
     unit,
+  });
+
+  const makeInitOperation = (id: string): InitSendOperation => ({
+    id,
+    state: 'init',
+    mintUrl,
+    amount: Amount.from(100),
+    unit: 'sat',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    method: 'default',
+    methodData: {},
+  });
+
+  const makePreparedOperation = (
+    id: string,
+    overrides: Partial<PreparedSendOperation> = {},
+  ): PreparedSendOperation => ({
+    id,
+    state: 'prepared',
+    mintUrl,
+    amount: Amount.from(100),
+    unit: 'sat',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    needsSwap: false,
+    fee: Amount.from(0),
+    inputAmount: Amount.from(100),
+    inputProofSecrets: ['proof-1'],
+    method: 'default',
+    methodData: {},
+    ...overrides,
+  });
+
+  const makeExecutingOperation = (id: string): ExecutingSendOperation => ({
+    ...makePreparedOperation(id),
+    state: 'executing',
+  });
+
+  const makePendingOperation = (
+    id: string,
+    overrides: Partial<PendingSendOperation> = {},
+  ): PendingSendOperation => ({
+    ...makePreparedOperation(id),
+    state: 'pending',
+    ...overrides,
+  });
+
+  const makeFinalizedOperation = (id: string): FinalizedSendOperation => ({
+    ...makePendingOperation(id),
+    state: 'finalized',
+  });
+
+  const makeRollingBackOperation = (id: string): RollingBackSendOperation => ({
+    ...makePendingOperation(id),
+    state: 'rolling_back',
+  });
+
+  const makeRolledBackOperation = (id: string): RolledBackSendOperation => ({
+    ...makePendingOperation(id),
+    state: 'rolled_back',
   });
 
   beforeEach(() => {
@@ -326,6 +391,114 @@ describe('SendOperationService', () => {
     const persisted = await sendOpRepo.getById(preparedOp.id);
     expect(persisted?.state).toBe('rolled_back');
     expect(persisted?.error).toBe('Explicit handler failure');
+  });
+
+  it('rejects rollback for a missing operation and releases the operation lock', async () => {
+    const operationId = 'missing-send-op';
+
+    await expect(service.rollback(operationId)).rejects.toThrow(
+      `Operation ${operationId} not found`,
+    );
+
+    expect(service.isOperationLocked(operationId)).toBe(false);
+    expect(walletService.getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+  });
+
+  it('rejects rollback for non-rollbackable states before handler or wallet side effects', async () => {
+    const rollback = mock(async () => {});
+    const guardedHandler: SendMethodHandler<'default'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      rollback,
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+
+    handlerProvider = new SendHandlerProvider({
+      default: guardedHandler,
+      p2pk: new P2pkSendHandler(),
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    const operations = [
+      makeFinalizedOperation('send-op-finalized'),
+      makeRolledBackOperation('send-op-rolled-back'),
+      makeRollingBackOperation('send-op-rolling-back'),
+      makeInitOperation('send-op-init'),
+      makeExecutingOperation('send-op-executing'),
+    ];
+
+    for (const operation of operations) {
+      await sendOpRepo.create(operation);
+
+      await expect(service.rollback(operation.id)).rejects.toThrow(
+        `Cannot rollback operation in state ${operation.state}`,
+      );
+
+      expect(service.isOperationLocked(operation.id)).toBe(false);
+    }
+
+    expect(rollback).not.toHaveBeenCalled();
+    expect(walletService.getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+  });
+
+  it('rejects pending P2PK rollback before handler rollback or wallet side effects', async () => {
+    const rollback = mock(async () => {});
+    const p2pkHandler: SendMethodHandler<'p2pk'> = {
+      prepare: mock(async () => {
+        throw new Error('not used');
+      }),
+      execute: mock(async () => {
+        throw new Error('not used');
+      }),
+      rollback,
+      recoverExecuting: mock(async () => {
+        throw new Error('not used');
+      }),
+    };
+    handlerProvider = new SendHandlerProvider({
+      default: new DefaultSendHandler(),
+      p2pk: p2pkHandler,
+    });
+    service = new SendOperationService(
+      sendOpRepo,
+      proofRepo,
+      proofService,
+      mintService,
+      walletService,
+      eventBus,
+      handlerProvider,
+      logger,
+    );
+
+    const pendingP2pkOp = makePendingOperation('send-op-pending-p2pk', {
+      method: 'p2pk',
+      methodData: { pubkey: 'receiver-pubkey' },
+    });
+    await sendOpRepo.create(pendingP2pkOp);
+
+    await expect(service.rollback(pendingP2pkOp.id)).rejects.toThrow(
+      'Cannot rollback pending P2PK send operation',
+    );
+
+    expect(rollback).not.toHaveBeenCalled();
+    expect(walletService.getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+    expect(service.isOperationLocked(pendingP2pkOp.id)).toBe(false);
+    expect((await sendOpRepo.getById(pendingP2pkOp.id))?.state).toBe('pending');
   });
 
   it('waits for an in-progress finalization to finish before returning', async () => {
