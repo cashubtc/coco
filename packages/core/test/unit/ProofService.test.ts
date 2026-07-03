@@ -474,6 +474,100 @@ describe('ProofService', () => {
   });
 
   describe('state changes and deletions', () => {
+    it('releaseProofs clears reservations and emits event', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({ secret: 'reserved-a', id: 'k1' }),
+        makeProof({ secret: 'reserved-b', id: 'k1' }),
+      ]);
+      await proofRepo.reserveProofs(mintUrl, ['reserved-a', 'reserved-b'], 'operation-1');
+
+      const releasedEvents: Array<{ mintUrl: string; secrets: string[] }> = [];
+      bus.on('proofs:released', (payload) => {
+        releasedEvents.push(payload);
+      });
+
+      await service.releaseProofs(mintUrl, ['reserved-a', 'reserved-b']);
+
+      const releasedProofA = await proofRepo.getProofBySecret(mintUrl, 'reserved-a');
+      const releasedProofB = await proofRepo.getProofBySecret(mintUrl, 'reserved-b');
+      expect(releasedProofA).toMatchObject({ secret: 'reserved-a', state: 'ready' });
+      expect(releasedProofB).toMatchObject({ secret: 'reserved-b', state: 'ready' });
+      expect(releasedProofA?.usedByOperationId).toBeUndefined();
+      expect(releasedProofB?.usedByOperationId).toBeUndefined();
+      expect(releasedEvents).toEqual([{ mintUrl, secrets: ['reserved-a', 'reserved-b'] }]);
+    });
+
+    it('restoreProofsToReady marks proofs ready, clears reservations, and emits events', async () => {
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await proofRepo.saveProofs(mintUrl, [
+        makeProof({
+          secret: 'inflight-proof',
+          id: 'k1',
+          state: 'inflight',
+          usedByOperationId: 'operation-1',
+        }),
+        makeProof({
+          secret: 'reserved-proof',
+          id: 'k1',
+          state: 'ready',
+          usedByOperationId: 'operation-1',
+        }),
+      ]);
+
+      const stateChangedEvents: Array<{
+        mintUrl: string;
+        secrets: string[];
+        state: 'inflight' | 'ready' | 'spent';
+      }> = [];
+      const releasedEvents: Array<{ mintUrl: string; secrets: string[] }> = [];
+      bus.on('proofs:state-changed', (payload) => {
+        stateChangedEvents.push(payload);
+      });
+      bus.on('proofs:released', (payload) => {
+        releasedEvents.push(payload);
+      });
+
+      await service.restoreProofsToReady(mintUrl, ['inflight-proof', 'reserved-proof']);
+
+      const restoredInflightProof = await proofRepo.getProofBySecret(mintUrl, 'inflight-proof');
+      const restoredReservedProof = await proofRepo.getProofBySecret(mintUrl, 'reserved-proof');
+      expect(restoredInflightProof).toMatchObject({ secret: 'inflight-proof', state: 'ready' });
+      expect(restoredReservedProof).toMatchObject({ secret: 'reserved-proof', state: 'ready' });
+      expect(restoredInflightProof?.usedByOperationId).toBeUndefined();
+      expect(restoredReservedProof?.usedByOperationId).toBeUndefined();
+      expect(stateChangedEvents).toEqual([
+        {
+          mintUrl,
+          secrets: ['inflight-proof', 'reserved-proof'],
+          state: 'ready',
+        },
+      ]);
+      expect(releasedEvents).toEqual([
+        { mintUrl, secrets: ['inflight-proof', 'reserved-proof'] },
+      ]);
+    });
+
     it('setProofState updates repository and emits event', async () => {
       const service = new ProofService(
         counterService,
