@@ -15,9 +15,12 @@
     "!packages/core/vitest.config.ts"
   ],
   "ignoreStatic": true,
-  "reporters": ["progress", "clear-text", "html"],
+  "reporters": ["progress", "clear-text", "html", "json"],
   "htmlReporter": {
     "fileName": "reports/mutation/core-unit/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/core-unit/mutation.json"
   },
   "thresholds": {
     "high": 80,
