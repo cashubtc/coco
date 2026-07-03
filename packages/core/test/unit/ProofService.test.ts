@@ -989,6 +989,109 @@ describe('ProofService', () => {
     });
   });
 
+  describe('prepareProofsForReceiving', () => {
+    const createService = () =>
+      new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+    const makeLockedSecret = (scriptType: string, recipientPublicKey: string, tags?: string[][]) =>
+      JSON.stringify([
+        scriptType,
+        {
+          nonce: 'nonce-1',
+          data: recipientPublicKey,
+          ...(tags ? { tags } : {}),
+        },
+      ]);
+
+    const expectProofValidationFailure = async (promise: Promise<unknown>, message: string) => {
+      try {
+        await promise;
+        throw new Error('Expected proof validation to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProofValidationError);
+        expect((error as Error).message).toBe(message);
+      }
+    };
+
+    it('returns regular non-JSON proof secrets unchanged and does not sign them', async () => {
+      const signProof = mock(async (proof: any, publicKey: string) => ({
+        ...proof,
+        witness: `signature-for-${publicKey}`,
+      }));
+      keyRingService = { signProof };
+      const service = createService();
+      const regularProof = makeProof({ secret: 'regular-secret' });
+
+      const result = await service.prepareProofsForReceiving([regularProof]);
+
+      expect(result).toEqual([regularProof]);
+      expect(result[0]).toBe(regularProof);
+      expect(signProof).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-P2PK JSON locked proofs before signing', async () => {
+      const signProof = mock(async (proof: any, publicKey: string) => ({
+        ...proof,
+        witness: `signature-for-${publicKey}`,
+      }));
+      keyRingService = { signProof };
+      const service = createService();
+      const lockedProof = makeProof({
+        secret: makeLockedSecret('HTLC', 'recipient-pubkey'),
+      });
+
+      await expectProofValidationFailure(
+        service.prepareProofsForReceiving([lockedProof]),
+        'Only P2PK locking scripts are supported',
+      );
+      expect(signProof).not.toHaveBeenCalled();
+    });
+
+    it('rejects P2PK proofs with additional pubkeys before signing', async () => {
+      const signProof = mock(async (proof: any, publicKey: string) => ({
+        ...proof,
+        witness: `signature-for-${publicKey}`,
+      }));
+      keyRingService = { signProof };
+      const service = createService();
+      const multisigProof = makeProof({
+        secret: makeLockedSecret('P2PK', 'recipient-pubkey', [['pubkeys', 'other-pubkey']]),
+      });
+
+      await expectProofValidationFailure(
+        service.prepareProofsForReceiving([multisigProof]),
+        'Multisig is not supported',
+      );
+      expect(signProof).not.toHaveBeenCalled();
+    });
+
+    it('signs a valid P2PK proof with the recipient public key and returns the replacement', async () => {
+      const recipientPublicKey = 'recipient-pubkey';
+      const p2pkProof = makeProof({
+        secret: makeLockedSecret('P2PK', recipientPublicKey),
+      });
+      const signedProof = { ...p2pkProof, witness: 'signed-witness' };
+      const signProof = mock(async () => signedProof);
+      keyRingService = { signProof };
+      const service = createService();
+
+      const result = await service.prepareProofsForReceiving([p2pkProof]);
+
+      expect(signProof).toHaveBeenCalledWith(p2pkProof, recipientPublicKey);
+      expect(result).toEqual([signedProof]);
+      expect(result[0]).toBe(signedProof);
+    });
+  });
+
   describe('reserveProofs', () => {
     it('emits the reserved input amount without counting operation output proofs', async () => {
       const service = new ProofService(
