@@ -1,4 +1,4 @@
 interface:
-  display_name: "Stryker Triage"
-  short_description: "Turn Stryker JSON into a small frontier of agent-ready slices"
-  default_prompt: "Use $stryker-triage to parse the latest Stryker mutation JSON and propose the next low-hanging agent slices."
+  display_name: 'Stryker Triage'
+  short_description: 'Turn Stryker JSON into a small frontier of agent-ready slices'
+  default_prompt: 'Use $stryker-triage to parse the latest Stryker mutation JSON and propose the next low-hanging agent slices.'
