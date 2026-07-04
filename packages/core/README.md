@@ -113,16 +113,28 @@ const pendingMint = await manager.ops.mint.prepare({
   amount: 100,
 });
 
-const finalized = new Promise<void>((resolve) => {
-  const off = manager.on('mint-op:finalized', ({ operationId }) => {
+const completed = new Promise<void>((resolve, reject) => {
+  let offFinalized = () => {};
+  let offFailed = () => {};
+  const cleanup = () => {
+    offFinalized();
+    offFailed();
+  };
+
+  offFinalized = manager.on('mint-op:finalized', ({ operationId }) => {
     if (operationId !== pendingMint.id) return;
-    off();
+    cleanup();
     resolve();
+  });
+  offFailed = manager.on('mint-op:failed', ({ operationId, operation }) => {
+    if (operationId !== pendingMint.id) return;
+    cleanup();
+    reject(new Error(operation.terminalFailure?.reason ?? operation.error ?? 'Mint failed'));
   });
 });
 
 // pay pendingMint.request externally; default processors finalize after payment
-await finalized;
+await completed;
 
 // Check balances
 const balances = await manager.wallet.balances.byMint();
@@ -373,6 +385,7 @@ include:
 - `mint-op:requeue` → `{ mintUrl, operationId, operation }`
 - `mint-op:executing` → `{ mintUrl, operationId, operation }`
 - `mint-op:finalized` → `{ mintUrl, operationId, operation }`
+- `mint-op:failed` → `{ mintUrl, operationId, operation }`
 - `send:prepared` → `{ mintUrl, operationId, operation }`
 - `send:pending` → `{ mintUrl, operationId, operation, token }`
 - `send:finalized` → `{ mintUrl, operationId, operation }`

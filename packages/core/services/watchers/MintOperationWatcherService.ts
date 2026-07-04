@@ -107,6 +107,7 @@ export class MintOperationWatcherService {
   private offPending?: () => void;
   private offExecuting?: () => void;
   private offFinalized?: () => void;
+  private offFailed?: () => void;
   private offUntrusted?: () => void;
 
   constructor(
@@ -193,6 +194,17 @@ export class MintOperationWatcherService {
         await this.stopWatchingOperation(operationId);
       } catch (err) {
         this.logger?.error('Failed to stop watching finalized mint operation', {
+          operationId,
+          err,
+        });
+      }
+    });
+
+    this.offFailed = this.bus.on('mint-op:failed', async ({ operationId }) => {
+      try {
+        await this.stopWatchingOperation(operationId);
+      } catch (err) {
+        this.logger?.error('Failed to stop watching failed mint operation', {
           operationId,
           err,
         });
@@ -306,6 +318,16 @@ export class MintOperationWatcherService {
         // ignore
       } finally {
         this.offFinalized = undefined;
+      }
+    }
+
+    if (this.offFailed) {
+      try {
+        this.offFailed();
+      } catch {
+        // ignore
+      } finally {
+        this.offFailed = undefined;
       }
     }
 
