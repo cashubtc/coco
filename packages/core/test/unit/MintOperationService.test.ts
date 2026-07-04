@@ -743,6 +743,71 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['21']);
   });
 
+  it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection without emitting', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-snapshot-paid',
+        request: 'lnbc1paid',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'bolt11', {
+      quote: 'quote-snapshot-paid',
+      request: 'lnbc1paid',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
+
+    expect(observed.state).toBe('PAID');
+    expect(stored?.state).toBe('PAID');
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot preserves reusable accounting merge behavior without emitting', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-stale-snapshot';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(8),
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(7),
+      amount_issued: Amount.from(5),
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    if (observed.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(stored?.method).toBe('onchain');
+    if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
+    expect(observed.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(stored.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
   it('prepare fails before creating an operation when the quote is missing', async () => {
     await expect(
       service.prepare({ mintUrl, method: 'bolt11', quoteId: 'missing-quote' }, Amount.from(10)),
