@@ -640,7 +640,8 @@ export async function runMintOperationRepositoryContract(
 
         const pending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
 
-        expect(pending.map((quote) => quote.quoteId)).toEqual(['accounting-pending']);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.quoteId).toBe('accounting-pending');
         if (pending[0]?.method !== 'bolt11') {
           throw new Error(`Expected BOLT11 quote, got ${pending[0]?.method}`);
         }
@@ -705,7 +706,6 @@ export async function runMintOperationRepositoryContract(
             amountPaid: Amount.from(0),
             amountIssued: Amount.from(0),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         };
@@ -788,7 +788,6 @@ export async function runMintOperationRepositoryContract(
             amountPaid: Amount.from(21),
             amountIssued: Amount.from(8),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
@@ -842,7 +841,6 @@ export async function runMintOperationRepositoryContract(
             amountPaid: Amount.from(21),
             amountIssued: Amount.from(8),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
@@ -864,7 +862,6 @@ export async function runMintOperationRepositoryContract(
             amountPaid: Amount.from(5),
             amountIssued: Amount.from(0),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
