@@ -1,6 +1,6 @@
 # cashu-ts owns wire quote normalization
 
-Status: proposed
+Status: accepted
 
 Coco relies on cashu-ts v5 `Mint` and `Wallet` APIs to normalize raw mint quote responses from
 mints, including legacy quote accounting derivation. Coco does not duplicate that wire-level

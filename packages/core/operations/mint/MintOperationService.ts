@@ -884,13 +884,13 @@ export class MintOperationService {
 
         return total.add(operation.amount);
       }, Amount.zero());
-      const effectiveIssued = locallyIssued.greaterThan(quote.quoteData.amountIssued)
+      const effectiveIssued = locallyIssued.greaterThan(quote.amountIssued)
         ? locallyIssued
-        : quote.quoteData.amountIssued;
+        : quote.amountIssued;
 
-      remoteAvailable = quote.quoteData.amountPaid.lessThan(effectiveIssued)
+      remoteAvailable = quote.amountPaid.lessThan(effectiveIssued)
         ? Amount.zero()
-        : quote.quoteData.amountPaid.subtract(effectiveIssued);
+        : quote.amountPaid.subtract(effectiveIssued);
     }
 
     const locallyReserved = siblings.reduce((total, operation) => {
