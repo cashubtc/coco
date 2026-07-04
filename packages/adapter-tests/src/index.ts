@@ -307,6 +307,9 @@ export function createDummyMintQuote(
     unit: 'sat',
     expiry: 1_730_000_000,
     reusable: false,
+    amountPaid: Amount.zero(),
+    amountIssued: Amount.zero(),
+    remoteUpdatedAt: null,
     quoteData: {
       amount: Amount.from(3),
     },
@@ -580,8 +583,6 @@ export async function runMintOperationRepositoryContract(
           mintUrl: 'https://mint.test/',
           quoteId: 'canonical-quote',
           quote: 'canonical-quote',
-          lastObservedRemoteState: 'UNPAID',
-          lastObservedRemoteStateAt: 10,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
         await repositories.mintQuoteRepository.setMintQuoteState(
@@ -607,9 +608,10 @@ export async function runMintOperationRepositoryContract(
           throw new Error(`Expected bolt11 quote, got ${stored!.method}`);
         }
         expect(stored!.state).toBe('PAID');
+        expect(stored!.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored!.amountIssued.equals(Amount.zero())).toBe(true);
+        expect(stored!.remoteUpdatedAt).toBe(null);
         expect(stored!.quoteData.amount.equals(Amount.from(3))).toBe(true);
-        expect(stored!.lastObservedRemoteState).toBe('PAID');
-        expect(stored!.lastObservedRemoteStateAt).toBe(20);
       } finally {
         await dispose();
       }
@@ -660,6 +662,9 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '4'),
           reusable: true,
+          amountPaid: Amount.zero(),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: {
             pubkey: '02'.padEnd(66, '4'),
             amountPaid: Amount.from(0),
@@ -740,6 +745,9 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '1'),
           reusable: true,
+          amountPaid: Amount.from(21),
+          amountIssued: Amount.from(8),
+          remoteUpdatedAt: 1_700_000_000,
           quoteData: {
             pubkey: '02'.padEnd(66, '1'),
             amountPaid: Amount.from(21),
@@ -765,6 +773,9 @@ export async function runMintOperationRepositoryContract(
           throw new Error(`Expected onchain quote, got ${stored.method}`);
         }
         expect(stored.reusable).toBe(true);
+        expect(stored.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.amountIssued.equals(Amount.from(8))).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(1_700_000_000);
         expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '1'));
         expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
         expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
@@ -787,6 +798,9 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '2'),
           reusable: true,
+          amountPaid: Amount.from(21),
+          amountIssued: Amount.from(8),
+          remoteUpdatedAt: 1_700_000_001,
           quoteData: {
             pubkey: '02'.padEnd(66, '2'),
             amount: Amount.from(12),
@@ -807,6 +821,9 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '3'),
           reusable: true,
+          amountPaid: Amount.from(5),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: {
             pubkey: '02'.padEnd(66, '3'),
             amountPaid: Amount.from(5),
@@ -838,6 +855,9 @@ export async function runMintOperationRepositoryContract(
         }
         expect(stored.reusable).toBe(true);
         expect(stored.amount?.equals(Amount.from(12))).toBe(true);
+        expect(stored.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.amountIssued.equals(Amount.from(8))).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(1_700_000_001);
         expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '2'));
         expect(stored.quoteData.amount?.equals(Amount.from(12))).toBe(true);
         expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
@@ -853,6 +873,9 @@ export async function runMintOperationRepositoryContract(
         }
         expect(amountless.reusable).toBe(true);
         expect(amountless.amount).toBe(undefined);
+        expect(amountless.amountPaid.equals(Amount.from(5))).toBe(true);
+        expect(amountless.amountIssued.equals(Amount.zero())).toBe(true);
+        expect(amountless.remoteUpdatedAt).toBe(null);
         expect(amountless.quoteData.amount).toBe(undefined);
         expect(amountless.quoteData.pubkey).toBe('02'.padEnd(66, '3'));
         expect(amountless.quoteData.amountPaid.equals(Amount.from(5))).toBe(true);

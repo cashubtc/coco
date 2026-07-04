@@ -1,5 +1,6 @@
 import {
   deserializeAmount,
+  deriveMintQuoteAccountingFromState,
   normalizeMintUrl,
   type LegacyMintQuoteRepository,
   type MintMethodRemoteState,
@@ -35,6 +36,7 @@ export class IdbLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
       )
       .map((row) => {
         const amount = deserializeAmount(row.amount);
+        const accounting = deriveMintQuoteAccountingFromState(row.state, amount);
         return {
           mintUrl: row.mintUrl,
           method: 'bolt11',
@@ -46,9 +48,10 @@ export class IdbLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
           unit: row.unit,
           expiry: row.expiry,
           pubkey: row.pubkey ?? undefined,
-          lastObservedRemoteState: row.state,
-          lastObservedRemoteStateAt: now,
           reusable: false,
+          amountPaid: accounting.amountPaid,
+          amountIssued: accounting.amountIssued,
+          remoteUpdatedAt: null,
           quoteData: { amount },
           createdAt: now,
           updatedAt: now,

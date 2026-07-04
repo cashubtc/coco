@@ -103,7 +103,7 @@ const projectionSelect = `
       NULL AS inputProofsJson,
       NULL AS metadata,
       op.id AS operationId,
-      q.lastObservedRemoteState AS remoteState,
+      q.state AS remoteState,
       op.error
     FROM coco_cashu_mint_operations op
     LEFT JOIN coco_cashu_canonical_mint_quotes q

@@ -39,6 +39,8 @@ export type {
 } from './models/index.ts';
 export {
   compareHistoryEntries,
+  deriveBolt11MintQuoteStateFromAccounting,
+  deriveMintQuoteAccountingFromState,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   isMintQuotePending,

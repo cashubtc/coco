@@ -11,6 +11,50 @@ function normalizeStoredUnit(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
+function parseStoredJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || value.length === 0) return {};
+  const parsed = JSON.parse(value);
+  return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+}
+
+function deriveStoredMintQuoteAccounting(row: {
+  method?: unknown;
+  state?: unknown;
+  amount?: unknown;
+  amountPaid?: unknown;
+  amountIssued?: unknown;
+  quoteDataJson?: unknown;
+}): { amountPaid: string; amountIssued: string } {
+  if (row.amountPaid != null && row.amountIssued != null) {
+    return {
+      amountPaid: String(row.amountPaid),
+      amountIssued: String(row.amountIssued),
+    };
+  }
+
+  const quoteData = parseStoredJsonObject(row.quoteDataJson);
+  if (quoteData.amountPaid != null && quoteData.amountIssued != null) {
+    return {
+      amountPaid: String(quoteData.amountPaid),
+      amountIssued: String(quoteData.amountIssued),
+    };
+  }
+
+  if (row.method === 'bolt11') {
+    if (row.state === 'PAID') {
+      return { amountPaid: String(row.amount ?? '0'), amountIssued: '0' };
+    }
+    if (row.state === 'ISSUED') {
+      return {
+        amountPaid: String(row.amount ?? '0'),
+        amountIssued: String(row.amount ?? '0'),
+      };
+    }
+  }
+
+  return { amountPaid: '0', amountIssued: '0' };
+}
+
 function removeNullOptionalPaymentRequestAttemptIndexValues(row: {
   transportMessageId?: unknown;
   receiveOperationId?: unknown;
@@ -1076,4 +1120,44 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_payment_request_receive_attempts:
       '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
   });
+
+  // Version 32: Store canonical mint quote accounting as first-class object fields.
+  db.version(32)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_melt_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_canonical_mint_quotes')
+        .toCollection()
+        .modify((row: Record<string, unknown>) => {
+          const accounting = deriveStoredMintQuoteAccounting(row);
+          row.amountPaid = accounting.amountPaid;
+          row.amountIssued = accounting.amountIssued;
+          row.remoteUpdatedAt = row.remoteUpdatedAt ?? null;
+          delete row.lastObservedRemoteState;
+          delete row.lastObservedRemoteStateAt;
+        });
+    });
 }

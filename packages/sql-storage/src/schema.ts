@@ -142,6 +142,91 @@ async function backfillSendOperationTokensFromHistory(db: SqlDatabase): Promise<
    `);
 }
 
+async function migrateMintQuoteAccountingColumns(db: SqlDatabase): Promise<void> {
+  if (!(await tableExists(db, 'coco_cashu_canonical_mint_quotes'))) return;
+
+  const columns = await getTableColumns(db, 'coco_cashu_canonical_mint_quotes');
+  const paidSource = columns.has('amountPaid')
+    ? 'amountPaid'
+    : "json_extract(quoteDataJson, '$.amountPaid')";
+  const issuedSource = columns.has('amountIssued')
+    ? 'amountIssued'
+    : "json_extract(quoteDataJson, '$.amountIssued')";
+  const remoteUpdatedAtSource = columns.has('remoteUpdatedAt') ? 'remoteUpdatedAt' : 'NULL';
+
+  await db.exec(`
+    ALTER TABLE coco_cashu_canonical_mint_quotes
+      RENAME TO coco_cashu_canonical_mint_quotes_legacy_accounting;
+
+    CREATE TABLE coco_cashu_canonical_mint_quotes (
+      mintUrl TEXT NOT NULL,
+      method TEXT NOT NULL,
+      quoteId TEXT NOT NULL,
+      state TEXT CHECK (state IS NULL OR state IN ('UNPAID','PAID','ISSUED')),
+      request TEXT NOT NULL,
+      amount TEXT,
+      unit TEXT NOT NULL,
+      expiry INTEGER,
+      pubkey TEXT,
+      quoteDataJson TEXT NOT NULL DEFAULT '{}',
+      amountPaid TEXT NOT NULL DEFAULT '0',
+      amountIssued TEXT NOT NULL DEFAULT '0',
+      remoteUpdatedAt INTEGER,
+      reusable INTEGER NOT NULL DEFAULT 0,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      PRIMARY KEY (mintUrl, method, quoteId)
+    );
+
+    INSERT INTO coco_cashu_canonical_mint_quotes (
+      mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey, quoteDataJson,
+      amountPaid, amountIssued, remoteUpdatedAt, reusable, createdAt, updatedAt
+    )
+    SELECT
+      mintUrl,
+      method,
+      quoteId,
+      state,
+      request,
+      amount,
+      unit,
+      expiry,
+      pubkey,
+      quoteDataJson,
+      CAST(
+        CASE
+          WHEN ${paidSource} IS NOT NULL THEN ${paidSource}
+          WHEN method = 'bolt11' AND state = 'UNPAID' THEN '0'
+          WHEN method = 'bolt11' AND state IN ('PAID','ISSUED') THEN COALESCE(amount, '0')
+          ELSE '0'
+        END AS TEXT
+      ),
+      CAST(
+        CASE
+          WHEN ${issuedSource} IS NOT NULL THEN ${issuedSource}
+          WHEN method = 'bolt11' AND state = 'ISSUED' THEN COALESCE(amount, '0')
+          ELSE '0'
+        END AS TEXT
+      ),
+      ${remoteUpdatedAtSource},
+      reusable,
+      createdAt,
+      updatedAt
+    FROM coco_cashu_canonical_mint_quotes_legacy_accounting;
+
+    DROP TABLE coco_cashu_canonical_mint_quotes_legacy_accounting;
+
+    CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_state
+      ON coco_cashu_canonical_mint_quotes(state);
+    CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_mint
+      ON coco_cashu_canonical_mint_quotes(mintUrl);
+    CREATE INDEX IF NOT EXISTS idx_coco_cashu_canonical_mint_quotes_method
+      ON coco_cashu_canonical_mint_quotes(method);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_canonical_mint_quotes_identity
+      ON coco_cashu_canonical_mint_quotes(mintUrl, quoteId);
+  `);
+}
+
 async function migrateAmountColumnsToText(db: SqlDatabase): Promise<void> {
   if (await tableExists(db, 'coco_cashu_proofs')) {
     await db.exec(`
@@ -1445,6 +1530,10 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_quotes_identity
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
+  },
+  {
+    id: '037_mint_quote_accounting_columns',
+    run: migrateMintQuoteAccountingColumns,
   },
 ];
 

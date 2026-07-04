@@ -73,6 +73,9 @@ describe('MintOperationWatcherService', () => {
     expiry: Math.floor(Date.now() / 1000) + 3600,
     state: 'UNPAID',
     reusable: false,
+    amountPaid: Amount.zero(),
+    amountIssued: Amount.zero(),
+    remoteUpdatedAt: null,
     quoteData: {
       amount: Amount.from(10),
     },
@@ -89,6 +92,9 @@ describe('MintOperationWatcherService', () => {
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     reusable: true,
+    amountPaid: Amount.zero(),
+    amountIssued: Amount.zero(),
+    remoteUpdatedAt: null,
     quoteData: {
       pubkey: 'pubkey-1',
       amountPaid: Amount.zero(),
@@ -277,6 +283,9 @@ describe('MintOperationWatcherService', () => {
         expiry: quote.expiry,
         state: quote.state,
         reusable: false as const,
+        amountPaid: quote.amount_paid,
+        amountIssued: quote.amount_issued,
+        remoteUpdatedAt: quote.updated_at,
         quoteData: {
           amount: quote.amount,
         },
@@ -383,6 +392,9 @@ describe('MintOperationWatcherService', () => {
         expiry: quote.expiry,
         state: quote.state,
         reusable: false as const,
+        amountPaid: quote.amount_paid,
+        amountIssued: quote.amount_issued,
+        remoteUpdatedAt: quote.updated_at,
         quoteData: {
           amount: quote.amount,
         },

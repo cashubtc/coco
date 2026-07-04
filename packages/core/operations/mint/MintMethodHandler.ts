@@ -37,9 +37,10 @@ type OptionalV5QuoteBase<T extends MintQuoteBaseResponse> = Omit<
  */
 export type CompatibleMintQuoteBolt11Response = Omit<
   OptionalV5QuoteBase<MintQuoteBolt11Response>,
-  'amount'
+  'amount' | 'state'
 > & {
   amount: Amount;
+  state?: MintQuoteBolt11Response['state'];
 };
 export type CompatibleMintQuoteOnchainResponse = OptionalV5QuoteBase<MintQuoteOnchainResponse>;
 export type CompatibleMintQuoteBolt12Response = Omit<

@@ -200,9 +200,10 @@ describe('initializeCoco', () => {
           unit: 'sat',
           expiry: Math.floor(Date.now() / 1000) + 3600,
           state: 'PAID',
-          lastObservedRemoteState: 'PAID',
-          lastObservedRemoteStateAt: observedAt,
           reusable: false,
+          amountPaid: Amount.from(10),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: {
             amount: Amount.from(10),
           },

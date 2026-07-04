@@ -1,7 +1,4 @@
-import {
-  Amount,
-  type AmountLike,
-} from '@cashu/cashu-ts';
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type { UnitAmount } from '../amounts.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts';
 import type { EventBus } from '../events/EventBus';
@@ -12,6 +9,8 @@ import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
 import {
   getMintQuoteAmount,
+  assertValidMintQuoteAccounting,
+  deriveMintQuoteAccountingFromState,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -93,8 +92,8 @@ function getRemoteStateChange(
       | undefined;
     if (!snapshot || hasReusableSettlementAmounts(snapshot)) {
       return (
-        !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
-        !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
+        !existing.amountPaid.equals(incoming.amountPaid) ||
+        !existing.amountIssued.equals(incoming.amountIssued)
       );
     }
 
@@ -138,15 +137,16 @@ function resolveMintQuoteObservation(
 
   let canonicalQuote = incoming;
   if (existing?.reusable && canonicalQuote.reusable) {
+    const amountPaid = maxAmount(existing.amountPaid, canonicalQuote.amountPaid);
+    const amountIssued = maxAmount(existing.amountIssued, canonicalQuote.amountIssued);
     canonicalQuote = {
       ...canonicalQuote,
+      amountPaid,
+      amountIssued,
       quoteData: {
         ...canonicalQuote.quoteData,
-        amountPaid: maxAmount(existing.quoteData.amountPaid, canonicalQuote.quoteData.amountPaid),
-        amountIssued: maxAmount(
-          existing.quoteData.amountIssued,
-          canonicalQuote.quoteData.amountIssued,
-        ),
+        amountPaid,
+        amountIssued,
       },
     };
   }
@@ -507,7 +507,14 @@ export class QuoteLifecycle {
       normalizedMintUrl,
       method,
       quote,
-      (resolvedQuote) => this.assertMintQuoteCapabilities(resolvedQuote),
+      async (resolvedQuote) => {
+        assertValidMintQuoteAccounting(
+          resolvedQuote.quoteId,
+          resolvedQuote.amountPaid,
+          resolvedQuote.amountIssued,
+        );
+        await this.assertMintQuoteCapabilities(resolvedQuote);
+      },
     );
     await this.emitMintQuoteUpdatedIfNeeded(imported, remoteStateChanged);
     return imported as MintQuote<M>;
@@ -532,6 +539,13 @@ export class QuoteLifecycle {
     method: MintMethod,
     quote: MintMethodQuoteSnapshot,
   ): MintQuote {
+    const snapshotMethod = (quote as { method?: unknown }).method;
+    if (snapshotMethod !== undefined && snapshotMethod !== method) {
+      throw new ProofValidationError(
+        `Mint quote ${quote.quote} reported method ${String(snapshotMethod)}, not ${method}`,
+      );
+    }
+
     if (method === 'bolt11') {
       const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
       const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
@@ -604,8 +618,7 @@ export class QuoteLifecycle {
       {
         ...existing,
         state,
-        lastObservedRemoteState: state,
-        lastObservedRemoteStateAt: observedAt,
+        ...deriveMintQuoteAccountingFromState(state, existing.amount),
         updatedAt: observedAt,
       },
       {
@@ -991,6 +1004,9 @@ export class QuoteLifecycle {
       pubkey: operation.pubkey,
       state: 'UNPAID',
       reusable: false,
+      amountPaid: Amount.zero(),
+      amountIssued: Amount.zero(),
+      remoteUpdatedAt: null,
       quoteData: {
         amount: operation.amount,
       },

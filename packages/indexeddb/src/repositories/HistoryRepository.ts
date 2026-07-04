@@ -193,7 +193,7 @@ export class IdbHistoryRepository implements HistoryRepository {
             | undefined;
           if (!row) return null;
           const quote = await this.getMintQuoteRowForOperation(tx, row);
-          return this.mintRowToEntry(row, quote?.lastObservedRemoteState ?? undefined);
+          return this.mintRowToEntry(row, quote?.state ?? undefined);
         }
         case 'receive': {
           const row = (await tx.table('coco_cashu_receive_operations').get(parsed.operationId)) as
@@ -239,8 +239,8 @@ export class IdbHistoryRepository implements HistoryRepository {
     await Promise.all(
       rows.map(async (row) => {
         const quote = await this.getMintQuoteRowForOperation(tx, row);
-        if (quote?.lastObservedRemoteState) {
-          result.set(row.id, quote.lastObservedRemoteState);
+        if (quote?.state) {
+          result.set(row.id, quote.state);
         }
       }),
     );

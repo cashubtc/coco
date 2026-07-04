@@ -3,6 +3,8 @@ import {
   deserializeAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
+  deriveBolt11MintQuoteStateFromAccounting,
+  deriveMintQuoteAccountingFromState,
   isMintQuotePending,
   isStatefulMintQuote,
   normalizeMintUrl,
@@ -30,6 +32,8 @@ function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
 
 function rowToMintQuote(row: MintQuoteRow): MintQuote {
   const quoteData = parseQuoteData(row.quoteDataJson);
+  const amountPaid = deserializeAmount(row.amountPaid ?? quoteData.amountPaid ?? 0);
+  const amountIssued = deserializeAmount(row.amountIssued ?? quoteData.amountIssued ?? 0);
   if (row.method === 'onchain' || row.method === 'bolt12') {
     const pubkey = quoteData.pubkey ?? row.pubkey ?? '';
     const amountValue = quoteData.amount ?? row.amount ?? undefined;
@@ -48,20 +52,33 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
       expiry: row.expiry,
       pubkey,
       reusable: true,
+      amountPaid,
+      amountIssued,
+      remoteUpdatedAt: row.remoteUpdatedAt ?? null,
       quoteData: {
         pubkey,
         ...(amount !== undefined ? { amount } : {}),
-        amountPaid: deserializeAmount(quoteData.amountPaid ?? 0),
-        amountIssued: deserializeAmount(quoteData.amountIssued ?? 0),
+        amountPaid,
+        amountIssued,
       },
-      lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } as MintQuote;
   }
 
   const amount = deserializeAmount(quoteData.amount ?? row.amount ?? 0);
-  const state = (row.state ?? row.lastObservedRemoteState ?? 'UNPAID') as MintMethodRemoteState;
+  const accounting =
+    row.amountPaid !== undefined && row.amountIssued !== undefined
+      ? { amountPaid, amountIssued }
+      : deriveMintQuoteAccountingFromState(
+          (row.state ?? 'UNPAID') as MintMethodRemoteState,
+          amount,
+        );
+  const state = (row.state ??
+    deriveBolt11MintQuoteStateFromAccounting(
+      accounting.amountPaid,
+      accounting.amountIssued,
+    )) as MintMethodRemoteState;
   return {
     mintUrl: row.mintUrl,
     method: 'bolt11',
@@ -73,9 +90,10 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
     unit: row.unit,
     expiry: row.expiry,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: (row.lastObservedRemoteState ?? state) as MintMethodRemoteState,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     reusable: false,
+    amountPaid: accounting.amountPaid,
+    amountIssued: accounting.amountIssued,
+    remoteUpdatedAt: row.remoteUpdatedAt ?? null,
     quoteData: { amount },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -92,15 +110,11 @@ function serializeQuoteData(quote: MintQuote): string {
     return stringifyJson({
       pubkey: quote.quoteData.pubkey,
       ...(amount !== undefined ? { amount: serializeAmount(amount) } : {}),
-      amountPaid: serializeAmount(quote.quoteData.amountPaid),
-      amountIssued: serializeAmount(quote.quoteData.amountIssued),
     });
   }
 
   return stringifyJson({
     pubkey: quote.quoteData.pubkey,
-    amountPaid: serializeAmount(quote.quoteData.amountPaid),
-    amountIssued: serializeAmount(quote.quoteData.amountIssued),
   });
 }
 
@@ -165,8 +179,9 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       expiry: quote.expiry,
       pubkey: quote.pubkey ?? null,
       quoteDataJson: serializeQuoteData(quote),
-      lastObservedRemoteState: getMintQuoteRemoteState(quote) ?? null,
-      lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
+      amountPaid: serializeAmount(quote.amountPaid),
+      amountIssued: serializeAmount(quote.amountIssued),
+      remoteUpdatedAt: quote.remoteUpdatedAt,
       reusable: quote.reusable ? 1 : 0,
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt || now,
@@ -185,11 +200,14 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       .table('coco_cashu_canonical_mint_quotes')
       .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
     if (!existing) return;
+    const existingQuote = rowToMintQuote(existing);
+    if (!isStatefulMintQuote(existingQuote)) return;
+    const accounting = deriveMintQuoteAccountingFromState(state, existingQuote.amount);
     await (this.db as any).table('coco_cashu_canonical_mint_quotes').put({
       ...existing,
       state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
+      amountPaid: serializeAmount(accounting.amountPaid),
+      amountIssued: serializeAmount(accounting.amountIssued),
       updatedAt: observedAt,
     } as MintQuoteRow);
   }

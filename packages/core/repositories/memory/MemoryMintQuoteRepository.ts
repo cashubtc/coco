@@ -1,5 +1,10 @@
 import { QuoteIdentityConflictError } from '@core/models/Error';
-import { isMintQuotePending, isStatefulMintQuote, type MintQuote } from '@core/models/MintQuote';
+import {
+  deriveMintQuoteAccountingFromState,
+  isMintQuotePending,
+  isStatefulMintQuote,
+  type MintQuote,
+} from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MintMethodRemoteState } from '@core/operations/mint/MintMethodHandler';
 import type { MintQuoteRepository } from '..';
@@ -75,8 +80,7 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     this.quotes.set(key, {
       ...existing,
       state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
+      ...deriveMintQuoteAccountingFromState(state, existing.amount),
       updatedAt: observedAt,
     });
   }

@@ -43,6 +43,7 @@ const EXPECTED_MIGRATION_IDS = [
   '034_clean_unquoted_mint_operations',
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
+  '037_mint_quote_accounting_columns',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -722,6 +723,119 @@ describe('shared SQL schema migrations', () => {
     },
   );
 
+  itWithDatabase(
+    'migrates canonical mint quote accounting into first-class columns',
+    async (db) => {
+      await ensureSchemaUpTo(db, '037_mint_quote_accounting_columns');
+
+      for (const [quoteId, state, amount] of [
+        ['bolt11-unpaid', 'UNPAID', '11'],
+        ['bolt11-paid', 'PAID', '12'],
+        ['bolt11-issued', 'ISSUED', '13'],
+      ] as const) {
+        await db.run(
+          `INSERT INTO coco_cashu_canonical_mint_quotes
+            (mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
+             quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+             createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            'https://mint.test',
+            'bolt11',
+            quoteId,
+            state,
+            `lnbc1${quoteId}`,
+            amount,
+            'sat',
+            null,
+            null,
+            JSON.stringify({ amount }),
+            state,
+            123_000,
+            0,
+            1_000,
+            2_000,
+          ],
+        );
+      }
+
+      await db.run(
+        `INSERT INTO coco_cashu_canonical_mint_quotes
+          (mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
+           quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+           createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'https://mint.test',
+          'onchain',
+          'onchain-reusable',
+          null,
+          'bc1qreusable',
+          null,
+          'sat',
+          null,
+          '02'.padEnd(66, '1'),
+          JSON.stringify({
+            pubkey: '02'.padEnd(66, '1'),
+            amountPaid: '21',
+            amountIssued: '8',
+          }),
+          null,
+          456_000,
+          1,
+          1_000,
+          2_000,
+        ],
+      );
+
+      await ensureSchemaUpTo(db);
+
+      const rows = await db.all<{
+        quoteId: string;
+        amountPaid: string;
+        amountIssued: string;
+        remoteUpdatedAt: number | null;
+      }>(
+        `SELECT quoteId, amountPaid, amountIssued, remoteUpdatedAt
+         FROM coco_cashu_canonical_mint_quotes
+         ORDER BY quoteId ASC`,
+      );
+
+      expect(rows).toEqual([
+        {
+          quoteId: 'bolt11-issued',
+          amountPaid: '13',
+          amountIssued: '13',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'bolt11-paid',
+          amountPaid: '12',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'bolt11-unpaid',
+          amountPaid: '0',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'onchain-reusable',
+          amountPaid: '21',
+          amountIssued: '8',
+          remoteUpdatedAt: null,
+        },
+      ]);
+
+      const columns = await db.all<{ name: string }>(
+        `PRAGMA table_info(coco_cashu_canonical_mint_quotes)`,
+      );
+      expect(columns.map((column) => column.name)).not.toContain('lastObservedRemoteState');
+      expect(columns.map((column) => column.name)).not.toContain('lastObservedRemoteStateAt');
+    },
+  );
+
   itWithDatabase('projects mint history remote state from canonical mint quotes', async (db) => {
     await ensureSchemaUpTo(db);
 
@@ -755,8 +869,8 @@ describe('shared SQL schema migrations', () => {
     await db.run(
       `INSERT INTO coco_cashu_canonical_mint_quotes
         (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
-         lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         amountPaid, amountIssued, remoteUpdatedAt, reusable, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         'https://mint.test',
         'bolt11',
@@ -766,8 +880,9 @@ describe('shared SQL schema migrations', () => {
         '21',
         'sat',
         JSON.stringify({ amount: '21' }),
-        'PAID',
-        3_000,
+        '21',
+        '0',
+        null,
         0,
         1,
         2,
@@ -782,7 +897,7 @@ describe('shared SQL schema migrations', () => {
       `SELECT
          op.id AS operationId,
          op.quoteId,
-         q.lastObservedRemoteState AS remoteState
+         q.state AS remoteState
        FROM coco_cashu_mint_operations op
        LEFT JOIN coco_cashu_canonical_mint_quotes q
          ON q.mintUrl = op.mintUrl
@@ -856,8 +971,8 @@ describe('shared SQL schema migrations', () => {
       await db.run(
         `INSERT INTO coco_cashu_canonical_mint_quotes
         (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
-         lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         amountPaid, amountIssued, remoteUpdatedAt, reusable, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           'https://mint.test',
           'bolt11',
@@ -867,8 +982,9 @@ describe('shared SQL schema migrations', () => {
           '21',
           'sat',
           '{}',
-          'UNPAID',
-          1,
+          '0',
+          '0',
+          null,
           0,
           1,
           1,
@@ -878,8 +994,8 @@ describe('shared SQL schema migrations', () => {
         await db.run(
           `INSERT INTO coco_cashu_canonical_mint_quotes
           (mintUrl, method, quoteId, state, request, amount, unit, quoteDataJson,
-           lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           amountPaid, amountIssued, remoteUpdatedAt, reusable, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             'https://mint.test',
             'custom',
@@ -889,8 +1005,9 @@ describe('shared SQL schema migrations', () => {
             '21',
             'sat',
             '{}',
-            'UNPAID',
-            1,
+            '0',
+            '0',
+            null,
             0,
             1,
             1,

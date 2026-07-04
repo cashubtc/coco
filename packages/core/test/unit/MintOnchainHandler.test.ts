@@ -84,6 +84,9 @@ describe('MintOnchainHandler', () => {
       expiry: remoteQuote.expiry,
       pubkey,
       reusable: true,
+      amountPaid: Amount.from(0),
+      amountIssued: Amount.from(0),
+      remoteUpdatedAt: null,
       quoteData: {
         pubkey,
         amountPaid: Amount.from(0),
