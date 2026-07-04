@@ -57,8 +57,7 @@ type OptionalMethodMeltQuote<T extends MeltQuoteBaseResponse> = Omit<T, 'method'
 
 export type CompatibleMeltQuoteBolt11Response = OptionalMethodMeltQuote<MeltQuoteBolt11Response>;
 export type CompatibleMeltQuoteBolt12Response = OptionalMethodMeltQuote<MeltQuoteBolt12Response>;
-export type CompatibleMeltQuoteOnchainResponse =
-  OptionalMethodMeltQuote<MeltQuoteOnchainResponse>;
+export type CompatibleMeltQuoteOnchainResponse = OptionalMethodMeltQuote<MeltQuoteOnchainResponse>;
 
 export interface MeltMethodQuoteDefinitions {
   bolt11: CompatibleMeltQuoteBolt11Response;
