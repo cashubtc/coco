@@ -2,8 +2,6 @@ import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import {
   OutputData,
-  type MintQuoteBolt11Response,
-  type MintQuoteBolt12Response,
   type Proof,
 } from '@cashu/cashu-ts';
 import { EventBus } from '../../events/EventBus';
@@ -16,6 +14,9 @@ import type {
   PendingMintOperation,
 } from '../../operations/mint/MintOperation';
 import type {
+  CompatibleMintQuoteBolt11Response,
+  CompatibleMintQuoteBolt12Response,
+  CompatibleMintQuoteOnchainResponse,
   MintExecutionResult,
   MintMethodHandler,
   PendingMintCheckResult,
@@ -150,7 +151,7 @@ describe('MintOperationService', () => {
     quote = 'bolt12-quote-1',
     amounts: { amount?: Amount; paid?: Amount; issued?: Amount; expiry?: number } = {},
   ): Promise<void> => {
-    const response: MintQuoteBolt12Response = {
+    const response: CompatibleMintQuoteBolt12Response = {
       quote,
       request: 'lno1test',
       amount: amounts.amount ?? null,
@@ -882,7 +883,7 @@ describe('MintOperationService', () => {
       pendingEvents.push(event);
     });
 
-    const importedQuote: MintQuoteBolt11Response = {
+    const importedQuote: CompatibleMintQuoteBolt11Response = {
       quote: 'quote-imported',
       request: 'lnbc1imported',
       amount: Amount.from(12),
@@ -925,7 +926,7 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const staleQuote: MintQuoteBolt11Response = {
+    const staleQuote: CompatibleMintQuoteBolt11Response = {
       quote: 'quote-canonical-paid',
       request: 'lnbc1canonical',
       amount: Amount.from(12),
@@ -940,7 +941,7 @@ describe('MintOperationService', () => {
         importedQuote,
       }: {
         operation: InitMintOperation;
-        importedQuote: MintQuoteBolt11Response;
+        importedQuote: CompatibleMintQuoteBolt11Response;
       }) => ({
         ...makePendingOp(operation.id),
         quoteId: importedQuote.quote,
@@ -962,7 +963,7 @@ describe('MintOperationService', () => {
   });
 
   it('quote import delegates unsupported quote units to capability validation', async () => {
-    const importedQuote: MintQuoteBolt11Response = {
+    const importedQuote: CompatibleMintQuoteBolt11Response = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
       amount: Amount.from(12),
@@ -982,6 +983,40 @@ describe('MintOperationService', () => {
       quoteRepo.getMintQuote(mintUrl, 'bolt11', importedQuote.quote),
     ).resolves.toBeNull();
     expect(handler.prepare).not.toHaveBeenCalled();
+  });
+
+  it('imports normalized reusable mint quote snapshots through QuoteLifecycle', async () => {
+    const onchainQuote: CompatibleMintQuoteOnchainResponse = {
+      quote: 'onchain-normalized',
+      request: 'bc1qnormalized',
+      method: 'onchain',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(21),
+      amount_issued: Amount.from(8),
+      updated_at: 1_700_000_000,
+    };
+    const bolt12Quote: CompatibleMintQuoteBolt12Response = {
+      quote: 'bolt12-normalized',
+      request: 'lno1normalized',
+      method: 'bolt12',
+      amount: null,
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '2'),
+      amount_paid: Amount.from(13),
+      amount_issued: Amount.from(5),
+      updated_at: 1_700_000_001,
+    };
+
+    const importedOnchain = await quoteLifecycle.importMintQuote(mintUrl, 'onchain', onchainQuote);
+    const importedBolt12 = await quoteLifecycle.importMintQuote(mintUrl, 'bolt12', bolt12Quote);
+
+    expect(importedOnchain.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(importedOnchain.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(importedBolt12.quoteData.amountPaid.equals(Amount.from(13))).toBe(true);
+    expect(importedBolt12.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
   });
 
   it('prepare + finalize runs pending -> execute for an existing canonical quote', async () => {

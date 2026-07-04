@@ -30,7 +30,7 @@
   "peerDependencies": {
     "@cashu/coco-core": "^1.0.0",
     "typescript": "^5",
-    "@cashu/cashu-ts": "4.5"
+    "@cashu/cashu-ts": "5.0.0-experimental.99bda2d7"
   },
   "dependencies": {
     "fake-bolt11": "^0.1.0"

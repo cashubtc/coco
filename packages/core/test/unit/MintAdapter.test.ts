@@ -19,15 +19,18 @@ const keysets = { keysets: [{ id: 'keyset-1', unit: 'sat', active: true }] };
 const onchainMintQuote = {
   quote: 'mint-quote',
   request: 'bc1ptest',
+  method: 'onchain',
   unit: 'sat',
   expiry,
   pubkey: 'quote-pubkey',
   amount_paid: Amount.from(10),
   amount_issued: Amount.zero(),
+  updated_at: null,
 };
 const bolt11MeltQuote = {
   quote: 'melt-11',
   request: 'lnbc1melt',
+  method: 'bolt11',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,
@@ -38,6 +41,7 @@ const bolt11MeltQuote = {
 const bolt12MeltQuote = {
   quote: 'melt-12',
   request: 'lno1offer',
+  method: 'bolt12',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,
@@ -48,6 +52,7 @@ const bolt12MeltQuote = {
 const onchainMeltQuote = {
   quote: 'melt-onchain',
   request: 'bc1ptest',
+  method: 'onchain',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,

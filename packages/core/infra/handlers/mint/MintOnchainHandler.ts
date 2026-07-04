@@ -1,4 +1,8 @@
-import { Amount, type Wallet } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
+  type Wallet,
+} from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
@@ -113,7 +117,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     const proofs = await ctx.wallet.mintProofsOnchain(
       ctx.operation.amount,
-      remoteQuote,
+      remoteQuote as CashuMintQuoteOnchainResponse,
       bytesToHex(quoteKey.secretKey),
       undefined,
       { type: 'custom', data: outputData.keep },
@@ -196,7 +200,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     try {
       const proofs = await ctx.wallet.mintProofsOnchain(
         operation.amount,
-        remoteQuote,
+        remoteQuote as CashuMintQuoteOnchainResponse,
         bytesToHex(quoteKey.secretKey),
         undefined,
         { type: 'custom', data: outputData.keep },
@@ -329,7 +333,11 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     assertSameUnit(quote.unit, expectedUnit, `Onchain mint quote ${quote.quote}`);
 
-    if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
+    if (
+      Amount.from(quote.amount_paid ?? Amount.zero()).lessThan(
+        Amount.from(quote.amount_issued ?? Amount.zero()),
+      )
+    ) {
       throw new Error(
         `Onchain mint quote ${quote.quote} has amount_issued greater than amount_paid`,
       );
@@ -378,7 +386,9 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   }
 
   private getAvailableAmount(quote: MintQuoteOnchainResponse): Amount {
-    return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
+    return Amount.from(quote.amount_paid ?? Amount.zero()).subtract(
+      Amount.from(quote.amount_issued ?? Amount.zero()),
+    );
   }
 
   private isExpired(quote: MintQuoteOnchainResponse): boolean {

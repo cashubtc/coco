@@ -206,6 +206,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
                 secret: Buffer.from(output.secret, 'hex').toString(),
                 C: signature.C_,
                 mintUrl,
+                unit: 'sat',
                 state: 'ready',
               });
             }
@@ -622,6 +623,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
       (proofService.saveProofs as Mock<any>).mockImplementation(
         async (_mintUrl: string, proofs: any[]) => {
           savedProofBatches.push(proofs);
+          await proofRepo.saveProofs(_mintUrl, proofs);
         },
       );
 

@@ -112,7 +112,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     const { mintUrl, quoteId } = ctx.operation;
     let remoteQuote: MintQuoteBolt11Response;
     try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
+      remoteQuote = (await ctx.mintAdapter.checkMintQuote(
+        mintUrl,
+        'bolt11',
+        quoteId,
+      )) as MintQuoteBolt11Response;
     } catch (error) {
       ctx.logger?.warn('Failed to check mint quote state during recovery', {
         mintUrl,

@@ -67,12 +67,14 @@ describe('MintBolt12Handler', () => {
   const quote = (overrides: Partial<MintQuoteBolt12Response> = {}): MintQuoteBolt12Response => ({
     quote: quoteId,
     request: 'lno1offer',
+    method: 'bolt12',
     amount: Amount.from(10),
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     pubkey,
     amount_paid: Amount.zero(),
     amount_issued: Amount.zero(),
+    updated_at: null,
     ...overrides,
   });
 

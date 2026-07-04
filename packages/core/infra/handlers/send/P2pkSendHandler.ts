@@ -21,6 +21,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  getProofStateInputsFromSerializedOutputs,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -66,7 +67,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     const keyset = wallet.getKeyset();
 
-    const sendOT = OutputData.createP2PKData({ pubkey }, amount, keyset);
+    const sendOT = OutputData.createP2PKData({ kind: 'P2PK', data: pubkey }, amount, keyset);
 
     // Serialize for storage
     const serializedOutputData = serializeOutputData({
@@ -250,7 +251,13 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // P2PK always requires swap - check with mint
-    const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
+    const proofInputs = await proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    if (proofInputs.length !== operation.inputProofSecrets.length) {
+      throw new Error('Cannot recover P2PK send operation: missing input proof metadata');
+    }
     let inputStates;
     try {
       inputStates = await wallet.checkProofsStates(proofInputs);
@@ -339,7 +346,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       };
     } else if (outputSecrets.sendSecrets.length > 0) {
       const sendStates = await wallet.checkProofsStates(
-        outputSecrets.sendSecrets.map((secret) => ({ secret })),
+        getProofStateInputsFromSerializedOutputs(operation.outputData.send),
       );
       const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
       if (!allSendProofsSpent) {

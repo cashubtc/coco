@@ -6,6 +6,7 @@ import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import type {
+  CompatibleMintQuoteBolt12Response,
   CreateMintQuoteContext,
   ExecuteContext,
   FetchRemoteMintQuoteContext,
@@ -123,7 +124,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     try {
       const proofs = await ctx.wallet.mintProofsBolt12(
         ctx.operation.amount,
-        remoteQuote,
+        remoteQuote as MintQuoteBolt12Response,
         bytesToHex(quoteKey.secretKey),
         undefined,
         { type: 'custom', data: outputData.keep },
@@ -155,11 +156,11 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     let remoteQuote: MintQuoteBolt12Response;
     try {
-      remoteQuote = await ctx.mintAdapter.checkMintQuote(
+      remoteQuote = (await ctx.mintAdapter.checkMintQuote(
         operation.mintUrl,
         'bolt12',
         operation.quoteId,
-      );
+      )) as MintQuoteBolt12Response;
     } catch (error) {
       ctx.logger?.warn('Failed to check BOLT12 mint quote during recovery', {
         mintUrl: operation.mintUrl,
@@ -341,7 +342,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   private assertQuoteMatchesRequest(
-    quote: MintQuoteBolt12Response,
+    quote: CompatibleMintQuoteBolt12Response,
     expectedPubkey: string,
     expectedUnit: string,
     expectedAmount?: Amount,
@@ -355,14 +356,21 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     assertSameUnit(quote.unit, expectedUnit, `BOLT12 mint quote ${quote.quote}`);
     this.assertQuoteAmount(quote, expectedAmount);
 
-    if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
+    if (
+      Amount.from(quote.amount_paid ?? Amount.zero()).lessThan(
+        Amount.from(quote.amount_issued ?? Amount.zero()),
+      )
+    ) {
       throw new Error(
         `BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`,
       );
     }
   }
 
-  private assertQuoteAmount(quote: MintQuoteBolt12Response, expectedAmount?: Amount): void {
+  private assertQuoteAmount(
+    quote: CompatibleMintQuoteBolt12Response,
+    expectedAmount?: Amount,
+  ): void {
     if (expectedAmount === undefined) {
       return;
     }
@@ -405,7 +413,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   private getQuoteValidationError(
-    quote: MintQuoteBolt12Response,
+    quote: CompatibleMintQuoteBolt12Response,
     expectedPubkey: string,
     expectedUnit: string,
   ): Error | null {
@@ -417,11 +425,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
   }
 
-  private getAvailableAmount(quote: MintQuoteBolt12Response): Amount {
-    return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
+  private getAvailableAmount(quote: CompatibleMintQuoteBolt12Response): Amount {
+    return Amount.from(quote.amount_paid ?? Amount.zero()).subtract(
+      Amount.from(quote.amount_issued ?? Amount.zero()),
+    );
   }
 
-  private isExpired(quote: MintQuoteBolt12Response): boolean {
+  private isExpired(quote: CompatibleMintQuoteBolt12Response): boolean {
     return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
   }
 

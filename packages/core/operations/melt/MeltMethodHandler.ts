@@ -1,6 +1,7 @@
 import {
   Amount,
   type AmountLike,
+  type MeltQuoteBaseResponse,
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
   type MeltQuoteOnchainResponse,
@@ -51,10 +52,18 @@ export type MeltMethod = keyof MeltMethodDefinitions;
 
 export type MeltMethodData<M extends MeltMethod = MeltMethod> = MeltMethodDefinitions[M];
 
+type OptionalMethodMeltQuote<T extends MeltQuoteBaseResponse> = Omit<T, 'method'> &
+  Partial<Pick<MeltQuoteBaseResponse, 'method'>>;
+
+export type CompatibleMeltQuoteBolt11Response = OptionalMethodMeltQuote<MeltQuoteBolt11Response>;
+export type CompatibleMeltQuoteBolt12Response = OptionalMethodMeltQuote<MeltQuoteBolt12Response>;
+export type CompatibleMeltQuoteOnchainResponse =
+  OptionalMethodMeltQuote<MeltQuoteOnchainResponse>;
+
 export interface MeltMethodQuoteDefinitions {
-  bolt11: MeltQuoteBolt11Response;
-  bolt12: MeltQuoteBolt12Response;
-  onchain: MeltQuoteOnchainResponse;
+  bolt11: CompatibleMeltQuoteBolt11Response;
+  bolt12: CompatibleMeltQuoteBolt12Response;
+  onchain: CompatibleMeltQuoteOnchainResponse;
 }
 
 export type MeltMethodInputData<M extends MeltMethod = MeltMethod> =

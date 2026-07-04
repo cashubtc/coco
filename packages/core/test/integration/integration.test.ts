@@ -38,6 +38,6 @@ runIntegrationTests(
     logger: getTestLogger(),
     suiteName: 'Testnut Integration Tests',
   },
-  //@ts-expect-error bun:test expect is wider than the adapter test runner shape
+  // @ts-expect-error bun:test expect is wider than the adapter test runner shape
   { describe, it, beforeEach, afterEach, expect },
 );

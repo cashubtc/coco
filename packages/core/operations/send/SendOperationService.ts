@@ -764,7 +764,10 @@ export class SendOperationService {
     unit: string,
   ): Promise<CashuProofState[]> {
     const wallet = await this.walletService.getWallet(mintUrl, unit);
-    const proofInputs = secrets.map((secret) => ({ secret }));
+    const proofInputs = await this.proofRepository.getProofsBySecrets(mintUrl, secrets);
+    if (proofInputs.length !== secrets.length) {
+      throw new Error('Cannot check proof states: missing proof metadata');
+    }
     return wallet.checkProofsStates(proofInputs);
   }
 
