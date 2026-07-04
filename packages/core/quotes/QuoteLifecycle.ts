@@ -11,6 +11,7 @@ import {
   getMintQuoteAmount,
   assertValidMintQuoteAccounting,
   deriveMintQuoteAccountingFromState,
+  getBolt11MintQuoteAccountingStatus,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -1005,7 +1006,7 @@ export class QuoteLifecycle {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
 
-    if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
+    if (isStatefulMintQuote(quote) && getBolt11MintQuoteAccountingStatus(quote) === 'completed') {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
     }
   }

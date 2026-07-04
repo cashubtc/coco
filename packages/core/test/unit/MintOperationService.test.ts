@@ -1100,6 +1100,36 @@ describe('MintOperationService', () => {
     expect(handler.prepare).not.toHaveBeenCalled();
   });
 
+  it('prepare uses BOLT11 accounting rather than compatibility terminal state', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'state-issued-accounting-ready',
+        request: 'lnbc1accountingready',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      }),
+    );
+    (handler.prepare as Mock<any>).mockImplementationOnce(
+      async ({ operation }: { operation: InitMintOperation }) => ({
+        ...makePendingOp(operation.id),
+        quoteId: operation.quoteId,
+      }),
+    );
+
+    const pending = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId: 'state-issued-accounting-ready' },
+      Amount.from(10),
+    );
+
+    expect(pending.state).toBe('pending');
+    expect(pending.quoteId).toBe('state-issued-accounting-ready');
+    expect(handler.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it('prepare rejects duplicate operations for non-reusable quotes', async () => {
     const quote = await quoteLifecycle.createMintQuote(mintUrl, {
       amount: Amount.from(10),
