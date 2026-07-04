@@ -47,8 +47,14 @@ _Avoid_: Method flow, payment workflow
 
 **Quote Observation**:
 A mint response that reports the current remote state of a quote and is recorded into Coco's
-canonical quote row before any Quote-backed Operation is advanced from it.
+canonical quote row before any Quote-backed Operation is advanced from it. Coco evaluates Quote
+Observations against the existing canonical quote row and may accept, merge, or ignore them.
 _Avoid_: Quote refresh, subscription update
+
+**Remote Quote Update Time**:
+The mint-reported Unix timestamp, in seconds, at which a quote last changed remotely. Coco exposes
+this separately from the local canonical quote row update time.
+_Avoid_: Updated at, row timestamp
 
 **Quote Identity**:
 A methodless reference to a mint or melt quote by mint URL and quote ID. Mint quote identities and
@@ -73,15 +79,25 @@ older `PENDING` observation.
 _Avoid_: Payment status, melt lifecycle
 
 **Mint Quote Claimability**:
-Whether a mint quote currently has paid value that coco can claim into proofs. BOLT11 mint quotes
-are claimable when their state is `PAID`; reusable mint quotes are claimable when their paid amount
-exceeds their issued amount.
+Whether a mint quote currently has paid value that coco can claim into proofs. A mint quote is
+claimable when its paid amount exceeds its issued amount; legacy method-specific state is
+compatibility metadata, not the canonical claimability model.
 _Avoid_: Mint quote paid state, payment status
+
+**Mint Quote Accounting**:
+The mint-reported paid and issued totals for a mint quote. Coco treats the difference between paid
+amount and issued amount as the quote's currently claimable value.
+_Avoid_: Quote state, payment status
 
 **Mint Quote Payment Observation**:
 A newly observed increase in paid value for a mint quote. It is distinct from Mint Quote
 Claimability because reusable mint quotes can already be claimable before another payment arrives.
 _Avoid_: Mint quote paid state, payment status
+
+**Mint Quote Reservation**:
+Locally in-flight claimable value from a reusable mint quote that Coco has assigned to a
+Quote-backed Operation but the mint has not yet reflected as issued accounting.
+_Avoid_: Remote issued amount, proof reservation
 
 **Quote Expiry**:
 The time after which a quote can no longer receive a new payment. Expiry does not prevent claiming
