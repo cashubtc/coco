@@ -902,7 +902,7 @@ describe('MintOperationService', () => {
     await persistOnchainQuote(onchainQuoteId, {
       paid: Amount.from(10),
       issued: Amount.from(2),
-      remoteUpdatedAt: null,
+      remoteUpdatedAt: 20,
     });
     const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
     eventBus.on('mint-quote:updated', (event) => {

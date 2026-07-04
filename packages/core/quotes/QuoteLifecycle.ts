@@ -197,14 +197,9 @@ function resolveMintQuoteObservation(
     }
   }
 
-  const canonicalQuote =
-    existing && existing.remoteUpdatedAt !== null && incoming.remoteUpdatedAt === null
-      ? { ...incoming, remoteUpdatedAt: existing.remoteUpdatedAt }
-      : incoming;
-
   return {
-    quote: canonicalQuote,
-    remoteQuoteChanged: getMintQuoteChange(existing, canonicalQuote),
+    quote: incoming,
+    remoteQuoteChanged: getMintQuoteChange(existing, incoming),
     shouldPersist: true,
   };
 }
