@@ -86,9 +86,23 @@ export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
   return quote.amountPaid.subtract(quote.amountIssued);
 }
 
+export function getBolt11MintQuoteAccountingStatus(
+  quote: Pick<MintQuote<'bolt11'>, 'amount' | 'amountPaid' | 'amountIssued'>,
+): 'waiting' | 'ready' | 'completed' {
+  if (!quote.amountIssued.lessThan(quote.amount)) {
+    return 'completed';
+  }
+
+  const claimable = quote.amountPaid.greaterThan(quote.amountIssued)
+    ? quote.amountPaid.subtract(quote.amountIssued)
+    : Amount.zero();
+
+  return claimable.lessThan(quote.amount) ? 'waiting' : 'ready';
+}
+
 export function isMintQuotePending(quote: MintQuote): boolean {
   if (isStatefulMintQuote(quote)) {
-    return quote.state !== 'ISSUED';
+    return getBolt11MintQuoteAccountingStatus(quote) !== 'completed';
   }
 
   return true;

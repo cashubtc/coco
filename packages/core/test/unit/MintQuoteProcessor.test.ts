@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
 import { MintOperationProcessor } from '../../services/watchers/MintOperationProcessor';
 import { EventBus } from '../../events/EventBus';
@@ -20,6 +21,33 @@ describe('MintOperationProcessor', () => {
   const TEST_PROCESS_INTERVAL = 50;
   const TEST_RETRY_DELAY = 100;
   const TEST_INITIAL_DELAY = 10;
+
+  const makeBolt11Quote = (
+    quoteId: string,
+    accounting: {
+      state?: 'UNPAID' | 'PAID' | 'ISSUED';
+      paid?: Amount;
+      issued?: Amount;
+    } = {},
+  ) =>
+    ({
+      mintUrl: 'https://mint.test',
+      method: 'bolt11',
+      quoteId,
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: null,
+      state: accounting.state ?? 'PAID',
+      reusable: false,
+      amountPaid: accounting.paid ?? Amount.from(10),
+      amountIssued: accounting.issued ?? Amount.zero(),
+      remoteUpdatedAt: null,
+      quoteData: { amount: Amount.from(10) },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }) as any;
 
   beforeEach(() => {
     bus = new EventBus<CoreEvents>();
@@ -56,19 +84,7 @@ describe('MintOperationProcessor', () => {
 
     mockQuoteLifecycle = {
       async getMintQuote() {
-        return {
-          mintUrl: 'https://mint.test',
-          method: 'bolt11',
-          quoteId: 'quote-2',
-          quote: 'quote-2',
-          request: 'lnbc1test',
-          amount: 10,
-          unit: 'sat',
-          expiry: null,
-          state: 'PAID',
-          reusable: false,
-          quoteData: { amount: 10 },
-        } as any;
+        return makeBolt11Quote('quote-2');
       },
     } as unknown as QuoteLifecycle;
 
@@ -109,13 +125,7 @@ describe('MintOperationProcessor', () => {
       mintUrl: 'https://mint.test',
       method: 'bolt11',
       quoteId: 'quote-1',
-      quote: {
-        mintUrl: 'https://mint.test',
-        method: 'bolt11',
-        quoteId: 'quote-1',
-        quote: 'quote-1',
-        state: 'PAID',
-      } as any,
+      quote: makeBolt11Quote('quote-1'),
     });
 
     await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
@@ -165,13 +175,7 @@ describe('MintOperationProcessor', () => {
       mintUrl: 'https://mint.test',
       method: 'bolt11',
       quoteId: 'shared-quote',
-      quote: {
-        mintUrl: 'https://mint.test',
-        method: 'bolt11',
-        quoteId: 'shared-quote',
-        quote: 'shared-quote',
-        state: 'PAID',
-      } as any,
+      quote: makeBolt11Quote('shared-quote'),
     });
 
     await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
@@ -362,20 +366,18 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-3']);
   });
 
-  it('ignores non-PAID quote updates', async () => {
+  it('ignores BOLT11 quote updates that are not fully claimable by accounting', async () => {
     await processor.start();
 
     await bus.emit('mint-quote:updated', {
       mintUrl: 'https://mint.test',
       method: 'bolt11',
       quoteId: 'quote-4',
-      quote: {
-        mintUrl: 'https://mint.test',
-        method: 'bolt11',
-        quoteId: 'quote-4',
-        quote: 'quote-4',
-        state: 'UNPAID',
-      } as any,
+      quote: makeBolt11Quote('quote-4', {
+        state: 'PAID',
+        paid: Amount.from(5),
+        issued: Amount.zero(),
+      }),
     });
 
     await sleep(TEST_PROCESS_INTERVAL + 20);
@@ -391,13 +393,7 @@ describe('MintOperationProcessor', () => {
         mintUrl: 'https://mint.test',
         method: 'bolt11',
         quoteId: 'quote-5',
-        quote: {
-          mintUrl: 'https://mint.test',
-          method: 'bolt11',
-          quoteId: 'quote-5',
-          quote: 'quote-5',
-          state: 'PAID',
-        } as any,
+        quote: makeBolt11Quote('quote-5'),
       });
     }
 

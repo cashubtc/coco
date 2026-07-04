@@ -266,7 +266,7 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
               quoteDataJson, amountPaid, amountIssued, remoteUpdatedAt, reusable,
               createdAt, updatedAt
        FROM coco_cashu_canonical_mint_quotes
-       WHERE (state IS NULL OR state != 'ISSUED') ${method ? 'AND method = ?' : ''}`,
+       ${method ? 'WHERE method = ?' : ''}`,
       method ? [method] : [],
     );
     return rows.map(rowToMintQuote).filter(isMintQuotePending);

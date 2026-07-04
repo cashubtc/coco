@@ -1,6 +1,6 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
-import { OutputData, type MintQuoteBolt11Response, type Wallet } from '@cashu/cashu-ts';
+import { OutputData, type MintQuoteBolt11Response, type Proof, type Wallet } from '@cashu/cashu-ts';
 import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
 import { MintOperationError } from '../../models/Error';
 import { EventBus } from '../../events/EventBus';
@@ -49,6 +49,14 @@ describe('MintBolt11Handler', () => {
     ],
     send: [],
   });
+
+  const makeProof = (): Proof =>
+    ({
+      id: keysetId,
+      amount: Amount.from(10),
+      secret: 'out-1',
+      C: 'C_out_1',
+    }) as Proof;
 
   const operation = {
     id: 'op-1',
@@ -223,6 +231,30 @@ describe('MintBolt11Handler', () => {
       expect((wallet.mintProofsBolt11 as Mock<any>).mock.calls.length).toBe(1);
       expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
     });
+
+    it('uses accounting-derived readiness instead of legacy state during recovery', async () => {
+      const remoteQuote = {
+        ...quote,
+        state: 'UNPAID' as const,
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      };
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementationOnce(async () => remoteQuote);
+      (wallet.mintProofsBolt11 as Mock<any>).mockImplementationOnce(async () => [makeProof()]);
+
+      const result = await handler.recoverExecuting(buildRecoverContext());
+
+      expect(result).toEqual({ status: 'FINALIZED' });
+      const mintCall = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0] as
+        | [Amount, string, unknown, { type: string; data: unknown[] }]
+        | undefined;
+      expect(mintCall?.[0].equals(Amount.from(10))).toBe(true);
+      expect(mintCall?.[1]).toBe(quoteId);
+      expect(mintCall?.[2]).toBeUndefined();
+      expect(mintCall?.[3]?.type).toBe('custom');
+      expect(mintCall?.[3]?.data).toHaveLength(1);
+      expect(proofService.saveProofs).toHaveBeenCalled();
+    });
   });
 
   describe('prepare', () => {
@@ -267,12 +299,44 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
-    it('returns the observed remote state with a normalized ready category', async () => {
+    it('returns the observed quote snapshot with a normalized ready category', async () => {
       const result = await handler.checkPending(buildPendingContext());
 
-      expect(result.observedRemoteState).toBe('PAID');
+      expect(result.quoteSnapshot).toEqual(quote);
       expect(result.category).toBe('ready');
       expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
+    });
+
+    it('categorizes BOLT11 as ready from full accounting even when state is not PAID', async () => {
+      const remoteQuote = {
+        ...quote,
+        state: 'UNPAID' as const,
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      };
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementationOnce(async () => remoteQuote);
+
+      const result = await handler.checkPending(buildPendingContext());
+
+      expect(result.category).toBe('ready');
+      expect(result.quoteSnapshot).toEqual(remoteQuote);
+      expect(result.observedRemoteState).toBeUndefined();
+    });
+
+    it('keeps partial BOLT11 accounting waiting even when state is PAID', async () => {
+      const remoteQuote = {
+        ...quote,
+        state: 'PAID' as const,
+        amount_paid: Amount.from(5),
+        amount_issued: Amount.zero(),
+      };
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementationOnce(async () => remoteQuote);
+
+      const result = await handler.checkPending(buildPendingContext());
+
+      expect(result.category).toBe('waiting');
+      expect(result.quoteSnapshot).toEqual(remoteQuote);
+      expect(result.observedRemoteState).toBeUndefined();
     });
   });
 });

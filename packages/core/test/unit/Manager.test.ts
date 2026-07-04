@@ -1153,7 +1153,9 @@ describe('initializeCoco', () => {
           amount: operation.amount,
           unit: operation.unit,
           expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'PAID',
+          state: 'UNPAID',
+          amount_paid: operation.amount,
+          amount_issued: Amount.zero(),
         }),
       );
 

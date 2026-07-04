@@ -2,7 +2,11 @@ import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
-import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
+import {
+  getBolt11MintQuoteAccountingStatus,
+  isStatefulMintQuote,
+  type MintQuote,
+} from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 interface QueueItem {
@@ -26,6 +30,10 @@ class Bolt11MintOperationHandler implements OperationHandler {
   async process(_mintUrl: string, operationId: string): Promise<void> {
     await this.mintOperations.finalize(operationId);
   }
+}
+
+function isBolt11MintQuoteReady(quote: MintQuote): boolean {
+  return isStatefulMintQuote(quote) && getBolt11MintQuoteAccountingStatus(quote) === 'ready';
 }
 
 export interface MintOperationProcessorOptions {
@@ -106,7 +114,7 @@ export class MintOperationProcessor {
           return;
         }
 
-        if (getMintQuoteRemoteState(quote) !== 'PAID') {
+        if (!isBolt11MintQuoteReady(quote)) {
           return;
         }
 
@@ -139,7 +147,7 @@ export class MintOperationProcessor {
         return;
       }
 
-      if (quote && getMintQuoteRemoteState(quote) === 'PAID') {
+      if (quote && isBolt11MintQuoteReady(quote)) {
         this.enqueue(mintUrl, operation.id, operation.method);
       }
     });

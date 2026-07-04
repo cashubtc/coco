@@ -614,7 +614,7 @@ describe('MintOperationService', () => {
     expect(wrongMint).toBeNull();
   });
 
-  it('getPendingQuotes returns non-issued canonical quotes with optional method filtering', async () => {
+  it('getPendingQuotes returns BOLT11 pending quotes from accounting with optional method filtering', async () => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromBolt11Response(mintUrl, {
         quote: 'quote-unpaid',
@@ -623,6 +623,18 @@ describe('MintOperationService', () => {
         unit: 'sat',
         expiry: Math.floor(Date.now() / 1000) + 3600,
         state: 'UNPAID',
+      }),
+    );
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-state-issued-accounting-pending',
+        request: 'lnbc1accountingpending',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'ISSUED',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
       }),
     );
     await quoteRepo.upsertMintQuote(
@@ -639,8 +651,14 @@ describe('MintOperationService', () => {
     const allPending = await quoteLifecycle.getPendingMintQuotes();
     const bolt11Pending = await quoteLifecycle.getPendingMintQuotes('bolt11');
 
-    expect(allPending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
-    expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual(['quote-unpaid']);
+    expect(allPending.map((quote) => quote.quoteId)).toEqual([
+      'quote-unpaid',
+      'quote-state-issued-accounting-pending',
+    ]);
+    expect(bolt11Pending.map((quote) => quote.quoteId)).toEqual([
+      'quote-unpaid',
+      'quote-state-issued-accounting-pending',
+    ]);
   });
 
   it('refreshMintQuote fails when the canonical quote is missing', async () => {
@@ -2145,6 +2163,39 @@ describe('MintOperationService', () => {
     if (!stored || stored.state !== 'pending') {
       throw new Error('Expected pending operation to remain pending after unpaid check');
     }
+  });
+
+  it('checkPendingOperation keeps partial BOLT11 accounting pending without minting', async () => {
+    const pendingOp = makePendingOp('pending-partial-bolt11');
+    await operationRepo.create(pendingOp);
+
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedRemoteStateAt: Date.now(),
+      quoteSnapshot: {
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'PAID',
+        amount_paid: Amount.from(5),
+        amount_issued: Amount.zero(),
+      },
+      category: 'waiting',
+    } satisfies PendingMintCheckResult<'bolt11'>);
+
+    const result = await service.checkPendingOperation(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', pendingOp.quoteId);
+
+    expect(result.category).toBe('waiting');
+    expect(stored?.state).toBe('pending');
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(quote?.method).toBe('bolt11');
+    if (quote?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(quote.state).toBe('PAID');
+    expect(quote.amountPaid.equals(Amount.from(5))).toBe(true);
+    expect(quote.amountIssued.equals(Amount.zero())).toBe(true);
   });
 
   it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {

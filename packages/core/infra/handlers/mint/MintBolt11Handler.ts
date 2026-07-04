@@ -16,7 +16,11 @@ import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
-import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
+import {
+  getBolt11MintQuoteAccountingStatus,
+  mintQuoteFromBolt11Response,
+  type MintQuote,
+} from '../../../models/MintQuote';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
@@ -129,7 +133,10 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       };
     }
 
-    if (remoteQuote.state === 'PAID') {
+    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, remoteQuote);
+    const accountingStatus = getBolt11MintQuoteAccountingStatus(canonicalQuote);
+
+    if (accountingStatus === 'ready') {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
         const proofs = await ctx.wallet.mintProofsBolt11(
@@ -173,15 +180,10 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           };
         }
       }
-    } else if (remoteQuote.state === 'UNPAID') {
+    } else if (accountingStatus === 'waiting') {
       return {
         status: 'PENDING',
-        error: `Recovered: quote ${quoteId} is still UNPAID`,
-      };
-    } else if (remoteQuote.state !== 'ISSUED') {
-      return {
-        status: 'PENDING',
-        error: `Recovered: quote ${quoteId} remains in remote state ${remoteQuote.state}`,
+        error: `Recovered: quote ${quoteId} is not fully claimable`,
       };
     }
 
@@ -214,32 +216,36 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
-    ctx.logger?.info('Pending mint quote state', { mintUrl, quoteId, state: quote.state });
+    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, quote);
+    const accountingStatus = getBolt11MintQuoteAccountingStatus(canonicalQuote);
+    ctx.logger?.info('Pending mint quote accounting', {
+      mintUrl,
+      quoteId,
+      state: quote.state,
+      amountPaid: canonicalQuote.amountPaid.toString(),
+      amountIssued: canonicalQuote.amountIssued.toString(),
+    });
     const observedRemoteStateAt = Date.now();
 
-    switch (quote.state) {
-      case 'UNPAID':
+    switch (accountingStatus) {
+      case 'waiting':
         return {
-          observedRemoteState: quote.state,
           observedRemoteStateAt,
+          quoteSnapshot: quote,
           category: 'waiting',
         };
-      case 'PAID':
+      case 'ready':
         return {
-          observedRemoteState: quote.state,
           observedRemoteStateAt,
+          quoteSnapshot: quote,
           category: 'ready',
         };
-      case 'ISSUED':
+      case 'completed':
         return {
-          observedRemoteState: quote.state,
           observedRemoteStateAt,
+          quoteSnapshot: quote,
           category: 'completed',
         };
-      default:
-        throw new Error(
-          `Unexpected mint quote state: ${quote.state} for quote ${quoteId} at mint ${mintUrl}`,
-        );
     }
   }
 }

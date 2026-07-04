@@ -73,6 +73,7 @@ import type { MintMethodQuoteSnapshot } from './operations/mint';
 import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 import {
+  getBolt11MintQuoteAccountingStatus,
   getMintQuoteAmount,
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
@@ -752,7 +753,13 @@ export class Manager {
         operation.method,
         operation.quoteId,
       );
-      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
+      if (
+        !quote ||
+        !isStatefulMintQuote(quote) ||
+        getBolt11MintQuoteAccountingStatus(quote) !== 'ready'
+      ) {
+        continue;
+      }
 
       const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
       if (!trusted) {

@@ -617,6 +617,41 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('lists pending BOLT11 mint quotes by accounting instead of compatibility state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const accountingPending = createDummyMintQuote({
+          quoteId: 'accounting-pending',
+          quote: 'accounting-pending',
+          state: 'ISSUED',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+        });
+        const accountingIssued = createDummyMintQuote({
+          quoteId: 'accounting-issued',
+          quote: 'accounting-issued',
+          state: 'PAID',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.from(3),
+        });
+
+        await repositories.mintQuoteRepository.upsertMintQuote(accountingPending);
+        await repositories.mintQuoteRepository.upsertMintQuote(accountingIssued);
+
+        const pending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+
+        expect(pending.map((quote) => quote.quoteId)).toEqual(['accounting-pending']);
+        if (pending[0]?.method !== 'bolt11') {
+          throw new Error(`Expected BOLT11 quote, got ${pending[0]?.method}`);
+        }
+        expect(pending[0].state).toBe('ISSUED');
+        expect(pending[0].amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(pending[0].amountIssued.equals(Amount.zero())).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('looks up canonical mint quotes by identity without method', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
