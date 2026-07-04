@@ -37,6 +37,7 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { QuoteIdentityConflictError } from '../../models/Error';
+import type { Logger } from '../../logging/Logger';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -51,6 +52,7 @@ describe('MintOperationService', () => {
   let walletService: WalletService;
   let mintAdapter: MintAdapter;
   let eventBus: EventBus<CoreEvents>;
+  let logger: Logger;
   let handler: MintMethodHandler<'bolt11'>;
   let handlerProvider: MintHandlerProvider;
   let quoteLifecycle: QuoteLifecycle;
@@ -129,7 +131,12 @@ describe('MintOperationService', () => {
 
   const persistOnchainQuote = async (
     quote = 'onchain-quote-1',
-    amounts: { paid?: Amount; issued?: Amount; expiry?: number } = {},
+    amounts: {
+      paid?: Amount;
+      issued?: Amount;
+      expiry?: number;
+      remoteUpdatedAt?: number | null;
+    } = {},
   ): Promise<void> => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromOnchainResponse(mintUrl, {
@@ -140,6 +147,7 @@ describe('MintOperationService', () => {
         pubkey: '02'.padEnd(66, '1'),
         amount_paid: amounts.paid ?? Amount.zero(),
         amount_issued: amounts.issued ?? Amount.zero(),
+        updated_at: amounts.remoteUpdatedAt,
       }),
     );
   };
@@ -225,6 +233,12 @@ describe('MintOperationService', () => {
     quoteRepo = new MemoryMintQuoteRepository();
     proofRepo = new MemoryProofRepository();
     eventBus = new EventBus<CoreEvents>();
+    logger = {
+      error: mock(() => {}),
+      warn: mock(() => {}),
+      info: mock(() => {}),
+      debug: mock(() => {}),
+    };
 
     const mockPrepare = mock(async ({ operation }: { operation: InitMintOperation<'bolt11'> }) => {
       return makePendingOp(operation.id) as PendingMintOperation<'bolt11'>;
@@ -332,6 +346,7 @@ describe('MintOperationService', () => {
       walletService,
       mintAdapter,
       eventBus,
+      logger,
     });
 
     service = new MintOperationService(
@@ -803,6 +818,224 @@ describe('MintOperationService', () => {
     expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
     expect(stored.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
     expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot ignores lower remoteUpdatedAt observations without emitting', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-lower-timestamp';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: 20,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qnew',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 7200,
+      pubkey,
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(2),
+      updated_at: 19,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(observed.request).toBe('bc1qtest');
+    expect(stored.request).toBe('bc1qtest');
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(20);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot warns and ignores equal timestamp accounting conflicts', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-equal-conflict';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: 20,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(11),
+      amount_issued: Amount.from(2),
+      updated_at: 20,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(20);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('recordMintQuoteSnapshot accepts null timestamp fallback increases', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-fallback-increase';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: null,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(11),
+      amount_issued: Amount.from(2),
+      updated_at: null,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(stored.amountPaid.equals(Amount.from(11))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(null);
+    expect(quoteUpdatedEvents).toHaveLength(1);
+  });
+
+  it('recordMintQuoteSnapshot rejects null timestamp fallback component decreases', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-fallback-decrease';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: null,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(1),
+      updated_at: null,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot warns and ignores issued-over-paid observations', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-invalid-accounting';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: null,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(9),
+      amount_issued: Amount.from(11),
+      updated_at: null,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('recordMintQuoteSnapshot persists timestamp-only freshness without emitting', async () => {
+    const pubkey = '02'.padEnd(66, '1');
+    const onchainQuoteId = 'onchain-quote-timestamp-only';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(2),
+      remoteUpdatedAt: 20,
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey,
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.from(2),
+      updated_at: 21,
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    expect(stored?.method).toBe('onchain');
+    if (observed.method !== 'onchain' || stored?.method !== 'onchain') {
+      throw new Error('Expected onchain quotes');
+    }
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(2))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(21);
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
 
