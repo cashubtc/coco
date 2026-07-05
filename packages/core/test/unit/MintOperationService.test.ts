@@ -2332,6 +2332,69 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
+  it('recordQuoteObservation clears remote freshness for local state observations', async () => {
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const localQuoteId = 'local-issued-clears-remote-freshness';
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: localQuoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'PAID',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: 20,
+      }),
+    );
+
+    const pendingOp: PendingMintOperation = {
+      ...makePendingOp('pending-local-issued'),
+      quoteId: localQuoteId,
+      request: 'lnbc1test',
+      expiry,
+    };
+    const localObservation = await quoteLifecycle.recordMintQuoteObservation(
+      pendingOp,
+      'ISSUED',
+      1_000,
+    );
+    const storedLocal = await quoteRepo.getMintQuote(mintUrl, 'bolt11', localQuoteId);
+
+    expect(localObservation.method).toBe('bolt11');
+    expect(storedLocal?.method).toBe('bolt11');
+    if (localObservation.method !== 'bolt11' || storedLocal?.method !== 'bolt11') {
+      throw new Error('Expected BOLT11 quotes');
+    }
+    expect(localObservation.state).toBe('ISSUED');
+    expect(localObservation.amountIssued.equals(Amount.from(10))).toBe(true);
+    expect(localObservation.remoteUpdatedAt).toBe(null);
+    expect(storedLocal.amountIssued.equals(Amount.from(10))).toBe(true);
+    expect(storedLocal.remoteUpdatedAt).toBe(null);
+
+    await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'bolt11', {
+      quote: localQuoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry,
+      state: 'PAID',
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.zero(),
+      updated_at: 21,
+    });
+    const storedAfterRemote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', localQuoteId);
+
+    expect(storedAfterRemote?.method).toBe('bolt11');
+    if (storedAfterRemote?.method !== 'bolt11') {
+      throw new Error('Expected BOLT11 quote');
+    }
+    expect(storedAfterRemote.state).toBe('ISSUED');
+    expect(storedAfterRemote.amountIssued.equals(Amount.from(10))).toBe(true);
+    expect(storedAfterRemote.remoteUpdatedAt).toBe(null);
+  });
+
   it('does not mirror canonical quote updates into pending operations', async () => {
     const pendingOp = makePendingOp('pending-5');
     const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];

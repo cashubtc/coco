@@ -677,23 +677,7 @@ export class QuoteLifecycle {
       };
     }
 
-    await this.mintQuoteRepository.setMintQuoteState(
-      resolution.quote.mintUrl,
-      resolution.quote.method,
-      resolution.quote.quoteId,
-      resolution.quote.state,
-      observedAt,
-    );
-    const persisted = await this.mintQuoteRepository.getMintQuote(
-      resolution.quote.mintUrl,
-      resolution.quote.method,
-      resolution.quote.quoteId,
-    );
-    if (!persisted) {
-      throw new Error(
-        `Cannot record quote observation: mint quote ${resolution.quote.quoteId} for ${resolution.quote.method} at ${resolution.quote.mintUrl} was not found after persistence`,
-      );
-    }
+    const persisted = await this.persistCanonicalMintQuote(resolution.quote);
 
     return { quote: persisted, remoteQuoteChanged: resolution.remoteQuoteChanged };
   }
