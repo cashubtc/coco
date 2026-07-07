@@ -12,8 +12,8 @@ passed as either an encoded string or a parsed `Token` object:
 const prepared = await coco.ops.receive.prepare({ token: 'cashuBpGF0gaJhaUgA...' });
 
 if (prepared.state === 'deferred') {
-  // Queued for later redemption (dust below the swap fee, missing p2pk key,
-  // or unreachable mint); coco redeems it automatically once it can.
+  // Queued for later redemption (dust below the swap fee, or unreachable
+  // mint); coco redeems it automatically once it can.
 } else if (userConfirmed) {
   await coco.ops.receive.execute(prepared.id);
 } else {

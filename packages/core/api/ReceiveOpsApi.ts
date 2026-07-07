@@ -57,9 +57,6 @@ export class ReceiveOpsApi {
     input: PrepareReceiveInput,
   ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.receiveOperationService.init(input.token);
-    if (initOp.state === 'deferred') {
-      return initOp;
-    }
     return this.receiveOperationService.prepare(initOp);
   }
 

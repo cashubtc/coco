@@ -69,9 +69,9 @@ export class WalletApi {
    * Receive a token in one shot.
    *
    * Returns the finalized operation, or a deferred operation when the receive
-   * cannot be settled yet (dust below the swap fee, missing p2pk key, or an
-   * unreachable mint); deferred receives are redeemed later, batched with other
-   * queued proofs of the same mint and unit.
+   * cannot be settled yet (dust below the swap fee, or an unreachable mint);
+   * deferred receives are redeemed later, batched with other queued proofs of
+   * the same mint and unit.
    *
    * For a multi-step receive flow (review fees/amounts before committing),
    * use `manager.ops.receive.prepare()` and `manager.ops.receive.execute()`.

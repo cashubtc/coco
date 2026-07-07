@@ -225,7 +225,7 @@ export interface ReceiveOperationRow {
   inputProofsJson?: string | null;
   outputDataJson?: string | null;
   sourceJson?: string | null;
-  deferredReason?: 'dust' | 'p2pk-unsigned' | 'mint-unreachable' | null;
+  deferredReason?: 'dust' | 'mint-unreachable' | null;
   batchId?: string | null;
 }
 

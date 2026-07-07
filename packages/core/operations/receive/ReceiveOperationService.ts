@@ -18,7 +18,6 @@ import {
 } from '../../utils';
 import {
   UnknownMintError,
-  KeyPairNotFoundError,
   KeysetSyncError,
   MintFetchError,
   MintOperationError,
@@ -142,15 +141,11 @@ export class ReceiveOperationService {
   /**
    * Create a new receive operation by decoding and validating the token.
    * Persists the init state so recovery can reason about this operation.
-   *
-   * When the token is p2pk-locked to a key that is not in the key ring yet,
-   * the operation is persisted directly as deferred with the raw (unsigned)
-   * proofs; signing is re-attempted at redemption time.
    */
   async init(
     token: Token | string,
     source?: ReceiveOperationSource,
-  ): Promise<InitReceiveOperation | DeferredReceiveOperation> {
+  ): Promise<InitReceiveOperation> {
     const mintUrl = this.extractMintUrl(token);
     const trusted = await this.mintService.isTrustedMint(mintUrl);
     if (!trusted) {
@@ -161,22 +156,7 @@ export class ReceiveOperationService {
     const unit = normalizeUnit(decodedToken.unit, { defaultUnit: DEFAULT_UNIT });
     const proofs = decodedToken.proofs;
 
-    let preparedProofs: Proof[];
-    let missingSigningKey = false;
-    try {
-      preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
-    } catch (e) {
-      if (e instanceof KeyPairNotFoundError) {
-        this.logger?.info('P2PK signing key missing, deferring receive', {
-          mintUrl,
-          publicKey: e.publicKey,
-        });
-        missingSigningKey = true;
-        preparedProofs = proofs;
-      } else {
-        throw e;
-      }
-    }
+    const preparedProofs = await this.proofService.prepareProofsForReceiving(proofs);
     if (!Array.isArray(preparedProofs) || preparedProofs.length === 0) {
       this.logger?.warn('Token contains no proofs', { mintUrl });
       throw new ProofValidationError('Token contains no proofs');
@@ -198,10 +178,6 @@ export class ReceiveOperationService {
       amount,
       proofCount: preparedProofs.length,
     });
-
-    if (missingSigningKey) {
-      return await this.markAsDeferred(operation, 'p2pk-unsigned');
-    }
 
     return operation;
   }
@@ -397,9 +373,6 @@ export class ReceiveOperationService {
     token: Token | string,
   ): Promise<FinalizedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.init(token);
-    if (initOp.state === 'deferred') {
-      return initOp;
-    }
 
     const hasQueuedGroupMembers = (
       await this.receiveOperationRepository.getByMintUrl(initOp.mintUrl)
@@ -972,9 +945,8 @@ export class ReceiveOperationService {
    * Each viable group (combined amount above the combined fee) is settled with
    * ONE swap whose single fee is apportioned across the members; every member
    * still finalizes as its own operation with its own event and history entry.
-   * Groups that stay below the fee, and members whose p2pk key is still
-   * missing, remain deferred. Failures are logged per group and never abort
-   * the sweep.
+   * Groups that stay below the combined fee remain deferred. Failures are
+   * logged per group and never abort the sweep.
    */
   async redeemDeferred(filter?: { mintUrl?: string; unit?: string }): Promise<void> {
     const deferredOps = await this.getDeferredOperations();
@@ -1053,8 +1025,7 @@ export class ReceiveOperationService {
 
   /**
    * Lock and validate one deferred operation for batch membership.
-   * Returns null (member stays deferred) when it is busy, changed state, or
-   * its p2pk unlock key is still missing.
+   * Returns null (member stays deferred) when it is busy or changed state.
    */
   private async collectBatchMember(
     candidate: DeferredReceiveOperation,
@@ -1070,33 +1041,12 @@ export class ReceiveOperationService {
       return null;
     }
 
-    if (current.deferredReason !== 'p2pk-unsigned') {
-      return {
-        operation: current,
-        signedProofs: current.inputProofs,
-        requeueReason: current.deferredReason,
-        releaseLock,
-      };
-    }
-
-    try {
-      const signedProofs = await this.proofService.prepareProofsForReceiving(current.inputProofs);
-      return { operation: current, signedProofs, requeueReason: 'p2pk-unsigned', releaseLock };
-    } catch (e) {
-      releaseLock();
-      if (e instanceof KeyPairNotFoundError) {
-        this.logger?.debug('P2PK key still missing for deferred receive', {
-          operationId: current.id,
-          publicKey: e.publicKey,
-        });
-      } else {
-        this.logger?.warn('Could not sign deferred p2pk receive, leaving deferred', {
-          operationId: current.id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-      return null;
-    }
+    return {
+      operation: current,
+      signedProofs: current.inputProofs,
+      requeueReason: current.deferredReason,
+      releaseLock,
+    };
   }
 
   /**

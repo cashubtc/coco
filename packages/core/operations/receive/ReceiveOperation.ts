@@ -12,8 +12,8 @@
  * - init: Operation created, token decoded/validated
  * - prepared: Fees calculated, outputs created, ready to execute
  * - executing: Receive in progress (mint interaction)
- * - deferred: Redemption postponed (dust, missing p2pk key, or unreachable mint)
- *   until it can be settled fee-efficiently or its prerequisites exist
+ * - deferred: Redemption postponed (dust or unreachable mint) until it can be
+ *   settled fee-efficiently or its prerequisites exist
  * - finalized: Proofs saved, operation complete
  * - rolled_back: Operation failed or aborted before completion
  */
@@ -28,10 +28,9 @@ export type ReceiveOperationState =
 /**
  * Why a receive operation was deferred:
  * - dust: input value does not cover the swap fee on its own
- * - p2pk-unsigned: the p2pk unlock key is not in the key ring; inputProofs are stored unsigned
  * - mint-unreachable: mint or keyset data could not be fetched (e.g. offline)
  */
-export type DeferredReceiveReason = 'dust' | 'p2pk-unsigned' | 'mint-unreachable';
+export type DeferredReceiveReason = 'dust' | 'mint-unreachable';
 
 import type { Amount, Proof } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';

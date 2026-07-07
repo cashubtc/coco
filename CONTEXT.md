@@ -84,8 +84,8 @@ _Avoid_: Claim deadline, quote invalidity
 
 **Deferred Receive**:
 A persisted receive operation whose redemption is postponed until it can be settled
-fee-efficiently or its prerequisites exist (dust below the swap fee, a missing p2pk unlock
-key, or an unreachable mint).
+fee-efficiently or its prerequisites exist (dust below the swap fee, or an unreachable
+mint).
 _Avoid_: Queued token, pending receive, receive later table
 
 **Batch Redemption**:

@@ -85,8 +85,6 @@ coco queues them as `deferred` operations with a `deferredReason`:
 - `dust` — the token's value does not cover the swap fee on its own
   (NUT-02: `fee = ceil(sum(input_fee_ppk) / 1000)`, so a lone 1-sat proof at
   100 ppk would leave zero outputs)
-- `p2pk-unsigned` — the token is p2pk-locked to a key that is not in the key
-  ring yet; the proofs are stored unsigned and signed at redemption time
 - `mint-unreachable` — mint or keyset data could not be fetched (e.g. offline)
 
 ### Batch Redemption
