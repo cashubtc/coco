@@ -83,7 +83,7 @@ describe('MemoryReceiveOperationRepository', () => {
   it('getByState filters deferred operations', async () => {
     await repo.create(
       makeOperation('op-deferred', 'deferred', {
-        deferredReason: 'p2pk-unsigned',
+        deferredReason: 'mint-unreachable',
       } as Partial<ReceiveOperation>),
     );
     await repo.create(makeOperation('op-executing', 'executing'));

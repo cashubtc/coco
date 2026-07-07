@@ -2824,7 +2824,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(allSpent).toBe(true);
       });
 
-      it('should defer receiving a P2PK token without the private key', async () => {
+      it('should fail to receive P2PK token without the private key', async () => {
         // Create a sender wallet with cashu-ts
         const senderSeed = crypto.getRandomValues(new Uint8Array(64));
         const senderWallet = new Wallet(createTestMint(mintUrl), {
@@ -2861,13 +2861,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           proofs: p2pkProofs,
         };
 
-        // Without the private key the receive is queued for later redemption
-        // instead of failing.
-        const result = await mgr!.wallet.receive(p2pkToken);
-        expect(result.state).toBe('deferred');
-        if (result.state === 'deferred') {
-          expect(result.deferredReason).toBe('p2pk-unsigned');
-        }
+        // Should fail because we don't have the private key
+        await expect(mgr!.wallet.receive(p2pkToken)).rejects.toThrow();
       });
 
       it('should send P2PK locked tokens using prepareSendP2pk', async () => {
@@ -3183,62 +3178,6 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         expect(laterResult.state).toBe('finalized');
         expect((await mgr!.ops.receive.get(dustResult.id))?.state).toBe('finalized');
         expect(await getMintSpendableBalance(mgr!, mintUrl, testUnit)).toBe(balanceBefore + 32);
-      }, 30000);
-
-      it('defers a p2pk token until its key is added, then redeems on demand', async () => {
-        // Compute a pubkey whose secret the receiver does NOT hold yet by
-        // deriving it in a throwaway manager.
-        const secretKey = crypto.getRandomValues(new Uint8Array(32));
-        const throwawayRepos = await createRepositories();
-        let lockedPubkey: string;
-        try {
-          const throwaway = await initializeCoco({
-            repo: throwawayRepos.repositories,
-            seedGetter: await createSeedGetter(),
-            logger,
-          });
-          const keypair = await throwaway.keyring.addKeyPair(secretKey);
-          lockedPubkey = keypair.publicKeyHex;
-          await throwaway.pauseSubscriptions();
-          await throwaway.dispose();
-        } finally {
-          await throwawayRepos.dispose();
-        }
-
-        // Build a p2pk-locked token from an independent sender wallet.
-        const senderWallet = new Wallet(createTestMint(mintUrl), { unit: testUnit });
-        await senderWallet.loadMint();
-        const senderQuote = await senderWallet.createMintQuoteBolt11(100);
-        let quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-        let attempts = 0;
-        while (quoteState.state !== 'PAID' && attempts <= 3) {
-          await delay(500);
-          quoteState = await senderWallet.checkMintQuoteBolt11(senderQuote.quote);
-          attempts++;
-        }
-        const senderProofs = await senderWallet.mintProofsBolt11(100, senderQuote.quote);
-        const { send: p2pkProofs } = await senderWallet.ops
-          .send(50, senderProofs)
-          .asP2PK({ pubkey: lockedPubkey })
-          .run();
-        const p2pkToken: Token = { mint: mintUrl, proofs: p2pkProofs };
-
-        const result = await mgr!.wallet.receive(p2pkToken);
-        expect(result.state).toBe('deferred');
-        if (result.state !== 'deferred') {
-          return;
-        }
-        expect(result.deferredReason).toBe('p2pk-unsigned');
-
-        // Once the key exists, an explicit redemption settles the receive.
-        await mgr!.keyring.addKeyPair(secretKey);
-        const balanceBefore = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
-        await mgr!.ops.receive.redeemDeferred();
-
-        const after = await mgr!.ops.receive.get(result.id);
-        expect(after?.state).toBe('finalized');
-        const balanceAfter = await getMintSpendableBalance(mgr!, mintUrl, testUnit);
-        expect(balanceAfter).toBeGreaterThan(balanceBefore);
       }, 30000);
     });
 

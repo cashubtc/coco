@@ -12,7 +12,7 @@ import type { ProofService } from '../../services/ProofService';
 import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import type { CoreProof } from '../../types';
-import { KeyPairNotFoundError, MintOperationError, NetworkError } from '../../models/Error';
+import { MintOperationError, NetworkError } from '../../models/Error';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -213,35 +213,6 @@ describe('ReceiveOperationService - redeemDeferred', () => {
     expect((await receiveOpRepo.getById('op-a'))?.state).toBe('finalized');
     expect((await receiveOpRepo.getById('op-b'))?.state).toBe('finalized');
     expect(mockWalletReceive).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps p2pk members with missing keys out of the batch', async () => {
-    await receiveOpRepo.create(makeDeferredOp('op-a', 5));
-    await receiveOpRepo.create(makeDeferredOp('op-p2pk', 4, 'p2pk-unsigned'));
-    (proofService.prepareProofsForReceiving as Mock<any>).mockImplementation(async () => {
-      throw new KeyPairNotFoundError('02abc');
-    });
-
-    await service.redeemDeferred();
-
-    expect((await receiveOpRepo.getById('op-a'))?.state).toBe('finalized');
-    const p2pk = await receiveOpRepo.getById('op-p2pk');
-    expect(p2pk?.state).toBe('deferred');
-    if (p2pk?.state === 'deferred') {
-      expect(p2pk.deferredReason).toBe('p2pk-unsigned');
-    }
-  });
-
-  it('re-signs p2pk members once the key is available', async () => {
-    await receiveOpRepo.create(makeDeferredOp('op-p2pk', 4, 'p2pk-unsigned'));
-    const signed = [makeProof('op-p2pk-signed', 4)];
-    (proofService.prepareProofsForReceiving as Mock<any>).mockImplementation(async () => signed);
-
-    await service.redeemDeferred();
-
-    const op = await receiveOpRepo.getById('op-p2pk');
-    expect(op?.state).toBe('finalized');
-    expect(op?.inputProofs).toEqual(signed);
   });
 
   it('keeps members executing when the batched swap fails transiently', async () => {

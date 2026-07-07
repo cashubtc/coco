@@ -612,14 +612,6 @@ export class PaymentRequestReceiveService {
         state: 'receiving',
         receiveOperationId: initReceive.id,
       });
-      if (initReceive.state === 'deferred') {
-        this.logger?.info('Payment request child receive deferred during recovery', {
-          attemptId: currentAttempt.id,
-          receiveOperationId: initReceive.id,
-          deferredReason: initReceive.deferredReason,
-        });
-        return;
-      }
       await this.resumeInitChildReceive(currentAttempt, initReceive, {
         ignoreMissingTransportHandler: true,
       });
@@ -762,15 +754,6 @@ export class PaymentRequestReceiveService {
         state: 'receiving',
         receiveOperationId: initReceive.id,
       });
-
-      if (initReceive.state === 'deferred') {
-        this.logger?.info('Payment request child receive deferred', {
-          attemptId: attempt.id,
-          receiveOperationId: initReceive.id,
-          deferredReason: initReceive.deferredReason,
-        });
-        return { operation, attempt, receiveOperation: initReceive };
-      }
 
       const preparedReceive = await this.receiveOperationService.prepare(initReceive);
       if (preparedReceive.state === 'deferred') {
