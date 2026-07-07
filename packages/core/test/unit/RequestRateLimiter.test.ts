@@ -1,7 +1,9 @@
 import { describe, it, beforeEach, afterEach, expect } from 'bun:test';
+import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
+import type { HeadersInit } from 'bun';
+
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
-import type { HeadersInit } from 'bun';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -111,6 +113,8 @@ describe('RequestRateLimiter', () => {
   });
 
   it('throws MintOperationError for 400 with protocol error shape', async () => {
+    expect(MintOperationError).toBe(CashuMintOperationError);
+
     // @ts-ignore
     globalThis.fetch = async () => {
       return new Response(JSON.stringify({ code: 4200, detail: 'proof already spent' }), {
@@ -125,6 +129,7 @@ describe('RequestRateLimiter', () => {
       throw new Error('Expected MintOperationError');
     } catch (err) {
       expect(err).toBeInstanceOf(MintOperationError);
+      expect(err).toBeInstanceOf(CashuMintOperationError);
       const e = err as MintOperationError;
       expect(e.status).toBe(400);
       expect(e.code).toBe(4200);

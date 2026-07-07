@@ -114,9 +114,15 @@ const offMelt = manager.on('melt-quote:updated', ({ mintUrl, quoteId, quote }) =
 
 Use `manager.quotes.*.refresh({ mintUrl, quoteId })` when resuming or when your
 app wants to explicitly check remote quote state. Use operation APIs and
-operation events such as `mint-op:finalized`, `melt-op:finalized`, or
-`melt-op:rolled-back` when the app needs to wait for value movement to reach a
-terminal state.
+operation events such as `mint-op:finalized`, `mint-op:failed`,
+`melt-op:finalized`, or `melt-op:rolled-back` when the app needs to wait for
+value movement to reach a terminal state.
+
+Mint completion waits should subscribe to both `mint-op:finalized` and
+`mint-op:failed`. `mint-op:finalized` now means successful issuance only; use
+`mint-op:failed` to reject or surface
+`operation.terminalFailure?.reason ?? operation.error` for terminal mint
+failures.
 
 ## Melt quote migration
 
@@ -159,7 +165,8 @@ manager.on('mint-quote:updated', ({ mintUrl, method, quoteId, quote }) => {
 ```
 
 Use `mint-quote:updated` only for quote state. Operation consumers should follow
-`mint-op:pending`, `mint-op:executing`, and `mint-op:finalized`.
+`mint-op:pending`, `mint-op:executing`, `mint-op:finalized`, and
+`mint-op:failed`.
 
 Because quote-only updates are separate from operation updates, `history:updated`
 is not emitted for bare quote creation or quote refresh. When a quote update

@@ -128,11 +128,15 @@ export function useMintOperation(
     const unsubscribeFinalized = manager.on('mint-op:finalized', ({ operation }) => {
       handleObservedOperation(operation);
     });
+    const unsubscribeFailed = manager.on('mint-op:failed', ({ operation }) => {
+      handleObservedOperation(operation);
+    });
 
     return () => {
       unsubscribePending();
       unsubscribeExecuting();
       unsubscribeFinalized();
+      unsubscribeFailed();
     };
   }, [handleObservedOperation, manager]);
 

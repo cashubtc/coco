@@ -160,10 +160,10 @@ describe('HistoryService', () => {
     expect(historyUpdateEvents).toHaveLength(0);
   });
 
-  it('emits mint operation state without operation-level remote quote state', async () => {
+  it('projects failed mint operation state from mint failure events', async () => {
     const failed = makeFailedMintOperation('mint-op-1', 'quote-1');
 
-    await eventBus.emit('mint-op:finalized', {
+    await eventBus.emit('mint-op:failed', {
       mintUrl,
       operationId: failed.id,
       operation: failed,

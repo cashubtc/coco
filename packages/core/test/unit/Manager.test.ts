@@ -5,6 +5,7 @@ import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
+import type { Mint } from '../../models/Mint';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { PendingMeltOperation } from '../../operations/melt';
@@ -12,7 +13,8 @@ import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
-import type { CoreProof } from '../../types';
+import type { Plugin } from '../../plugin';
+import type { CoreProof, MintInfo } from '../../types';
 
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
@@ -83,6 +85,95 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
+    });
+
+    it('should expose the quote api to plugins', async () => {
+      let pluginQuotes: QuoteApi | undefined;
+      const plugin: Plugin<['quotes']> = {
+        name: 'quotes-plugin',
+        required: ['quotes'],
+        onReady: ({ services }) => {
+          pluginQuotes = services.quotes;
+        },
+      };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [plugin],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      expect(pluginQuotes).toBe(manager.quotes);
+      expect(pluginQuotes).toBeInstanceOf(QuoteApi);
+
+      await manager.dispose();
+    });
+
+    it('should let plugins import canonical mint quotes through the quote api', async () => {
+      const mintUrl = 'https://mint.test';
+      const quoteId = 'plugin-import-quote';
+      const now = Math.floor(Date.now() / 1000);
+      await repositories.mintRepository.addNewMint({
+        mintUrl,
+        name: mintUrl,
+        mintInfo: {
+          nuts: {
+            '4': { methods: [{ method: 'bolt11', unit: 'sat' }] },
+          },
+        } as MintInfo,
+        trusted: true,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies Mint);
+
+      let importedQuoteId: string | undefined;
+      const plugin: Plugin<['quotes']> = {
+        name: 'quotes-import-plugin',
+        required: ['quotes'],
+        onReady: async ({ services }) => {
+          const quote = await services.quotes.mint.import({
+            mintUrl,
+            method: 'bolt11',
+            quote: {
+              quote: quoteId,
+              request: 'lnbc1pluginimportquote',
+              amount: Amount.from(21),
+              unit: 'sat',
+              expiry: 4_102_444_800,
+              state: 'PAID',
+            },
+          });
+          importedQuoteId = quote.quoteId;
+        },
+      };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [plugin],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      expect(importedQuoteId).toBe(quoteId);
+      await expect(manager.quotes.mint.get({ mintUrl, quoteId })).resolves.toMatchObject({
+        mintUrl,
+        quoteId,
+        method: 'bolt11',
+        state: 'PAID',
+      });
+
+      await manager.dispose();
     });
 
     it('does not reconcile canonical quote-only rows into mint operations on startup', async () => {

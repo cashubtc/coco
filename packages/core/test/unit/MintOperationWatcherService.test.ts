@@ -13,7 +13,10 @@ import {
 import type { SubscriptionManager } from '../../infra/SubscriptionManager.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { MintOperationService } from '../../operations/mint/MintOperationService.ts';
-import type { PendingMintOperation } from '../../operations/mint/MintOperation.ts';
+import type {
+  FailedMintOperation,
+  PendingMintOperation,
+} from '../../operations/mint/MintOperation.ts';
 import type { MintQuote } from '../../models/MintQuote.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -43,6 +46,19 @@ describe('MintOperationWatcherService', () => {
     outputData: '{"keep":[],"send":[]}' as unknown as PendingMintOperation['outputData'],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+  });
+
+  const makeFailedOperation = (operation = makePendingOperation()): FailedMintOperation => ({
+    ...operation,
+    state: 'failed',
+    updatedAt: Date.now(),
+    error: 'Quote expired before issuance',
+    terminalFailure: {
+      reason: 'Quote expired before issuance',
+      code: 'quote_expired',
+      retryable: false,
+      observedAt: Date.now(),
+    },
   });
 
   const makeOnchainOperation = (): PendingMintOperation<'onchain'> =>
@@ -697,6 +713,31 @@ describe('MintOperationWatcherService', () => {
       operationId: second.id,
       operation: { ...second, state: 'finalized' },
     });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await watcher.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops operation-specific watch interest when an operation fails', async () => {
+    const operation = makePendingOperation();
+
+    const watcher = makeWatcher({
+      mintOperations: {
+        getPendingOperations: mock(async () => [operation]),
+      } as unknown as MintOperationService,
+      options: { watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    await bus.emit('mint-op:failed', {
+      mintUrl,
+      operationId: operation.id,
+      operation: makeFailedOperation(operation),
+    });
+
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();

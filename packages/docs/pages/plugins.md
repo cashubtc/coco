@@ -83,11 +83,31 @@ implementation wiring and is not needed to author extensions.
 | `receiveOperationService`      | Receive operation lifecycle                 |
 | `meltOperationService`         | Melt operation lifecycle                    |
 | `mintOperationService`         | Mint operation lifecycle                    |
+| `quotes`                       | Canonical quote create/import/lookup API    |
 | `paymentRequestService`        | Payment request helpers                     |
 | `paymentRequestReceiveService` | Payment request receive operation lifecycle |
 | `subscriptions`                | WebSocket subscription manager              |
 | `eventBus`                     | Event pub/sub system                        |
 | `logger`                       | Logging interface                           |
+
+Plugins that sync externally created mint quotes can request `quotes` and use
+the same canonical quote API available on the manager:
+
+```ts
+import type { Plugin } from '@cashu/coco-core/plugin';
+
+const externalQuotePlugin: Plugin<['quotes']> = {
+  name: 'external-quote-plugin',
+  required: ['quotes'],
+  onReady: async ({ services }) => {
+    await services.quotes.mint.import({
+      mintUrl,
+      method: 'bolt11',
+      quote,
+    });
+  },
+};
+```
 
 ## Plugin Extensions
 

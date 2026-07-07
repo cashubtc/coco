@@ -395,6 +395,7 @@ export class Manager {
       counterService: this.counterService,
       meltOperationService: this.meltOperationService,
       mintOperationService: this.mintOperationService,
+      quotes: this.quotes,
       historyService: this.historyService,
       sendOperationService: this.sendOperationService,
       receiveOperationService: this.receiveOperationService,
