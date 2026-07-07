@@ -2,6 +2,7 @@ import type { SubscriptionManager } from '../infra/SubscriptionManager.ts';
 import type { EventBus } from '../events/EventBus.ts';
 import type { CoreEvents } from '../events/types.ts';
 import type { Logger } from '../logging/Logger.ts';
+import type { QuoteApi } from '../api/QuoteApi.ts';
 import type {
   CounterService,
   HistoryService,
@@ -42,6 +43,7 @@ export interface ServiceMap {
   receiveOperationService: ReceiveOperationService;
   meltOperationService: MeltOperationService;
   mintOperationService: MintOperationService;
+  quotes: QuoteApi;
   paymentRequestService: PaymentRequestService;
   paymentRequestReceiveService: PaymentRequestReceiveService;
   subscriptions: SubscriptionManager;
