@@ -890,6 +890,9 @@ export class Manager {
       walletRestoreLogger,
     );
 
+    // One shared instance across every counter-consuming operation service so that
+    // send, receive, melt, and mint serialize their per-mint deterministic-output
+    // derivation against each other. Passing separate instances would break that.
     const mintScopedLock = new MintScopedLock();
 
     const sendOperationLogger = this.getChildLogger('SendOperationService');
@@ -923,6 +926,7 @@ export class Manager {
       tokenService,
       this.eventBus,
       receiveOperationLogger,
+      mintScopedLock,
     );
     const receiveOperationRepository = repositories.receiveOperationRepository;
     const paymentRequestReceiveOperationRepository =
