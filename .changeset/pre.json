@@ -13,6 +13,7 @@
     "@cashu/coco-sqlite": "1.0.0"
   },
   "changesets": [
+    "align-cashu-error-types",
     "bright-bolt12-offers",
     "bright-onchain-mints",
     "bun-sqlite-drift",
@@ -32,6 +33,7 @@
     "melt-quote-watcher",
     "melt-settlement-processor",
     "methodless-quote-refresh",
+    "mint-failure-events",
     "mint-prepare-quote-refs",
     "mint-quote-import-boundary",
     "narrow-core-root-surface",
@@ -41,6 +43,7 @@
     "payment-method-capabilities",
     "payment-request-receive",
     "persist-send-memo",
+    "plugin-quote-service",
     "project-history-from-operations",
     "public-core-events",
     "quiet-tokens-validate",

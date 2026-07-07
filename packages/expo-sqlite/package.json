@@ -1,6 +1,6 @@
 {
   "name": "@cashu/coco-expo-sqlite",
-  "version": "2.0.0-rc.0",
+  "version": "2.0.0-rc.1",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,8 +15,8 @@
     "README.md"
   ],
   "devDependencies": {
-    "@cashu/coco-adapter-tests": "2.0.0-rc.0",
-    "@cashu/coco-sql-storage": "2.0.0-rc.0"
+    "@cashu/coco-adapter-tests": "2.0.0-rc.1",
+    "@cashu/coco-sql-storage": "2.0.0-rc.1"
   },
   "exports": {
     ".": {
@@ -34,6 +34,6 @@
     "@cashu/cashu-ts": "4.5",
     "typescript": "^5",
     "expo-sqlite": "*",
-    "@cashu/coco-core": "2.0.0-rc.0"
+    "@cashu/coco-core": "2.0.0-rc.1"
   }
 }

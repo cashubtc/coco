@@ -1,5 +1,22 @@
 # @cashu/coco-core
 
+## 2.0.0-rc.1
+
+### Major Changes
+
+- 5598750: Emit terminal failed mint operations through `mint-op:failed` instead of
+  `mint-op:finalized`, so `mint-op:finalized` now only reports successful
+  issuance.
+
+### Minor Changes
+
+- d787fa1: Expose the canonical quote API through the plugin service map so plugins can import mint quotes.
+
+### Patch Changes
+
+- af4b491: Re-export cashu-ts transport and mint operation errors from core so protocol
+  errors thrown by Coco share constructor identity with cashu-ts.
+
 ## 2.0.0-rc.0
 
 ### Major Changes
