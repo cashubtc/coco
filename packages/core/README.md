@@ -433,6 +433,23 @@ const myPlugin: Plugin<['eventBus', 'logger']> = {
 };
 ```
 
+Plugins that ingest externally created mint quotes can request the canonical
+quote API:
+
+```ts
+const quotePlugin: Plugin<['quotes']> = {
+  name: 'quote-plugin',
+  required: ['quotes'] as const,
+  onReady: async ({ services }) => {
+    await services.quotes.mint.import({
+      mintUrl,
+      method: 'bolt11',
+      quote,
+    });
+  },
+};
+```
+
 ### Using plugins
 
 ```ts
