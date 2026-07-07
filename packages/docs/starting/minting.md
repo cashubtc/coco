@@ -60,15 +60,27 @@ const pendingMint = await coco.ops.mint.prepare({
 console.log('pay this: ', pendingMint.request);
 console.log('this is the quote id: ', pendingMint.quoteId);
 
-const finalized = new Promise<void>((resolve) => {
-  const off = coco.on('mint-op:finalized', (payload) => {
+const completed = new Promise<void>((resolve, reject) => {
+  let offFinalized = () => {};
+  let offFailed = () => {};
+  const cleanup = () => {
+    offFinalized();
+    offFailed();
+  };
+
+  offFinalized = coco.on('mint-op:finalized', (payload) => {
     if (payload.operationId !== pendingMint.id) return;
-    off();
+    cleanup();
     resolve();
+  });
+  offFailed = coco.on('mint-op:failed', ({ operationId, operation }) => {
+    if (operationId !== pendingMint.id) return;
+    cleanup();
+    reject(new Error(operation.terminalFailure?.reason ?? operation.error ?? 'Mint failed'));
   });
 });
 
-await finalized;
+await completed;
 ```
 
 If you disable the default mint processor and want to finalize manually, listen

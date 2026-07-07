@@ -1075,7 +1075,7 @@ export class MintOperationService {
 
     await this.mintOperationRepository.update(failed);
 
-    await this.eventBus.emit('mint-op:finalized', {
+    await this.eventBus.emit('mint-op:failed', {
       mintUrl: failed.mintUrl,
       operationId: failed.id,
       operation: failed,
@@ -1205,7 +1205,7 @@ export class MintOperationService {
 
     await this.mintOperationRepository.update(failed);
 
-    await this.eventBus.emit('mint-op:finalized', {
+    await this.eventBus.emit('mint-op:failed', {
       mintUrl: failed.mintUrl,
       operationId: failed.id,
       operation: failed,

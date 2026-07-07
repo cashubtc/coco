@@ -64,6 +64,9 @@ export class HistoryService {
     this.eventBus.on('mint-op:finalized', ({ mintUrl, operation }) => {
       return this.emitProjectedMint(mintUrl, operation);
     });
+    this.eventBus.on('mint-op:failed', ({ mintUrl, operation }) => {
+      return this.emitProjectedMint(mintUrl, operation);
+    });
 
     this.eventBus.on('receive-op:finalized', ({ mintUrl, operation }) => {
       return this.emitProjectedReceive(mintUrl, operation);

@@ -922,11 +922,15 @@ describe('MintOperationService', () => {
   it('prepare + finalize runs pending -> execute for an existing canonical quote', async () => {
     const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
     eventBus.on('mint-quote:updated', (event) => {
       quoteUpdatedEvents.push(event);
     });
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
+    });
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
     });
 
     await persistQuote();
@@ -951,6 +955,7 @@ describe('MintOperationService', () => {
     expect(finalizedEvents.length).toBe(1);
     expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
     expect(finalizedEvents[0]?.operation.state).toBe('finalized');
+    expect(failedEvents).toHaveLength(0);
   });
 
   it('finalize is idempotent after finalize', async () => {
@@ -1458,7 +1463,15 @@ describe('MintOperationService', () => {
 
   it('recoverExecutingOperation finalizes expired quotes as terminal failures', async () => {
     const op = makeExecutingOp('exec-expired');
+    const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
     await operationRepo.create(op);
+    eventBus.on('mint-op:finalized', (event) => {
+      finalizedEvents.push(event);
+    });
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
+    });
 
     (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
       status: 'TERMINAL',
@@ -1471,6 +1484,13 @@ describe('MintOperationService', () => {
 
     expect(stored?.state).toBe('failed');
     expect(stored?.error).toBe(`Recovered: quote ${quoteId} expired while executing mint`);
+    expect(finalizedEvents).toHaveLength(0);
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]?.operationId).toBe(op.id);
+    expect(failedEvents[0]?.operation.state).toBe('failed');
+    expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
+      `Recovered: quote ${quoteId} expired while executing mint`,
+    );
   });
 
   it('finalize returns a failed operation when recovery finds an expired quote', async () => {
@@ -1559,6 +1579,53 @@ describe('MintOperationService', () => {
     if (!stored || stored.state !== 'pending') {
       throw new Error('Expected pending operation to remain pending after unpaid check');
     }
+  });
+
+  it('checkPendingOperation emits mint-op:failed for terminal pending failures', async () => {
+    const pendingOp = makePendingOp('pending-terminal');
+    const observedAt = Date.now();
+    const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+
+    await operationRepo.create(pendingOp);
+    eventBus.on('mint-op:finalized', (event) => {
+      finalizedEvents.push(event);
+    });
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
+    });
+
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedRemoteState: 'UNPAID',
+      observedRemoteStateAt: observedAt,
+      category: 'terminal',
+      terminalFailure: {
+        reason: 'Quote expired before issuance',
+        code: 'quote_expired',
+        retryable: false,
+        observedAt,
+      },
+    });
+
+    const result = await service.checkPendingOperation(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(result.category).toBe('terminal');
+    expect(stored?.state).toBe('failed');
+    expect(stored?.error).toBe('Quote expired before issuance');
+    expect(stored?.terminalFailure).toMatchObject({
+      reason: 'Quote expired before issuance',
+      code: 'quote_expired',
+      retryable: false,
+      observedAt,
+    });
+    expect(finalizedEvents).toHaveLength(0);
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]?.operationId).toBe(pendingOp.id);
+    expect(failedEvents[0]?.operation.state).toBe('failed');
+    expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
+      'Quote expired before issuance',
+    );
   });
 
   it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {
