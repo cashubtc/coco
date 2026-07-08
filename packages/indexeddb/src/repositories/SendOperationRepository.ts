@@ -13,6 +13,7 @@ import {
 } from '@cashu/coco-core/adapter';
 import type { IdbDb, SendOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
+import { assertFieldPresent } from '../utils.ts';
 
 type LegacySendOperationRow = SendOperationRow & {
   methodData?: SendOperation['methodData'];
@@ -58,8 +59,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   // All other states have PreparedData
   const preparedData = {
     needsSwap: row.needsSwap === 1,
-    fee: deserializeAmount(row.fee ?? 0),
-    inputAmount: deserializeAmount(row.inputAmount ?? 0),
+    fee: deserializeAmount(assertFieldPresent(row.fee, 'fee', row.id)),
+    inputAmount: deserializeAmount(assertFieldPresent(row.inputAmount, 'inputAmount', row.id)),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };

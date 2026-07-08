@@ -7,7 +7,7 @@ import {
   stringifyJson,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
+import { getUnixTimeSeconds, assertFieldPresent } from '../utils.ts';
 
 type MeltOperation = NonNullable<Awaited<ReturnType<MeltOperationRepository['getById']>>>;
 type MeltOperationState = Parameters<MeltOperationRepository['getByState']>[0];
@@ -82,11 +82,11 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 
   const preparedData = {
     quoteId: row.quoteId ?? '',
-    amount: deserializeAmount(row.amount ?? 0),
-    fee_reserve: deserializeAmount(row.fee_reserve ?? 0),
-    swap_fee: deserializeAmount(row.swap_fee ?? 0),
+    amount: deserializeAmount(assertFieldPresent(row.amount, 'amount', row.id)),
+    fee_reserve: deserializeAmount(assertFieldPresent(row.fee_reserve, 'fee_reserve', row.id)),
+    swap_fee: deserializeAmount(assertFieldPresent(row.swap_fee, 'swap_fee', row.id)),
     needsSwap: row.needsSwap === 1,
-    inputAmount: deserializeAmount(row.inputAmount ?? 0),
+    inputAmount: deserializeAmount(assertFieldPresent(row.inputAmount, 'inputAmount', row.id)),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     changeOutputData: row.changeOutputDataJson
       ? JSON.parse(row.changeOutputDataJson)

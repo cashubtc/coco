@@ -5,7 +5,7 @@ import type {
 } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
+import { getUnixTimeSeconds, assertFieldPresent } from '../utils.ts';
 
 function getOperationUnit(op: ReceiveOperation): string {
   return (op as ReceiveOperation & { unit?: string }).unit ?? 'sat';
@@ -54,7 +54,7 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
   }
 
   const preparedData = {
-    fee: deserializeAmount(row.fee ?? 0),
+    fee: deserializeAmount(assertFieldPresent(row.fee, 'fee', row.id)),
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };
 
