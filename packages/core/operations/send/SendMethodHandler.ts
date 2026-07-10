@@ -1,4 +1,4 @@
-import type { Wallet, Proof, Token } from '@cashu/cashu-ts';
+import type { Wallet, Proof, Token, P2PKOptions } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -22,9 +22,21 @@ import type {
  * Future methods may include:
  * - htlc: { hash: string; timeout: number } - HTLC locked tokens
  */
+export type P2pkSendMethodData =
+  | {
+      /** Legacy/direct shorthand for sending to one P2PK lock key. */
+      pubkey: string;
+      options?: never;
+    }
+  | {
+      /** Full NUT-11 P2PK options accepted by cashu-ts output builders. */
+      options: P2PKOptions;
+      pubkey?: never;
+    };
+
 export interface SendMethodDefinitions {
   default: Record<string, never>;
-  p2pk: { pubkey: string };
+  p2pk: P2pkSendMethodData;
 }
 
 export type SendMethod = keyof SendMethodDefinitions;

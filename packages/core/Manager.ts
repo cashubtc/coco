@@ -1022,6 +1022,7 @@ export class Manager {
     const paymentRequestService = new PaymentRequestService(
       sendOperationService,
       proofService,
+      mintService,
       paymentRequestLogger,
     );
     const paymentRequestReceiveLogger = this.getChildLogger('PaymentRequestReceiveService');
