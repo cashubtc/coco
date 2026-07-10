@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type P2PKOptions } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import type {
@@ -93,6 +93,32 @@ describe('SendOpsApi', () => {
       {
         method: 'p2pk',
         methodData: { pubkey: 'pubkey-1' },
+      },
+    );
+  });
+
+  it('prepare maps structured p2pk target options to send method options', async () => {
+    const options: P2PKOptions = {
+      pubkey: ['pubkey-1', 'pubkey-2'],
+      requiredSignatures: 2,
+      additionalTags: [['memo', 'test']],
+    };
+
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(20),
+      target: { type: 'p2pk', options },
+    });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'p2pk',
+        methodData: { options },
       },
     );
   });

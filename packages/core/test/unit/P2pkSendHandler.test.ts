@@ -1,4 +1,4 @@
-import { Amount, OutputData, type OutputDataLike } from '@cashu/cashu-ts';
+import { Amount, OutputData, type OutputDataLike, type P2PKOptions } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
 import { EventBus } from '../../events/EventBus';
@@ -10,6 +10,7 @@ import type { Logger } from '../../logging/Logger';
 import type { CoreProof } from '../../types';
 import type { ProofRepository } from '../../repositories';
 import { ProofValidationError } from '../../models/Error';
+import { getSecretsFromSerializedOutputData } from '../../utils';
 import type {
   InitSendOperation,
   PreparedSendOperation,
@@ -30,6 +31,9 @@ describe('P2pkSendHandler', () => {
   const mintUrl = 'https://mint.test';
   const keysetId = 'keyset-1';
   const testPubkey = '02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9';
+  const secondPubkey = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+  const refundPubkey = '02c6047f9441ed7d6d3045406e95c07cd85a2a1ac9f278e80f2ea26a1f8f1c287c';
+  const secondRefundPubkey = '02e493dbf1c10d80f3581e4904930b1404cc6c139f1a77d71642c9efe2e5a95c8f';
 
   let handler: P2pkSendHandler;
   let proofRepository: ProofRepository;
@@ -80,6 +84,15 @@ describe('P2pkSendHandler', () => {
       secret: Buffer.from(secret).toString('hex'),
     })),
   });
+
+  const getSendSecretPayloads = (operation: PreparedSendOperation): unknown[] => {
+    if (!operation.outputData) {
+      throw new Error('expected output data');
+    }
+    return getSecretsFromSerializedOutputData(operation.outputData).sendSecrets.map((secret) =>
+      JSON.parse(secret),
+    );
+  };
 
   const makeInitOp = (id: string, overrides?: Partial<InitSendOperation>): InitSendOperation => ({
     id,
@@ -205,6 +218,7 @@ describe('P2pkSendHandler', () => {
     // Mock MintService
     mintService = {
       isTrustedMint: mock(() => Promise.resolve(true)),
+      assertNutSupported: mock(() => Promise.resolve()),
     } as unknown as MintService;
 
     // Mock WalletService
@@ -345,15 +359,37 @@ describe('P2pkSendHandler', () => {
       ]);
     });
 
-    it('should throw if pubkey is missing from methodData', async () => {
+    it('should throw if P2PK target data is missing from methodData', async () => {
       const operation = makeInitOp('op-1', {
-        methodData: {}, // No pubkey
+        methodData: {}, // No P2PK target
       });
       const ctx = buildPrepareContext(operation);
 
       await expect(handler.prepare(ctx)).rejects.toThrow(
-        'P2PK send requires a pubkey in methodData',
+        'P2PK send requires P2PK options or a pubkey in methodData',
       );
+    });
+
+    it('should assert that the mint advertises NUT-11 before preparing outputs', async () => {
+      const operation = makeInitOp('op-nut11');
+      const ctx = buildPrepareContext(operation);
+
+      await handler.prepare(ctx);
+
+      expect(mintService.assertNutSupported).toHaveBeenCalledWith(mintUrl, 11, 'P2PK send');
+    });
+
+    it('should reject prepare when the mint does not advertise NUT-11', async () => {
+      (mintService.assertNutSupported as Mock<any>).mockRejectedValueOnce(
+        new ProofValidationError('NUT-11 support is required'),
+      );
+      const operation = makeInitOp('op-no-nut11');
+
+      await expect(handler.prepare(buildPrepareContext(operation))).rejects.toThrow(
+        'NUT-11 support is required',
+      );
+      expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
+      expect(proofService.reserveProofs).not.toHaveBeenCalled();
     });
 
     it('should throw if balance is insufficient', async () => {
@@ -389,6 +425,57 @@ describe('P2pkSendHandler', () => {
       expect(result.methodData).toEqual({ pubkey: testPubkey });
       expect(result.inputProofSecrets).toEqual(['input-1', 'input-2']);
       expect(result.outputData).toBeDefined();
+    });
+
+    it('should create P2PK outputs from legacy pubkey method data', async () => {
+      const operation = makeInitOp('op-legacy', {
+        methodData: { pubkey: testPubkey },
+      });
+
+      const result = await handler.prepare(buildPrepareContext(operation));
+      const [secret] = getSendSecretPayloads(result);
+
+      expect(secret).toEqual([
+        'P2PK',
+        expect.objectContaining({
+          data: testPubkey,
+        }),
+      ]);
+    });
+
+    it('should create P2PK outputs from structured NUT-11 options', async () => {
+      const options: P2PKOptions = {
+        pubkey: [testPubkey, secondPubkey],
+        requiredSignatures: 2,
+        locktime: 1_735_689_600,
+        refundKeys: [refundPubkey, secondRefundPubkey],
+        requiredRefundSignatures: 2,
+        sigFlag: 'SIG_ALL',
+        additionalTags: [['memo', 'preserve-me']],
+      };
+      const operation = makeInitOp('op-structured', {
+        methodData: { options },
+      });
+
+      const result = await handler.prepare(buildPrepareContext(operation));
+      const [secret] = getSendSecretPayloads(result);
+
+      expect(Array.isArray(secret)).toBe(true);
+      const [kind, payload] = secret as [string, { nonce: string; data: string; tags: string[][] }];
+      expect(kind).toBe('P2PK');
+      expect(payload.nonce).toEqual(expect.any(String));
+      expect(payload.data).toBe(testPubkey);
+      expect(payload.tags).toEqual(
+        expect.arrayContaining([
+          ['pubkeys', secondPubkey],
+          ['n_sigs', '2'],
+          ['locktime', '1735689600'],
+          ['refund', refundPubkey, secondRefundPubkey],
+          ['n_sigs_refund', '2'],
+          ['sigflag', 'SIG_ALL'],
+          ['memo', 'preserve-me'],
+        ]),
+      );
     });
 
     it('should reserve proofs for the operation', async () => {
@@ -467,7 +554,7 @@ describe('P2pkSendHandler', () => {
       expect(proofService.reserveProofs).not.toHaveBeenCalled();
     });
 
-    it('should log preparation with pubkey', async () => {
+    it('should log preparation with P2PK pubkey data', async () => {
       const operation = makeInitOp('op-1');
       const ctx = buildPrepareContext(operation);
 
@@ -477,7 +564,7 @@ describe('P2pkSendHandler', () => {
         'P2PK send operation prepared',
         expect.objectContaining({
           operationId: 'op-1',
-          pubkey: testPubkey,
+          p2pkPubkey: testPubkey,
         }),
       );
     });
@@ -548,16 +635,30 @@ describe('P2pkSendHandler', () => {
         });
       });
 
-      it('should throw if pubkey is missing during execute', async () => {
+      it('should accept structured P2PK method data during execute', async () => {
+        const operation = makeExecutingOp('op-structured-execute', {
+          methodData: { options: { pubkey: [testPubkey, secondPubkey], requiredSignatures: 2 } },
+          inputProofSecrets: ['input-1', 'input-2'],
+        });
+        const inputProofs = [makeProof('input-1', 60), makeProof('input-2', 50)];
+
+        const ctx = buildExecuteContext(operation, inputProofs);
+
+        await expect(handler.execute(ctx)).resolves.toMatchObject({
+          status: 'PENDING',
+        });
+      });
+
+      it('should throw if P2PK target data is missing during execute', async () => {
         const operation = makeExecutingOp('op-1', {
-          methodData: {}, // No pubkey
+          methodData: {}, // No P2PK target
         });
         const inputProofs = [makeProof('input-1', 110)];
 
         const ctx = buildExecuteContext(operation, inputProofs);
 
         await expect(handler.execute(ctx)).rejects.toThrow(
-          'P2PK send requires a pubkey in methodData',
+          'P2PK send requires P2PK options or a pubkey in methodData',
         );
       });
 

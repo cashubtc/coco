@@ -224,6 +224,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     // Mock MintService
     mintService = {
       isTrustedMint: mock(() => Promise.resolve(true)),
+      assertNutSupported: mock(() => Promise.resolve()),
     } as unknown as MintService;
 
     // Mock WalletService

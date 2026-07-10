@@ -4,11 +4,15 @@ import {
   JSONInt,
   PaymentRequest,
   PaymentRequestTransportType,
+  type NUT10Option,
+  type P2PKOptions,
   type Token,
 } from '@cashu/cashu-ts';
 import { PaymentRequestError } from '../models/Error';
 import type { ProofService } from '../services';
+import type { MintService } from '../services/MintService.ts';
 import type {
+  CreateSendOperationOptions,
   PendingSendOperation,
   PreparedSendOperation,
   SendOperationService,
@@ -27,6 +31,34 @@ type PaymentRequestTransport =
   | HttpPaymentRequestTransport
   | NostrPaymentRequestTransport;
 
+export type PaymentRequestP2pkRequirement = {
+  kind: 'P2PK';
+  options: P2PKOptions;
+  rawNut10: NUT10Option;
+};
+
+export type PaymentRequestUnsupportedSpendingCondition = {
+  kind: 'unsupported';
+  nut10Kind: string;
+  reason: string;
+  rawNut10: NUT10Option;
+};
+
+export type PaymentRequestMalformedSpendingCondition = {
+  kind: 'malformed';
+  nut10Kind: string;
+  reason: string;
+  rawNut10: NUT10Option;
+};
+
+export type PaymentRequestSpendingConditionRequirement =
+  | {
+      kind: 'P2PK';
+      p2pk: PaymentRequestP2pkRequirement;
+    }
+  | PaymentRequestUnsupportedSpendingCondition
+  | PaymentRequestMalformedSpendingCondition;
+
 type ResolvedPaymentRequest = {
   paymentRequest: PaymentRequest;
   payableMints: string[];
@@ -34,6 +66,7 @@ type ResolvedPaymentRequest = {
   amount?: Amount;
   unit: string;
   transport: PaymentRequestTransport;
+  spendingCondition?: PaymentRequestSpendingConditionRequirement;
 };
 
 export type PreparedPaymentRequest = {
@@ -79,15 +112,18 @@ export type {
 export class PaymentRequestService {
   private readonly sendOperationService: SendOperationService;
   private readonly proofService: ProofService;
+  private readonly mintService: MintService;
   private readonly logger?: Logger;
 
   constructor(
     sendOperationService: SendOperationService,
     proofService: ProofService,
+    mintService: MintService,
     logger?: Logger,
   ) {
     this.sendOperationService = sendOperationService;
     this.proofService = proofService;
+    this.mintService = mintService;
     this.logger = logger;
   }
 
@@ -100,7 +136,12 @@ export class PaymentRequestService {
     const decodedPaymentRequest = await this.readPaymentRequest(paymentRequest);
     const transport = this.getPaymentRequestTransport(decodedPaymentRequest);
     const unit = normalizeUnit(decodedPaymentRequest.unit, { defaultUnit: DEFAULT_UNIT });
-    const payableMints = await this.findMatchingMints(decodedPaymentRequest, unit);
+    const spendingCondition = this.resolveSpendingCondition(decodedPaymentRequest);
+    const payableMints = await this.findMatchingMints(
+      decodedPaymentRequest,
+      unit,
+      spendingCondition,
+    );
     const allowedMints = decodedPaymentRequest.mints ?? [];
     return {
       paymentRequest: decodedPaymentRequest,
@@ -109,6 +150,7 @@ export class PaymentRequestService {
       amount: decodedPaymentRequest.amount,
       unit,
       transport,
+      spendingCondition,
     };
   }
 
@@ -123,8 +165,9 @@ export class PaymentRequestService {
     this.validateMint(mintUrl, request.allowedMints);
     const finalAmount = this.validateAmount(request, amount);
     const preparedRequest = await this.resolvePreparedRequest(request, finalAmount);
+    const sendOptions = await this.resolveSendOptions(preparedRequest, mintUrl);
     this.logger?.debug('Preparing payment request transaction', { mintUrl, amount: finalAmount });
-    const initSend = await this.sendOperationService.init(mintUrl, finalAmount);
+    const initSend = await this.sendOperationService.init(mintUrl, finalAmount, sendOptions);
     const preparedSend = await this.sendOperationService.prepare(initSend);
     this.logger?.debug('Payment request transaction prepared', { mintUrl, amount: finalAmount });
     return { sendOperation: preparedSend, request: preparedRequest };
@@ -244,7 +287,18 @@ export class PaymentRequestService {
     );
   }
 
-  private async findMatchingMints(paymentRequest: PaymentRequest, unit: string): Promise<string[]> {
+  private async findMatchingMints(
+    paymentRequest: PaymentRequest,
+    unit: string,
+    spendingCondition?: PaymentRequestSpendingConditionRequirement,
+  ): Promise<string[]> {
+    if (
+      spendingCondition &&
+      (spendingCondition.kind === 'unsupported' || spendingCondition.kind === 'malformed')
+    ) {
+      return [];
+    }
+
     const normalizedUnit = normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT });
     const balances = await this.proofService.getBalancesByMint({
       trustedOnly: true,
@@ -258,10 +312,141 @@ export class PaymentRequestService {
         balance.spendable.greaterThanOrEqual(amount) &&
         (!mintRequirement || mintRequirement.includes(mintUrl))
       ) {
+        if (
+          spendingCondition?.kind === 'P2PK' &&
+          !(await this.mintService.supportsNut(mintUrl, 11))
+        ) {
+          continue;
+        }
         matchingMints.push(mintUrl);
       }
     }
     return matchingMints;
+  }
+
+  private resolveSpendingCondition(
+    paymentRequest: PaymentRequest,
+  ): PaymentRequestSpendingConditionRequirement | undefined {
+    const rawNut10 = paymentRequest.nut10;
+    if (!rawNut10) {
+      return undefined;
+    }
+
+    const nut10Kind = this.getNut10Kind(rawNut10);
+    if (nut10Kind !== 'P2PK') {
+      return {
+        kind: 'unsupported',
+        nut10Kind,
+        reason: `Unsupported NUT-10 spending condition '${nut10Kind}'`,
+        rawNut10,
+      };
+    }
+
+    try {
+      const options = paymentRequest.toP2PKOptions();
+      if (!options) {
+        return {
+          kind: 'malformed',
+          nut10Kind,
+          reason: 'NUT-10 P2PK spending condition could not be normalized',
+          rawNut10,
+        };
+      }
+
+      return {
+        kind: 'P2PK',
+        p2pk: {
+          kind: 'P2PK',
+          options,
+          rawNut10,
+        },
+      };
+    } catch (error) {
+      return {
+        kind: 'malformed',
+        nut10Kind,
+        reason: error instanceof Error ? error.message : String(error),
+        rawNut10,
+      };
+    }
+  }
+
+  private getNut10Kind(nut10: NUT10Option): string {
+    const compact = nut10 as NUT10Option & { k?: unknown };
+    if (typeof nut10.kind === 'string' && nut10.kind.length > 0) {
+      return nut10.kind;
+    }
+    if (typeof compact.k === 'string' && compact.k.length > 0) {
+      return compact.k;
+    }
+    return 'unknown';
+  }
+
+  private async resolveSendOptions(
+    request: ResolvedPaymentRequest,
+    mintUrl: string,
+  ): Promise<CreateSendOperationOptions | undefined> {
+    const spendingCondition = request.spendingCondition;
+    if (!spendingCondition) {
+      return undefined;
+    }
+
+    if (spendingCondition.kind === 'unsupported') {
+      throw new PaymentRequestError(
+        `Unsupported NUT-10 spending condition '${spendingCondition.nut10Kind}'`,
+      );
+    }
+
+    if (spendingCondition.kind === 'malformed') {
+      this.throwMalformedSpendingCondition(spendingCondition, request.paymentRequest);
+    }
+
+    const options = this.normalizeP2pkOptionsForPrepare(request.paymentRequest);
+
+    try {
+      await this.mintService.assertNutSupported(mintUrl, 11, 'payment request P2PK');
+    } catch (cause) {
+      throw new PaymentRequestError(
+        `Mint ${mintUrl} does not support NUT-11 required by payment request P2PK`,
+        cause,
+      );
+    }
+
+    return {
+      method: 'p2pk',
+      methodData: { options },
+    };
+  }
+
+  private normalizeP2pkOptionsForPrepare(paymentRequest: PaymentRequest): P2PKOptions {
+    try {
+      const options = paymentRequest.toP2PKOptions();
+      if (!options) {
+        throw new PaymentRequestError('NUT-10 P2PK spending condition could not be normalized');
+      }
+      return options;
+    } catch (cause) {
+      throw new PaymentRequestError('Malformed NUT-10 P2PK spending condition', cause);
+    }
+  }
+
+  private throwMalformedSpendingCondition(
+    spendingCondition: PaymentRequestMalformedSpendingCondition,
+    paymentRequest: PaymentRequest,
+  ): never {
+    const message =
+      `Malformed NUT-10 spending condition '${spendingCondition.nut10Kind}': ` +
+      spendingCondition.reason;
+
+    if (spendingCondition.nut10Kind === 'P2PK') {
+      try {
+        this.normalizeP2pkOptionsForPrepare(paymentRequest);
+      } catch (cause) {
+        throw new PaymentRequestError(message, cause);
+      }
+    }
+
+    throw new PaymentRequestError(message);
   }
 
   private validateAmount(request: ResolvedPaymentRequest, amount?: UnitAmount): UnitAmount {
@@ -290,21 +475,29 @@ export class PaymentRequestService {
     intent: UnitAmount,
   ): Promise<ResolvedPaymentRequest> {
     const amount = intent.amount;
-    if (request.amount?.equals(amount)) {
+    const amountUnchanged = request.amount?.equals(amount) === true;
+    if (amountUnchanged && !request.paymentRequest.nut10 && !request.spendingCondition) {
       return request;
     }
 
-    const paymentRequest = new PaymentRequest(
-      request.paymentRequest.transport,
-      request.paymentRequest.id,
-      amount,
+    const paymentRequest = amountUnchanged
+      ? request.paymentRequest
+      : new PaymentRequest(
+          request.paymentRequest.transport,
+          request.paymentRequest.id,
+          amount,
+          request.unit,
+          request.paymentRequest.mints,
+          request.paymentRequest.description,
+          request.paymentRequest.singleUse,
+          request.paymentRequest.nut10,
+        );
+    const spendingCondition = this.resolveSpendingCondition(paymentRequest);
+    const payableMints = await this.findMatchingMints(
+      paymentRequest,
       request.unit,
-      request.paymentRequest.mints,
-      request.paymentRequest.description,
-      request.paymentRequest.singleUse,
-      request.paymentRequest.nut10,
+      spendingCondition,
     );
-    const payableMints = await this.findMatchingMints(paymentRequest, request.unit);
 
     return {
       ...request,
@@ -312,6 +505,7 @@ export class PaymentRequestService {
       unit: request.unit,
       payableMints,
       paymentRequest,
+      spendingCondition,
     };
   }
 }
