@@ -24,7 +24,37 @@ The returned `ResolvedPaymentRequest` contains:
 - **amount** - The requested amount (optional, but required for payment)
 - **unit** - The requested unit, normalized to lowercase
 - **allowedMints** - List of allowed mints from the request
-- **payableMints** - Trusted mints with sufficient balance
+- **payableMints** - Trusted mints with sufficient balance. For P2PK requests,
+  this also requires NUT-11 support.
+- **spendingCondition** - Optional NUT-10 requirement details. Valid P2PK
+  requirements are exposed as normalized P2PK options; unsupported or malformed
+  requirements are exposed as diagnostics.
+
+## P2PK Payment Request Requirements
+
+Payment requests can include a NUT-10 spending condition. Coco currently supports
+payer-side NUT-11 P2PK requirements. When `paymentRequests.parse()` sees a valid
+P2PK requirement, the resolved request includes normalized P2PK options:
+
+```ts
+const prepared = await coco.paymentRequests.parse(paymentRequest);
+
+if (prepared.spendingCondition?.kind === 'P2PK') {
+  console.log('P2PK options:', prepared.spendingCondition.p2pk.options);
+}
+```
+
+For P2PK payment requests, `payableMints` only includes mints that are:
+
+- trusted by this Coco instance
+- holding enough spendable balance for the requested unit and amount
+- allowed by the payment request's mint list, if present
+- advertising NUT-11 support in mint info
+
+If a request contains unsupported NUT-10, HTLC, or malformed P2PK requirements,
+`parse()` returns `payableMints: []` and preserves the reason in
+`spendingCondition`. `prepare()` also enforces the requirement before creating a
+send operation, so funds are not moved for unsupported or malformed requirements.
 
 ## Transport Types
 
@@ -142,6 +172,10 @@ await coco.paymentRequests.incoming.create({
 Core then validates the payload, deduplicates redeliveries, runs the normal receive
 operation, and completes the request if it is single-use.
 
+Incoming payment request creation with `nut10` is not supported yet. Receiver-side
+validation of incoming payloads against a request's `nut10` requirement is also
+out of scope for core today.
+
 ## Specifying the Amount
 
 If the payment request doesn't include an amount, you must provide one:
@@ -188,6 +222,9 @@ const transaction = await coco.paymentRequests.prepare(prepared, { mintUrl });
 await coco.paymentRequests.execute(transaction);
 ```
 
+For P2PK requests, do not choose from `allowedMints` directly. Use
+`payableMints`, because it also applies the NUT-11 mint capability check.
+
 ## Error Handling
 
 Payment request operations can throw errors in several cases:
@@ -204,6 +241,8 @@ try {
   // - Mint not in allowed list
   // - Amount mismatch
   // - Insufficient balance
+  // - Unsupported or malformed NUT-10 requirement
+  // - Selected mint does not advertise NUT-11 for a P2PK request
   console.error('Payment failed:', error.message);
 }
 ```
