@@ -36,6 +36,12 @@ function getLegacyPublicKeyHex(secretKey: Uint8Array): string {
   return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
 }
 
+const ODD_Y_SECRET_KEY = Uint8Array.from([...new Uint8Array(31), 6]);
+const ODD_Y_CANONICAL_PUBLIC_KEY =
+  '03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
+const ODD_Y_LEGACY_PUBLIC_KEY =
+  '02fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556';
+
 describe('KeyRingService', () => {
   let repo: MemoryKeyRingRepository;
   let seedService: SeedService;
@@ -276,6 +282,21 @@ describe('KeyRingService', () => {
       expect(stored?.derivationIndex).toBeUndefined();
     });
 
+    it('does not duplicate a persisted legacy odd-Y keypair when importing its secret', async () => {
+      await repo.setPersistedKeyPair({
+        publicKeyHex: ODD_Y_LEGACY_PUBLIC_KEY,
+        secretKey: ODD_Y_SECRET_KEY,
+        derivationIndex: 7,
+        purpose: 'p2pk',
+      });
+
+      const imported = await service.addKeyPair(ODD_Y_SECRET_KEY);
+
+      expect(imported.publicKeyHex).toBe(ODD_Y_LEGACY_PUBLIC_KEY);
+      expect(imported.derivationIndex).toBe(7);
+      expect(await service.getAllKeyPairs()).toHaveLength(1);
+    });
+
     it('rejects secret key that is not 32 bytes', async () => {
       const invalidKey = new Uint8Array(31); // Wrong length
 
@@ -309,6 +330,26 @@ describe('KeyRingService', () => {
       expect(stored).toBeNull();
     });
 
+    it('removes a canonical odd-Y keypair by its legacy public key alias', async () => {
+      await service.addKeyPair(ODD_Y_SECRET_KEY);
+
+      await service.removeKeyPair(ODD_Y_LEGACY_PUBLIC_KEY);
+
+      expect(await service.getKeyPair(ODD_Y_CANONICAL_PUBLIC_KEY)).toBeNull();
+    });
+
+    it('removes a persisted legacy odd-Y keypair by its canonical public key alias', async () => {
+      await repo.setPersistedKeyPair({
+        publicKeyHex: ODD_Y_LEGACY_PUBLIC_KEY,
+        secretKey: ODD_Y_SECRET_KEY,
+        purpose: 'p2pk',
+      });
+
+      await service.removeKeyPair(ODD_Y_CANONICAL_PUBLIC_KEY);
+
+      expect(await repo.getPersistedKeyPair(ODD_Y_LEGACY_PUBLIC_KEY, 'p2pk')).toBeNull();
+    });
+
     it('does not throw when removing non-existent key', async () => {
       // Should complete without throwing
       await service.removeKeyPair(
@@ -327,6 +368,26 @@ describe('KeyRingService', () => {
       expect(retrieved).not.toBeNull();
       expect(retrieved?.publicKeyHex).toBe(generated.publicKeyHex);
       expect(bytesToHex(retrieved!.secretKey)).toBe(bytesToHex(generated.secretKey));
+    });
+
+    it('retrieves a canonical odd-Y keypair by its legacy public key alias', async () => {
+      await service.addKeyPair(ODD_Y_SECRET_KEY);
+
+      const retrieved = await service.getKeyPair(ODD_Y_LEGACY_PUBLIC_KEY);
+
+      expect(retrieved?.publicKeyHex).toBe(ODD_Y_CANONICAL_PUBLIC_KEY);
+    });
+
+    it('retrieves a persisted legacy odd-Y keypair by its canonical public key alias', async () => {
+      await repo.setPersistedKeyPair({
+        publicKeyHex: ODD_Y_LEGACY_PUBLIC_KEY,
+        secretKey: ODD_Y_SECRET_KEY,
+        purpose: 'p2pk',
+      });
+
+      const retrieved = await service.getKeyPair(ODD_Y_CANONICAL_PUBLIC_KEY);
+
+      expect(retrieved?.publicKeyHex).toBe(ODD_Y_LEGACY_PUBLIC_KEY);
     });
 
     it('returns null for non-existent key', async () => {
@@ -538,6 +599,25 @@ describe('KeyRingService', () => {
         proof,
         getLegacyPublicKeyHex(oddYKeyPair.secretKey),
       );
+      const witness = JSON.parse(signed.witness as string);
+
+      expect(witness.signatures).toHaveLength(1);
+    });
+
+    it('signs a canonical alias using a persisted legacy odd-Y keypair', async () => {
+      await repo.setPersistedKeyPair({
+        publicKeyHex: ODD_Y_LEGACY_PUBLIC_KEY,
+        secretKey: ODD_Y_SECRET_KEY,
+        purpose: 'p2pk',
+      });
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: Amount.from(64),
+        secret: 'canonical-alias-secret',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const signed = await service.signProof(proof, ODD_Y_CANONICAL_PUBLIC_KEY);
       const witness = JSON.parse(signed.witness as string);
 
       expect(witness.signatures).toHaveLength(1);
