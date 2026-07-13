@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, afterEach, expect, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
@@ -16,6 +16,7 @@ import {
 import type { CoreProof } from '../../types.ts';
 import { OutputData } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils.ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 describe('ProofService', () => {
   const mintUrl = 'https://mint.test';
@@ -117,6 +118,107 @@ describe('ProofService', () => {
   });
 
   describe('createOutputsAndIncrementCounters', () => {
+    it('delegates deterministic keep and send outputs to the supplied creator', async () => {
+      const keepOutputs = [
+        { marker: 'keep-1' },
+        { marker: 'keep-2' },
+      ] as unknown as OutputDataLike[];
+      const sendOutputs = [{ marker: 'send-1' }] as unknown as OutputDataLike[];
+      const createDeterministicData = mock((amount: Amount, _seed: Uint8Array, counter: number) =>
+        amount.equals(3) && counter === 0 ? keepOutputs : sendOutputs,
+      );
+      const creator = makeOutputDataCreator({ createDeterministicData });
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        creator,
+      );
+
+      const result = await service.createOutputsAndIncrementCounters(mintUrl, {
+        keep: unitAmount(3),
+        send: unitAmount(7),
+      });
+
+      expect(createDeterministicData).toHaveBeenNthCalledWith(1, Amount.from(3), makeSeed(), 0, {
+        id: keysetId,
+      });
+      expect(createDeterministicData).toHaveBeenNthCalledWith(2, Amount.from(7), makeSeed(), 2, {
+        id: keysetId,
+      });
+      expect(result.keep).toBe(keepOutputs);
+      expect(result.send).toBe(sendOutputs);
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 3,
+      });
+    });
+
+    it('does not invoke the creator for zero-valued keep or send sides', async () => {
+      const createDeterministicData = mock(() => []);
+      const creator = makeOutputDataCreator({ createDeterministicData });
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        creator,
+      );
+
+      await service.createOutputsAndIncrementCounters(mintUrl, {
+        keep: unitAmount(0),
+        send: unitAmount(0),
+      });
+
+      expect(createDeterministicData).not.toHaveBeenCalled();
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 0,
+      });
+    });
+
+    it('propagates creator errors without using a built-in fallback', async () => {
+      const creatorError = new Error('custom creator failed');
+      const createDeterministicData = mock(() => {
+        throw creatorError;
+      });
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        makeOutputDataCreator({ createDeterministicData }),
+      );
+
+      await expect(
+        service.createOutputsAndIncrementCounters(mintUrl, {
+          keep: unitAmount(1),
+          send: unitAmount(0),
+        }),
+      ).rejects.toBe(creatorError);
+      expect(createDeterministicData).toHaveBeenCalledTimes(1);
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 0,
+      });
+    });
+
     it('throws when mintUrl is missing', async () => {
       const service = new ProofService(
         counterService,
@@ -246,6 +348,39 @@ describe('ProofService', () => {
   });
 
   describe('createBlankOutputs', () => {
+    it('delegates blank outputs with consecutive counters to the supplied creator', async () => {
+      const createSingleDeterministicData = mock(
+        (_amount: Amount, _seed: Uint8Array, counter: number, _keysetId: string) =>
+          ({ counter }) as unknown as OutputDataLike,
+      );
+      const creator = makeOutputDataCreator({ createSingleDeterministicData });
+      OutputData.createSingleDeterministicData = () => {
+        throw new Error('built-in single deterministic creation must not be used');
+      };
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        creator,
+      );
+
+      const result = await service.createBlankOutputs(mintUrl, unitAmount(8));
+
+      expect(createSingleDeterministicData).toHaveBeenCalledTimes(3);
+      expect(createSingleDeterministicData.mock.calls.map((call) => call[2])).toEqual([0, 1, 2]);
+      for (const call of createSingleDeterministicData.mock.calls) {
+        expect(Amount.from(call[0]).isZero()).toBe(true);
+        expect(call[1]).toEqual(makeSeed());
+        expect(call[3]).toBe(keysetId);
+      }
+      expect(result).toHaveLength(3);
+    });
+
     it('creates blank outputs for bigint-backed amounts above MAX_SAFE_INTEGER', async () => {
       const counters: number[] = [];
       OutputData.createSingleDeterministicData = ((

@@ -1,4 +1,4 @@
-import type { Amount, MeltQuoteBolt12Response, OutputData, Proof } from '@cashu/cashu-ts';
+import type { Amount, MeltQuoteBolt12Response, OutputDataLike, Proof } from '@cashu/cashu-ts';
 import type {
   BasePrepareContext,
   CreateMeltQuoteContext,
@@ -37,7 +37,7 @@ export class MeltBolt12Handler extends BaseQuoteMeltHandler<'bolt12'> {
   protected executeMelt(
     ctx: ExecuteContext<'bolt12'>,
     proofsToMelt: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
   ): Promise<QuoteMeltResponse<'bolt12'>> {
     return ctx.mintAdapter.customMeltBolt12(

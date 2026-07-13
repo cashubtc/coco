@@ -1,4 +1,12 @@
-import { Amount } from '@cashu/cashu-ts';
+import {
+  Amount,
+  deriveKeysetId,
+  OutputData,
+  Wallet,
+  type OutputDataLike,
+  type Proof,
+  type ProofState,
+} from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 import { WalletRestoreService } from '../../services/WalletRestoreService';
 import type { ProofService } from '../../services/ProofService';
@@ -6,7 +14,7 @@ import type { CounterService } from '../../services/CounterService';
 import type { WalletService } from '../../services/WalletService';
 import type { MintRequestProvider } from '../../infra/MintRequestProvider';
 import type { Logger } from '../../logging/Logger';
-import { Wallet, type Proof, type ProofState } from '@cashu/cashu-ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 describe('WalletRestoreService', () => {
   const mintUrl = 'https://mint.test';
@@ -89,6 +97,96 @@ describe('WalletRestoreService', () => {
   });
 
   describe('sweepKeyset', () => {
+    it('uses the supplied creator for the sweep-specific Wallet Instance', async () => {
+      const keypairs = {
+        '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+      };
+      const sweepKeysetId = deriveKeysetId(keypairs, { unit: 'sat' });
+      const output = {
+        blindedMessage: {
+          amount: Amount.zero(),
+          id: sweepKeysetId,
+          B_: 'custom-sweep-restore-output',
+        },
+        blindingFactor: 17n,
+        secret: new Uint8Array([7, 8, 9]),
+        toProof: mock(() => {
+          throw new Error('not used when the mint returns no signatures');
+        }),
+      } satisfies OutputDataLike;
+      const createDeterministicData = mock(() => [output]);
+      const creator = makeOutputDataCreator({ createDeterministicData });
+
+      Wallet.prototype.loadMint = mock(async function (this: Wallet) {
+        this.loadMintFromCache(
+          {
+            name: 'Sweep Mint',
+            version: '1.0.0',
+            pubkey: 'test-pubkey',
+            contact: [],
+            nuts: {
+              '4': { methods: [], disabled: false },
+              '5': { methods: [], disabled: false },
+            },
+          } as any,
+          {
+            mintUrl,
+            keysets: [
+              {
+                id: sweepKeysetId,
+                unit: 'sat',
+                active: true,
+                input_fee_ppk: 0,
+                keys: keypairs,
+              },
+            ],
+          },
+        );
+      });
+      const restoreRequest = mock(async () => ({ outputs: [], signatures: [] }));
+      Wallet.prototype.batchRestore = mock(async function (
+        this: Wallet,
+        _gapLimit,
+        _batchSize,
+        counter,
+        restoredKeysetId,
+      ) {
+        this.mint.restore = restoreRequest;
+        const restored = await this.restore(counter, 1, { keysetId: restoredKeysetId });
+        return {
+          proofs: restored.proofs,
+          lastCounterWithSignature: restored.lastCounterWithSignature,
+        };
+      });
+      service = new WalletRestoreService(
+        proofService,
+        counterService,
+        walletService,
+        requestProvider,
+        logger,
+        creator,
+      );
+      const originalCreateDeterministicData = OutputData.createDeterministicData;
+      OutputData.createDeterministicData = () => {
+        throw new Error('built-in deterministic creation must not be used');
+      };
+
+      try {
+        await service.sweepKeyset(mintUrl, sweepKeysetId, bip39seed);
+      } finally {
+        OutputData.createDeterministicData = originalCreateDeterministicData;
+      }
+
+      expect(createDeterministicData).toHaveBeenCalledWith(
+        0,
+        bip39seed,
+        0,
+        expect.objectContaining({ id: sweepKeysetId }),
+        [0],
+      );
+      expect(restoreRequest).toHaveBeenCalledWith({ outputs: [output.blindedMessage] });
+    });
+
     it('should successfully sweep a keyset with ready proofs', async () => {
       const proofs = [makeProof(50, 'proof1'), makeProof(50, 'proof2')];
 
