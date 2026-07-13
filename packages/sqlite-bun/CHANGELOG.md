@@ -1,5 +1,15 @@
 # @cashu/coco-sqlite-bun
 
+## 2.0.0-rc.2
+
+### Patch Changes
+
+- 14542a7: Fail fast instead of silently corrupting operation data when hydrating prepared send, receive, and melt operations. Repository adapters previously defaulted missing (NULL) financial fields such as amounts and fees to zero via `?? 0` fallbacks, masking data integrity issues. Hydration now throws `Invalid operation row <id>: missing required field "<field>"` when a required field is absent.
+- Updated dependencies [ddbdc97]
+- Updated dependencies [be23636]
+- Updated dependencies [d4c8a99]
+  - @cashu/coco-core@2.0.0-rc.2
+
 ## 2.0.0-rc.1
 
 ### Patch Changes

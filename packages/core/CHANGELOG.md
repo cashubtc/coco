@@ -1,5 +1,17 @@
 # @cashu/coco-core
 
+## 2.0.0-rc.2
+
+### Minor Changes
+
+- be23636: Allow applications to configure one session-wide `OutputDataCreator` for Wallet Instances and all
+  Coco-owned mint, send, receive, melt, Restore, and sweep output construction paths.
+
+### Patch Changes
+
+- ddbdc97: Poll every quote ID in multi-filter quote subscriptions when using the polling fallback.
+- d4c8a99: Serialize concurrent receive `prepare()` per mint with the shared `MintScopedLock`. Receive was left out of the mint-level lock added for proof selection, but it shares the same non-atomic NUT-13 counter derivation, so two concurrent receives on one mint could read the same counter and derive colliding deterministic outputs, failing with "Failed to persist proofs".
+
 ## 2.0.0-rc.1
 
 ### Major Changes

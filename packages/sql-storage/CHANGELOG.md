@@ -1,5 +1,14 @@
 # @cashu/coco-sql-storage
 
+## 2.0.0-rc.2
+
+### Patch Changes
+
+- Updated dependencies [ddbdc97]
+- Updated dependencies [be23636]
+- Updated dependencies [d4c8a99]
+  - @cashu/coco-core@2.0.0-rc.2
+
 ## 2.0.0-rc.1
 
 ### Patch Changes

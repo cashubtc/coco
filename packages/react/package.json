@@ -1,6 +1,6 @@
 {
   "name": "@cashu/coco-react",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0-rc.2",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -30,7 +30,7 @@
   },
   "peerDependencies": {
     "react": "^19",
-    "@cashu/coco-core": "2.0.0-rc.1"
+    "@cashu/coco-core": "2.0.0-rc.2"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
@@ -40,7 +40,7 @@
     "react-dom": "^19.1.1",
     "@vitejs/plugin-react": "^5.0.0",
     "ajv": "^8.17.1",
-    "@cashu/coco-core": "2.0.0-rc.1",
+    "@cashu/coco-core": "2.0.0-rc.2",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",

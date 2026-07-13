@@ -1,6 +1,6 @@
 {
   "name": "@cashu/coco-adapter-tests",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0-rc.2",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,7 @@
     "directory": "packages/adapter-tests"
   },
   "devDependencies": {
-    "@cashu/coco-core": "2.0.0-rc.1"
+    "@cashu/coco-core": "2.0.0-rc.2"
   },
   "files": [
     "dist",
@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@cashu/coco-core": "^2.0.0-rc.1",
+    "@cashu/coco-core": "^2.0.0-rc.2",
     "typescript": "^5",
     "@cashu/cashu-ts": "4.5"
   },
