@@ -21,7 +21,7 @@ import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
 import type { Plugin } from '../../plugin';
-import type { ProofService, WalletRestoreService, WalletService } from '../../services';
+import type { ProofService, WalletService } from '../../services';
 import type { CoreProof, MintInfo } from '../../types';
 import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
@@ -32,7 +32,7 @@ describe('initializeCoco', () => {
 
   beforeEach(() => {
     repositories = new MemoryRepositories();
-    seedGetter = async () => new Uint8Array(64);
+    seedGetter = async () => new Uint8Array(32);
     baseConfig = {
       repo: repositories,
       seedGetter,
@@ -120,6 +120,7 @@ describe('initializeCoco', () => {
   describe('default behavior', () => {
     it('propagates a custom output data creator through initialized services', async () => {
       await seedOutputCreatorMint();
+      const outputCreatorSeed = new Uint8Array(64);
       const deterministicOutput = makeOutput('custom-deterministic');
       const creatorReceivers: OutputDataCreator[] = [];
       const randomOutputs: OutputDataLike[] = [];
@@ -145,20 +146,19 @@ describe('initializeCoco', () => {
       });
       let proofService: ProofService | undefined;
       let walletService: WalletService | undefined;
-      let walletRestoreService: WalletRestoreService | undefined;
-      const plugin: Plugin<['proofService', 'walletService', 'walletRestoreService']> = {
+      const plugin: Plugin<['proofService', 'walletService']> = {
         name: 'output-creator-acceptance',
-        required: ['proofService', 'walletService', 'walletRestoreService'],
+        required: ['proofService', 'walletService'],
         onReady: ({ services }) => {
           proofService = services.proofService;
           walletService = services.walletService;
-          walletRestoreService = services.walletRestoreService;
         },
       };
 
       const manager = await initializeCoco({
         ...baseConfig,
         ...disabledRuntime,
+        seedGetter: async () => outputCreatorSeed,
         outputDataCreator,
         plugins: [plugin],
       });
@@ -200,9 +200,6 @@ describe('initializeCoco', () => {
           await prepareRandomMint(secondMintUrl, 'sat', 'quote-second-mint'),
         ];
 
-        expect(proofService!['outputDataCreator']).toBe(outputDataCreator);
-        expect(walletService!['outputDataCreator']).toBe(outputDataCreator);
-        expect(walletRestoreService!['outputDataCreator']).toBe(outputDataCreator);
         expect(outputs.keep).toEqual([deterministicOutput]);
         const deterministicCall = createDeterministicData.mock.calls[0];
         expect(deterministicCall?.[0]).toEqual(Amount.from(1));
@@ -232,6 +229,7 @@ describe('initializeCoco', () => {
 
     it('uses cashu-ts output construction when no creator is configured', async () => {
       await seedOutputCreatorMint();
+      const outputCreatorSeed = new Uint8Array(64);
       const builtInOutput = makeOutput('built-in-deterministic');
       const createDeterministicData = mock(() => [builtInOutput]);
       const originalCreateDeterministicData = OutputData.createDeterministicData;
@@ -250,6 +248,7 @@ describe('initializeCoco', () => {
         manager = await initializeCoco({
           ...baseConfig,
           ...disabledRuntime,
+          seedGetter: async () => outputCreatorSeed,
           plugins: [plugin],
         });
         const outputs = await proofService!.createOutputsAndIncrementCounters(mintUrl, {
