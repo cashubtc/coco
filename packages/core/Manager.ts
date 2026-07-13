@@ -95,8 +95,14 @@ export interface CocoConfig {
   /** Optional plugins to extend functionality */
   plugins?: Plugin[];
   /**
-   * Optional session-wide strategy for constructing Cashu output material.
+   * Optional session-wide strategy used only to construct Cashu output material.
    * Defaults to the standard cashu-ts implementation.
+   *
+   * This does not customize persisted output reconstruction or guarantee custom proof conversion
+   * after serialization. Coco persists only the standard `OutputDataLike` fields and may later
+   * reconstruct a cashu-ts `OutputData`, whose built-in `toProof()` implementation is then used. A
+   * custom result must still satisfy `OutputDataLike`, but its object identity and `toProof()`
+   * implementation are not preserved across serialization.
    */
   outputDataCreator?: OutputDataCreator;
   /**

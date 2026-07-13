@@ -51,7 +51,7 @@ export interface CocoConfig {
 - logger (optional): An implementation of the Logger interface that Coco will use to log
 - webSocketFactory (optional): A factory function that should return a `WebSocketLike` instance that will be used by Coco to establish websocket connections. If the global `WebSocket` is not present and `webSocketFactory` is undefined coco will fallback to polling.
 - plugins (optional): An array of `Plugin` that can be used to inject functionality in Coco. See [Plugins](./plugins.md) for more information.
-- outputDataCreator (optional): A session-wide strategy for constructing Cashu output material. See [Custom output construction](#custom-output-construction).
+- outputDataCreator (optional): A session-wide strategy used only to construct Cashu output material. See [Custom output construction](#custom-output-construction).
 - watchers (optional): Can be used to disable or configure the available watchers. See [Watchers & Processors](./watchers-processors.md) for more information
 - processors (optional): Can be used to disable or configure the available processors. See [Watchers & Processors](./watchers-processors.md) for more information
 
@@ -74,8 +74,12 @@ send, receive, melt, Restore, and sweep output paths. If it throws, the requesti
 Coco does not fall back to built-in construction. Omitting it preserves the standard `cashu-ts`
 behavior.
 
+`outputDataCreator` is a construction hook, not a persistent proof-conversion hook. It does not
+replace output reconstruction or guarantee that a custom `toProof()` implementation will be used
+later.
+
 Creator results must be `OutputDataLike`: they must provide a standard blinded message, blinding
 factor, secret, optional `ephemeralE`, and `toProof()` method. Coco persists only those standard
 fields. When a later operation reads persisted output data, Coco reconstructs the standard
-`cashu-ts` `OutputData` and uses its standard `toProof()` implementation; custom object identity or
-a custom `toProof()` implementation is not preserved across serialization.
+`cashu-ts` `OutputData`, so its built-in `toProof()` implementation may be used instead. Custom
+object identity and a custom `toProof()` implementation are not preserved across serialization.
