@@ -175,6 +175,57 @@ describe('PollingTransport subscription kinds', () => {
     transport.closeAll();
   });
 
+  it('polls every filter in a multi-filter quote subscription', async () => {
+    const quoteIds = ['quote1', 'quote2', 'quote3'];
+    const checkMintQuote = mock((_: string, __: string, quoteId: string) =>
+      Promise.resolve({
+        quote: quoteId,
+        request: `${quoteId}-request`,
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    const adapter = {
+      checkMintQuote,
+      checkMeltQuoteState: mock(() => Promise.resolve({})),
+      checkProofStates: mock(() => Promise.resolve([])),
+    } as unknown as MintAdapter;
+    const transport = new PollingTransport(adapter, { intervalMs: 1 }, new NullLogger());
+    const messages: any[] = [];
+
+    transport.on(mintUrl, 'message', (evt) => {
+      messages.push(JSON.parse(evt.data));
+    });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_mint_quote', subId: 'multi-filter-sub-1', filters: quoteIds },
+      id: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const polledQuoteIds = checkMintQuote.mock.calls.map((call) => call[2]);
+    for (const quoteId of quoteIds) {
+      expect(polledQuoteIds).toContain(quoteId);
+    }
+
+    const updateMessages = messages.filter((message) => message.method === 'subscribe');
+    expect(updateMessages.length).toBeGreaterThanOrEqual(quoteIds.length);
+    expect(updateMessages.every((message) => message.params?.subId === 'multi-filter-sub-1')).toBe(
+      true,
+    );
+
+    const payloadQuoteIds = updateMessages.map((message) => message.params?.payload?.quote);
+    for (const quoteId of quoteIds) {
+      expect(payloadQuoteIds).toContain(quoteId);
+    }
+
+    transport.closeAll();
+  });
+
   it('emits an error and does not enqueue unsupported subscription kinds', async () => {
     const adapter = createMockMintAdapter();
     const transport = new PollingTransport(adapter, { intervalMs: 5000 }, new NullLogger());
