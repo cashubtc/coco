@@ -14,7 +14,6 @@ import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
 import { normalizeMintUrl } from '../utils.ts';
-import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 interface CachedWallet {
   wallet: Wallet;
@@ -30,7 +29,7 @@ export class WalletService {
   private readonly logger?: Logger;
   private readonly requestProvider: MintRequestProvider;
   private readonly authProviderGetter?: (mintUrl: string) => AuthProvider | undefined;
-  private readonly outputDataCreator: OutputDataCreator;
+  private readonly outputDataCreator?: OutputDataCreator;
 
   constructor(
     mintService: MintService,
@@ -38,7 +37,7 @@ export class WalletService {
     requestProvider: MintRequestProvider,
     logger?: Logger,
     authProviderGetter?: (mintUrl: string) => AuthProvider | undefined,
-    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
+    outputDataCreator?: OutputDataCreator,
   ) {
     this.mintService = mintService;
     this.seedService = seedService;

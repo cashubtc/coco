@@ -13,7 +13,6 @@ import type { Logger } from '../logging/Logger.ts';
 import type { WalletService } from './WalletService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
-import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 export class WalletRestoreService {
   private readonly proofService: ProofService;
@@ -21,7 +20,7 @@ export class WalletRestoreService {
   private readonly walletService: WalletService;
   private readonly requestProvider: MintRequestProvider;
   private readonly logger?: Logger;
-  private readonly outputDataCreator: OutputDataCreator;
+  private readonly outputDataCreator?: OutputDataCreator;
 
   // Defaults for batch restore behavior
   private readonly restoreBatchSize = 300;
@@ -34,7 +33,7 @@ export class WalletRestoreService {
     walletService: WalletService,
     requestProvider: MintRequestProvider,
     logger?: Logger,
-    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
+    outputDataCreator?: OutputDataCreator,
   ) {
     this.proofService = proofService;
     this.counterService = counterService;

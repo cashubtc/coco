@@ -79,7 +79,6 @@ import {
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
-import { DEFAULT_OUTPUT_DATA_CREATOR } from './OutputDataCreator.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -287,7 +286,7 @@ export class Manager {
   private readonly mintAdapter: MintAdapter;
   private disposed = false;
   private disposePromise?: Promise<void>;
-  private readonly outputDataCreator: OutputDataCreator;
+  private readonly outputDataCreator?: OutputDataCreator;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -297,7 +296,7 @@ export class Manager {
     watchers?: CocoConfig['watchers'],
     processors?: CocoConfig['processors'],
     subscriptions?: CocoConfig['subscriptions'],
-    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
+    outputDataCreator?: OutputDataCreator,
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();

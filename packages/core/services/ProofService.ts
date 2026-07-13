@@ -1,5 +1,6 @@
 import {
   Amount,
+  OutputData,
   splitAmount,
   sumProofs,
   type Keys,
@@ -39,7 +40,6 @@ import {
 } from '../amounts.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
-import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
   const value = amount.toBigInt();
@@ -68,7 +68,7 @@ export class ProofService {
     seedService: SeedService,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
-    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
+    outputDataCreator?: OutputDataCreator,
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
@@ -78,7 +78,7 @@ export class ProofService {
     this.seedService = seedService;
     this.logger = logger;
     this.eventBus = eventBus;
-    this.outputDataCreator = outputDataCreator;
+    this.outputDataCreator = outputDataCreator ?? OutputData;
   }
 
   /**
