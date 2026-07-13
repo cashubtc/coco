@@ -13,6 +13,7 @@ import type { ProofService } from '../services';
 import type { MintService } from '../services/MintService.ts';
 import type {
   CreateSendOperationOptions,
+  P2pkSendOptions,
   PendingSendOperation,
   PreparedSendOperation,
   SendOperationService,
@@ -31,29 +32,57 @@ type PaymentRequestTransport =
   | HttpPaymentRequestTransport
   | NostrPaymentRequestTransport;
 
+/**
+ * A NUT-18 payment request spending condition that was successfully normalized
+ * as a NUT-11 P2PK lock by cashu-ts.
+ */
 export type PaymentRequestP2pkRequirement = {
+  /** The supported NUT-10 spending condition kind. */
   kind: 'P2PK';
-  options: P2PKOptions;
+  /** Normalized NUT-11 P2PK options used when preparing locked outputs. */
+  options: P2pkSendOptions;
+  /** Original NUT-10 option carried by the payment request. */
   rawNut10: NUT10Option;
 };
 
+/**
+ * Diagnostic for a payment request that carries a NUT-10 kind Coco cannot pay
+ * yet. Parse returns this value with no payable mints; prepare rejects before
+ * initializing a send operation.
+ */
 export type PaymentRequestUnsupportedSpendingCondition = {
   kind: 'unsupported';
+  /** Unsupported NUT-10 kind, for example HTLC. */
   nut10Kind: string;
+  /** Human-readable reason suitable for surfacing to callers. */
   reason: string;
+  /** Original NUT-10 option carried by the payment request. */
   rawNut10: NUT10Option;
 };
 
+/**
+ * Diagnostic for a payment request whose NUT-10 option is present but cannot
+ * be normalized by cashu-ts. Parse returns this value with no payable mints;
+ * prepare rejects before initializing a send operation.
+ */
 export type PaymentRequestMalformedSpendingCondition = {
   kind: 'malformed';
+  /** NUT-10 kind that failed normalization. */
   nut10Kind: string;
+  /** Human-readable normalization failure reason. */
   reason: string;
+  /** Original malformed NUT-10 option carried by the payment request. */
   rawNut10: NUT10Option;
 };
 
+/**
+ * Spending-condition requirement or diagnostic exposed on resolved payment
+ * requests. Absence means the request has no NUT-10 spending condition.
+ */
 export type PaymentRequestSpendingConditionRequirement =
   | {
       kind: 'P2PK';
+      /** Normalized P2PK requirement that prepare will encode into outputs. */
       p2pk: PaymentRequestP2pkRequirement;
     }
   | PaymentRequestUnsupportedSpendingCondition
@@ -312,11 +341,18 @@ export class PaymentRequestService {
         balance.spendable.greaterThanOrEqual(amount) &&
         (!mintRequirement || mintRequirement.includes(mintUrl))
       ) {
-        if (
-          spendingCondition?.kind === 'P2PK' &&
-          !(await this.mintService.supportsNut(mintUrl, 11))
-        ) {
-          continue;
+        if (spendingCondition?.kind === 'P2PK') {
+          try {
+            if (!(await this.mintService.supportsNut(mintUrl, 11))) {
+              continue;
+            }
+          } catch (cause) {
+            this.logger?.warn(
+              'Skipping mint for P2PK payment request because NUT-11 support could not be verified',
+              { mintUrl, cause },
+            );
+            continue;
+          }
         }
         matchingMints.push(mintUrl);
       }
@@ -357,7 +393,7 @@ export class PaymentRequestService {
         kind: 'P2PK',
         p2pk: {
           kind: 'P2PK',
-          options,
+          options: this.requireP2pkOnlyOptions(options),
           rawNut10,
         },
       };
@@ -418,16 +454,23 @@ export class PaymentRequestService {
     };
   }
 
-  private normalizeP2pkOptionsForPrepare(paymentRequest: PaymentRequest): P2PKOptions {
+  private normalizeP2pkOptionsForPrepare(paymentRequest: PaymentRequest): P2pkSendOptions {
     try {
       const options = paymentRequest.toP2PKOptions();
       if (!options) {
         throw new PaymentRequestError('NUT-10 P2PK spending condition could not be normalized');
       }
-      return options;
+      return this.requireP2pkOnlyOptions(options);
     } catch (cause) {
       throw new PaymentRequestError('Malformed NUT-10 P2PK spending condition', cause);
     }
+  }
+
+  private requireP2pkOnlyOptions(options: P2PKOptions): P2pkSendOptions {
+    if (options.hashlock !== undefined) {
+      throw new PaymentRequestError('P2PK payment requests cannot include hashlock/HTLC options');
+    }
+    return options as P2pkSendOptions;
   }
 
   private throwMalformedSpendingCondition(

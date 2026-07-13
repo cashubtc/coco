@@ -1,4 +1,4 @@
-import { Amount, OutputData, type OutputDataLike, type P2PKOptions } from '@cashu/cashu-ts';
+import { Amount, OutputData, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
 import { EventBus } from '../../events/EventBus';
@@ -21,6 +21,7 @@ import type {
   BasePrepareContext,
   ExecuteContext,
   FinalizeContext,
+  P2pkSendOptions,
   RollbackContext,
   RecoverExecutingContext,
 } from '../../operations/send/SendMethodHandler';
@@ -444,7 +445,7 @@ describe('P2pkSendHandler', () => {
     });
 
     it('should create P2PK outputs from structured NUT-11 options', async () => {
-      const options: P2PKOptions = {
+      const options: P2pkSendOptions = {
         pubkey: [testPubkey, secondPubkey],
         requiredSignatures: 2,
         locktime: 1_735_689_600,
@@ -476,6 +477,22 @@ describe('P2pkSendHandler', () => {
           ['memo', 'preserve-me'],
         ]),
       );
+    });
+
+    it('should reject structured P2PK options with hashlock data', async () => {
+      const operation = makeInitOp('op-hashlock', {
+        methodData: {
+          options: {
+            pubkey: testPubkey,
+            hashlock: 'hash',
+          } as unknown as P2pkSendOptions,
+        },
+      });
+
+      await expect(handler.prepare(buildPrepareContext(operation))).rejects.toThrow(
+        'P2PK send does not support hashlock/HTLC options',
+      );
+      expect(mintService.assertNutSupported).not.toHaveBeenCalled();
     });
 
     it('should reserve proofs for the operation', async () => {

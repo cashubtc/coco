@@ -331,6 +331,36 @@ describe('PaymentRequestService', () => {
       expect(mockMintService.supportsNut).toHaveBeenCalledWith(testMintUrl2, 11);
     });
 
+    it('excludes individual P2PK payable mints when their NUT-11 lookup fails', async () => {
+      const lookupError = new Error('mint info unavailable');
+      (mockMintService.supportsNut as unknown as ReturnType<typeof mock>).mockImplementation(
+        async (mintUrl: string) => {
+          if (mintUrl === testMintUrl) {
+            throw lookupError;
+          }
+          return mintUrl === testMintUrl2;
+        },
+      );
+      const pr = new PaymentRequest(
+        [],
+        'request-id-p2pk-filter-offline-mint',
+        100,
+        'sat',
+        [testMintUrl, testMintUrl2],
+        undefined,
+        false,
+        p2pkNut10(),
+      );
+      const encoded = pr.toEncodedRequest();
+
+      const result = await service.parse(encoded);
+
+      expect(result.spendingCondition?.kind).toBe('P2PK');
+      expect(result.payableMints).toEqual([testMintUrl2]);
+      expect(mockMintService.supportsNut).toHaveBeenCalledWith(testMintUrl, 11);
+      expect(mockMintService.supportsNut).toHaveBeenCalledWith(testMintUrl2, 11);
+    });
+
     it('returns no payable mints for P2PK requests when no matching mint advertises NUT-11', async () => {
       (mockMintService.supportsNut as unknown as ReturnType<typeof mock>).mockImplementation(
         async () => false,

@@ -1,4 +1,4 @@
-import { Amount, type P2PKOptions } from '@cashu/cashu-ts';
+import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { SendOperationService } from '../../operations/send/SendOperationService.ts';
 import type {
@@ -7,9 +7,17 @@ import type {
   PreparedSendOperation,
   SendOperation,
 } from '../../operations/send/SendOperation.ts';
+import type { P2pkSendOptions } from '../../operations/send/SendMethodHandler.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
 const mintUrl = 'https://mint.test';
+
+const p2pkOptionsRejectHashlock = {
+  pubkey: 'pubkey-1',
+  // @ts-expect-error Hashlocks produce HTLC/NUT-14 data and are out of scope for P2PK sends.
+  hashlock: 'hash',
+} satisfies P2pkSendOptions;
+void p2pkOptionsRejectHashlock;
 
 const makePreparedOperation = (): PreparedSendOperation => ({
   id: 'op-1',
@@ -98,7 +106,7 @@ describe('SendOpsApi', () => {
   });
 
   it('prepare maps structured p2pk target options to send method options', async () => {
-    const options: P2PKOptions = {
+    const options: P2pkSendOptions = {
       pubkey: ['pubkey-1', 'pubkey-2'],
       requiredSignatures: 2,
       additionalTags: [['memo', 'test']],

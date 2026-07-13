@@ -4,6 +4,7 @@ import {
   type Token,
   type Proof,
   type OutputConfig,
+  type P2PKOptions,
   type OutputDataCreator,
 } from '@cashu/cashu-ts';
 import type {
@@ -77,7 +78,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     const keyset = wallet.getKeyset();
 
-    const sendOT = this.outputDataCreator.createP2PKData({ pubkey }, amount, keyset);
+    const sendOT = this.outputDataCreator.createP2PKData(p2pkOptions, amount, keyset);
 
     // Serialize for storage
     const serializedOutputData = serializeOutputData({
@@ -213,6 +214,9 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
   private getP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
     if ('options' in methodData && methodData.options) {
+      if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
+        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+      }
       return methodData.options;
     }
 

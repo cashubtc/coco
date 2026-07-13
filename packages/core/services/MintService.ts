@@ -225,6 +225,14 @@ export class MintService {
     return mint.mintInfo;
   }
 
+  /**
+   * Returns whether a mint advertises support for a top-level NUT capability.
+   *
+   * This currently supports NUT-11 checks only. Mint information is resolved via
+   * `getMintInfo()`, so stale local records may be refreshed and fetch failures
+   * propagate to the caller. Missing, malformed, or disabled settings return
+   * `false` rather than throwing.
+   */
   async supportsNut(mintUrl: string, nut: 11): Promise<boolean> {
     this.assertSupportCapabilityNut(nut);
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
@@ -233,6 +241,13 @@ export class MintService {
     return settings?.supported === true;
   }
 
+  /**
+   * Requires a mint to advertise a top-level NUT capability.
+   *
+   * This currently supports NUT-11 checks only. Returns when support is
+   * advertised, throws `ProofValidationError` when support is absent, and lets
+   * mint-info refresh/fetch failures propagate unchanged.
+   */
   async assertNutSupported(mintUrl: string, nut: 11, scope?: string): Promise<void> {
     if (await this.supportsNut(mintUrl, nut)) {
       return;

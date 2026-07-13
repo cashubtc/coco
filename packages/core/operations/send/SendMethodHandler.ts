@@ -16,11 +16,22 @@ import type {
 } from './SendOperation';
 
 /**
- * Registry of supported send methods and their payload shapes.
- * Extend via declaration merging if you need to add methods externally.
+ * Structured P2PK send options accepted by Coco.
  *
- * Future methods may include:
- * - htlc: { hash: string; timeout: number } - HTLC locked tokens
+ * `hashlock` is intentionally unavailable because cashu-ts treats hashlocked
+ * P2PK options as HTLC/NUT-14 data, which this send method does not support.
+ */
+export type P2pkSendOptions = Omit<P2PKOptions, 'hashlock'> & {
+  /** HTLC/NUT-14 hashlocks are out of scope for P2PK sends. */
+  hashlock?: never;
+};
+
+/**
+ * Payload accepted by the P2PK send method.
+ *
+ * `pubkey` is the legacy shorthand for locking outputs to a single public key.
+ * Prefer `options` for full NUT-11 P2PK conditions such as `sigflag`,
+ * multisig tags, locktime, and refund keys.
  */
 export type P2pkSendMethodData =
   | {
@@ -29,11 +40,18 @@ export type P2pkSendMethodData =
       options?: never;
     }
   | {
-      /** Full NUT-11 P2PK options accepted by cashu-ts output builders. */
-      options: P2PKOptions;
+      /** Full NUT-11 P2PK options accepted by Coco output builders. */
+      options: P2pkSendOptions;
       pubkey?: never;
     };
 
+/**
+ * Registry of supported send methods and their payload shapes.
+ * Extend via declaration merging if you need to add methods externally.
+ *
+ * Future methods may include:
+ * - htlc: { hash: string; timeout: number } - HTLC locked tokens
+ */
 export interface SendMethodDefinitions {
   default: Record<string, never>;
   p2pk: P2pkSendMethodData;
