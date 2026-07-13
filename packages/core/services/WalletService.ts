@@ -6,6 +6,7 @@ import {
   type MintKeyset,
   type KeyChainCache,
   type AuthProvider,
+  type OutputDataCreator,
 } from '@cashu/cashu-ts';
 import type { MintService } from './MintService';
 import type { Logger } from '../logging/Logger.ts';
@@ -13,6 +14,7 @@ import type { SeedService } from './SeedService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
 import { normalizeMintUrl } from '../utils.ts';
+import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 interface CachedWallet {
   wallet: Wallet;
@@ -28,6 +30,7 @@ export class WalletService {
   private readonly logger?: Logger;
   private readonly requestProvider: MintRequestProvider;
   private readonly authProviderGetter?: (mintUrl: string) => AuthProvider | undefined;
+  private readonly outputDataCreator: OutputDataCreator;
 
   constructor(
     mintService: MintService,
@@ -35,12 +38,14 @@ export class WalletService {
     requestProvider: MintRequestProvider,
     logger?: Logger,
     authProviderGetter?: (mintUrl: string) => AuthProvider | undefined,
+    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
   ) {
     this.mintService = mintService;
     this.seedService = seedService;
     this.requestProvider = requestProvider;
     this.logger = logger;
     this.authProviderGetter = authProviderGetter;
+    this.outputDataCreator = outputDataCreator;
   }
 
   async getWallet(mintUrl: string, unit: string): Promise<Wallet> {
@@ -212,6 +217,7 @@ export class WalletService {
         logger:
           this.logger && this.logger.child ? this.logger.child({ module: 'Wallet' }) : undefined,
         bip39seed: seed,
+        outputDataCreator: this.outputDataCreator,
       },
     );
     wallet.loadMintFromCache(mint.mintInfo, cache);

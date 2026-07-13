@@ -1,10 +1,11 @@
 import {
   Amount,
-  OutputData,
   splitAmount,
   sumProofs,
   type Keys,
   type Proof,
+  type OutputDataCreator,
+  type OutputDataLike,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type {
@@ -38,6 +39,7 @@ import {
 } from '../amounts.ts';
 import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
+import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
   const value = amount.toBigInt();
@@ -56,6 +58,7 @@ export class ProofService {
   private readonly keyRingService: KeyRingService;
   private readonly seedService: SeedService;
   private readonly logger?: Logger;
+  private readonly outputDataCreator: OutputDataCreator;
   constructor(
     counterService: CounterService,
     proofRepository: ProofRepository,
@@ -65,6 +68,7 @@ export class ProofService {
     seedService: SeedService,
     logger?: Logger,
     eventBus?: EventBus<CoreEvents>,
+    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
   ) {
     this.counterService = counterService;
     this.walletService = walletService;
@@ -74,6 +78,7 @@ export class ProofService {
     this.seedService = seedService;
     this.logger = logger;
     this.eventBus = eventBus;
+    this.outputDataCreator = outputDataCreator;
   }
 
   /**
@@ -181,7 +186,12 @@ export class ProofService {
     mintUrl: string,
     amount: { keep: UnitAmount; send: UnitAmount },
     options?: { includeFees?: boolean },
-  ): Promise<{ keep: OutputData[]; send: OutputData[]; sendAmount: Amount; keepAmount: Amount }> {
+  ): Promise<{
+    keep: OutputDataLike[];
+    send: OutputDataLike[];
+    sendAmount: Amount;
+    keepAmount: Amount;
+  }> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -197,7 +207,7 @@ export class ProofService {
     );
     const seed = await this.seedService.getSeed();
     const currentCounter = await this.counterService.getCounter(mintUrl, keys.id);
-    const data: { keep: OutputData[]; send: OutputData[] } = { keep: [], send: [] };
+    const data: { keep: OutputDataLike[]; send: OutputDataLike[] } = { keep: [], send: [] };
 
     // Calculate send amount with fees if needed
     let sendAmount = requestedSend;
@@ -224,7 +234,7 @@ export class ProofService {
     }
 
     if (!keepAmount.isZero()) {
-      data.keep = OutputData.createDeterministicData(
+      data.keep = this.outputDataCreator.createDeterministicData(
         keepAmount,
         seed,
         currentCounter.counter,
@@ -235,7 +245,7 @@ export class ProofService {
       }
     }
     if (!sendAmount.isZero()) {
-      data.send = OutputData.createDeterministicData(
+      data.send = this.outputDataCreator.createDeterministicData(
         sendAmount,
         seed,
         currentCounter.counter + data.keep.length,
@@ -890,7 +900,7 @@ export class ProofService {
     return preparedProofs;
   }
 
-  async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputData[]> {
+  async createBlankOutputs(mintUrl: string, intent: UnitAmount): Promise<OutputDataLike[]> {
     const { amount: requestedAmount, unit } = normalizeUnitAmount(intent);
     const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
     if (requestedAmount.isZero()) {
@@ -902,7 +912,7 @@ export class ProofService {
     const outputData = Array(outputNumber)
       .fill(0)
       .map((_, index) => {
-        return OutputData.createSingleDeterministicData(
+        return this.outputDataCreator.createSingleDeterministicData(
           0,
           seed,
           currentCounter.counter + index,
@@ -928,7 +938,7 @@ export class ProofService {
    */
   async unblindAndSaveChangeProofs(
     mintUrl: string,
-    outputData: OutputData[],
+    outputData: OutputDataLike[],
     changeSignatures: SerializedBlindedSignature[],
     options: { unit: string; createdByOperationId?: string },
   ): Promise<CoreProof[]> {

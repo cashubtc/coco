@@ -3,6 +3,7 @@ import {
   hashToCurve,
   OutputData,
   type AmountLike,
+  type OutputDataLike,
   type Proof,
   type Token,
 } from '@cashu/cashu-ts';
@@ -31,6 +32,7 @@ export interface SerializedOutput {
   blindedMessage: StoredBlindedMessage;
   blindingFactor: string; // hex-encoded bigint
   secret: string; // hex-encoded Uint8Array
+  ephemeralE?: string;
 }
 
 /**
@@ -68,7 +70,7 @@ function hexToUint8Array(hex: string): Uint8Array {
 /**
  * Serialize a single OutputData to JSON-safe format
  */
-export function serializeOutput(output: OutputData): SerializedOutput {
+export function serializeOutput(output: OutputDataLike): SerializedOutput {
   return {
     blindedMessage: {
       amount: serializeAmount(output.blindedMessage.amount),
@@ -77,6 +79,7 @@ export function serializeOutput(output: OutputData): SerializedOutput {
     },
     blindingFactor: output.blindingFactor.toString(16),
     secret: uint8ArrayToHex(output.secret),
+    ...(output.ephemeralE === undefined ? {} : { ephemeralE: output.ephemeralE }),
   };
 }
 
@@ -92,6 +95,7 @@ export function deserializeOutput(serialized: SerializedOutput): OutputData {
     },
     BigInt('0x' + serialized.blindingFactor),
     hexToUint8Array(serialized.secret),
+    serialized.ephemeralE,
   );
 }
 
@@ -99,8 +103,8 @@ export function deserializeOutput(serialized: SerializedOutput): OutputData {
  * Serialize OutputData arrays for keep and send to JSON-safe format
  */
 export function serializeOutputData(data: {
-  keep: OutputData[];
-  send: OutputData[];
+  keep: OutputDataLike[];
+  send: OutputDataLike[];
 }): SerializedOutputData {
   return {
     keep: data.keep.map(serializeOutput),

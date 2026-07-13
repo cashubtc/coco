@@ -1,4 +1,11 @@
-import { type Proof, Mint, Wallet, sumProofs, type OutputConfig } from '@cashu/cashu-ts';
+import {
+  type Proof,
+  Mint,
+  Wallet,
+  sumProofs,
+  type OutputConfig,
+  type OutputDataCreator,
+} from '@cashu/cashu-ts';
 import { mapProofToCoreProof } from '@core/utils';
 import type { ProofService } from './ProofService';
 import type { CounterService } from './CounterService';
@@ -6,6 +13,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { WalletService } from './WalletService.ts';
 import type { MintRequestProvider } from '../infra/MintRequestProvider.ts';
 import { DEFAULT_UNIT, normalizeUnit } from '../amounts.ts';
+import { DEFAULT_OUTPUT_DATA_CREATOR } from '../OutputDataCreator.ts';
 
 export class WalletRestoreService {
   private readonly proofService: ProofService;
@@ -13,6 +21,7 @@ export class WalletRestoreService {
   private readonly walletService: WalletService;
   private readonly requestProvider: MintRequestProvider;
   private readonly logger?: Logger;
+  private readonly outputDataCreator: OutputDataCreator;
 
   // Defaults for batch restore behavior
   private readonly restoreBatchSize = 300;
@@ -25,12 +34,14 @@ export class WalletRestoreService {
     walletService: WalletService,
     requestProvider: MintRequestProvider,
     logger?: Logger,
+    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
   ) {
     this.proofService = proofService;
     this.counterService = counterService;
     this.walletService = walletService;
     this.requestProvider = requestProvider;
     this.logger = logger;
+    this.outputDataCreator = outputDataCreator;
   }
 
   async sweepKeyset(
@@ -49,6 +60,7 @@ export class WalletRestoreService {
     const sweepWallet = new Wallet(new Mint(mintUrl, { customRequest: requestFn }), {
       bip39seed,
       unit: normalizedUnit,
+      outputDataCreator: this.outputDataCreator,
     });
     await sweepWallet.loadMint();
 

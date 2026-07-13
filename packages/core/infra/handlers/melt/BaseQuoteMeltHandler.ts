@@ -5,6 +5,7 @@ import {
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
   type OutputConfig,
+  type OutputDataLike,
   type Proof,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
@@ -75,7 +76,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
   protected abstract executeMelt(
     ctx: ExecuteContext<M>,
     proofsToMelt: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
   ): Promise<QuoteMeltResponse<M>>;
 

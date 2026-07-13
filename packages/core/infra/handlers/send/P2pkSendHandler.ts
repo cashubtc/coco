@@ -1,4 +1,10 @@
-import { sumProofs, type Token, type Proof, type OutputConfig, OutputData } from '@cashu/cashu-ts';
+import {
+  sumProofs,
+  type Token,
+  type Proof,
+  type OutputConfig,
+  type OutputDataCreator,
+} from '@cashu/cashu-ts';
 import type {
   SendMethodHandler,
   BasePrepareContext,
@@ -23,12 +29,17 @@ import {
   getSecretsFromSerializedOutputData,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
+import { DEFAULT_OUTPUT_DATA_CREATOR } from '../../../OutputDataCreator.ts';
 
 /**
  * P2PK send handler for sending tokens locked to a recipient's public key.
  * The recipient must have the corresponding private key to spend the tokens.
  */
 export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
+  constructor(
+    private readonly outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
+  ) {}
+
   /**
    * Prepare the send operation by selecting proofs and creating outputs.
    * P2PK sends always require a swap to lock the proofs to the pubkey.
@@ -66,7 +77,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     const keyset = wallet.getKeyset();
 
-    const sendOT = OutputData.createP2PKData({ pubkey }, amount, keyset);
+    const sendOT = this.outputDataCreator.createP2PKData({ pubkey }, amount, keyset);
 
     // Serialize for storage
     const serializedOutputData = serializeOutputData({

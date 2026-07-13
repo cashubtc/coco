@@ -1,4 +1,4 @@
-import type { Amount, MeltQuoteOnchainResponse, OutputData, Proof } from '@cashu/cashu-ts';
+import type { Amount, MeltQuoteOnchainResponse, OutputDataLike, Proof } from '@cashu/cashu-ts';
 import type {
   CreateMeltQuoteContext,
   BasePrepareContext,
@@ -29,7 +29,7 @@ export class MeltOnchainHandler extends BaseQuoteMeltHandler<'onchain'> {
   protected executeMelt(
     ctx: ExecuteContext<'onchain'>,
     proofsToMelt: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
   ): Promise<QuoteMeltResponse<'onchain'>> {
     const feeIndex = ctx.operation.methodData.feeIndex;

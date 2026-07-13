@@ -1,3 +1,5 @@
+import type { OutputDataCreator } from '@cashu/cashu-ts';
+
 import type {
   Repositories,
   LegacyMintQuoteRepository,
@@ -77,6 +79,7 @@ import {
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
+import { DEFAULT_OUTPUT_DATA_CREATOR } from './OutputDataCreator.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -92,6 +95,11 @@ export interface CocoConfig {
   webSocketFactory?: WebSocketFactory;
   /** Optional plugins to extend functionality */
   plugins?: Plugin[];
+  /**
+   * Optional session-wide strategy for constructing Cashu output material.
+   * Defaults to the standard cashu-ts implementation.
+   */
+  outputDataCreator?: OutputDataCreator;
   /**
    * Watcher configuration (all enabled by default)
    * - Omit to use defaults (enabled)
@@ -175,6 +183,7 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.watchers,
     config.processors,
     config.subscriptions,
+    config.outputDataCreator,
   );
 
   // Initialize plugin system (must complete before watchers for extensions to be available)
@@ -278,6 +287,7 @@ export class Manager {
   private readonly mintAdapter: MintAdapter;
   private disposed = false;
   private disposePromise?: Promise<void>;
+  private readonly outputDataCreator: OutputDataCreator;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -287,9 +297,11 @@ export class Manager {
     watchers?: CocoConfig['watchers'],
     processors?: CocoConfig['processors'],
     subscriptions?: CocoConfig['subscriptions'],
+    outputDataCreator: OutputDataCreator = DEFAULT_OUTPUT_DATA_CREATOR,
   ) {
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
+    this.outputDataCreator = outputDataCreator;
 
     // Create shared request provider and mint adapter first
     // These are shared across WalletService and SubscriptionManager (polling)
@@ -866,6 +878,7 @@ export class Manager {
       this.mintRequestProvider,
       walletLogger,
       (mintUrl: string) => this.mintAdapter.getAuthProvider(mintUrl),
+      this.outputDataCreator,
     );
     const counterService = new CounterService(
       repositories.counterRepository,
@@ -881,6 +894,7 @@ export class Manager {
       seedService,
       proofLogger,
       this.eventBus,
+      this.outputDataCreator,
     );
     const walletRestoreService = new WalletRestoreService(
       proofService,
@@ -888,6 +902,7 @@ export class Manager {
       walletService,
       this.mintRequestProvider,
       walletRestoreLogger,
+      this.outputDataCreator,
     );
 
     // One shared instance across every counter-consuming operation service so that
@@ -898,7 +913,7 @@ export class Manager {
     const sendOperationLogger = this.getChildLogger('SendOperationService');
     const sendHandlerProvider = new SendHandlerProvider({
       default: new DefaultSendHandler(),
-      p2pk: new P2pkSendHandler(),
+      p2pk: new P2pkSendHandler(this.outputDataCreator),
     });
     const sendOperationService = new SendOperationService(
       repositories.sendOperationRepository,

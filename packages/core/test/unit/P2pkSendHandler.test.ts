@@ -1,4 +1,4 @@
-import { Amount } from '@cashu/cashu-ts';
+import { Amount, OutputData, type OutputDataLike } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { P2pkSendHandler } from '../../infra/handlers/send/P2pkSendHandler';
 import { EventBus } from '../../events/EventBus';
@@ -24,6 +24,7 @@ import type {
   RecoverExecutingContext,
 } from '../../operations/send/SendMethodHandler';
 import type { Wallet, Proof, OutputConfig } from '@cashu/cashu-ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 describe('P2pkSendHandler', () => {
   const mintUrl = 'https://mint.test';
@@ -297,6 +298,53 @@ describe('P2pkSendHandler', () => {
   // ============================================================================
 
   describe('prepare', () => {
+    it('delegates P2PK output construction and persists the custom output fields', async () => {
+      const customOutput = {
+        blindedMessage: {
+          amount: Amount.from(100),
+          id: keysetId,
+          B_: 'custom-p2pk-blinded-message',
+        },
+        blindingFactor: 0x1234n,
+        secret: new Uint8Array([1, 2, 3, 4]),
+        ephemeralE: 'custom-ephemeral-e',
+        toProof: mock(() => {
+          throw new Error('not used while preparing');
+        }),
+      } satisfies OutputDataLike;
+      const createP2PKData = mock(() => [customOutput]);
+      handler = new P2pkSendHandler(makeOutputDataCreator({ createP2PKData }));
+      const originalCreateP2PKData = OutputData.createP2PKData;
+      OutputData.createP2PKData = () => {
+        throw new Error('built-in P2PK creation must not be used');
+      };
+
+      const result = await (async () => {
+        try {
+          return await handler.prepare(buildPrepareContext(makeInitOp('op-custom-p2pk')));
+        } finally {
+          OutputData.createP2PKData = originalCreateP2PKData;
+        }
+      })();
+
+      expect(createP2PKData).toHaveBeenCalledWith({ pubkey: testPubkey }, Amount.from(100), {
+        id: keysetId,
+        keys: { 1: 'pubkey' },
+      });
+      expect(result.outputData?.send).toEqual([
+        {
+          blindedMessage: {
+            amount: '100',
+            id: keysetId,
+            B_: 'custom-p2pk-blinded-message',
+          },
+          blindingFactor: '1234',
+          secret: '01020304',
+          ephemeralE: 'custom-ephemeral-e',
+        },
+      ]);
+    });
+
     it('should throw if pubkey is missing from methodData', async () => {
       const operation = makeInitOp('op-1', {
         methodData: {}, // No pubkey
