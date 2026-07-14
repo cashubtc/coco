@@ -117,9 +117,12 @@ interface KeyRingApi {
 
 ## Storage
 
-All keypairs are persisted across sessions using your chosen storage adapter (SQLite, IndexedDB, etc.). The secret keys are stored encrypted along with the public keys and derivation indices.
+All keypairs are persisted across sessions using your chosen storage adapter (SQLite, IndexedDB,
+etc.). Coco's built-in storage adapters do not encrypt keypair data at rest. This includes P2PK
+private keys and NUT-20 mint-quote private keys.
 
-See [Storage Adapters](./storage-adapters.md) for more information on how data is persisted.
+See [Storage Adapters](./storage-adapters.md#security) for the storage security model and guidance
+on protecting wallet data.
 
 ## Error Handling
 
