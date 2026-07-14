@@ -80,6 +80,10 @@ type NutMethodSettings = {
   disabled?: boolean;
 };
 
+type NutSupportSettings = {
+  supported?: boolean;
+};
+
 export class MintService {
   private readonly mintRepo: MintRepository;
   private readonly keysetRepo: KeysetRepository;
@@ -219,6 +223,40 @@ export class MintService {
     // ensureUpdatedMint already normalizes, but normalize here for consistency
     const { mint } = await this.ensureUpdatedMint(normalizeMintUrl(mintUrl));
     return mint.mintInfo;
+  }
+
+  /**
+   * Returns whether a mint advertises support for a top-level NUT capability.
+   *
+   * This currently supports NUT-11 checks only. Mint information is resolved via
+   * `getMintInfo()`, so stale local records may be refreshed and fetch failures
+   * propagate to the caller. Missing, malformed, or disabled settings return
+   * `false` rather than throwing.
+   */
+  async supportsNut(mintUrl: string, nut: 11): Promise<boolean> {
+    this.assertSupportCapabilityNut(nut);
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const mintInfo = await this.getMintInfo(normalizedMintUrl);
+    const settings = this.getNutSupportSettings(mintInfo, nut);
+    return settings?.supported === true;
+  }
+
+  /**
+   * Requires a mint to advertise a top-level NUT capability.
+   *
+   * This currently supports NUT-11 checks only. Returns when support is
+   * advertised, throws `ProofValidationError` when support is absent, and lets
+   * mint-info refresh/fetch failures propagate unchanged.
+   */
+  async assertNutSupported(mintUrl: string, nut: 11, scope?: string): Promise<void> {
+    if (await this.supportsNut(mintUrl, nut)) {
+      return;
+    }
+
+    const context = scope ? ` for ${scope}` : '';
+    throw new ProofValidationError(
+      `${this.formatNut(nut)} support is required${context} but is not advertised by mint ${normalizeMintUrl(mintUrl)}`,
+    );
   }
 
   async checkPaymentMethodCapability(
@@ -416,6 +454,15 @@ export class MintService {
     return nuts?.[String(nut)] as NutMethodSettings | undefined;
   }
 
+  private getNutSupportSettings(mintInfo: MintInfo, nut: 11): NutSupportSettings | undefined {
+    const nuts = mintInfo.nuts as Record<string, unknown> | undefined;
+    const settings = nuts?.[String(nut)];
+    if (!settings || typeof settings !== 'object') {
+      return undefined;
+    }
+    return settings as NutSupportSettings;
+  }
+
   private assertMethodCapabilityNut(nut: number): asserts nut is 4 | 5 {
     if (nut !== 4 && nut !== 5) {
       throw new ProofValidationError(
@@ -424,8 +471,14 @@ export class MintService {
     }
   }
 
-  private formatNut(nut: 4 | 5): string {
-    return `NUT-0${nut}`;
+  private assertSupportCapabilityNut(nut: number): asserts nut is 11 {
+    if (nut !== 11) {
+      throw new ProofValidationError(`NUT-${nut} support capability checks are not implemented`);
+    }
+  }
+
+  private formatNut(nut: number): string {
+    return `NUT-${String(nut).padStart(2, '0')}`;
   }
 
   private assertPaymentMethodCapabilityOperation(

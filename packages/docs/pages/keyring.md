@@ -75,6 +75,42 @@ Removing a keypair will prevent you from spending any P2PK tokens locked to that
 
 ## Working with P2PK Tokens
 
+### Sending P2PK Tokens
+
+P2PK sends use Coco's normal send operation saga with a P2PK target. The simple
+form locks the token to one public key:
+
+```ts
+const prepared = await coco.ops.send.prepare({
+  mintUrl,
+  amount: 100,
+  target: { type: 'p2pk', pubkey: recipientPublicKey },
+});
+```
+
+Structured NUT-11 options are also supported for multisig, locktime, refund keys,
+signature flags, and non-reserved extra tags:
+
+```ts
+await coco.ops.send.prepare({
+  mintUrl,
+  amount: 100,
+  target: {
+    type: 'p2pk',
+    options: {
+      pubkey: [recipientPublicKey, cosignerPublicKey],
+      requiredSignatures: 2,
+      refundKeys: [refundPublicKey],
+      locktime: 1_730_000_000,
+    },
+  },
+});
+```
+
+Mints must advertise NUT-11 support before Coco creates P2PK outputs. Valid P2PK
+payment requests are prepared through the same send path, using the P2PK options
+from the request.
+
 ### Receiving P2PK Tokens
 
 When you receive a P2PK token, Coco automatically handles the signature verification if you have the corresponding keypair:

@@ -4,6 +4,7 @@ import {
   type Token,
   type Proof,
   type OutputConfig,
+  type P2PKOptions,
   type OutputDataCreator,
 } from '@cashu/cashu-ts';
 import type {
@@ -15,6 +16,7 @@ import type {
   RecoverExecutingContext,
   ExecutionResult,
   RecoveryResult,
+  SendMethodData,
 } from '../../../operations/send/SendMethodHandler';
 import type {
   PreparedSendOperation,
@@ -47,14 +49,11 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
    * P2PK sends always require a swap to lock the proofs to the pubkey.
    */
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
-    const { operation, wallet, proofService, logger } = ctx;
+    const { operation, wallet, proofService, mintService, logger } = ctx;
     const { mintUrl, amount, unit } = operation;
 
-    // Validate that we have a pubkey in methodData
-    const pubkey = (operation.methodData as { pubkey: string })?.pubkey;
-    if (!pubkey) {
-      throw new ProofValidationError('P2PK send requires a pubkey in methodData');
-    }
+    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
+    await mintService.assertNutSupported(mintUrl, 11, 'P2PK send');
 
     // P2PK always requires a swap to lock proofs to the pubkey
     // Select proofs including fees
@@ -79,7 +78,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
 
     const keyset = wallet.getKeyset();
 
-    const sendOT = this.outputDataCreator.createP2PKData({ pubkey }, amount, keyset);
+    const sendOT = this.outputDataCreator.createP2PKData(p2pkOptions, amount, keyset);
 
     // Serialize for storage
     const serializedOutputData = serializeOutputData({
@@ -96,7 +95,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       proofCount: selected.length,
       keepOutputs: outputResult.keep.length,
       sendOutputs: sendOT.length,
-      pubkey,
+      p2pkPubkey: p2pkOptions.pubkey,
     });
 
     // Reserve the selected proofs
@@ -126,7 +125,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       fee,
       inputProofCount: inputSecrets.length,
-      pubkey,
+      p2pkPubkey: p2pkOptions.pubkey,
     });
 
     return prepared;
@@ -139,11 +138,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const { operation, wallet, reservedProofs, proofService, logger } = ctx;
     const { mintUrl, amount, inputProofSecrets } = operation;
 
-    // Get the pubkey from methodData
-    const pubkey = (operation.methodData as { pubkey: string })?.pubkey;
-    if (!pubkey) {
-      throw new Error('P2PK send requires a pubkey in methodData');
-    }
+    const p2pkOptions = this.getP2pkOptions(operation.methodData as SendMethodData<'p2pk'>);
 
     const inputProofs = reservedProofs.filter((p: Proof) => inputProofSecrets.includes(p.secret));
 
@@ -163,7 +158,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       keepOutputs: outputData.keep.length,
       sendOutputs: outputData.send.length,
-      pubkey,
+      p2pkPubkey: p2pkOptions.pubkey,
     });
 
     const outputConfig: OutputConfig = {
@@ -211,10 +206,25 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       sendProofCount: sendProofs.length,
       keepProofCount: keepProofs.length,
-      pubkey,
+      p2pkPubkey: p2pkOptions.pubkey,
     });
 
     return { status: 'PENDING', pending, token };
+  }
+
+  private getP2pkOptions(methodData: SendMethodData<'p2pk'>): P2PKOptions {
+    if ('options' in methodData && methodData.options) {
+      if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
+        throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+      }
+      return methodData.options;
+    }
+
+    if ('pubkey' in methodData && methodData.pubkey) {
+      return { pubkey: methodData.pubkey };
+    }
+
+    throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
   }
 
   /**

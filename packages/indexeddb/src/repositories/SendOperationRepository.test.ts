@@ -103,4 +103,59 @@ describe('IdbSendOperationRepository', () => {
       },
     });
   });
+
+  it('loads structured P2PK method data from methodDataJson', async () => {
+    const primaryKey = `02${'22'.repeat(32)}`;
+    const secondKey = `03${'33'.repeat(32)}`;
+    const refundKey = `02${'44'.repeat(32)}`;
+    const methodData = {
+      options: {
+        pubkey: [primaryKey, secondKey],
+        requiredSignatures: 2,
+        locktime: 1_730_000_000,
+        refundKeys: [refundKey],
+        requiredRefundSignatures: 1,
+        sigFlag: 'SIG_ALL',
+        additionalTags: [['memo', 'payment-request']],
+      },
+    };
+    const row = {
+      id: 'op-p2pk-structured',
+      mintUrl: 'https://mint.test',
+      amount: 100,
+      unit: 'sat',
+      state: 'prepared',
+      createdAt: 1,
+      updatedAt: 2,
+      error: null,
+      method: 'p2pk',
+      methodDataJson: JSON.stringify(methodData),
+      needsSwap: 1,
+      fee: 1,
+      inputAmount: 101,
+      inputProofSecretsJson: JSON.stringify(['secret-1']),
+      outputDataJson: JSON.stringify({ keep: [], send: [] }),
+      tokenJson: null,
+    } satisfies SendOperationRow;
+
+    const repository = new IdbSendOperationRepository(createDbStub(row) as any);
+
+    await expect(repository.getById('op-p2pk-structured')).resolves.toEqual({
+      id: 'op-p2pk-structured',
+      mintUrl: 'https://mint.test',
+      amount: Amount.from(100),
+      unit: 'sat',
+      state: 'prepared',
+      createdAt: 1000,
+      updatedAt: 2000,
+      error: undefined,
+      method: 'p2pk',
+      methodData,
+      needsSwap: true,
+      fee: Amount.from(1),
+      inputAmount: Amount.from(101),
+      inputProofSecrets: ['secret-1'],
+      outputData: { keep: [], send: [] },
+    });
+  });
 });

@@ -279,6 +279,105 @@ describe('MintService', () => {
     });
   });
 
+  describe('nut support capabilities', () => {
+    const useMintInfo = (mintInfo: MintInfo) => {
+      mockAdapter.fetchMintInfo = mock(() => Promise.resolve(mintInfo));
+    };
+
+    it('returns true when NUT-11 support is advertised', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: true },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(true);
+      await expect(
+        service.assertNutSupported(testMintUrl, 11, 'P2PK send'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('returns false and rejects when NUT-11 metadata is missing', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [], disabled: false },
+          '5': { methods: [], disabled: false },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+      await expect(
+        service.assertNutSupported(testMintUrl, 11, 'payment request P2PK'),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('returns false when NUT-11 support is explicitly false', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: false },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('returns false when NUT-11 metadata is malformed', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': true,
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('returns false when NUT-11 supported is not the boolean true', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: 'true' },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('keeps existing NUT-04 and NUT-05 method-unit capability checks unchanged', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+          '5': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+          '11': { supported: true },
+        },
+      } as unknown as MintInfo);
+
+      const mintCapability = await service.getMintMethodUnitCapability(
+        testMintUrl,
+        4,
+        'bolt11',
+        'sat',
+      );
+      const meltCapability = await service.getMintMethodUnitCapability(
+        testMintUrl,
+        5,
+        'bolt11',
+        'sat',
+      );
+
+      expect(mintCapability.supported).toBe(true);
+      expect(meltCapability.supported).toBe(true);
+    });
+  });
+
   describe('method-unit capabilities', () => {
     const mintInfoWithMethods = (
       methods4: Array<{

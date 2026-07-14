@@ -1303,6 +1303,61 @@ export async function runSendOperationRepositoryContract(
         await dispose();
       }
     });
+
+    it('round-trips legacy P2PK send operation method data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const publicKey = `02${'11'.repeat(32)}`;
+        const operation = createDummyPreparedSendOperation({
+          id: 'send-p2pk-legacy',
+          method: 'p2pk',
+          methodData: { pubkey: publicKey },
+        });
+
+        await repositories.sendOperationRepository.create(operation);
+
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('p2pk');
+        expect(JSON.stringify(stored!.methodData)).toBe(JSON.stringify({ pubkey: publicKey }));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips structured P2PK send operation method data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const primaryKey = `02${'22'.repeat(32)}`;
+        const secondKey = `03${'33'.repeat(32)}`;
+        const refundKey = `02${'44'.repeat(32)}`;
+        const methodData = {
+          options: {
+            pubkey: [primaryKey, secondKey],
+            requiredSignatures: 2,
+            locktime: 1_730_000_000,
+            refundKeys: [refundKey],
+            requiredRefundSignatures: 1,
+            sigFlag: 'SIG_ALL',
+            additionalTags: [['memo', 'payment-request']],
+          },
+        };
+        const operation = createDummyPreparedSendOperation({
+          id: 'send-p2pk-structured',
+          method: 'p2pk',
+          methodData: methodData as unknown as PreparedSendOperation['methodData'],
+        });
+
+        await repositories.sendOperationRepository.create(operation);
+
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('p2pk');
+        expect(JSON.stringify(stored!.methodData)).toBe(JSON.stringify(methodData));
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 

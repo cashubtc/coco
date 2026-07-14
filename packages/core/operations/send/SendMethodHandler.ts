@@ -1,4 +1,4 @@
-import type { Wallet, Proof, Token } from '@cashu/cashu-ts';
+import type { Wallet, Proof, Token, P2PKOptions } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -16,6 +16,36 @@ import type {
 } from './SendOperation';
 
 /**
+ * Structured P2PK send options accepted by Coco.
+ *
+ * `hashlock` is intentionally unavailable because cashu-ts treats hashlocked
+ * P2PK options as HTLC/NUT-14 data, which this send method does not support.
+ */
+export type P2pkSendOptions = Omit<P2PKOptions, 'hashlock'> & {
+  /** HTLC/NUT-14 hashlocks are out of scope for P2PK sends. */
+  hashlock?: never;
+};
+
+/**
+ * Payload accepted by the P2PK send method.
+ *
+ * `pubkey` is the legacy shorthand for locking outputs to a single public key.
+ * Prefer `options` for full NUT-11 P2PK conditions such as `sigflag`,
+ * multisig tags, locktime, and refund keys.
+ */
+export type P2pkSendMethodData =
+  | {
+      /** Legacy/direct shorthand for sending to one P2PK lock key. */
+      pubkey: string;
+      options?: never;
+    }
+  | {
+      /** Full NUT-11 P2PK options accepted by Coco output builders. */
+      options: P2pkSendOptions;
+      pubkey?: never;
+    };
+
+/**
  * Registry of supported send methods and their payload shapes.
  * Extend via declaration merging if you need to add methods externally.
  *
@@ -24,7 +54,7 @@ import type {
  */
 export interface SendMethodDefinitions {
   default: Record<string, never>;
-  p2pk: { pubkey: string };
+  p2pk: P2pkSendMethodData;
 }
 
 export type SendMethod = keyof SendMethodDefinitions;

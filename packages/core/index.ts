@@ -17,7 +17,11 @@ export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
-export type { SendMethod, SendMethodData } from './operations/send/SendMethodHandler.ts';
+export type {
+  P2pkSendMethodData,
+  SendMethod,
+  SendMethodData,
+} from './operations/send/SendMethodHandler.ts';
 export type {
   InitSendOperation,
   PreparedSendOperation,
