@@ -231,6 +231,29 @@ describe('ReceiveOperationService - batch recovery', () => {
     expect(survivor?.batchId).not.toBe(batchId);
   });
 
+  it('requeues an incomplete batch group instead of re-executing unbalanced outputs', async () => {
+    // Crash mid-persist: only the largest member of a bigger batch reached
+    // 'executing'. Its stored outputs carry the whole batch fee (5 input,
+    // 2 fee share), so replaying them against a solo swap of its input at
+    // fee 1 would not balance (3 + 1 != 5). Recovery must requeue instead of
+    // replaying; the end-of-recovery sweep then redeems with fresh outputs.
+    await receiveOpRepo.create(makeBatchMember('op-a', 5, 2, ['a-out']));
+
+    await service.recoverPendingOperations();
+
+    const a = await receiveOpRepo.getById('op-a');
+    expect(a?.state).toBe('finalized');
+    expect(a?.batchId).toBeDefined();
+    expect(a?.batchId).not.toBe(batchId);
+    if (a?.state === 'finalized') {
+      expect(a.fee).toEqual(Amount.from(1));
+    }
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+    const outputs = (mockWalletReceive.mock.calls[0]?.[2] as { data: { secret: Uint8Array }[] })
+      .data;
+    expect(outputs.map((output) => decoder.decode(output.secret))).toEqual(['sweep-out-0']);
+  });
+
   it('requeues all members when re-execution fails terminally', async () => {
     await receiveOpRepo.create(makeBatchMember('op-a', 5, 1, ['a-out']));
     await receiveOpRepo.create(makeBatchMember('op-b', 4, 0, ['b-out']));

@@ -104,6 +104,13 @@ Redemption is attempted automatically:
    `coco.ops.receive.recovery.run()`), and
 3. explicitly via `coco.ops.receive.redeemDeferred()`.
 
+Because the batch swap is atomic, queued members are validated with the mint
+before each attempt: members whose inputs were spent in the meantime (e.g. the
+sender double-spent a queued token) roll back terminally instead of poisoning
+every future batch. A fresh receive that batched with the queue is never
+failed by the queue — when the batch cannot settle, the incoming token falls
+back to a solo receive.
+
 Groups whose combined value stays at or below the combined fee remain queued.
 A future configuration may additionally hold redemption until the fee ceiling
 (`floor(1000 / input_fee_ppk)` inputs per fee unit) is better utilized.
@@ -136,7 +143,10 @@ by attempting to redeem queued `deferred` operations.
 Interrupted batch redemptions recover as a group: when the batch inputs were
 spent the members restore from their own output data, and when they were not
 the combined swap is re-executed. A batch member is never re-executed alone
-because its fee share only balances inside its batch.
+because its fee share only balances inside its batch; recovery verifies the
+stored outputs still satisfy the swap equation (e.g. after a crash between
+persisting members, or a keyset fee change) and requeues the members for a
+fresh batch when they do not.
 
 Use `refresh(operationId)` for explicit recovery UI:
 

@@ -94,9 +94,8 @@ export class ReceiveOpsApi {
 
   /**
    * Attempts to redeem deferred receive operations now, batched per mint and
-   * unit. Groups that are still below the swap fee, and members whose p2pk
-   * key is missing, stay deferred. Useful when connectivity returns; the
-   * recovery sweep also runs this automatically.
+   * unit. Groups that are still below the swap fee stay deferred. Useful when
+   * connectivity returns; the recovery sweep also runs this automatically.
    */
   async redeemDeferred(filter?: { mintUrl?: string; unit?: string }): Promise<void> {
     return this.receiveOperationService.redeemDeferred(filter);

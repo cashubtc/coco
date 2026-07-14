@@ -378,9 +378,26 @@ export class ReceiveOperationService {
       await this.receiveOperationRepository.getByMintUrl(initOp.mintUrl)
     ).some((op) => op.state === 'deferred' && op.unit === initOp.unit);
     if (hasQueuedGroupMembers) {
-      const batched = await this.redeemDeferredGroup(initOp.mintUrl, initOp.unit, initOp);
-      if (batched) {
-        return batched;
+      try {
+        const batched = await this.redeemDeferredGroup(initOp.mintUrl, initOp.unit, initOp);
+        if (batched) {
+          return batched;
+        }
+      } catch (e) {
+        // A failed batch must not fail a token that is receivable on its
+        // own: fall back to the solo path when the operation is untouched,
+        // or report it queued when the failure returned it to the queue.
+        const current = await this.receiveOperationRepository.getById(initOp.id);
+        if (current?.state === 'deferred') {
+          return current;
+        }
+        if (!current || current.state !== 'init') {
+          throw e;
+        }
+        this.logger?.warn('Batched receive failed, retrying solo', {
+          operationId: initOp.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     }
 
@@ -860,17 +877,36 @@ export class ReceiveOperationService {
 
   /**
    * Persist rolled back state with error context.
+   * Accepts deferred operations (e.g. queued members whose inputs turn out
+   * spent); they were never prepared, so an empty prepared payload is
+   * persisted to satisfy the terminal row shape.
    */
   private async markAsRolledBack(
-    op: PreparedOrLaterOperation,
+    op: PreparedOrLaterOperation | DeferredReceiveOperation,
     error: string,
   ): Promise<RolledBackReceiveOperation> {
-    const rolledBack: RolledBackReceiveOperation = {
-      ...op,
-      state: 'rolled_back',
-      updatedAt: Date.now(),
-      error,
-    };
+    const rolledBack: RolledBackReceiveOperation =
+      op.state === 'deferred'
+        ? {
+            id: op.id,
+            state: 'rolled_back',
+            mintUrl: op.mintUrl,
+            unit: op.unit,
+            amount: op.amount,
+            inputProofs: op.inputProofs,
+            createdAt: op.createdAt,
+            updatedAt: Date.now(),
+            error,
+            source: op.source,
+            fee: Amount.zero(),
+            outputData: serializeOutputData({ keep: [], send: [] }),
+          }
+        : {
+            ...op,
+            state: 'rolled_back',
+            updatedAt: Date.now(),
+            error,
+          };
     await this.receiveOperationRepository.update(rolledBack);
     await this.eventBus.emit('receive-op:rolled-back', {
       mintUrl: rolledBack.mintUrl,
@@ -1000,6 +1036,8 @@ export class ReceiveOperationService {
         }
       }
 
+      await this.dropUnredeemableBatchMembers(mintUrl, members);
+
       if (incoming) {
         const releaseLock = await this.acquireOperationLock(incoming.id);
         members.push({
@@ -1024,8 +1062,63 @@ export class ReceiveOperationService {
   }
 
   /**
+   * Validate queued members' inputs with the mint before batching. The batch
+   * swap is atomic, so one already-spent input (e.g. a sender double-spent a
+   * queued token) would fail redemption for every member on every attempt.
+   * Members with spent inputs roll back terminally; members with pending
+   * inputs stay queued but sit out this round. Best-effort: when the state
+   * check itself fails, the batch proceeds and the swap outcome decides.
+   * Dropped members are released and removed from `members` in place.
+   */
+  private async dropUnredeemableBatchMembers(
+    mintUrl: string,
+    members: BatchMember[],
+  ): Promise<void> {
+    const queued = members.filter((member) => member.operation.state === 'deferred');
+    if (queued.length === 0) {
+      return;
+    }
+
+    let states: CashuProofState[];
+    try {
+      states = await this.checkProofStatesWithMint(
+        mintUrl,
+        queued.flatMap((member) => member.signedProofs),
+      );
+    } catch {
+      return;
+    }
+    const stateByY = new Map(states.map((state) => [state.Y, state.state]));
+
+    for (const member of queued) {
+      const yHexes = computeYHexForSecrets(member.signedProofs.map((proof) => proof.secret));
+      const memberStates = yHexes.map((y) => stateByY.get(y));
+
+      if (memberStates.some((state) => state === 'SPENT')) {
+        if (member.operation.state === 'deferred') {
+          await this.markAsRolledBack(member.operation, 'Receive inputs are already spent');
+        }
+      } else if (memberStates.some((state) => state === 'PENDING')) {
+        this.logger?.debug('Queued receive inputs pending elsewhere, skipping this batch', {
+          operationId: member.operation.id,
+        });
+      } else {
+        continue;
+      }
+
+      member.releaseLock();
+      members.splice(members.indexOf(member), 1);
+    }
+  }
+
+  /**
    * Lock and validate one deferred operation for batch membership.
    * Returns null (member stays deferred) when it is busy or changed state.
+   *
+   * The isLocked check must stay non-blocking: prepare()/execute() acquire
+   * their operation lock before any mint-scoped work, while the batch path
+   * already holds the mint lock here — blocking on a busy operation would be
+   * an ABBA deadlock between the two paths.
    */
   private async collectBatchMember(
     candidate: DeferredReceiveOperation,
@@ -1212,18 +1305,25 @@ export class ReceiveOperationService {
       return;
     }
 
-    const requeueReasons = new Map(
-      members.map((member) => [member.operation.id, member.requeueReason]),
-    );
+    const membersById = new Map(members.map((member) => [member.operation.id, member]));
     for (const executing of executingMembers) {
       try {
         const inputStates = await this.checkProofStatesWithMint(mintUrl, executing.inputProofs);
         const allSpent =
           inputStates.length > 0 && inputStates.every((state) => state.state === 'SPENT');
+        const original = membersById.get(executing.id);
         if (allSpent) {
           await this.settleSpentBatchMember(executing, rollbackReason);
+        } else if (original?.operation.state === 'init') {
+          // A fresh receive only joined the batch opportunistically; restore
+          // its init snapshot so receive() can retry it solo instead of
+          // parking a token that is receivable on its own.
+          await this.receiveOperationRepository.update({
+            ...original.operation,
+            updatedAt: Date.now(),
+          });
         } else {
-          await this.markAsDeferred(executing, requeueReasons.get(executing.id) ?? 'dust');
+          await this.markAsDeferred(executing, original?.requeueReason ?? 'dust');
         }
       } catch (memberError) {
         this.logger?.warn('Could not settle batch member after failed swap, left executing', {
@@ -1388,6 +1488,27 @@ export class ReceiveOperationService {
     const allKeepOutputs = members.flatMap(
       (member) => deserializeOutputData(member.outputData).keep,
     );
+
+    // The stored outputs only balance when every member of the original
+    // apportionment is present and the keyset fee is unchanged. A crash
+    // between persisting members can leave a subset whose outputs no longer
+    // satisfy the swap equation; requeue instead of trusting the mint to
+    // reject the unbalanced swap.
+    const fee = wallet.getFeesForProofs(allInputs);
+    const outputTotal = Amount.sum(allKeepOutputs.map((output) => output.blindedMessage.amount));
+    if (!outputTotal.add(fee).equals(sumProofs(allInputs))) {
+      this.logger?.warn('Interrupted batch outputs do not balance, requeueing members', {
+        mintUrl,
+        batchId,
+        memberCount: members.length,
+        outputTotal,
+        fee,
+      });
+      for (const member of members) {
+        await this.markAsDeferred(member, 'dust');
+      }
+      return;
+    }
 
     this.logger?.info('Re-executing interrupted batched receive', {
       mintUrl,

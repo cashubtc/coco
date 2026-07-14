@@ -13,6 +13,7 @@ import { TokenService } from '../../services/TokenService';
 import type { WalletService } from '../../services/WalletService';
 import type { CoreProof } from '../../types';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { computeYHexForSecrets } from '../../utils';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
@@ -237,12 +238,17 @@ describe('ReceiveOperationService - redeemDeferred', () => {
     mockWalletReceive.mockImplementation(async () => {
       throw new MintOperationError(11001, 'Proofs already spent');
     });
-    // The poisoned member's inputs are spent at the mint, the healthy one's are not.
-    let firstMember = true;
+    // The poisoned member's inputs are spent at the mint, the healthy one's
+    // are not. The double-spend lands after the pre-batch validation, so the
+    // first (batched) state check still reports everything unspent.
+    const poisonedY = computeYHexForSecrets(['op-poisoned-input'])[0]!;
+    let preflightDone = false;
     mockCheckProofStates.mockImplementation(async (_mintUrl: string, ys: string[]) => {
-      const state = firstMember ? 'UNSPENT' : 'SPENT';
-      firstMember = false;
-      return ys.map(() => ({ state }));
+      if (!preflightDone) {
+        preflightDone = true;
+        return ys.map((y) => ({ Y: y, state: 'UNSPENT' }));
+      }
+      return ys.map((y) => ({ Y: y, state: y === poisonedY ? 'SPENT' : 'UNSPENT' }));
     });
 
     await service.redeemDeferred();
@@ -253,6 +259,86 @@ describe('ReceiveOperationService - redeemDeferred', () => {
       expect(healthy.deferredReason).toBe('mint-unreachable');
     }
     // Spent member with no recoverable outputs rolls back.
+    expect((await receiveOpRepo.getById('op-poisoned'))?.state).toBe('rolled_back');
+  });
+
+  it('rolls back queued members whose inputs were spent before batching', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-healthy', 5));
+    await receiveOpRepo.create(makeDeferredOp('op-poisoned', 4));
+    const poisonedY = computeYHexForSecrets(['op-poisoned-input'])[0]!;
+    mockCheckProofStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map((y) => ({ Y: y, state: y === poisonedY ? 'SPENT' : 'UNSPENT' })),
+    );
+
+    await service.redeemDeferred();
+
+    // The batch swap is atomic, so the spent member must not poison it: it
+    // rolls back terminally and the healthy member settles without it.
+    expect((await receiveOpRepo.getById('op-poisoned'))?.state).toBe('rolled_back');
+    expect((await receiveOpRepo.getById('op-healthy'))?.state).toBe('finalized');
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+    const swapToken = mockWalletReceive.mock.calls[0]?.[0] as { proofs: Proof[] };
+    expect(swapToken.proofs.map((proof) => proof.secret)).toEqual(['op-healthy-input']);
+  });
+
+  it('leaves queued members with pending inputs out of the batch', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-healthy', 5));
+    await receiveOpRepo.create(makeDeferredOp('op-pending', 4));
+    const pendingY = computeYHexForSecrets(['op-pending-input'])[0]!;
+    mockCheckProofStates.mockImplementation(async (_mintUrl: string, ys: string[]) =>
+      ys.map((y) => ({ Y: y, state: y === pendingY ? 'PENDING' : 'UNSPENT' })),
+    );
+
+    await service.redeemDeferred();
+
+    expect((await receiveOpRepo.getById('op-pending'))?.state).toBe('deferred');
+    expect((await receiveOpRepo.getById('op-healthy'))?.state).toBe('finalized');
+    expect(mockWalletReceive).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to a solo receive when a poisoned batch fails around a fresh token', async () => {
+    await receiveOpRepo.create(makeDeferredOp('op-poisoned', 4));
+    // The pre-batch validation misses the double-spend that lands right
+    // before the swap; the batched swap fails terminally.
+    const poisonedY = computeYHexForSecrets(['op-poisoned-input'])[0]!;
+    let preflightDone = false;
+    mockCheckProofStates.mockImplementation(async (_mintUrl: string, ys: string[]) => {
+      if (!preflightDone) {
+        preflightDone = true;
+        return ys.map((y) => ({ Y: y, state: 'UNSPENT' }));
+      }
+      return ys.map((y) => ({ Y: y, state: y === poisonedY ? 'SPENT' : 'UNSPENT' }));
+    });
+    let firstSwap = true;
+    mockWalletReceive.mockImplementation(
+      async (_token: unknown, _config: unknown, outputType: { data: OutputData[] }) => {
+        if (firstSwap) {
+          firstSwap = false;
+          throw new MintOperationError(11001, 'Token already spent');
+        }
+        return outputType.data.map(
+          (output) =>
+            ({
+              id: keysetId,
+              amount: output.blindedMessage.amount,
+              secret: decoder.decode(output.secret),
+              C: `C_${decoder.decode(output.secret)}`,
+            }) as Proof,
+        );
+      },
+    );
+
+    const token: Token = { mint: mintUrl, proofs: [makeProof('incoming-input', 32)] } as Token;
+    const result = await service.receive(token);
+
+    // The fresh token is receivable on its own, so the failed batch must not
+    // fail it or park it in the queue.
+    expect(result.state).toBe('finalized');
+    if (result.state === 'finalized') {
+      expect(result.amount).toEqual(Amount.from(32));
+      expect(result.batchId).toBeUndefined();
+    }
+    expect(mockWalletReceive).toHaveBeenCalledTimes(2);
     expect((await receiveOpRepo.getById('op-poisoned'))?.state).toBe('rolled_back');
   });
 
