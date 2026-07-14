@@ -19,9 +19,16 @@ export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
 export type {
   P2pkSendMethodData,
+  P2pkSendOptions,
   SendMethod,
   SendMethodData,
 } from './operations/send/SendMethodHandler.ts';
+export type {
+  PaymentRequestMalformedSpendingCondition,
+  PaymentRequestP2pkRequirement,
+  PaymentRequestSpendingConditionRequirement,
+  PaymentRequestUnsupportedSpendingCondition,
+} from './services/PaymentRequestService.ts';
 export type {
   InitSendOperation,
   PreparedSendOperation,
