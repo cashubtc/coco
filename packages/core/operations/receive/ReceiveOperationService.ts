@@ -92,11 +92,13 @@ export class ReceiveOperationService {
 
   /** In-memory lock to prevent concurrent operations on the same operation ID */
   private readonly operationIdLock = new OperationIdLock();
-  /** Serializes batch redemption per mint */
-  private readonly mintScopedLock = new MintScopedLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
-  /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
+  /**
+   * In-memory lock to serialize deterministic-output derivation (counter) per
+   * mint. Shared with the other operation services via the Manager so batch
+   * redemption serializes against every other counter consumer.
+   */
   private readonly mintScopedLock: MintScopedLock;
 
   constructor(
@@ -201,7 +203,7 @@ export class ReceiveOperationService {
       // same NUT-13 counter and derive colliding deterministic outputs. Mirrors the
       // send/melt/mint services, which already hold this lock across counter usage.
       const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
-      let prepared: PreparedReceiveOperation;
+      let prepared: PreparedReceiveOperation | DeferredReceiveOperation;
       try {
         const current = await this.receiveOperationRepository.getById(operation.id);
         if (!current) {
@@ -224,12 +226,15 @@ export class ReceiveOperationService {
       }
 
       // Emit outside the mint lock so a listener cannot extend or re-enter the
-      // per-mint critical section. Mirrors the send service.
-      await this.eventBus.emit('receive-op:prepared', {
-        mintUrl: prepared.mintUrl,
-        operationId: prepared.id,
-        operation: prepared,
-      });
+      // per-mint critical section. Mirrors the send service. Deferred results
+      // already emitted receive-op:deferred inside markAsDeferred.
+      if (prepared.state === 'prepared') {
+        await this.eventBus.emit('receive-op:prepared', {
+          mintUrl: prepared.mintUrl,
+          operationId: prepared.id,
+          operation: prepared,
+        });
+      }
 
       return prepared;
     } finally {
