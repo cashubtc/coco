@@ -12,7 +12,7 @@ import {
   stringifyJson,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
-import { getUnixTimeSeconds } from '../utils.ts';
+import { getUnixTimeSeconds, assertFieldPresent } from '../utils.ts';
 
 interface SendOperationRow {
   id: string;
@@ -62,8 +62,8 @@ function rowToOperation(row: SendOperationRow): SendOperation {
   // All other states have PreparedData
   const preparedData = {
     needsSwap: row.needsSwap === 1,
-    fee: deserializeAmount(row.fee ?? 0),
-    inputAmount: deserializeAmount(row.inputAmount ?? 0),
+    fee: deserializeAmount(assertFieldPresent(row.fee, 'fee', row.id)),
+    inputAmount: deserializeAmount(assertFieldPresent(row.inputAmount, 'inputAmount', row.id)),
     inputProofSecrets: row.inputProofSecretsJson ? JSON.parse(row.inputProofSecretsJson) : [],
     outputData: row.outputDataJson ? JSON.parse(row.outputDataJson) : undefined,
   };

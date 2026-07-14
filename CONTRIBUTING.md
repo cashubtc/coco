@@ -195,6 +195,10 @@ Published packages are versioned with Changesets. If your PR changes runtime
 behavior, public types, package exports, or documentation for a published package,
 you should usually include a changeset unless a maintainer tells you otherwise.
 
+Stable and prerelease npm publishes validate and publish the tagged commit.
+Package versions and changelogs must be committed before the GitHub Release is
+published. See `RELEASING.md` for the maintainer release checklist.
+
 ## Good contributions
 
 The fastest way to get a PR reviewed is to keep it easy to understand:

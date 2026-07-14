@@ -28,6 +28,7 @@ import { getOutputProofSecrets } from '../../operations/receive/ReceiveOperation
 import { MemoryHistoryRepository } from '../../repositories/memory/MemoryHistoryRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
 import { ReceiveOperationService } from '../../operations/receive/ReceiveOperationService';
+import { MintScopedLock } from '../../operations/MintScopedLock';
 import { MemoryReceiveOperationRepository } from '../../repositories/memory/MemoryReceiveOperationRepository';
 
 describe('ReceiveOperationService', () => {
@@ -175,6 +176,56 @@ describe('ReceiveOperationService', () => {
     expect(prepared.state).toBe('prepared');
     expect(prepared.fee).toEqual(Amount.from(0));
     expect(prepared.outputData).toBeDefined();
+  });
+
+  it('serializes concurrent prepare() on the same mint so deterministic outputs cannot collide', async () => {
+    // Two independent tokens received on the same mint at the same time (for example the
+    // same gift-wrapped token delivered more than once, or two tokens arriving together)
+    // must not derive blinded outputs from the same NUT-13 counter value. The per-mint
+    // lock has to serialize the counter-consuming section across operations, the same way
+    // the send/melt/mint services already do. Without it both prepares read the same
+    // counter and produce colliding secrets, which the store then rejects as duplicate
+    // proofs.
+    let inside = 0;
+    let maxInside = 0;
+    const racingProofService = {
+      prepareProofsForReceiving: mock(async (proofs: Proof[]) => proofs),
+      createOutputsAndIncrementCounters: mock(async () => {
+        inside += 1;
+        maxInside = Math.max(maxInside, inside);
+        // Hold the counter-consuming section open long enough for a racing prepare to
+        // overlap here if it is not serialized.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inside -= 1;
+        return { keep: makeOutputData(['out-1']), send: [] };
+      }),
+      setProofState: mock(async () => {}),
+      saveProofs: mock(async () => {}),
+    } as unknown as ProofService;
+
+    const mintScopedLock = new MintScopedLock();
+    service = new ReceiveOperationService(
+      receiveOpRepo,
+      proofRepo,
+      racingProofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      tokenService,
+      eventBus,
+      undefined,
+      mintScopedLock,
+    );
+
+    const opA = await service.init({ mint: mintUrl, proofs: [makeProof('a')] } as Token);
+    const opB = await service.init({ mint: mintUrl, proofs: [makeProof('b')] } as Token);
+
+    const [preparedA, preparedB] = await Promise.all([service.prepare(opA), service.prepare(opB)]);
+
+    expect(maxInside).toBe(1);
+    expect(preparedA.state).toBe('prepared');
+    expect(preparedB.state).toBe('prepared');
+    expect(racingProofService.createOutputsAndIncrementCounters).toHaveBeenCalledTimes(2);
   });
 
   it('emits receive-op:prepared after the prepared state is persisted', async () => {

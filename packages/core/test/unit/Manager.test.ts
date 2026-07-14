@@ -1,10 +1,18 @@
-import { Amount, type SerializedBlindedSignature } from '@cashu/cashu-ts';
+import {
+  Amount,
+  deriveKeysetId,
+  OutputData,
+  type OutputDataCreator,
+  type OutputDataLike,
+  type SerializedBlindedSignature,
+} from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
 import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
+import type { Mint } from '../../models/Mint';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { PendingMeltOperation } from '../../operations/melt';
@@ -12,7 +20,10 @@ import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';
-import type { CoreProof } from '../../types';
+import type { Plugin } from '../../plugin';
+import type { ProofService, WalletService } from '../../services';
+import type { CoreProof, MintInfo } from '../../types';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 describe('initializeCoco', () => {
   let repositories: MemoryRepositories;
@@ -28,7 +39,231 @@ describe('initializeCoco', () => {
     };
   });
 
+  const mintUrl = 'https://output-creator.test';
+  const keypairs = {
+    '1': '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+  };
+  const keysetId = deriveKeysetId(keypairs, { unit: 'sat' });
+  const usdKeysetId = deriveKeysetId(keypairs, { unit: 'usd' });
+  const secondMintUrl = 'https://second-output-creator.test';
+
+  async function seedOutputCreatorMint(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    for (const url of [mintUrl, secondMintUrl]) {
+      await repositories.mintRepository.addNewMint({
+        mintUrl: url,
+        name: url,
+        mintInfo: {
+          name: 'Output Creator Test Mint',
+          version: '1.0.0',
+          pubkey: '',
+          contact: [],
+          nuts: {
+            '4': { methods: [], disabled: false },
+            '5': { methods: [], disabled: false },
+          },
+        } as MintInfo,
+        trusted: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: keysetId,
+      unit: 'sat',
+      keypairs,
+      active: true,
+      feePpk: 0,
+    });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl,
+      id: usdKeysetId,
+      unit: 'usd',
+      keypairs,
+      active: true,
+      feePpk: 0,
+    });
+    await repositories.keysetRepository.addKeyset({
+      mintUrl: secondMintUrl,
+      id: keysetId,
+      unit: 'sat',
+      keypairs,
+      active: true,
+      feePpk: 0,
+    });
+  }
+
+  const disabledRuntime = {
+    watchers: {
+      mintOperationWatcher: { disabled: true },
+      proofStateWatcher: { disabled: true },
+      meltQuoteWatcher: { disabled: true },
+    },
+    processors: {
+      mintOperationProcessor: { disabled: true },
+      meltSettlementProcessor: { disabled: true },
+    },
+  } satisfies Pick<CocoConfig, 'watchers' | 'processors'>;
+
+  function makeOutput(marker: string, id = keysetId): OutputDataLike {
+    return {
+      blindedMessage: { amount: Amount.from(1), id, B_: marker },
+      blindingFactor: 19n,
+      secret: new Uint8Array([1, 2, 3]),
+      toProof: mock(() => {
+        throw new Error('not used while preparing outputs');
+      }),
+    };
+  }
+
   describe('default behavior', () => {
+    it('propagates a custom output data creator through initialized services', async () => {
+      await seedOutputCreatorMint();
+      const outputCreatorSeed = new Uint8Array(64);
+      const deterministicOutput = makeOutput('custom-deterministic');
+      const creatorReceivers: OutputDataCreator[] = [];
+      const randomOutputs: OutputDataLike[] = [];
+      const createDeterministicData = mock(function (
+        this: OutputDataCreator,
+        ..._args: Parameters<OutputDataCreator['createDeterministicData']>
+      ) {
+        creatorReceivers.push(this);
+        return [deterministicOutput];
+      });
+      const createRandomData = mock(function (
+        this: OutputDataCreator,
+        ...args: Parameters<OutputDataCreator['createRandomData']>
+      ) {
+        creatorReceivers.push(this);
+        const output = makeOutput(`custom-random-${args[1].id}`, args[1].id);
+        randomOutputs.push(output);
+        return [output];
+      });
+      const outputDataCreator = makeOutputDataCreator({
+        createDeterministicData,
+        createRandomData,
+      });
+      let proofService: ProofService | undefined;
+      let walletService: WalletService | undefined;
+      const plugin: Plugin<['proofService', 'walletService']> = {
+        name: 'output-creator-acceptance',
+        required: ['proofService', 'walletService'],
+        onReady: ({ services }) => {
+          proofService = services.proofService;
+          walletService = services.walletService;
+        },
+      };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        ...disabledRuntime,
+        seedGetter: async () => outputCreatorSeed,
+        outputDataCreator,
+        plugins: [plugin],
+      });
+      const originalCreateDeterministicData = OutputData.createDeterministicData;
+      const originalCreateRandomData = OutputData.createRandomData;
+      OutputData.createDeterministicData = () => {
+        throw new Error('built-in deterministic creation must not be used');
+      };
+      OutputData.createRandomData = () => {
+        throw new Error('built-in random creation must not be used');
+      };
+
+      const prepareRandomMint = async (url: string, unit: string, quote: string) => {
+        const wallet = await walletService!.getWallet(url, unit);
+        return wallet.prepareMint(
+          'bolt11',
+          Amount.from(1),
+          {
+            quote,
+            request: 'lnbc1test',
+            unit,
+            amount: Amount.from(1),
+            state: 'PAID',
+            expiry: null,
+          },
+          undefined,
+          { type: 'random' },
+        );
+      };
+
+      try {
+        const outputs = await proofService!.createOutputsAndIncrementCounters(mintUrl, {
+          keep: { amount: Amount.from(1), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        });
+        const previews = [
+          await prepareRandomMint(mintUrl, 'sat', 'quote-sat'),
+          await prepareRandomMint(mintUrl, 'usd', 'quote-usd'),
+          await prepareRandomMint(secondMintUrl, 'sat', 'quote-second-mint'),
+        ];
+
+        expect(outputs.keep).toEqual([deterministicOutput]);
+        const deterministicCall = createDeterministicData.mock.calls[0];
+        expect(deterministicCall?.[0]).toEqual(Amount.from(1));
+        expect(deterministicCall?.[1]).toEqual(new Uint8Array(64));
+        expect(deterministicCall?.[2]).toBe(0);
+        expect(deterministicCall?.[3]?.id).toBe(keysetId);
+        expect(randomOutputs.map((output) => output.blindedMessage.id)).toEqual([
+          keysetId,
+          usdKeysetId,
+          keysetId,
+        ]);
+        expect(previews.map((preview) => preview.outputData[0])).toEqual(randomOutputs);
+        expect(previews.map((preview) => preview.payload.outputs[0])).toEqual(
+          randomOutputs.map((output) => output.blindedMessage),
+        );
+        expect(createRandomData).toHaveBeenCalledTimes(3);
+        expect(creatorReceivers).toHaveLength(4);
+        for (const receiver of creatorReceivers) {
+          expect(receiver).toBe(outputDataCreator);
+        }
+      } finally {
+        OutputData.createDeterministicData = originalCreateDeterministicData;
+        OutputData.createRandomData = originalCreateRandomData;
+        await manager.dispose();
+      }
+    });
+
+    it('uses cashu-ts output construction when no creator is configured', async () => {
+      await seedOutputCreatorMint();
+      const outputCreatorSeed = new Uint8Array(64);
+      const builtInOutput = makeOutput('built-in-deterministic');
+      const createDeterministicData = mock(() => [builtInOutput]);
+      const originalCreateDeterministicData = OutputData.createDeterministicData;
+      OutputData.createDeterministicData = createDeterministicData;
+      let proofService: ProofService | undefined;
+      const plugin: Plugin<['proofService']> = {
+        name: 'default-output-creator-acceptance',
+        required: ['proofService'],
+        onReady: ({ services }) => {
+          proofService = services.proofService;
+        },
+      };
+      let manager: Manager | undefined;
+
+      try {
+        manager = await initializeCoco({
+          ...baseConfig,
+          ...disabledRuntime,
+          seedGetter: async () => outputCreatorSeed,
+          plugins: [plugin],
+        });
+        const outputs = await proofService!.createOutputsAndIncrementCounters(mintUrl, {
+          keep: { amount: Amount.from(1), unit: 'sat' },
+          send: { amount: Amount.zero(), unit: 'sat' },
+        });
+
+        expect(outputs.keep).toEqual([builtInOutput]);
+        expect(createDeterministicData).toHaveBeenCalledTimes(1);
+      } finally {
+        OutputData.createDeterministicData = originalCreateDeterministicData;
+        await manager?.dispose();
+      }
+    });
+
     it('should enable all watchers and processors by default', async () => {
       const manager = await initializeCoco(baseConfig);
 
@@ -83,6 +318,95 @@ describe('initializeCoco', () => {
       await manager.disableMintOperationWatcher();
       await manager.disableProofStateWatcher();
       await manager.disableMintOperationProcessor();
+    });
+
+    it('should expose the quote api to plugins', async () => {
+      let pluginQuotes: QuoteApi | undefined;
+      const plugin: Plugin<['quotes']> = {
+        name: 'quotes-plugin',
+        required: ['quotes'],
+        onReady: ({ services }) => {
+          pluginQuotes = services.quotes;
+        },
+      };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [plugin],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      expect(pluginQuotes).toBe(manager.quotes);
+      expect(pluginQuotes).toBeInstanceOf(QuoteApi);
+
+      await manager.dispose();
+    });
+
+    it('should let plugins import canonical mint quotes through the quote api', async () => {
+      const mintUrl = 'https://mint.test';
+      const quoteId = 'plugin-import-quote';
+      const now = Math.floor(Date.now() / 1000);
+      await repositories.mintRepository.addNewMint({
+        mintUrl,
+        name: mintUrl,
+        mintInfo: {
+          nuts: {
+            '4': { methods: [{ method: 'bolt11', unit: 'sat' }] },
+          },
+        } as MintInfo,
+        trusted: true,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies Mint);
+
+      let importedQuoteId: string | undefined;
+      const plugin: Plugin<['quotes']> = {
+        name: 'quotes-import-plugin',
+        required: ['quotes'],
+        onReady: async ({ services }) => {
+          const quote = await services.quotes.mint.import({
+            mintUrl,
+            method: 'bolt11',
+            quote: {
+              quote: quoteId,
+              request: 'lnbc1pluginimportquote',
+              amount: Amount.from(21),
+              unit: 'sat',
+              expiry: 4_102_444_800,
+              state: 'PAID',
+            },
+          });
+          importedQuoteId = quote.quoteId;
+        },
+      };
+
+      const manager = await initializeCoco({
+        ...baseConfig,
+        plugins: [plugin],
+        watchers: {
+          mintOperationWatcher: { disabled: true },
+          proofStateWatcher: { disabled: true },
+        },
+        processors: {
+          mintOperationProcessor: { disabled: true },
+        },
+      });
+
+      expect(importedQuoteId).toBe(quoteId);
+      await expect(manager.quotes.mint.get({ mintUrl, quoteId })).resolves.toMatchObject({
+        mintUrl,
+        quoteId,
+        method: 'bolt11',
+        state: 'PAID',
+      });
+
+      await manager.dispose();
     });
 
     it('does not reconcile canonical quote-only rows into mint operations on startup', async () => {

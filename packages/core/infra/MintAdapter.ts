@@ -2,7 +2,7 @@ import {
   Mint,
   type CheckStatePayload,
   type Keys,
-  OutputData,
+  type OutputDataLike,
   type Proof,
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
@@ -140,7 +140,7 @@ export class MintAdapter {
   async customMeltBolt11(
     mintUrl: string,
     proofsToSend: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
   ): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);
@@ -151,7 +151,7 @@ export class MintAdapter {
   async customMeltBolt12(
     mintUrl: string,
     proofsToSend: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
   ): Promise<MeltQuoteBolt12Response> {
     const cashuMint = this.getCashuMint(mintUrl);
@@ -162,7 +162,7 @@ export class MintAdapter {
   async customMeltOnchain(
     mintUrl: string,
     proofsToSend: Proof[],
-    changeOutputs: OutputData[],
+    changeOutputs: OutputDataLike[],
     quoteId: string,
     feeIndex: number,
   ): Promise<MeltQuoteOnchainResponse> {

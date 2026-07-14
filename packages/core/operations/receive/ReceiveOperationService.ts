@@ -96,6 +96,8 @@ export class ReceiveOperationService {
   private readonly mintScopedLock = new MintScopedLock();
   /** Lock for the global recovery process */
   private recoveryLock: Promise<void> | null = null;
+  /** In-memory lock to serialize deterministic-output derivation (counter) per mint */
+  private readonly mintScopedLock: MintScopedLock;
 
   constructor(
     receiveOperationRepository: ReceiveOperationRepository,
@@ -107,6 +109,7 @@ export class ReceiveOperationService {
     tokenService: TokenService,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
+    mintScopedLock?: MintScopedLock,
   ) {
     this.receiveOperationRepository = receiveOperationRepository;
     this.proofRepository = proofRepository;
@@ -117,6 +120,7 @@ export class ReceiveOperationService {
     this.tokenService = tokenService;
     this.eventBus = eventBus;
     this.logger = logger;
+    this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
   }
 
   /**
@@ -193,22 +197,41 @@ export class ReceiveOperationService {
   ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     const releaseLock = await this.acquireOperationLock(operation.id);
     try {
-      const current = await this.receiveOperationRepository.getById(operation.id);
-      if (!current) {
-        throw new Error(`Operation ${operation.id} not found`);
-      }
-      if (current.state !== 'init') {
-        throw new Error(`Cannot prepare operation in state '${current.state}'. Expected 'init'.`);
+      // Serialize per-mint so concurrent receives on the same keyset cannot read the
+      // same NUT-13 counter and derive colliding deterministic outputs. Mirrors the
+      // send/melt/mint services, which already hold this lock across counter usage.
+      const releaseMintLock = await this.mintScopedLock.acquire(operation.mintUrl);
+      let prepared: PreparedReceiveOperation;
+      try {
+        const current = await this.receiveOperationRepository.getById(operation.id);
+        if (!current) {
+          throw new Error(`Operation ${operation.id} not found`);
+        }
+        if (current.state !== 'init') {
+          throw new Error(`Cannot prepare operation in state '${current.state}'. Expected 'init'.`);
+        }
+
+        try {
+          prepared = await this.prepareInternal(current as InitReceiveOperation);
+        } catch (e) {
+          if (current.state === 'init') {
+            await this.tryRecoverInitOperation(current as InitReceiveOperation);
+          }
+          throw e;
+        }
+      } finally {
+        releaseMintLock();
       }
 
-      try {
-        return await this.prepareInternal(current as InitReceiveOperation);
-      } catch (e) {
-        if (current.state === 'init') {
-          await this.tryRecoverInitOperation(current as InitReceiveOperation);
-        }
-        throw e;
-      }
+      // Emit outside the mint lock so a listener cannot extend or re-enter the
+      // per-mint critical section. Mirrors the send service.
+      await this.eventBus.emit('receive-op:prepared', {
+        mintUrl: prepared.mintUrl,
+        operationId: prepared.id,
+        operation: prepared,
+      });
+
+      return prepared;
     } finally {
       releaseLock();
     }
@@ -264,11 +287,6 @@ export class ReceiveOperationService {
     };
 
     await this.receiveOperationRepository.update(prepared);
-    await this.eventBus.emit('receive-op:prepared', {
-      mintUrl,
-      operationId: prepared.id,
-      operation: prepared,
-    });
 
     this.logger?.info('Receive operation prepared', {
       operationId: operation.id,

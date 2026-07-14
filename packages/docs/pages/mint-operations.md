@@ -86,8 +86,8 @@ settlement state changes. Stable metadata-only updates do not emit. Importing a
 quote can therefore start watcher interest, but it does not create history or a
 mint operation; call `coco.ops.mint.prepare(...)` when you want to redeem it.
 Use `coco.on('mint-quote:updated', ...)` for live application quote state, and
-use `mint-op:finalized` or `coco.ops.mint.finalize(...)` for issuance
-completion.
+use `mint-op:finalized`, `mint-op:failed`, or `coco.ops.mint.finalize(...)` for
+issuance completion.
 
 For BOLT11 quotes, the invoice is available at `quote.request`. For reusable
 onchain quotes, the address/payment request is also available at `quote.request`
@@ -258,6 +258,31 @@ coco.on('mint-op:executing', ({ operationId }) => {
 });
 
 coco.on('mint-op:finalized', ({ operationId, operation }) => {
-  console.log('Mint terminal', operationId, operation.state);
+  console.log('Mint finalized', operationId, operation.state);
 });
+
+coco.on('mint-op:failed', ({ operationId, operation }) => {
+  console.log('Mint failed', operationId, operation.terminalFailure?.reason ?? operation.error);
+});
+
+const waitForMintCompletion = (operationId: string) =>
+  new Promise<void>((resolve, reject) => {
+    let offFinalized = () => {};
+    let offFailed = () => {};
+    const cleanup = () => {
+      offFinalized();
+      offFailed();
+    };
+
+    offFinalized = coco.on('mint-op:finalized', (payload) => {
+      if (payload.operationId !== operationId) return;
+      cleanup();
+      resolve();
+    });
+    offFailed = coco.on('mint-op:failed', ({ operationId: failedId, operation }) => {
+      if (failedId !== operationId) return;
+      cleanup();
+      reject(new Error(operation.terminalFailure?.reason ?? operation.error ?? 'Mint failed'));
+    });
+  });
 ```

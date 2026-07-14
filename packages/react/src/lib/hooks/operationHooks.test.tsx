@@ -358,6 +358,24 @@ function createFinalizedMintOperation(
   } as MintExecuteResult;
 }
 
+function createFailedMintOperation(
+  overrides: Partial<MintOperationRecord> = {},
+): MintOperationRecord {
+  return {
+    ...createPendingMintOperation(),
+    state: 'failed',
+    updatedAt: 1_700_000_020_000,
+    error: 'Quote expired before issuance',
+    terminalFailure: {
+      reason: 'Quote expired before issuance',
+      code: 'quote_expired',
+      retryable: false,
+      observedAt: 1_700_000_020_000,
+    },
+    ...overrides,
+  } as MintOperationRecord;
+}
+
 function createMintCheckPaymentResult(
   overrides: Partial<MintCheckPaymentResult> = {},
 ): MintCheckPaymentResult {
@@ -1312,6 +1330,33 @@ describe('useMintOperation', () => {
 
     await waitForAssertion(() => {
       expect(result.current.currentOperation).toEqual(finalized);
+    });
+    expect(mint.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('reacts to background failed events for the bound mint operation id', async () => {
+    const { manager, mint, emit } = createMintManagerMock();
+    const pending = createPendingMintOperation();
+    const failed = createFailedMintOperation({ id: pending.id });
+
+    mint.get.mockResolvedValueOnce(pending);
+
+    const { result } = renderHook(() => useMintOperation(pending.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(pending);
+    });
+
+    await emit('mint-op:failed', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: failed,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).toEqual(failed);
     });
     expect(mint.get).toHaveBeenCalledTimes(1);
   });

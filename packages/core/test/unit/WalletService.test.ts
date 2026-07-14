@@ -1,10 +1,17 @@
-import { deriveKeysetId } from '@cashu/cashu-ts';
+import {
+  Amount,
+  deriveKeysetId,
+  OutputData,
+  type OutputDataCreator,
+  type OutputDataLike,
+} from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 
 import type { Keyset } from '../../models/Keyset.ts';
 import type { Mint } from '../../models/Mint.ts';
 import { WalletService } from '../../services/WalletService.ts';
 import type { MintInfo } from '../../types.ts';
+import { makeOutputDataCreator } from '../fixtures/OutputDataCreator.ts';
 
 const mintUrl = 'https://mint.test';
 
@@ -49,7 +56,7 @@ function makeKeyset(unit: string): Keyset {
   };
 }
 
-function makeService(keysets: Keyset[]) {
+function makeService(keysets: Keyset[], outputDataCreator?: OutputDataCreator) {
   const ensureUpdatedMint = mock(async (url: string) => ({
     mint: makeMint(url),
     keysets: keysets.map((keyset) => ({ ...keyset, mintUrl: url })),
@@ -69,12 +76,86 @@ function makeService(keysets: Keyset[]) {
     { ensureUpdatedMint, updateMintData } as any,
     { getSeed } as any,
     { getRequestFn } as any,
+    undefined,
+    undefined,
+    outputDataCreator,
   );
 
   return { service, ensureUpdatedMint, updateMintData, getRequestFn };
 }
 
 describe('WalletService unit scoping', () => {
+  it('uses the supplied creator when a Wallet Instance prepares outputs', async () => {
+    const output = {
+      blindedMessage: { amount: Amount.from(1), id: 'custom-keyset', B_: 'custom-blinded' },
+      blindingFactor: 7n,
+      secret: new Uint8Array([1, 2, 3]),
+      toProof: mock(() => {
+        throw new Error('not used while preparing');
+      }),
+    } satisfies OutputDataLike;
+    const createRandomData = mock(() => [output]);
+    const creator = makeOutputDataCreator({ createRandomData });
+    const { service } = makeService([makeKeyset('sat')], creator);
+    const wallet = await service.getWallet(mintUrl, 'sat');
+
+    const preview = await wallet.prepareMint(
+      'bolt11',
+      Amount.from(1),
+      {
+        quote: 'quote-1',
+        request: 'lnbc1test',
+        unit: 'sat',
+        amount: Amount.from(1),
+        state: 'PAID',
+        expiry: null,
+      },
+      undefined,
+      { type: 'random' },
+    );
+
+    expect(createRandomData).toHaveBeenCalledTimes(1);
+    expect(preview.outputData).toEqual([output]);
+  });
+
+  it('uses the supplied creator for Wallet Instance restore output generation', async () => {
+    const output = {
+      blindedMessage: { amount: Amount.zero(), id: 'custom-keyset', B_: 'custom-restore' },
+      blindingFactor: 11n,
+      secret: new Uint8Array([4, 5, 6]),
+      toProof: mock(() => {
+        throw new Error('not used when the mint returns no signatures');
+      }),
+    } satisfies OutputDataLike;
+    const createDeterministicData = mock(() => [output]);
+    const creator = makeOutputDataCreator({ createDeterministicData });
+    const keyset = makeKeyset('sat');
+    const { service } = makeService([keyset], creator);
+    const wallet = await service.getWallet(mintUrl, 'sat');
+    wallet.mint.restore = mock(async () => ({ outputs: [], signatures: [] }));
+    const originalCreateDeterministicData = OutputData.createDeterministicData;
+    OutputData.createDeterministicData = () => {
+      throw new Error('built-in deterministic creation must not be used');
+    };
+
+    try {
+      await wallet.restore(5, 1, { keysetId: keyset.id });
+    } finally {
+      OutputData.createDeterministicData = originalCreateDeterministicData;
+    }
+
+    expect(createDeterministicData).toHaveBeenCalledWith(
+      0,
+      new Uint8Array(64).fill(1),
+      5,
+      expect.objectContaining({ id: keyset.id }),
+      [0],
+    );
+    expect(wallet.mint.restore).toHaveBeenCalledWith({
+      outputs: [output.blindedMessage],
+    });
+  });
+
   it('builds sat wallets when sat is requested explicitly', async () => {
     const { service } = makeService([makeKeyset('sat')]);
 

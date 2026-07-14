@@ -1,6 +1,11 @@
 import type { Token } from '@cashu/cashu-ts';
 import type { MeltMethod, MeltOperation } from '@core/operations/melt';
-import type { MintOperation, MintMethod } from '@core/operations/mint';
+import type {
+  FailedMintOperation,
+  FinalizedMintOperation,
+  MintMethod,
+  MintOperation,
+} from '@core/operations/mint';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
 import type { UnitAmount } from '../amounts.ts';
@@ -85,7 +90,8 @@ export interface CoreEvents {
   };
   'mint-op:requeue': { mintUrl: string; operationId: string; operation: MintOperation };
   'mint-op:executing': { mintUrl: string; operationId: string; operation: MintOperation };
-  'mint-op:finalized': { mintUrl: string; operationId: string; operation: MintOperation };
+  'mint-op:finalized': { mintUrl: string; operationId: string; operation: FinalizedMintOperation };
+  'mint-op:failed': { mintUrl: string; operationId: string; operation: FailedMintOperation };
   'subscriptions:paused': void;
   'subscriptions:resumed': void;
   'auth-session:updated': { mintUrl: string };

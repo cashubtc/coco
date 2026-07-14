@@ -148,3 +148,102 @@ describe('indexeddb quote storage constraints', () => {
     }
   });
 });
+
+describe('hydration corruption guard', () => {
+  it('throws when send operation has prepared state but null financial fields', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.runTransaction('rw', ['coco_cashu_send_operations'], async (tx) => {
+        await tx.table('coco_cashu_send_operations').put({
+          id: 'corrupt-send',
+          mintUrl: 'https://mint.test',
+          amount: 100,
+          unit: 'sat',
+          state: 'prepared',
+          createdAt: 0,
+          updatedAt: 0,
+          method: 'default',
+          methodDataJson: '{}',
+          needsSwap: 0,
+          fee: null,
+          inputAmount: null,
+        });
+      });
+
+      let threw = false;
+      try {
+        await repositories.sendOperationRepository.getById('corrupt-send');
+      } catch (e) {
+        threw = true;
+        expect(String(e)).toContain('missing required field');
+      }
+      expect(threw).toBe(true);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('throws when receive operation has prepared state but null fee', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.runTransaction('rw', ['coco_cashu_receive_operations'], async (tx) => {
+        await tx.table('coco_cashu_receive_operations').put({
+          id: 'corrupt-receive',
+          mintUrl: 'https://mint.test',
+          amount: 100,
+          unit: 'sat',
+          state: 'prepared',
+          createdAt: 0,
+          updatedAt: 0,
+          fee: null,
+          inputProofsJson: '[]',
+        });
+      });
+
+      let threw = false;
+      try {
+        await repositories.receiveOperationRepository.getById('corrupt-receive');
+      } catch (e) {
+        threw = true;
+        expect(String(e)).toContain('missing required field');
+      }
+      expect(threw).toBe(true);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('throws when melt operation has prepared state but null financial fields', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await repositories.db.runTransaction('rw', ['coco_cashu_melt_operations'], async (tx) => {
+        await tx.table('coco_cashu_melt_operations').put({
+          id: 'corrupt-melt',
+          mintUrl: 'https://mint.test',
+          state: 'prepared',
+          createdAt: 0,
+          updatedAt: 0,
+          method: 'bolt11',
+          methodDataJson: '{"invoice":"lnbc1test"}',
+          quoteId: 'q1',
+          amount: null,
+          fee_reserve: null,
+          swap_fee: null,
+          needsSwap: 0,
+          inputAmount: null,
+        });
+      });
+
+      let threw = false;
+      try {
+        await repositories.meltOperationRepository.getById('corrupt-melt');
+      } catch (e) {
+        threw = true;
+        expect(String(e)).toContain('missing required field');
+      }
+      expect(threw).toBe(true);
+    } finally {
+      await dispose();
+    }
+  });
+});
