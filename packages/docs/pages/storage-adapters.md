@@ -30,6 +30,17 @@ Concrete core services, operation service classes, handler providers, transport
 internals, and individual memory repository classes are not part of the
 app-facing root API.
 
+## Security
+
+Coco's built-in storage adapters do not encrypt wallet data at rest. Stored data can include
+bearer proofs, proof secrets, P2PK private keys, and NUT-20 mint-quote private keys. Treat the
+underlying database and any associated journals, write-ahead logs, and backups as sensitive.
+
+The embedding application is responsible for storage protection. Applications that require
+encryption at rest should use an encrypted database, encrypted filesystem or platform storage, or
+a custom `Repositories` implementation that provides the required protection. Ensure that the
+chosen protection also covers database journals and backups.
+
 ## SQLite adapter public API
 
 The SQLite adapter packages share the same public shape. Import
