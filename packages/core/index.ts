@@ -60,6 +60,7 @@ export type {
   MintOperationState,
   TerminalMintOperation,
 } from './operations/mint/MintOperation.ts';
+export { toMintOperation } from './operations/mint/MintOperation.ts';
 export type {
   MeltMethod,
   MeltMethodData,

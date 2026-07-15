@@ -51,7 +51,7 @@ type MintOps = Manager['ops']['mint'];
 type MintPrepareResult = Awaited<ReturnType<MintOps['prepare']>>;
 type MintExecuteResult = Awaited<ReturnType<MintOps['execute']>>;
 type MintCheckPaymentResult = Awaited<ReturnType<MintOps['checkPayment']>>;
-type MintOperationRecord = NonNullable<Awaited<ReturnType<MintOps['get']>>>;
+type MintOperation = NonNullable<Awaited<ReturnType<MintOps['get']>>>;
 
 type MeltOps = Manager['ops']['melt'];
 type MeltPrepareResult = Awaited<ReturnType<MeltOps['prepare']>>;
@@ -339,7 +339,6 @@ function createPendingMintOperation(overrides: Partial<MintPrepareResult> = {}):
     expiry: 1_700_000_100_000,
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
-    outputData: {} as MintPrepareResult['outputData'],
     ...overrides,
   };
 }
@@ -355,9 +354,7 @@ function createFinalizedMintOperation(
   } as MintExecuteResult;
 }
 
-function createFailedMintOperation(
-  overrides: Partial<MintOperationRecord> = {},
-): MintOperationRecord {
+function createFailedMintOperation(overrides: Partial<MintOperation> = {}): MintOperation {
   return {
     ...createPendingMintOperation(),
     state: 'failed',
@@ -370,7 +367,7 @@ function createFailedMintOperation(
       observedAt: 1_700_000_020_000,
     },
     ...overrides,
-  } as MintOperationRecord;
+  } as MintOperation;
 }
 
 function createMintCheckPaymentResult(
@@ -384,12 +381,12 @@ function createMintCheckPaymentResult(
   };
 }
 
-function createMintOperation(overrides: Partial<MintOperationRecord> = {}): MintOperationRecord {
+function createMintOperation(overrides: Partial<MintOperation> = {}): MintOperation {
   return {
     ...createPendingMintOperation(),
     updatedAt: 1_700_000_010_000,
     ...overrides,
-  } as MintOperationRecord;
+  } as MintOperation;
 }
 
 function createPreparedMeltOperation(
@@ -1216,7 +1213,7 @@ describe('useMintOperation', () => {
       state: 'executing',
       updatedAt: 20,
     });
-    const deferredLoad = createDeferred<MintOperationRecord | null>();
+    const deferredLoad = createDeferred<MintOperation | null>();
 
     mint.get.mockReturnValue(deferredLoad.promise);
 
@@ -1298,6 +1295,54 @@ describe('useMintOperation', () => {
       expect(result.current.currentOperation).toEqual(finalized);
     });
     expect(mint.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retain durable mint fields received from APIs or events', async () => {
+    const { manager, mint, emit } = createMintManagerMock();
+    const pending = Object.assign(createPendingMintOperation(), {
+      attemptId: 'attempt-1',
+      counterStart: 42,
+      recoveryMaterial: { secret: 'recovery-secret' },
+    });
+    const executing = Object.assign(
+      createMintOperation({
+        id: pending.id,
+        state: 'executing',
+        updatedAt: pending.updatedAt + 1,
+      }),
+      {
+        attemptId: 'attempt-1',
+        counterStart: 42,
+        recoveryMaterial: { secret: 'recovery-secret' },
+      },
+    );
+
+    mint.get.mockResolvedValueOnce(pending);
+
+    const { result } = renderHook(() => useMintOperation(pending.id), {
+      wrapper: createHookWrapper(manager),
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation).not.toHaveProperty('outputData');
+      expect(result.current.currentOperation).not.toHaveProperty('attemptId');
+      expect(result.current.currentOperation).not.toHaveProperty('counterStart');
+      expect(result.current.currentOperation).not.toHaveProperty('recoveryMaterial');
+    });
+
+    await emit('mint-op:executing', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: executing,
+    });
+
+    await waitForAssertion(() => {
+      expect(result.current.currentOperation?.state).toBe('executing');
+      expect(result.current.currentOperation).not.toHaveProperty('outputData');
+      expect(result.current.currentOperation).not.toHaveProperty('attemptId');
+      expect(result.current.currentOperation).not.toHaveProperty('counterStart');
+      expect(result.current.currentOperation).not.toHaveProperty('recoveryMaterial');
+    });
   });
 
   it('reacts to background failed events for the bound mint operation id', async () => {

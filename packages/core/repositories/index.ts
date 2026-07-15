@@ -5,7 +5,7 @@ import type { MeltQuote } from '@core/models/MeltQuote';
 import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
-import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
+import type { MintOperationRecord, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -274,25 +274,25 @@ export interface AuthSessionRepository {
 
 export interface MintOperationRepository {
   /** Create a new mint operation */
-  create(operation: MintOperation): Promise<void>;
+  create(operation: MintOperationRecord): Promise<void>;
 
   /** Update an existing mint operation */
-  update(operation: MintOperation): Promise<void>;
+  update(operation: MintOperationRecord): Promise<void>;
 
   /** Get a mint operation by ID */
-  getById(id: string): Promise<MintOperation | null>;
+  getById(id: string): Promise<MintOperationRecord | null>;
 
   /** Get all mint operations in a specific state */
-  getByState(state: MintOperationState): Promise<MintOperation[]>;
+  getByState(state: MintOperationState): Promise<MintOperationRecord[]>;
 
   /** Get all in-flight operations (state in ['pending', 'executing']) */
-  getPending(): Promise<MintOperation[]>;
+  getPending(): Promise<MintOperationRecord[]>;
 
   /** Get all operations for a specific mint */
-  getByMintUrl(mintUrl: string): Promise<MintOperation[]>;
+  getByMintUrl(mintUrl: string): Promise<MintOperationRecord[]>;
 
   /** Get all operations for a mint/method/quote tuple */
-  getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]>;
+  getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperationRecord[]>;
 
   /** Delete a mint operation */
   delete(id: string): Promise<void>;

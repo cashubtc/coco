@@ -18,7 +18,7 @@ import type {
   MintMethodHandler,
   PendingContext,
   PendingMintCheckResult,
-  PendingMintOperation,
+  PendingMintOperationRecord,
   PrepareContext,
   RecoverExecutingContext,
   RecoverExecutingResult,
@@ -57,7 +57,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     await this.requireQuoteKey(quote.quoteData.pubkey);
   }
 
-  async prepare(ctx: PrepareContext<'onchain'>): Promise<PendingMintOperation<'onchain'>> {
+  async prepare(ctx: PrepareContext<'onchain'>): Promise<PendingMintOperationRecord<'onchain'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);

@@ -58,6 +58,7 @@ export type {
   MintMethodData,
   MintMethodRemoteState,
   MintOperation,
+  MintOperationRecord,
   MintOperationState,
   PaymentRequestReceiveAttempt,
   PaymentRequestReceiveAttemptState,

@@ -1,4 +1,4 @@
-import type { Manager } from '@cashu/coco-core';
+import { toMintOperation, type Manager } from '@cashu/coco-core';
 import { useCallback, useEffect, useRef } from 'react';
 import { useManager } from '../contexts/ManagerContext';
 import type { OperationBinding, OperationHookResult } from './operation-types';
@@ -43,7 +43,8 @@ export function useMintOperation(
 ): UseMintOperationResult {
   const manager = useManager();
   const initialBindingRef = useRef(initialBinding);
-  const initialOperation = getInitialOperationFromBinding(initialBindingRef.current);
+  const boundInitialOperation = getInitialOperationFromBinding(initialBindingRef.current);
+  const initialOperation = boundInitialOperation ? toMintOperation(boundInitialOperation) : null;
   const boundOperationIdRef = useRef<string | null>(
     getInitialOperationIdFromBinding(initialBindingRef.current),
   );
@@ -69,16 +70,18 @@ export function useMintOperation(
         return;
       }
 
-      if (boundOperationIdRef.current && boundOperationIdRef.current !== operation.id) {
+      const projected = toMintOperation(operation);
+
+      if (boundOperationIdRef.current && boundOperationIdRef.current !== projected.id) {
         return;
       }
 
-      if (!shouldReplaceBoundOperation(getCurrentOperation(), operation)) {
+      if (!shouldReplaceBoundOperation(getCurrentOperation(), projected)) {
         return;
       }
 
-      boundOperationIdRef.current = operation.id;
-      replaceCurrentOperation(operation, options);
+      boundOperationIdRef.current = projected.id;
+      replaceCurrentOperation(projected, options);
     },
     [getCurrentOperation, replaceCurrentOperation],
   );
@@ -145,7 +148,7 @@ export function useMintOperation(
       requireUnboundOperationCreation(boundOperationIdRef.current, 'prepare');
 
       return runStatefulAction(
-        async () => manager.ops.mint.prepare(input),
+        async () => toMintOperation(await manager.ops.mint.prepare(input)),
         async (operation) => {
           bindOperation(operation, { clearExecuteResult: true });
         },
@@ -158,7 +161,7 @@ export function useMintOperation(
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'refresh');
 
     return runStatefulAction(
-      async () => manager.ops.mint.refresh(targetOperationId),
+      async () => toMintOperation(await manager.ops.mint.refresh(targetOperationId)),
       async (operation) => {
         bindOperation(operation);
       },
@@ -169,7 +172,7 @@ export function useMintOperation(
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'execute');
 
     return runStatefulAction(
-      async () => manager.ops.mint.execute(targetOperationId),
+      async () => toMintOperation(await manager.ops.mint.execute(targetOperationId)),
       async (operation) => {
         bindOperation(operation);
         replaceExecuteResult(operation);
@@ -196,7 +199,7 @@ export function useMintOperation(
     const targetOperationId = requireCurrentOperationId(getCurrentOperation(), 'finalize');
 
     return runStatefulAction(
-      async () => manager.ops.mint.finalize(targetOperationId),
+      async () => toMintOperation(await manager.ops.mint.finalize(targetOperationId)),
       async (operation) => {
         bindOperation(operation);
       },
@@ -205,17 +208,20 @@ export function useMintOperation(
 
   const listByQuote = useCallback(
     async (input: MintOperationListByQuoteInput): Promise<MintOperationListByQuoteResult> => {
-      return manager.ops.mint.listByQuote(input);
+      const operations = await manager.ops.mint.listByQuote(input);
+      return operations.map((operation) => toMintOperation(operation));
     },
     [manager],
   );
 
   const listPending = useCallback(async (): Promise<MintOperationPendingList> => {
-    return manager.ops.mint.listPending();
+    const operations = await manager.ops.mint.listPending();
+    return operations.map((operation) => toMintOperation(operation));
   }, [manager]);
 
   const listInFlight = useCallback(async (): Promise<MintOperation[]> => {
-    return manager.ops.mint.listInFlight();
+    const operations = await manager.ops.mint.listInFlight();
+    return operations.map((operation) => toMintOperation(operation));
   }, [manager]);
 
   const resetBoundOperation = useCallback(() => {

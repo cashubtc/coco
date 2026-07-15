@@ -1446,6 +1446,14 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
   },
+  {
+    id: '037_mint_operation_attempt_reference',
+    sql: `
+      ALTER TABLE coco_cashu_mint_operations ADD COLUMN attemptId TEXT;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_attempt
+        ON coco_cashu_mint_operations(attemptId);
+    `,
+  },
 ];
 
 // Export for testing

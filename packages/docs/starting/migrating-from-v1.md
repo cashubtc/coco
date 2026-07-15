@@ -214,6 +214,17 @@ Mint operation prepare derives the quote method, unit, request details, and
 method data from the canonical quote. Do not pass sibling `method`, `unit`, or
 `methodData` fields to `manager.ops.mint.prepare(...)`.
 
+App-facing `MintOperation` values no longer include deterministic `outputData`.
+Mint APIs, `mint-op:*` events, history consumers, and React mint operation hooks
+return the same allowlisted projection and also omit internal issuance attempt,
+retry, submission, proof provenance, and recovery fields. Remove application
+reads of these fields.
+
+Custom storage adapters should import `MintOperationRecord` from
+`@cashu/coco-core/adapter`. Persist its `outputData` and optional `attemptId` so
+issuance can resume safely after a restart, but do not expose the adapter record
+directly to application code.
+
 ## Quote waiter migration
 
 The public subscription quote waiters were removed because they returned raw

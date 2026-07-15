@@ -38,6 +38,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    ...(row.attemptId ? { attemptId: row.attemptId } : {}),
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -91,6 +92,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      attemptId: operation.attemptId ?? null,
     };
   }
 
@@ -115,6 +117,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       ? JSON.stringify(operation.terminalFailure)
       : null,
     outputDataJson: JSON.stringify(operation.outputData),
+    attemptId: operation.attemptId ?? null,
   };
 };
 

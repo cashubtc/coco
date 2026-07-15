@@ -14,10 +14,10 @@ import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import type {
-  ExecutingMintOperation,
-  InitMintOperation,
+  ExecutingMintOperationRecord,
+  InitMintOperationRecord,
   MintOperationFailure,
-  PendingMintOperation,
+  PendingMintOperationRecord,
 } from './MintOperation';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
@@ -108,25 +108,25 @@ export interface FetchRemoteMintQuoteContext<
 }
 
 export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
-  operation: InitMintOperation<M>;
+  operation: InitMintOperationRecord<M>;
   wallet: Wallet;
   importedQuote?: MintMethodQuoteSnapshot<M>;
 }
 
 export interface ExecuteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
-  operation: ExecutingMintOperation<M>;
+  operation: ExecutingMintOperationRecord<M>;
   wallet: Wallet;
 }
 
 export interface RecoverExecutingContext<
   M extends MintMethod = MintMethod,
 > extends BaseHandlerDeps {
-  operation: ExecutingMintOperation<M>;
+  operation: ExecutingMintOperationRecord<M>;
   wallet: Wallet;
 }
 
 export interface PendingContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
-  operation: PendingMintOperation<M>;
+  operation: PendingMintOperationRecord<M>;
   wallet: Wallet;
 }
 
@@ -162,7 +162,7 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
   validateQuoteForPrepare?(quote: MintQuote<M>): Promise<void> | void;
-  prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
+  prepare(ctx: PrepareContext<M>): Promise<PendingMintOperationRecord<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
   checkPending(ctx: PendingContext<M>): Promise<PendingMintCheckResult<M>>;

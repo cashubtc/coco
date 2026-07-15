@@ -5,7 +5,7 @@ import type {
   PrepareContext,
   MintMethodHandler,
   MintExecutionResult,
-  PendingMintOperation,
+  PendingMintOperationRecord,
   RecoverExecutingResult,
   RecoverExecutingContext,
   PendingContext,
@@ -35,7 +35,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
   async prepare(
     ctx: PrepareContext<'bolt11'>,
-  ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
+  ): Promise<PendingMintOperationRecord<'bolt11'> & MintMethodMeta<'bolt11'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
