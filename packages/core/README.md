@@ -224,7 +224,12 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 - `SendOperationRepository`
 - `MeltOperationRepository`
 - `MintOperationRepository`
+- `MintIssuanceAttemptRepository`
 - `ReceiveOperationRepository`
+
+Mint Issuance Attempts are adapter-facing recovery records. They preserve exact ordered members,
+outputs, counters, and request metadata, while `CoreProof.createdByAttemptId` provides queryable
+proof provenance without removing legacy operation provenance.
 
 The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
 

@@ -44,6 +44,7 @@ const EXPECTED_MIGRATION_IDS = [
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
   '037_mint_operation_attempt_reference',
+  '038_mint_issuance_attempts',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
