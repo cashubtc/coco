@@ -45,6 +45,21 @@ quote parameters and endpoint fields, but quote-backed minting and melting share
 saga shape for outputs, inputs, proof state, and recovery.
 _Avoid_: Method flow, payment workflow
 
+**Mint Operation**:
+A Quote-backed Operation for one mint quote. It remains individually observable when issued alone
+or together with other Mint Operations.
+_Avoid_: Mint request, mint batch member
+
+**Mint Issuance Attempt**:
+One atomic effort to turn one or more eligible Mint Operations at a single mint into wallet proofs.
+Its members share the same issuance and recovery outcome.
+_Avoid_: Mint Operation, quote claim
+
+**Mint Batch**:
+A multi-operation Mint Issuance Attempt performed through NUT-29. It is an internal execution unit;
+users continue to interact with its individual Mint Operations.
+_Avoid_: User batch, quote group
+
 **Quote Observation**:
 A mint response that reports the current remote state of a quote and is recorded into Coco's
 canonical quote row before any Quote-backed Operation is advanced from it.
