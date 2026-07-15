@@ -23,6 +23,7 @@ import {
   type MintQuote,
 } from '../models/MintQuote';
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
+import { isMintQuoteExpired } from '../models/MintQuoteExpiry';
 import {
   ProofValidationError,
   QuoteIdentityConflictError,
@@ -852,7 +853,7 @@ export class QuoteLifecycle {
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (quote.expiry !== null && quote.expiry * 1000 <= Date.now()) {
+    if (isMintQuoteExpired(quote)) {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
 

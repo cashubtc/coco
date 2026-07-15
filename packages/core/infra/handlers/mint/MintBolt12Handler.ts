@@ -5,6 +5,7 @@ import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from 
 import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
+import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -422,7 +423,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   }
 
   private isExpired(quote: MintQuoteBolt12Response): boolean {
-    return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
+    return isMintQuoteExpired(quote);
   }
 
   private isAlreadyIssuedError(error: unknown): boolean {

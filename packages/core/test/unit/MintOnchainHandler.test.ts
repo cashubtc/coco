@@ -398,6 +398,17 @@ describe('MintOnchainHandler', () => {
     expect(result.quoteSnapshot).toBe(remoteQuote);
   });
 
+  it('keeps a funded onchain quote with no-expiry sentinel claimable', async () => {
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      expiry: 0,
+    });
+
+    const result = await handler.checkPending(buildPendingContext());
+
+    expect(result.category).toBe('ready');
+  });
+
   it('checks pending onchain operations as waiting when the quote cannot cover the amount', async () => {
     (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,

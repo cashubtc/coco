@@ -1297,6 +1297,27 @@ describe('MintOperationService', () => {
     expect(operations[0]?.amount.equals(Amount.from(10))).toBe(true);
   });
 
+  it('claimMintQuote keeps a reusable no-expiry sentinel quote claimable', async () => {
+    const onchainQuoteId = 'onchain-quote-no-expiry';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.zero(),
+      expiry: 0,
+    });
+    useAutoClaimOnchainHandler(Amount.from(10));
+
+    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
+      mintUrl,
+      'onchain',
+      onchainQuoteId,
+    );
+    const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(hasClaimableBalance).toBe(true);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.state).toBe('finalized');
+  });
+
   it('claimMintQuote treats expired reusable onchain quotes as unclaimable', async () => {
     const onchainQuoteId = 'onchain-quote-expired';
     await persistOnchainQuote(onchainQuoteId, {

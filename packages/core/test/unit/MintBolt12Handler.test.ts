@@ -317,6 +317,59 @@ describe('MintBolt12Handler', () => {
     expect(result.category).toBe('ready');
   });
 
+  it('keeps a funded quote with no-expiry sentinel claimable', async () => {
+    const result = await handler.checkPending(
+      buildPendingContext(
+        quote({
+          expiry: 0,
+          amount_paid: Amount.from(10),
+        }),
+      ),
+    );
+
+    expect(result.category).toBe('ready');
+  });
+
+  it('keeps a funded quote with null expiry claimable', async () => {
+    const result = await handler.checkPending(
+      buildPendingContext(
+        quote({
+          expiry: null,
+          amount_paid: Amount.from(10),
+        }),
+      ),
+    );
+
+    expect(result.category).toBe('ready');
+  });
+
+  it('keeps a funded quote with a future positive expiry claimable', async () => {
+    const result = await handler.checkPending(
+      buildPendingContext(
+        quote({
+          expiry: Math.floor(Date.now() / 1000) + 60,
+          amount_paid: Amount.from(10),
+        }),
+      ),
+    );
+
+    expect(result.category).toBe('ready');
+  });
+
+  it('treats a funded quote with a past positive expiry as terminal', async () => {
+    const result = await handler.checkPending(
+      buildPendingContext(
+        quote({
+          expiry: Math.floor(Date.now() / 1000) - 1,
+          amount_paid: Amount.from(10),
+        }),
+      ),
+    );
+
+    expect(result.category).toBe('terminal');
+    expect(result.terminalFailure?.code).toBe('quote_expired');
+  });
+
   it('mints with the keyring private key and custom outputs', async () => {
     await handler.execute(
       buildExecuteContext(

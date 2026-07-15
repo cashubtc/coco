@@ -302,6 +302,34 @@ describe('HybridTransport', () => {
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
     });
 
+    it('should dedupe no-expiry sentinel and null quote notifications', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      const notificationWithSentinel = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry: 0 },
+        },
+      });
+      const notificationWithNull = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry: null },
+        },
+      });
+
+      mockSocket.triggerMessage(notificationWithSentinel);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notificationWithNull);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
+    });
+
     it('should not dedupe changed onchain quote counters', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);

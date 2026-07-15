@@ -9,6 +9,7 @@ import {
   type MintQuote,
   type MintQuoteOnchainResponse,
 } from '../../../models/MintQuote';
+import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -382,7 +383,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   }
 
   private isExpired(quote: MintQuoteOnchainResponse): boolean {
-    return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
+    return isMintQuoteExpired(quote);
   }
 
   private isAlreadyIssuedError(error: unknown): boolean {
