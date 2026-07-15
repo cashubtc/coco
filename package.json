@@ -9,10 +9,7 @@
     "packages/*"
   ],
   "devDependencies": {
-    "@grpc/grpc-js": "^1.14.4",
-    "@grpc/proto-loader": "^0.8.1",
     "@types/bun": "1.3.10",
-    "fake-bolt11": "^0.1.0",
     "prettier": "3.8.1",
     "tsdown": "0.20.1",
     "typescript": "5.9.3",
@@ -36,7 +33,7 @@
     "docs:dev": "vitepress dev packages/docs",
     "docs:build": "vitepress build packages/docs",
     "docs:preview": "vitepress preview packages/docs",
-    "prototype:cdk-payment-processor": "bun scripts/prototype-cdk-payment-processor/index.ts",
+    "test-mint:smoke": "bun run --filter='@cashu/coco-test-mint' smoke",
     "security:release-age": "bun scripts/check-release-age.ts",
     "format": "prettier . --write",
     "format:check": "prettier . --check"

@@ -1,0 +1,43 @@
+{
+  "name": "@cashu/coco-test-mint",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental controllable CDK mint for integration tests",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cashubtc/coco",
+    "directory": "packages/test-mint"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "smoke": "bun test/smoke.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "fake-bolt11": "^0.1.0"
+  },
+  "devDependencies": {
+    "@cashu/coco-core": "1.0.0",
+    "@types/bun": "1.3.10"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "sideEffects": false
+}
