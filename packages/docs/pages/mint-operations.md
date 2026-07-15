@@ -32,6 +32,21 @@ canonical quote or a structural quote ref with `{ mintUrl, quoteId, method }`.
 The old single-operation quote lookup was removed because reusable quotes can
 back multiple mint operations; use `listByQuote({ mintUrl, quoteId })` instead.
 
+## Public Operations and Adapter Records
+
+App-facing mint operation APIs, `mint-op:*` events, and React mint operation
+hooks return an allowlisted `MintOperation` projection. It keeps operation and
+quote identity, the normalized mint URL, public method data, amount and unit,
+state, timestamps, and public failure information. It does not expose durable
+issuance internals such as deterministic output data, attempt references,
+counters, exact outputs, proof provenance, retry or submission metadata, or
+recovery material.
+
+Storage adapters use `MintOperationRecord` from `@cashu/coco-core/adapter`.
+That record retains the deterministic output data required for recovery and an
+optional issuance `attemptId`. Custom adapters must persist the record but
+must not return it directly to application consumers.
+
 ## Quote Identity and Refs
 
 `QuoteIdentity` is the methodless lookup shape `{ mintUrl, quoteId }`. Use it
@@ -98,13 +113,13 @@ quote.quoteData.amountIssued`.
 
 Mint operations progress through the following states:
 
-| State       | Description                                                                    |
-| ----------- | ------------------------------------------------------------------------------ |
-| `init`      | Local mint intent exists before a quote snapshot is attached                   |
-| `pending`   | Quote and deterministic output data are persisted; payment may settle remotely |
-| `executing` | Quote redemption or recovery is in progress                                    |
-| `finalized` | Quote was issued and proofs were saved or recovered                            |
-| `failed`    | Quote reached a terminal non-issued state, such as expiry                      |
+| State       | Description                                                      |
+| ----------- | ---------------------------------------------------------------- |
+| `init`      | Local mint intent exists before a quote snapshot is attached     |
+| `pending`   | Durable issuance state is persisted; payment may settle remotely |
+| `executing` | Quote redemption or recovery is in progress                      |
+| `finalized` | Quote was issued and proofs were saved or recovered              |
+| `failed`    | Quote reached a terminal non-issued state, such as expiry        |
 
 ```
 init -> pending -> executing -> finalized

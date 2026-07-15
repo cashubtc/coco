@@ -10,7 +10,7 @@ import {
   type QuoteIdentity,
   type MintQuoteRef,
   type MeltQuoteRef,
-  type MintOperation,
+  type MintOperationRecord,
   type PaymentRequestReceiveAttempt,
   type PaymentRequestReceiveOperation,
   type ReceiveOperation,
@@ -291,7 +291,7 @@ function createDummySendOperationsByState(unit: string): SendOperation[] {
   ] satisfies SendOperation[];
 }
 
-type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
+type PendingMintOperation = Extract<MintOperationRecord, { state: 'pending' }>;
 
 export function createDummyMintQuote(
   overrides?: Partial<MintQuote<'bolt11'>>,
@@ -358,7 +358,7 @@ export function createDummyMintOperation(
   } satisfies PendingMintOperation;
 }
 
-type InitMintOperation = Extract<MintOperation, { state: 'init' }>;
+type InitMintOperation = Extract<MintOperationRecord, { state: 'init' }>;
 
 export function createDummyInitMintOperation(
   overrides?: Partial<InitMintOperation>,
@@ -486,6 +486,28 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('round-trips durable mint operation fields', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyMintOperation(),
+          attemptId: 'mint-attempt-1',
+        } satisfies MintOperationRecord;
+        await repositories.mintOperationRepository.create(operation);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored?.attemptId).toBe('mint-attempt-1');
+        if (!stored || stored.state === 'init') {
+          throw new Error('Expected pending mint operation record');
+        }
+        expect(JSON.stringify(stored.outputData)).toBe(JSON.stringify(operation.outputData));
+      } finally {
+        await dispose();
+      }
+    });
+
     it('returns only pending and executing work from getPending', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -501,7 +523,7 @@ export async function runMintOperationRepositoryContract(
             createdAt: 2_000,
           }),
           state: 'executing',
-        } satisfies MintOperation;
+        } satisfies MintOperationRecord;
         const finalized = {
           ...createDummyMintOperation({
             id: 'mint-op-finalized',
@@ -509,7 +531,7 @@ export async function runMintOperationRepositoryContract(
             createdAt: 3_000,
           }),
           state: 'finalized',
-        } satisfies MintOperation;
+        } satisfies MintOperationRecord;
 
         await repositories.mintOperationRepository.create(pending);
         await repositories.mintOperationRepository.create(executing);

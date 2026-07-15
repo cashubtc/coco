@@ -10,10 +10,11 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
 import type {
-  ExecutingMintOperation,
-  FinalizedMintOperation,
-  InitMintOperation,
-  PendingMintOperation,
+  ExecutingMintOperationRecord as ExecutingMintOperation,
+  FinalizedMintOperationRecord as FinalizedMintOperation,
+  InitMintOperationRecord as InitMintOperation,
+  PendingMintOperation as PublicPendingMintOperation,
+  PendingMintOperationRecord as PendingMintOperation,
 } from '../../operations/mint/MintOperation';
 import type {
   MintExecutionResult,
@@ -374,9 +375,11 @@ describe('MintOperationService', () => {
     expect(pending.quoteId).toBe(quote.quoteId);
     expect(pendingEvents).toHaveLength(1);
     expect(pendingEvents[0]?.operationId).toBe(pending.id);
-    const createdOperation = pendingEvents[0]?.operation as PendingMintOperation | undefined;
+    const createdOperation = pendingEvents[0]?.operation as PublicPendingMintOperation | undefined;
     expect(createdOperation?.quoteId).toBe(quote.quoteId);
     expect(createdOperation?.request).toBe(quote.request);
+    expect(createdOperation).not.toHaveProperty('outputData');
+    expect(createdOperation).not.toHaveProperty('attemptId');
   });
 
   it('prepare accepts normalized custom-unit quotes', async () => {
@@ -921,6 +924,7 @@ describe('MintOperationService', () => {
 
   it('prepare + finalize runs pending -> execute for an existing canonical quote', async () => {
     const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    const executingEvents: Array<CoreEvents['mint-op:executing']> = [];
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
     const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
     eventBus.on('mint-quote:updated', (event) => {
@@ -928,6 +932,9 @@ describe('MintOperationService', () => {
     });
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
+    });
+    eventBus.on('mint-op:executing', (event) => {
+      executingEvents.push(event);
     });
     eventBus.on('mint-op:failed', (event) => {
       failedEvents.push(event);
@@ -952,9 +959,14 @@ describe('MintOperationService', () => {
     expect(quoteUpdatedEvents[0]?.quoteId).toBe(quoteId);
     expect(quoteUpdatedEvents[0]?.method).toBe('bolt11');
     expect(quoteUpdatedEvents[0]?.quote.state).toBe('ISSUED');
+    expect(executingEvents).toHaveLength(1);
+    expect(executingEvents[0]?.operation).not.toHaveProperty('outputData');
+    expect(executingEvents[0]?.operation).not.toHaveProperty('attemptId');
     expect(finalizedEvents.length).toBe(1);
     expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
     expect(finalizedEvents[0]?.operation.state).toBe('finalized');
+    expect(finalizedEvents[0]?.operation).not.toHaveProperty('outputData');
+    expect(finalizedEvents[0]?.operation).not.toHaveProperty('attemptId');
     expect(failedEvents).toHaveLength(0);
   });
 
@@ -1512,6 +1524,8 @@ describe('MintOperationService', () => {
     expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
       `Recovered: quote ${quoteId} expired while executing mint`,
     );
+    expect(failedEvents[0]?.operation).not.toHaveProperty('outputData');
+    expect(failedEvents[0]?.operation).not.toHaveProperty('attemptId');
   });
 
   it('finalize returns a failed operation when recovery finds an expired quote', async () => {

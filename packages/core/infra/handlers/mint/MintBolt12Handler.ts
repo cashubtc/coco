@@ -14,7 +14,7 @@ import type {
   MintMethodHandler,
   PendingContext,
   PendingMintCheckResult,
-  PendingMintOperation,
+  PendingMintOperationRecord,
   PrepareContext,
   RecoverExecutingContext,
   RecoverExecutingResult,
@@ -66,7 +66,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     await this.requireQuoteKey(quote.quoteData.pubkey);
   }
 
-  async prepare(ctx: PrepareContext<'bolt12'>): Promise<PendingMintOperation<'bolt12'>> {
+  async prepare(ctx: PrepareContext<'bolt12'>): Promise<PendingMintOperationRecord<'bolt12'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);

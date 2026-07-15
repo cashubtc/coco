@@ -16,7 +16,7 @@ import type { Mint } from '../../models/Mint';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
 import type { PendingMeltOperation } from '../../operations/melt';
-import type { PendingMintOperation } from '../../operations/mint';
+import type { PendingMintOperationRecord as PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
 import { NullLogger } from '../../logging';
 import type { FinalizedReceiveOperation } from '../../operations/receive/ReceiveOperation';

@@ -5,7 +5,7 @@ import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryM
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemorySendOperationRepository } from '../../repositories/memory/MemorySendOperationRepository';
 import type { PreparedMeltOperation } from '../../operations/melt';
-import type { PendingMintOperation } from '../../operations/mint';
+import type { PendingMintOperationRecord as PendingMintOperation } from '../../operations/mint';
 import type { PreparedSendOperation } from '../../operations/send/SendOperation';
 
 describe('MemoryHistoryRepository', () => {
@@ -157,6 +157,22 @@ describe('MemoryHistoryRepository', () => {
     const history = await historyRepository.getPaginatedHistoryEntries(10, 0);
 
     expect(history.map((entry) => entry.id)).toEqual(['mint:mint-op-1', 'melt:melt-op-1']);
+  });
+
+  it('projects adapter mint records before exposing history entries', async () => {
+    const mint = {
+      ...makePendingMintOperation('mint-op-1', 'quote-1', 4_000),
+      mintUrl: 'https://mint.test/',
+      attemptId: 'attempt-secret',
+      recoveryToken: 'recovery-secret',
+    };
+    await mintOperationRepository.create(mint);
+
+    const history = await historyRepository.getPaginatedHistoryEntries(10, 0);
+
+    expect(history[0]?.mintUrl).toBe('https://mint.test');
+    expect(JSON.stringify(history[0])).not.toContain('attempt-secret');
+    expect(JSON.stringify(history[0])).not.toContain('recovery-secret');
   });
 
   function makePreparedSendOperation(id: string, createdAt: number): PreparedSendOperation {

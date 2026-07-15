@@ -17,7 +17,7 @@ import {
   projectSendOperation,
 } from '@core/models/History';
 import { getMintQuoteRemoteState } from '@core/models/MintQuote';
-import type { MintOperation } from '@core/operations/mint';
+import { toMintOperation, type MintOperationRecord } from '@core/operations/mint';
 import type { MemoryMeltOperationRepository } from './MemoryMeltOperationRepository';
 import type { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
 import type { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
@@ -144,7 +144,8 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     }
   }
 
-  private async projectMintOperation(operation: MintOperation): Promise<HistoryEntry | null> {
+  private async projectMintOperation(record: MintOperationRecord): Promise<HistoryEntry | null> {
+    const operation = toMintOperation(record);
     const entry = projectMintOperation(operation);
     if (!entry) return null;
 

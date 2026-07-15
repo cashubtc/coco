@@ -15,7 +15,7 @@ export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' 
 
 import type { Amount } from '@cashu/cashu-ts';
 import type { SerializedOutputData } from '../../utils';
-import { getSecretsFromSerializedOutputData } from '../../utils';
+import { getSecretsFromSerializedOutputData, normalizeMintUrl } from '../../utils';
 import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
 
@@ -47,10 +47,6 @@ interface MintQuoteSnapshot {
   pubkey?: string;
 }
 
-interface PendingData {
-  outputData: SerializedOutputData;
-}
-
 export interface InitMintOperation<M extends MintMethod = MintMethod>
   extends MintOperationBase<M>, MintIntentData {
   state: 'init';
@@ -58,22 +54,22 @@ export interface InitMintOperation<M extends MintMethod = MintMethod>
 }
 
 export interface PendingMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot {
   state: 'pending';
 }
 
 export interface ExecutingMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot {
   state: 'executing';
 }
 
 export interface FinalizedMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot {
   state: 'finalized';
 }
 
 export interface FailedMintOperation<M extends MintMethod = MintMethod>
-  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot, PendingData {
+  extends MintOperationBase<M>, MintIntentData, MintQuoteSnapshot {
   state: 'failed';
 }
 
@@ -94,9 +90,47 @@ export type TerminalMintOperation<M extends MintMethod = MintMethod> =
   | FinalizedMintOperation<M>
   | FailedMintOperation<M>;
 
+interface MintOperationRecordData {
+  /** Durable link to the issuance attempt that owns this operation's exact outputs. */
+  attemptId?: string;
+}
+
+interface PendingRecordData extends MintOperationRecordData {
+  outputData: SerializedOutputData;
+}
+
+export type InitMintOperationRecord<M extends MintMethod = MintMethod> = InitMintOperation<M> &
+  MintOperationRecordData;
+export type PendingMintOperationRecord<M extends MintMethod = MintMethod> =
+  PendingMintOperation<M> & PendingRecordData;
+export type ExecutingMintOperationRecord<M extends MintMethod = MintMethod> =
+  ExecutingMintOperation<M> & PendingRecordData;
+export type FinalizedMintOperationRecord<M extends MintMethod = MintMethod> =
+  FinalizedMintOperation<M> & PendingRecordData;
+export type FailedMintOperationRecord<M extends MintMethod = MintMethod> = FailedMintOperation<M> &
+  PendingRecordData;
+
+/** Adapter-facing durable Mint Operation representation. */
+export type MintOperationRecord<M extends MintMethod = MintMethod> =
+  | InitMintOperationRecord<M>
+  | PendingMintOperationRecord<M>
+  | ExecutingMintOperationRecord<M>
+  | FinalizedMintOperationRecord<M>
+  | FailedMintOperationRecord<M>;
+
+export type PendingOrLaterOperationRecord<M extends MintMethod = MintMethod> =
+  | PendingMintOperationRecord<M>
+  | ExecutingMintOperationRecord<M>
+  | FinalizedMintOperationRecord<M>
+  | FailedMintOperationRecord<M>;
+
+export type TerminalMintOperationRecord<M extends MintMethod = MintMethod> =
+  | FinalizedMintOperationRecord<M>
+  | FailedMintOperationRecord<M>;
+
 export function hasPendingData<M extends MintMethod>(
-  op: MintOperation<M>,
-): op is PendingOrLaterOperation<M> {
+  op: MintOperationRecord<M>,
+): op is PendingOrLaterOperationRecord<M> {
   return op.state !== 'init';
 }
 
@@ -107,7 +141,7 @@ export function isTerminalOperation<M extends MintMethod>(
 }
 
 export function getOutputProofSecrets<M extends MintMethod>(
-  op: PendingOrLaterOperation<M>,
+  op: PendingOrLaterOperationRecord<M>,
 ): string[] {
   const { keepSecrets, sendSecrets } = getSecretsFromSerializedOutputData(op.outputData);
   return [...keepSecrets, ...sendSecrets];
@@ -119,7 +153,7 @@ export function createMintOperation<M extends MintMethod>(
   meta: MintMethodMeta<M>,
   intent: UnitAmount,
   options: { quoteId: string },
-): InitMintOperation<M> {
+): InitMintOperationRecord<M> {
   const now = Date.now();
   return {
     ...meta,
@@ -133,4 +167,72 @@ export function createMintOperation<M extends MintMethod>(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/**
+ * Projects a durable Mint Operation record into the app-facing contract.
+ *
+ * Every public field is selected explicitly so newly persisted orchestration data cannot cross an
+ * app boundary by accident.
+ */
+export function toMintOperation<M extends MintMethod>(
+  record: InitMintOperation<M>,
+): InitMintOperation<M>;
+export function toMintOperation<M extends MintMethod>(
+  record: PendingMintOperation<M>,
+): PendingMintOperation<M>;
+export function toMintOperation<M extends MintMethod>(
+  record: ExecutingMintOperation<M>,
+): ExecutingMintOperation<M>;
+export function toMintOperation<M extends MintMethod>(
+  record: FinalizedMintOperation<M>,
+): FinalizedMintOperation<M>;
+export function toMintOperation<M extends MintMethod>(
+  record: FailedMintOperation<M>,
+): FailedMintOperation<M>;
+export function toMintOperation<M extends MintMethod>(record: MintOperation<M>): MintOperation<M>;
+export function toMintOperation<M extends MintMethod>(record: MintOperation<M>): MintOperation<M> {
+  const terminalFailure = record.terminalFailure
+    ? {
+        reason: record.terminalFailure.reason,
+        ...(record.terminalFailure.code !== undefined ? { code: record.terminalFailure.code } : {}),
+        ...(record.terminalFailure.retryable !== undefined
+          ? { retryable: record.terminalFailure.retryable }
+          : {}),
+        observedAt: record.terminalFailure.observedAt,
+      }
+    : undefined;
+  const base = {
+    id: record.id,
+    mintUrl: normalizeMintUrl(record.mintUrl),
+    method: record.method,
+    methodData: record.methodData,
+    amount: record.amount,
+    unit: record.unit,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(record.error !== undefined ? { error: record.error } : {}),
+    ...(terminalFailure ? { terminalFailure } : {}),
+  };
+
+  if (record.state === 'init') {
+    return {
+      ...base,
+      state: 'init',
+      quoteId: record.quoteId,
+    } as InitMintOperation<M>;
+  }
+
+  const quote = {
+    quoteId: record.quoteId,
+    request: record.request,
+    expiry: record.expiry,
+    ...(record.pubkey !== undefined ? { pubkey: record.pubkey } : {}),
+  };
+
+  return {
+    ...base,
+    ...quote,
+    state: record.state,
+  } as PendingOrLaterOperation<M>;
 }
