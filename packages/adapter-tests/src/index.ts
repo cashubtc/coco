@@ -145,7 +145,7 @@ type ExpectApi = {
   toBeDefined(): void;
 };
 
-async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
+async function expectThrows(fn: () => Promise<unknown>, expect: Expectation) {
   let didThrow = false;
   try {
     await fn();
@@ -156,7 +156,7 @@ async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
 }
 
 async function expectThrowsError(
-  fn: () => Promise<void>,
+  fn: () => Promise<unknown>,
   errorClass: Function,
   expect: Expectation,
 ) {
@@ -883,7 +883,7 @@ export async function runMeltQuoteRepositoryContract(
           lastObservedRemoteStateAt: 20,
         });
 
-        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        const persisted = await repositories.meltQuoteRepository.upsertMeltQuote(quote);
 
         const stored = await repositories.meltQuoteRepository.getMeltQuote(
           'https://mint.test',
@@ -891,6 +891,11 @@ export async function runMeltQuoteRepositoryContract(
           'canonical-melt-quote',
         );
 
+        expect(persisted.mintUrl).toBe(stored?.mintUrl);
+        expect(persisted.quote).toBe(stored?.quote);
+        expect(persisted.createdAt).toBe(stored?.createdAt);
+        expect(persisted.updatedAt).toBe(stored?.updatedAt);
+        expect(persisted.amount.equals(stored!.amount)).toBe(true);
         expect(stored).toBeDefined();
         expect(stored!.mintUrl).toBe('https://mint.test');
         expect(stored!.method).toBe('bolt11');

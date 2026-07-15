@@ -114,7 +114,7 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
     return row ? rowToQuote(row) : null;
   }
 
-  async upsertMeltQuote(quote: MeltQuote): Promise<void> {
+  async upsertMeltQuote(quote: MeltQuote): Promise<MeltQuote> {
     const now = Date.now();
     const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
     const identityOwner = await this.getMeltQuoteById({
@@ -130,6 +130,33 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
         `Melt quote ${quote.quoteId} at ${normalizedMintUrl} already exists for method ${identityOwner.method}`,
       );
     }
+    const row: MeltQuoteRow = {
+      mintUrl: normalizedMintUrl,
+      method: quote.method,
+      quoteId: quote.quoteId,
+      state: quote.state,
+      request: quote.request,
+      amount: serializeAmount(quote.amount),
+      unit: quote.unit,
+      fee_reserve: quote.method === 'onchain' ? null : serializeAmount(quote.fee_reserve),
+      expiry: quote.expiry,
+      payment_preimage: quote.method === 'onchain' ? null : (quote.payment_preimage ?? null),
+      fee_options_json:
+        quote.method === 'onchain'
+          ? stringifyJson(
+              quote.fee_options.map((option) => ({
+                ...option,
+                fee_reserve: serializeAmount(option.fee_reserve),
+              })),
+            )
+          : null,
+      outpoint: quote.method === 'onchain' ? (quote.outpoint ?? null) : null,
+      changeJson: quote.change ? stringifyJson(quote.change) : null,
+      lastObservedRemoteState: quote.lastObservedRemoteState ?? quote.state,
+      lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
+      createdAt: identityOwner?.createdAt ?? quote.createdAt,
+      updatedAt: quote.updatedAt || now,
+    };
     await this.db.run(
       `INSERT INTO coco_cashu_melt_quotes
          (mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
@@ -151,32 +178,26 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
          lastObservedRemoteStateAt=excluded.lastObservedRemoteStateAt,
          updatedAt=excluded.updatedAt`,
       [
-        normalizedMintUrl,
-        quote.method,
-        quote.quoteId,
-        quote.state,
-        quote.request,
-        serializeAmount(quote.amount),
-        quote.unit,
-        quote.method === 'onchain' ? null : serializeAmount(quote.fee_reserve),
-        quote.expiry,
-        quote.method === 'onchain' ? null : (quote.payment_preimage ?? null),
-        quote.method === 'onchain'
-          ? stringifyJson(
-              quote.fee_options.map((option) => ({
-                ...option,
-                fee_reserve: serializeAmount(option.fee_reserve),
-              })),
-            )
-          : null,
-        quote.method === 'onchain' ? (quote.outpoint ?? null) : null,
-        quote.change ? stringifyJson(quote.change) : null,
-        quote.lastObservedRemoteState ?? quote.state,
-        quote.lastObservedRemoteStateAt ?? now,
-        quote.createdAt,
-        quote.updatedAt || now,
+        row.mintUrl,
+        row.method,
+        row.quoteId,
+        row.state,
+        row.request,
+        row.amount,
+        row.unit,
+        row.fee_reserve ?? null,
+        row.expiry,
+        row.payment_preimage ?? null,
+        row.fee_options_json ?? null,
+        row.outpoint ?? null,
+        row.changeJson ?? null,
+        row.lastObservedRemoteState ?? null,
+        row.lastObservedRemoteStateAt ?? null,
+        row.createdAt,
+        row.updatedAt,
       ],
     );
+    return rowToQuote(row);
   }
 
   async getPendingMeltQuotes(method?: string): Promise<MeltQuote[]> {

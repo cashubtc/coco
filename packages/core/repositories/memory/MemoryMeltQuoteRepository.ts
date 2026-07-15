@@ -32,7 +32,7 @@ export class MemoryMeltQuoteRepository implements MeltQuoteRepository {
     return quote ? { ...quote } : null;
   }
 
-  async upsertMeltQuote(quote: MeltQuote): Promise<void> {
+  async upsertMeltQuote(quote: MeltQuote): Promise<MeltQuote> {
     const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
     const now = Date.now();
     const identityOwner = await this.getMeltQuoteById({
@@ -49,13 +49,15 @@ export class MemoryMeltQuoteRepository implements MeltQuoteRepository {
       );
     }
     const existing = await this.getMeltQuote(normalizedMintUrl, quote.method, quote.quoteId);
-    this.quotes.set(this.makeKey(normalizedMintUrl, quote.method, quote.quoteId), {
+    const persisted = {
       ...quote,
       mintUrl: normalizedMintUrl,
       quote: quote.quoteId,
       createdAt: existing?.createdAt ?? quote.createdAt,
       updatedAt: now,
-    });
+    };
+    this.quotes.set(this.makeKey(normalizedMintUrl, quote.method, quote.quoteId), persisted);
+    return { ...persisted };
   }
 
   async getPendingMeltQuotes(method?: string): Promise<MeltQuote[]> {
