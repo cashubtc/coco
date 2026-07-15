@@ -1454,6 +1454,53 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_mint_operations(attemptId);
     `,
   },
+  {
+    id: '038_mint_issuance_attempts',
+    sql: `
+      CREATE TABLE coco_cashu_mint_issuance_attempts (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        keysetId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (
+          state IN ('prepared','submitting','recovering','succeeded','rejected','failed')
+        ),
+        quoteIdsJson TEXT NOT NULL,
+        quoteAmountsJson TEXT NOT NULL,
+        signingRequirementsJson TEXT NOT NULL,
+        outputDataJson TEXT NOT NULL,
+        counterStart INTEGER NOT NULL,
+        counterEnd INTEGER NOT NULL,
+        requestJson TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        submittedAt INTEGER,
+        recoveryStartedAt INTEGER,
+        recoveredAt INTEGER,
+        terminalErrorJson TEXT
+      );
+
+      CREATE TABLE coco_cashu_mint_issuance_attempt_members (
+        attemptId TEXT NOT NULL REFERENCES coco_cashu_mint_issuance_attempts(id) ON DELETE CASCADE,
+        operationId TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        PRIMARY KEY (attemptId, position),
+        UNIQUE (attemptId, operationId)
+      );
+
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempts_state
+        ON coco_cashu_mint_issuance_attempts(state);
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempts_mint
+        ON coco_cashu_mint_issuance_attempts(mintUrl);
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempt_members_operation
+        ON coco_cashu_mint_issuance_attempt_members(operationId);
+
+      ALTER TABLE coco_cashu_proofs ADD COLUMN createdByAttemptId TEXT;
+      CREATE INDEX idx_coco_cashu_proofs_created_by_attempt
+        ON coco_cashu_proofs(mintUrl, createdByAttemptId);
+    `,
+  },
 ];
 
 // Export for testing

@@ -14,6 +14,7 @@ import type {
   MeltOperationRepository,
   AuthSessionRepository,
   MintOperationRepository,
+  MintIssuanceAttemptRepository,
   ReceiveOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
@@ -33,6 +34,7 @@ import { SqliteSendOperationRepository } from './repositories/SendOperationRepos
 import { SqliteMeltOperationRepository } from './repositories/MeltOperationRepository.ts';
 import { SqliteAuthSessionRepository } from './repositories/AuthSessionRepository.ts';
 import { SqliteMintOperationRepository } from './repositories/MintOperationRepository.ts';
+import { SqliteMintIssuanceAttemptRepository } from './repositories/MintIssuanceAttemptRepository.ts';
 import { SqliteReceiveOperationRepository } from './repositories/ReceiveOperationRepository.ts';
 import {
   SqlitePaymentRequestReceiveAttemptRepository,
@@ -58,6 +60,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
     meltOperationRepository: new SqliteMeltOperationRepository(database),
     authSessionRepository: new SqliteAuthSessionRepository(database),
     mintOperationRepository: new SqliteMintOperationRepository(database),
+    mintIssuanceAttemptRepository: new SqliteMintIssuanceAttemptRepository(database),
     receiveOperationRepository: new SqliteReceiveOperationRepository(database),
     paymentRequestReceiveOperationRepository: new SqlitePaymentRequestReceiveOperationRepository(
       database,
@@ -82,6 +85,7 @@ export class SqlStorageRepositories implements Repositories {
   readonly meltOperationRepository: MeltOperationRepository;
   readonly authSessionRepository: AuthSessionRepository;
   readonly mintOperationRepository: MintOperationRepository;
+  readonly mintIssuanceAttemptRepository: MintIssuanceAttemptRepository;
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
@@ -103,6 +107,7 @@ export class SqlStorageRepositories implements Repositories {
     this.meltOperationRepository = repositories.meltOperationRepository;
     this.authSessionRepository = repositories.authSessionRepository;
     this.mintOperationRepository = repositories.mintOperationRepository;
+    this.mintIssuanceAttemptRepository = repositories.mintIssuanceAttemptRepository;
     this.receiveOperationRepository = repositories.receiveOperationRepository;
     this.paymentRequestReceiveOperationRepository =
       repositories.paymentRequestReceiveOperationRepository;
@@ -133,6 +138,7 @@ export {
   SqliteMeltOperationRepository,
   SqliteAuthSessionRepository,
   SqliteMintOperationRepository,
+  SqliteMintIssuanceAttemptRepository,
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,

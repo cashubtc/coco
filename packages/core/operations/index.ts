@@ -8,6 +8,18 @@ export type {
   MintOperationState,
 } from './mint/MintOperation.ts';
 export type {
+  MintIssuanceAttempt,
+  MintIssuanceAttemptError,
+  MintIssuanceAttemptState,
+  MintIssuanceRequestMetadata,
+  MintIssuanceSigningRequirement,
+} from './mint/MintIssuanceAttempt.ts';
+export {
+  assertMintIssuanceAttemptRecoveryMaterialUnchanged,
+  normalizeMintIssuanceAttempt,
+  RECOVERABLE_MINT_ISSUANCE_ATTEMPT_STATES,
+} from './mint/MintIssuanceAttempt.ts';
+export type {
   MintMethod,
   MintMethodData,
   MintMethodRemoteState,

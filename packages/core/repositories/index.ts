@@ -6,6 +6,7 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperationRecord, MintOperationState } from '@core/operations/mint/MintOperation';
+import type { MintIssuanceAttempt } from '@core/operations/mint/MintIssuanceAttempt';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -100,6 +101,9 @@ export interface ProofRepository {
    * Get proofs associated with a specific operation (as input or output).
    */
   getProofsByOperationId(mintUrl: string, operationId: string): Promise<CoreProof[]>;
+
+  /** Get proofs created by a specific Mint Issuance Attempt. */
+  getProofsByAttemptId(mintUrl: string, attemptId: string): Promise<CoreProof[]>;
 
   /**
    * Get available (ready and not reserved) proofs for a mint.
@@ -298,6 +302,20 @@ export interface MintOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+/** Persists the exact recovery boundary for single and batched mint issuance. */
+export interface MintIssuanceAttemptRepository {
+  /** Creates a prepared attempt with immutable recovery material. */
+  create(attempt: MintIssuanceAttempt): Promise<void>;
+  /** Updates lifecycle and error metadata without changing recovery material. */
+  update(attempt: MintIssuanceAttempt): Promise<void>;
+  /** Returns an attempt by its durable ID. */
+  getById(id: string): Promise<MintIssuanceAttempt | null>;
+  /** Returns the newest attempt containing the member, including historical rejected attempts. */
+  getByMemberOperationId(operationId: string): Promise<MintIssuanceAttempt | null>;
+  /** Lists prepared, possibly submitted, and recovering attempts in deterministic order. */
+  listRecoverable(mintUrl?: string): Promise<MintIssuanceAttempt[]>;
+}
+
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
   create(operation: ReceiveOperation): Promise<void>;
@@ -366,6 +384,7 @@ interface RepositoriesBase {
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
+  mintIssuanceAttemptRepository: MintIssuanceAttemptRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;

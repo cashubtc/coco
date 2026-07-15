@@ -45,6 +45,7 @@ function rowToProof(r: ProofRow): CoreProof {
     state: r.state,
     ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
     ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
+    ...(r.createdByAttemptId ? { createdByAttemptId: r.createdByAttemptId } : {}),
   };
 }
 
@@ -84,6 +85,7 @@ export class IdbProofRepository implements ProofRepository {
           createdAt: now,
           usedByOperationId: p.usedByOperationId ?? null,
           createdByOperationId: p.createdByOperationId ?? null,
+          createdByAttemptId: p.createdByAttemptId ?? null,
         };
         await table.put(row);
       }
@@ -289,6 +291,15 @@ export class IdbProofRepository implements ProofRepository {
     }
 
     return results;
+  }
+
+  async getProofsByAttemptId(mintUrl: string, attemptId: string): Promise<CoreProof[]> {
+    const rows = (await this.db
+      .table('coco_cashu_proofs')
+      .where('[mintUrl+createdByAttemptId]')
+      .equals([mintUrl, attemptId])
+      .toArray()) as ProofRow[];
+    return rows.map(rowToProof);
   }
 
   async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
