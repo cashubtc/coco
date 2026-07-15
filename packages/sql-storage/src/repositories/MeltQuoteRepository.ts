@@ -154,10 +154,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
       changeJson: quote.change ? stringifyJson(quote.change) : null,
       lastObservedRemoteState: quote.lastObservedRemoteState ?? quote.state,
       lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
-      createdAt: identityOwner?.createdAt ?? quote.createdAt,
+      createdAt: quote.createdAt,
       updatedAt: quote.updatedAt || now,
     };
-    await this.db.run(
+    const persisted = await this.db.get<MeltQuoteRow>(
       `INSERT INTO coco_cashu_melt_quotes
          (mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
           payment_preimage, fee_options_json, outpoint, changeJson, lastObservedRemoteState,
@@ -176,7 +176,10 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
          changeJson=excluded.changeJson,
          lastObservedRemoteState=excluded.lastObservedRemoteState,
          lastObservedRemoteStateAt=excluded.lastObservedRemoteStateAt,
-         updatedAt=excluded.updatedAt`,
+         updatedAt=excluded.updatedAt
+       RETURNING mintUrl, method, quoteId, state, request, amount, unit, fee_reserve, expiry,
+                 payment_preimage, fee_options_json, outpoint, changeJson,
+                 lastObservedRemoteState, lastObservedRemoteStateAt, createdAt, updatedAt`,
       [
         row.mintUrl,
         row.method,
@@ -197,7 +200,12 @@ export class SqliteMeltQuoteRepository implements MeltQuoteRepository {
         row.updatedAt,
       ],
     );
-    return rowToQuote(row);
+    if (!persisted) {
+      throw new Error(
+        `Melt quote ${quote.quoteId} for ${quote.method} at ${normalizedMintUrl} was not returned after persistence`,
+      );
+    }
+    return rowToQuote(persisted);
   }
 
   async getPendingMeltQuotes(method?: string): Promise<MeltQuote[]> {
