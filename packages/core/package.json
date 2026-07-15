@@ -45,6 +45,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "prototype:mint-attempt-persistence": "bun operations/mint/prototype-attempt-persistence/tui.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test test/unit",
