@@ -1,5 +1,5 @@
 ---
-'@cashu/coco-core': patch
+'@cashu/coco-core': major
 '@cashu/coco-adapter-tests': patch
 '@cashu/coco-indexeddb': patch
 '@cashu/coco-sqlite': patch
