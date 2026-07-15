@@ -45,15 +45,12 @@ import {
   getMintQuoteAmount,
   type MintQuote,
 } from '../../models/MintQuote';
+import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
-}
-
-function isExpiredMintQuote(quote: Pick<MintQuote, 'expiry'>): boolean {
-  return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
 }
 
 /**
@@ -866,7 +863,7 @@ export class MintOperationService {
     quote: MintQuote,
     targetOperationId?: string,
   ): Promise<Amount> {
-    if (isExpiredMintQuote(quote)) {
+    if (isMintQuoteExpired(quote)) {
       return Amount.zero();
     }
 

@@ -3,6 +3,7 @@ import type { RealTimeTransport, TransportEvent } from './RealTimeTransport.ts';
 import type { WsRequest } from './SubscriptionProtocol.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { Logger } from '../logging/Logger.ts';
+import { isMintQuoteExpired } from '../models/MintQuoteExpiry.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
@@ -285,11 +286,11 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   private getExpirySignature(payload: { expiry?: unknown }): string {
-    if (typeof payload.expiry !== 'number') {
+    if (typeof payload.expiry !== 'number' || payload.expiry === 0) {
       return 'no-expiry';
     }
 
-    const status = payload.expiry * 1000 <= Date.now() ? 'expired' : 'active';
+    const status = isMintQuoteExpired({ expiry: payload.expiry }) ? 'expired' : 'active';
     return `${payload.expiry}:${status}`;
   }
 }

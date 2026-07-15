@@ -10,20 +10,13 @@ import type {
 } from '@core/operations/mint';
 import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
+import { isMintQuoteExpired } from '../../models/MintQuoteExpiry.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
 
 function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
   return `${mintUrl}::${method}::${quoteId}`;
-}
-
-function isExpiredMintQuoteSnapshot(snapshot: { expiry?: number | null }): boolean {
-  return (
-    snapshot.expiry !== null &&
-    snapshot.expiry !== undefined &&
-    snapshot.expiry * 1000 <= Date.now()
-  );
 }
 
 interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
@@ -41,15 +34,14 @@ const mintQuoteWatchPolicies: {
     subscriptionKind: 'bolt11_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) => payload.state === 'PAID' || payload.state === 'ISSUED',
-    shouldStopWatching: (payload) =>
-      payload.state === 'ISSUED' || isExpiredMintQuoteSnapshot(payload),
+    shouldStopWatching: (payload) => payload.state === 'ISSUED' || isMintQuoteExpired(payload),
   },
   onchain: {
     subscriptionKind: 'onchain_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: (payload) => isExpiredMintQuoteSnapshot(payload),
+    shouldStopWatching: (payload) => isMintQuoteExpired(payload),
     keepWatchingWithoutOperationInterest: true,
   },
   bolt12: {
@@ -57,7 +49,7 @@ const mintQuoteWatchPolicies: {
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: (payload) => isExpiredMintQuoteSnapshot(payload),
+    shouldStopWatching: (payload) => isMintQuoteExpired(payload),
     keepWatchingWithoutOperationInterest: true,
   },
 };
