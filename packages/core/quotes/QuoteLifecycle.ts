@@ -812,18 +812,7 @@ export class QuoteLifecycle {
   }
 
   private async persistCanonicalMeltQuote(canonicalQuote: MeltQuote): Promise<MeltQuote> {
-    await this.meltQuoteRepository.upsertMeltQuote(canonicalQuote);
-    const quote = await this.meltQuoteRepository.getMeltQuote(
-      canonicalQuote.mintUrl,
-      canonicalQuote.method,
-      canonicalQuote.quoteId,
-    );
-    if (!quote) {
-      throw new Error(
-        `Cannot persist quote observation: melt quote ${canonicalQuote.quoteId} for ${canonicalQuote.method} at ${canonicalQuote.mintUrl} was not found after persistence`,
-      );
-    }
-    return quote;
+    return this.meltQuoteRepository.upsertMeltQuote(canonicalQuote);
   }
 
   private async emitMeltQuoteUpdatedIfNeeded(
