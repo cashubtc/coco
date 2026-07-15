@@ -1,0 +1,14 @@
+{
+  "extends": "../../packages/core/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@core/*": ["packages/core/*"]
+    },
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "types": ["bun"]
+  },
+  "include": ["index.ts"]
+}
