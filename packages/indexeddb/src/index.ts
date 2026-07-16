@@ -95,6 +95,7 @@ export class IndexedDbRepositories implements Repositories {
       return;
     }
     await ensureSchema(this.db);
+    await this.db.open();
     this.initialized = true;
   }
 

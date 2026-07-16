@@ -1,5 +1,12 @@
-import { normalizeMintUrl, stringifyJson } from '@cashu/coco-core/adapter';
-import type { IdbDb } from './db.ts';
+import {
+  normalizeMintUrl,
+  planLegacyMintOperationMigration,
+  serializeAmount,
+  stringifyJson,
+  type LegacyMintOperationMigrationRecord,
+  type SerializedOutputData,
+} from '@cashu/coco-core/adapter';
+import type { CounterRow, IdbDb, MintIssuanceAttemptRow, MintOperationRow } from './db.ts';
 
 function normalizeStoredAmount(value: unknown): string | null | undefined {
   if (value === null || value === undefined) return value;
@@ -1103,4 +1110,95 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_payment_request_receive_attempts:
       '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
   });
+
+  // Version 33: Upgrade recoverable legacy Mint Operations into single-member attempts.
+  db.version(33)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], [mintUrl+createdByAttemptId], state, mintUrl, unit, id, usedByOperationId, createdByOperationId, createdByAttemptId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_melt_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, attemptId, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+      coco_cashu_mint_issuance_attempts:
+        '&id, state, mintUrl, createdAt, *memberOperationIds, [mintUrl+state]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      const rows = (await tx.table('coco_cashu_mint_operations').toArray()) as MintOperationRow[];
+      const counters = (await tx.table('coco_cashu_counters').toArray()) as CounterRow[];
+      const operations = rows.map(
+        (row) =>
+          ({
+            id: row.id,
+            mintUrl: row.mintUrl,
+            quoteId: row.quoteId ?? '',
+            method: row.method as LegacyMintOperationMigrationRecord['method'],
+            unit: row.unit ?? '',
+            amount: row.amount ?? 0,
+            state: row.state,
+            outputData: row.outputDataJson
+              ? (JSON.parse(row.outputDataJson) as SerializedOutputData)
+              : undefined,
+            attemptId: row.attemptId ?? undefined,
+            createdAt: row.createdAt * 1_000,
+            updatedAt: row.updatedAt * 1_000,
+            error: row.error ?? undefined,
+            terminalFailure: row.terminalFailureJson
+              ? JSON.parse(row.terminalFailureJson)
+              : undefined,
+          }) satisfies LegacyMintOperationMigrationRecord,
+      );
+      const plan = planLegacyMintOperationMigration(operations, counters);
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+
+      for (const entry of plan) {
+        const source = rowsById.get(entry.operationId);
+        if (!source?.outputDataJson) {
+          throw new Error(`Legacy Mint Operation ${entry.operationId} lost its serialized outputs`);
+        }
+        const attempt = entry.attempt;
+        await tx.table('coco_cashu_mint_issuance_attempts').add({
+          id: attempt.id,
+          mintUrl: attempt.mintUrl,
+          method: attempt.method,
+          unit: attempt.unit,
+          keysetId: attempt.keysetId,
+          state: attempt.state,
+          memberOperationIds: [...attempt.memberOperationIds],
+          quoteIdsJson: JSON.stringify(attempt.quoteIds),
+          quoteAmountsJson: JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
+          signingRequirementsJson: JSON.stringify(attempt.signingRequirements),
+          outputDataJson: source.outputDataJson,
+          counterStart: attempt.counterStart,
+          counterEnd: attempt.counterEnd,
+          requestJson: JSON.stringify(attempt.request),
+          createdAt: attempt.createdAt,
+          updatedAt: attempt.updatedAt,
+          submittedAt: attempt.submittedAt ?? null,
+          recoveryStartedAt: attempt.recoveryStartedAt ?? null,
+          recoveredAt: attempt.recoveredAt ?? null,
+          terminalErrorJson: attempt.terminalError ? JSON.stringify(attempt.terminalError) : null,
+        } satisfies MintIssuanceAttemptRow);
+        await tx.table('coco_cashu_mint_operations').update(entry.operationId, {
+          state: entry.operationState,
+          attemptId: attempt.id,
+        });
+      }
+    });
 }

@@ -100,3 +100,12 @@ export {
   stringifyJson,
 } from './utils.ts';
 export type { SerializedOutput, SerializedOutputData, StoredBlindedMessage } from './utils.ts';
+export {
+  LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX,
+  planLegacyMintOperationMigration,
+} from './repositories/LegacyMintOperationMigration.ts';
+export type {
+  LegacyMintCounterSnapshot,
+  LegacyMintOperationMigrationPlanEntry,
+  LegacyMintOperationMigrationRecord,
+} from './repositories/LegacyMintOperationMigration.ts';

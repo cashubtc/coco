@@ -1,4 +1,12 @@
-import { normalizeMintUrl } from '@cashu/coco-core/adapter';
+import {
+  normalizeMintUrl,
+  planLegacyMintOperationMigration,
+  serializeAmount,
+  type LegacyMintOperationMigrationRecord,
+  type MintMethod,
+  type MintOperationState,
+  type SerializedOutputData,
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 
 export interface Migration {
@@ -46,6 +54,102 @@ async function insertMigrationIds(db: SqlDatabase, ids: readonly string[]): Prom
     await db.run('INSERT OR IGNORE INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
       id,
       appliedAt,
+    ]);
+  }
+}
+
+interface LegacyMintOperationRow {
+  id: string;
+  mintUrl: string;
+  quoteId: string;
+  method: MintMethod;
+  unit: string;
+  amount: string | number;
+  state: MintOperationState;
+  outputDataJson: string | null;
+  attemptId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  terminalFailureJson: string | null;
+}
+
+async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
+  const rows = await db.all<LegacyMintOperationRow>(
+    `SELECT id, mintUrl, quoteId, method, unit, amount, state, outputDataJson, attemptId,
+            createdAt, updatedAt, error, terminalFailureJson
+     FROM coco_cashu_mint_operations
+     ORDER BY createdAt ASC, id ASC`,
+  );
+  const counters = await db.all<{ mintUrl: string; keysetId: string; counter: number }>(
+    'SELECT mintUrl, keysetId, counter FROM coco_cashu_counters',
+  );
+  const operations = rows.map(
+    (row) =>
+      ({
+        id: row.id,
+        mintUrl: row.mintUrl,
+        quoteId: row.quoteId,
+        method: row.method,
+        unit: row.unit,
+        amount: row.amount,
+        state: row.state,
+        outputData: row.outputDataJson
+          ? (JSON.parse(row.outputDataJson) as SerializedOutputData)
+          : undefined,
+        attemptId: row.attemptId ?? undefined,
+        createdAt: row.createdAt * 1_000,
+        updatedAt: row.updatedAt * 1_000,
+        error: row.error ?? undefined,
+        terminalFailure: row.terminalFailureJson ? JSON.parse(row.terminalFailureJson) : undefined,
+      }) satisfies LegacyMintOperationMigrationRecord,
+  );
+  const plan = planLegacyMintOperationMigration(operations, counters);
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+
+  for (const entry of plan) {
+    const { attempt } = entry;
+    const source = rowsById.get(entry.operationId);
+    if (!source?.outputDataJson) {
+      throw new Error(`Legacy Mint Operation ${entry.operationId} lost its serialized outputs`);
+    }
+    await db.run(
+      `INSERT INTO coco_cashu_mint_issuance_attempts (
+        id, mintUrl, method, unit, keysetId, state, quoteIdsJson, quoteAmountsJson,
+        signingRequirementsJson, outputDataJson, counterStart, counterEnd, requestJson,
+        createdAt, updatedAt, submittedAt, recoveryStartedAt, recoveredAt, terminalErrorJson
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        attempt.id,
+        attempt.mintUrl,
+        attempt.method,
+        attempt.unit,
+        attempt.keysetId,
+        attempt.state,
+        JSON.stringify(attempt.quoteIds),
+        JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
+        JSON.stringify(attempt.signingRequirements),
+        source.outputDataJson,
+        attempt.counterStart,
+        attempt.counterEnd,
+        JSON.stringify(attempt.request),
+        attempt.createdAt,
+        attempt.updatedAt,
+        attempt.submittedAt ?? null,
+        attempt.recoveryStartedAt ?? null,
+        attempt.recoveredAt ?? null,
+        attempt.terminalError ? JSON.stringify(attempt.terminalError) : null,
+      ],
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_mint_issuance_attempt_members (attemptId, operationId, position)
+       VALUES (?, ?, 0)`,
+      [attempt.id, entry.operationId],
+    );
+    await db.run('UPDATE coco_cashu_mint_operations SET state = ?, attemptId = ? WHERE id = ?', [
+      entry.operationState,
+      attempt.id,
+      entry.operationId,
     ]);
   }
 }
@@ -1500,6 +1604,10 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX idx_coco_cashu_proofs_created_by_attempt
         ON coco_cashu_proofs(mintUrl, createdByAttemptId);
     `,
+  },
+  {
+    id: '039_migrate_legacy_mint_operations',
+    run: migrateLegacyMintOperations,
   },
 ];
 
