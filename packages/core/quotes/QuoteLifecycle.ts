@@ -9,6 +9,12 @@ import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts'
 import type { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MintAdapter } from '../infra';
+import type { MintQuotePollingCheckResult } from '../infra/MintQuotePollingChecker.ts';
+import {
+  getNut29MintQuoteCheckLimit,
+  MintQuoteBatchTransport,
+  supportsNut29MintQuoteCheck,
+} from './MintQuoteBatchTransport.ts';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
@@ -25,9 +31,6 @@ import {
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
 import { isMintQuoteExpired } from '../models/MintQuoteExpiry';
 import {
-  HttpResponseError,
-  MintOperationError,
-  NetworkError,
   ProofValidationError,
   QuoteIdentityConflictError,
   UnknownMintError,
@@ -75,45 +78,6 @@ function hasReusableSettlementAmounts(snapshot: {
   amount_issued?: unknown;
 }): boolean {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
-}
-
-function supportsNut29MintQuoteCheck(mintInfo: unknown, method: MintMethod): boolean {
-  if (!mintInfo || typeof mintInfo !== 'object') return false;
-  const nuts = (mintInfo as { nuts?: unknown }).nuts;
-  if (!nuts || typeof nuts !== 'object') return false;
-  const settings = (nuts as Record<string, unknown>)['29'];
-  if (!settings || typeof settings !== 'object') return false;
-  const methods = (settings as { methods?: unknown }).methods;
-  if (methods !== undefined) {
-    return Array.isArray(methods) && methods.includes(method);
-  }
-  const nut4 = (nuts as Record<string, unknown>)['4'];
-  const mintMethods =
-    nut4 && typeof nut4 === 'object' ? (nut4 as { methods?: unknown }).methods : undefined;
-  return (
-    Array.isArray(mintMethods) &&
-    mintMethods.some(
-      (entry) =>
-        entry !== null &&
-        typeof entry === 'object' &&
-        (entry as { method?: unknown }).method === method,
-    )
-  );
-}
-
-function getNut29MintQuoteCheckLimit(mintInfo: unknown, method: MintMethod): number | null {
-  if (!supportsNut29MintQuoteCheck(mintInfo, method)) return null;
-  const nuts = (mintInfo as { nuts: Record<string, unknown> }).nuts;
-  const settings = nuts['29'] as { max_batch_size?: unknown };
-  const advertised = settings.max_batch_size;
-  if (advertised === undefined) return 100;
-  if (!Number.isSafeInteger(advertised) || Number(advertised) < 1) return null;
-  return Math.min(Number(advertised), 100);
-}
-
-export interface MintQuotePollingCheckResult {
-  attemptedQuoteIds: string[];
-  observations: MintMethodQuoteSnapshot[];
 }
 
 function getMintQuoteSnapshotFingerprint(
@@ -193,13 +157,6 @@ function assertMintQuoteBatchSnapshotStructure(
   if (bolt12.amount != null) Amount.from(bolt12.amount);
   Amount.from(bolt12.amount_paid);
   Amount.from(bolt12.amount_issued);
-}
-
-function isTransientMintQuoteCheckError(error: unknown): boolean {
-  return (
-    error instanceof NetworkError ||
-    (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
-  );
 }
 
 function getRemoteStateChange(
@@ -348,9 +305,8 @@ export class QuoteLifecycle {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly mintQuoteBatchTransport: MintQuoteBatchTransport;
   private readonly mintQuoteRefreshInFlight = new Map<string, Promise<MintQuote>>();
-  private readonly effectiveMintQuoteBatchLimit = new Map<string, number>();
-  private readonly incompatibleMintQuoteBatchUntil = new Map<string, number>();
 
   constructor(deps: QuoteLifecycleDeps) {
     this.mintHandlerProvider = deps.mintHandlerProvider;
@@ -364,6 +320,11 @@ export class QuoteLifecycle {
     this.mintAdapter = deps.mintAdapter;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger;
+    this.mintQuoteBatchTransport = new MintQuoteBatchTransport(
+      deps.mintAdapter,
+      deps.eventBus,
+      deps.logger,
+    );
   }
 
   private buildDeps() {
@@ -400,6 +361,7 @@ export class QuoteLifecycle {
         existingQuote.method,
         [existingQuote.quoteId],
         getNut29MintQuoteCheckLimit(mintInfo, existingQuote.method),
+        existingQuote.quoteId,
       );
       if (!result.observations.some((snapshot) => snapshot.quote === existingQuote.quoteId)) {
         throw new ProofValidationError(
@@ -435,6 +397,7 @@ export class QuoteLifecycle {
     method: MintMethod,
     quoteIds: string[],
     knownLimit?: number | null,
+    ownedInFlightQuoteId?: string,
   ): Promise<MintQuotePollingCheckResult> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     if (!(await this.mintService.isTrustedMint(normalizedMintUrl))) {
@@ -446,60 +409,106 @@ export class QuoteLifecycle {
       return { attemptedQuoteIds: [], observations: [] };
     }
 
+    const joined = new Map<string, Promise<MintQuote>>();
+    const uncheckedQuoteIds: string[] = [];
+    for (const quoteId of uniqueQuoteIds) {
+      const key = `${normalizedMintUrl}::${method}::${quoteId}`;
+      const inFlight = this.mintQuoteRefreshInFlight.get(key);
+      if (inFlight && quoteId !== ownedInFlightQuoteId) {
+        joined.set(quoteId, inFlight);
+      } else {
+        uncheckedQuoteIds.push(quoteId);
+      }
+    }
+
+    const check =
+      uncheckedQuoteIds.length === 0
+        ? Promise.resolve({ attemptedQuoteIds: [], observations: [] })
+        : Promise.resolve().then(() =>
+            this.performMintQuotePollingCheck(
+              normalizedMintUrl,
+              method,
+              uncheckedQuoteIds,
+              knownLimit,
+            ),
+          );
+
+    for (const quoteId of uncheckedQuoteIds) {
+      if (quoteId === ownedInFlightQuoteId) continue;
+      const key = `${normalizedMintUrl}::${method}::${quoteId}`;
+      const quoteWork = check.then(async (result) => {
+        if (
+          !result.attemptedQuoteIds.includes(quoteId) ||
+          !result.observations.some((snapshot) => snapshot.quote === quoteId)
+        ) {
+          throw new ProofValidationError(
+            `Mint quote batch check did not return a usable observation for ${quoteId}`,
+          );
+        }
+        const persisted = await this.mintQuoteRepository.getMintQuote(
+          normalizedMintUrl,
+          method,
+          quoteId,
+        );
+        if (!persisted) throw new Error(`Mint quote ${quoteId} disappeared after observation`);
+        return persisted;
+      });
+      quoteWork.catch(() => {});
+      this.mintQuoteRefreshInFlight.set(key, quoteWork);
+      void quoteWork
+        .finally(() => {
+          if (this.mintQuoteRefreshInFlight.get(key) === quoteWork) {
+            this.mintQuoteRefreshInFlight.delete(key);
+          }
+        })
+        .catch(() => {});
+    }
+
+    const result = await check;
+    const joinedResults = await Promise.allSettled(joined.values());
+    const observationsByQuoteId = new Map(
+      result.observations.map((snapshot) => [snapshot.quote, snapshot]),
+    );
+    let joinedIndex = 0;
+    for (const quoteId of joined.keys()) {
+      const settled = joinedResults[joinedIndex++];
+      if (settled?.status === 'fulfilled') {
+        observationsByQuoteId.set(quoteId, mintQuoteToMethodSnapshot(settled.value));
+      }
+    }
+    const attempted = new Set([...result.attemptedQuoteIds, ...joined.keys()]);
+    return {
+      attemptedQuoteIds: uniqueQuoteIds.filter((quoteId) => attempted.has(quoteId)),
+      observations: uniqueQuoteIds
+        .map((quoteId) => observationsByQuoteId.get(quoteId))
+        .filter((snapshot): snapshot is MintMethodQuoteSnapshot => snapshot !== undefined),
+    };
+  }
+
+  private async performMintQuotePollingCheck(
+    normalizedMintUrl: string,
+    method: MintMethod,
+    uniqueQuoteIds: string[],
+    knownLimit?: number | null,
+  ): Promise<MintQuotePollingCheckResult> {
     const limit =
       knownLimit === undefined
         ? getNut29MintQuoteCheckLimit(await this.mintService.getMintInfo(normalizedMintUrl), method)
         : knownLimit;
-    const groupKey = `${normalizedMintUrl}::${method}`;
-    const incompatibleUntil = this.incompatibleMintQuoteBatchUntil.get(groupKey) ?? 0;
-    if (limit === null || incompatibleUntil > Date.now()) {
-      return this.checkSingleMintQuoteForPolling(normalizedMintUrl, method, uniqueQuoteIds[0]!);
-    }
-    const effectiveLimit = Math.min(
+    const request = await this.mintQuoteBatchTransport.check(
+      normalizedMintUrl,
+      method,
+      uniqueQuoteIds,
       limit,
-      this.effectiveMintQuoteBatchLimit.get(groupKey) ?? limit,
     );
-    let attemptedQuoteIds = uniqueQuoteIds.slice(0, effectiveLimit);
-    let response: unknown;
-    while (true) {
-      try {
-        response = await this.checkMintQuoteBatchWithIsolation(
-          normalizedMintUrl,
-          method,
-          attemptedQuoteIds,
-        );
-        break;
-      } catch (error) {
-        if (
-          error instanceof HttpResponseError &&
-          (error.status === 404 || error.status === 405 || error.status === 501)
-        ) {
-          this.incompatibleMintQuoteBatchUntil.set(groupKey, Date.now() + 5 * 60_000);
-          return this.checkSingleMintQuoteForPolling(
-            normalizedMintUrl,
-            method,
-            attemptedQuoteIds[0]!,
-          );
-        }
-        if (!(error instanceof MintOperationError) || error.code !== 11017) {
-          throw error;
-        }
-        if (attemptedQuoteIds.length <= 1) {
-          this.incompatibleMintQuoteBatchUntil.set(groupKey, Date.now() + 5 * 60_000);
-          return this.checkSingleMintQuoteForPolling(
-            normalizedMintUrl,
-            method,
-            attemptedQuoteIds[0]!,
-          );
-        }
-        const loweredLimit = Math.max(1, Math.floor(attemptedQuoteIds.length / 2));
-        this.effectiveMintQuoteBatchLimit.set(groupKey, loweredLimit);
-        attemptedQuoteIds = attemptedQuoteIds.slice(0, loweredLimit);
-      }
+    if (request.kind === 'single') {
+      return this.checkSingleMintQuoteForPolling(
+        normalizedMintUrl,
+        method,
+        request.attemptedQuoteIds[0],
+      );
     }
-    if (!Array.isArray(response)) {
-      throw new ProofValidationError('Mint quote batch check returned a non-array response');
-    }
+    const { attemptedQuoteIds, response } = request;
 
     const rawByQuoteId = new Map<string, MintMethodQuoteSnapshot[]>();
     for (const raw of response) {
@@ -579,73 +588,6 @@ export class QuoteLifecycle {
       attemptedQuoteIds: [quoteId],
       observations: [snapshot],
     };
-  }
-
-  private async checkMintQuoteBatchWithIsolation(
-    mintUrl: string,
-    method: MintMethod,
-    quoteIds: string[],
-  ): Promise<unknown[]> {
-    try {
-      const response = await this.requestMintQuoteBatchWithRetry(mintUrl, method, quoteIds);
-      if (!Array.isArray(response)) {
-        throw new ProofValidationError('Mint quote batch check returned a non-array response');
-      }
-      return response;
-    } catch (error) {
-      if (!(error instanceof MintOperationError) || error.code === 11017) {
-        throw error;
-      }
-      if (quoteIds.length === 1) {
-        this.logger?.warn('Isolated invalid mint quote during NUT-29 batch check', {
-          mintUrl,
-          method,
-          quoteId: quoteIds[0],
-          code: error.code,
-        });
-        return [];
-      }
-
-      const midpoint = Math.floor(quoteIds.length / 2);
-      const left = await this.checkMintQuoteBatchWithIsolation(
-        mintUrl,
-        method,
-        quoteIds.slice(0, midpoint),
-      );
-      const right = await this.checkMintQuoteBatchWithIsolation(
-        mintUrl,
-        method,
-        quoteIds.slice(midpoint),
-      );
-      return [...left, ...right];
-    }
-  }
-
-  private async requestMintQuoteBatchWithRetry(
-    mintUrl: string,
-    method: MintMethod,
-    quoteIds: string[],
-  ): Promise<unknown> {
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await this.mintAdapter.checkMintQuoteBatch(mintUrl, method, quoteIds);
-      } catch (error) {
-        if (!isTransientMintQuoteCheckError(error) || attempt === maxAttempts) {
-          throw error;
-        }
-        const delayMs = 10 * 2 ** (attempt - 1);
-        this.logger?.warn('Transient NUT-29 quote check failed; retrying', {
-          mintUrl,
-          method,
-          quoteCount: quoteIds.length,
-          attempt,
-          delayMs,
-        });
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    throw new Error('Unreachable NUT-29 quote check retry state');
   }
 
   private async requireAttributableBatchObservation(

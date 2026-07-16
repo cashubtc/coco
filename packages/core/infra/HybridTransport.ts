@@ -6,7 +6,8 @@ import type { Logger } from '../logging/Logger.ts';
 import { isMintQuoteExpired } from '../models/MintQuoteExpiry.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { WsTransport } from './WsTransport.ts';
-import { PollingTransport, type MintQuotePollingChecker } from './PollingTransport.ts';
+import { PollingTransport } from './PollingTransport.ts';
+import type { MintQuotePollingChecker } from './MintQuotePollingChecker.ts';
 
 export interface HybridTransportOptions {
   /** Polling interval while WS is connected (default: 20000ms) */

@@ -2,7 +2,8 @@ import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { RealTimeTransport } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
-import { PollingTransport, type MintQuotePollingChecker } from './PollingTransport.ts';
+import { PollingTransport } from './PollingTransport.ts';
+import type { MintQuotePollingChecker } from './MintQuotePollingChecker.ts';
 import { HybridTransport } from './HybridTransport.ts';
 import { generateSubId } from '../utils.ts';
 

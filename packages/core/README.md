@@ -75,6 +75,10 @@ implementation details. They are not app-facing root API.
 - [x] NUT-23
 - [ ] NUT-24
 - [ ] NUT-25
+- [ ] NUT-26
+- [ ] NUT-27
+- [ ] NUT-28
+- [x] NUT-29 (mint quote batch checks)
 
 ## Quick start
 
