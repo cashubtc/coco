@@ -616,7 +616,7 @@ export async function runMintIssuanceAttemptRepositoryContract(
           await tx.counterRepository.setCounter(
             attempt.mintUrl,
             attempt.keysetId,
-            attempt.counterEnd,
+            attempt.counterEnd!,
           );
         });
         await expectThrows(async () => {

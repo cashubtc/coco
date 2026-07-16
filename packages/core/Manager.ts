@@ -1003,6 +1003,7 @@ export class Manager {
       mintService,
       walletService,
       mintAdapter: this.mintAdapter,
+      mintHandlerProvider,
       eventBus: this.eventBus,
       logger: mintIssuanceLogger,
       mintScopedLock,

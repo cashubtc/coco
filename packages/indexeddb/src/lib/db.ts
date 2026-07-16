@@ -341,8 +341,9 @@ export interface MintIssuanceAttemptRow {
   quoteAmountsJson: string;
   signingRequirementsJson: string;
   outputDataJson: string;
-  counterStart: number;
-  counterEnd: number;
+  counterStart: number | null;
+  counterEnd: number | null;
+  counterRangeKnown?: boolean;
   requestJson: string;
   createdAt: number;
   updatedAt: number;
