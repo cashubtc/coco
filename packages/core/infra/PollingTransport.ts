@@ -62,7 +62,10 @@ export class PollingTransport implements RealTimeTransport {
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly intervalByMint = new Map<string, number>();
-  private readonly mintQuoteBackoff = new Map<string, MintQuoteBackoff>();
+  private readonly mintQuoteBackoff = new Map<
+    string,
+    Map<MintMethod, Map<string, MintQuoteBackoff>>
+  >();
   // Track unsubscribed subIds to prevent re-enqueuing tasks that are currently being processed
   private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
@@ -281,9 +284,7 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.delete(mintUrl);
     this.intervalByMint.delete(mintUrl);
     this.unsubscribedByMint.delete(mintUrl);
-    for (const key of this.mintQuoteBackoff.keys()) {
-      if (key.startsWith(`${mintUrl}::`)) this.mintQuoteBackoff.delete(key);
-    }
+    this.mintQuoteBackoff.delete(mintUrl);
   }
 
   pause(): void {
@@ -400,14 +401,15 @@ export class PollingTransport implements RealTimeTransport {
     }
   }
 
-  private mintQuoteBackoffKey(mintUrl: string, task: Task): string | undefined {
+  private getMintQuoteBackoff(mintUrl: string, task: Task): MintQuoteBackoff | undefined {
     const method = this.getMintMethod(task.kind);
-    return method && task.filter ? `${mintUrl}::${method}::${task.filter}` : undefined;
+    return method && task.filter
+      ? this.mintQuoteBackoff.get(mintUrl)?.get(method)?.get(task.filter)
+      : undefined;
   }
 
   private isMintQuoteTaskEligible(mintUrl: string, task: Task, now: number): boolean {
-    const key = this.mintQuoteBackoffKey(mintUrl, task);
-    return !key || (this.mintQuoteBackoff.get(key)?.nextEligibleAt ?? 0) <= now;
+    return (this.getMintQuoteBackoff(mintUrl, task)?.nextEligibleAt ?? 0) <= now;
   }
 
   private takeNextEligibleTask(
@@ -428,8 +430,7 @@ export class PollingTransport implements RealTimeTransport {
     now: number,
   ): void {
     const nextEligibleAt = scheduler.queue.reduce((earliest, task) => {
-      const key = this.mintQuoteBackoffKey(mintUrl, task);
-      const candidate = key ? this.mintQuoteBackoff.get(key)?.nextEligibleAt : undefined;
+      const candidate = this.getMintQuoteBackoff(mintUrl, task)?.nextEligibleAt;
       return candidate === undefined ? earliest : Math.min(earliest, candidate);
     }, Number.POSITIVE_INFINITY);
     if (!Number.isFinite(nextEligibleAt)) return;
@@ -444,16 +445,25 @@ export class PollingTransport implements RealTimeTransport {
     const method = this.getMintMethod(kind);
     if (!method) return;
     const observed = new Set(result.observations.map((observation) => observation.quote));
+    let byMethod = this.mintQuoteBackoff.get(mintUrl);
+    if (!byMethod) {
+      byMethod = new Map();
+      this.mintQuoteBackoff.set(mintUrl, byMethod);
+    }
+    let byQuote = byMethod.get(method);
+    if (!byQuote) {
+      byQuote = new Map();
+      byMethod.set(method, byQuote);
+    }
     for (const quoteId of result.attemptedQuoteIds) {
-      const key = `${mintUrl}::${method}::${quoteId}`;
       if (observed.has(quoteId)) {
-        this.mintQuoteBackoff.delete(key);
+        byQuote.delete(quoteId);
         continue;
       }
-      const failures = (this.mintQuoteBackoff.get(key)?.failures ?? 0) + 1;
+      const failures = (byQuote.get(quoteId)?.failures ?? 0) + 1;
       const baseDelay = Math.max(1_000, this.getIntervalForMint(mintUrl));
       const delayMs = Math.min(60_000, baseDelay * 2 ** Math.min(failures, 6));
-      this.mintQuoteBackoff.set(key, { failures, nextEligibleAt: Date.now() + delayMs });
+      byQuote.set(quoteId, { failures, nextEligibleAt: Date.now() + delayMs });
     }
   }
 

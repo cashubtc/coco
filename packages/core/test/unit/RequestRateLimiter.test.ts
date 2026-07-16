@@ -3,6 +3,7 @@ import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
 import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
+import { QuoteSpecificMintOperationError } from '../../infra/MintQuoteBatchError.ts';
 import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -134,6 +135,26 @@ describe('RequestRateLimiter', () => {
       expect(e.status).toBe(400);
       expect(e.code).toBe(4200);
       expect(e.message).toBe('proof already spent');
+    }
+  });
+
+  it('preserves an exact structured quote identity on protocol errors', async () => {
+    // @ts-ignore
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ code: 10000, detail: 'unknown quote', quote: 'quote-bad' }), {
+        status: 400,
+      });
+
+    const limiter = new RequestRateLimiter();
+    try {
+      await limiter.request({
+        endpoint: 'https://mint.test/v1/mint/quote/bolt11/check',
+        method: 'POST',
+      });
+      throw new Error('Expected QuoteSpecificMintOperationError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(QuoteSpecificMintOperationError);
+      expect((error as QuoteSpecificMintOperationError).quoteId).toBe('quote-bad');
     }
   });
 

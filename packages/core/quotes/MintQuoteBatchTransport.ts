@@ -1,6 +1,8 @@
 import type { EventBus } from '../events/EventBus.ts';
 import type { CoreEvents } from '../events/types.ts';
 import type { MintAdapter } from '../infra/MintAdapter.ts';
+import { QuoteSpecificMintOperationError } from '../infra/MintQuoteBatchError.ts';
+import { mintQuoteGroupKey } from '../infra/MintQuotePollingKey.ts';
 import type { Logger } from '../logging/Logger.ts';
 import {
   HttpResponseError,
@@ -11,6 +13,9 @@ import {
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import { normalizeMintUrl } from '../utils.ts';
 
+const MINT_METHODS: MintMethod[] = ['bolt11', 'bolt12', 'onchain'];
+
+/** Returns whether current mint metadata advertises NUT-29 for the requested mint method. */
 export function supportsNut29MintQuoteCheck(mintInfo: unknown, method: MintMethod): boolean {
   if (!mintInfo || typeof mintInfo !== 'object') return false;
   const nuts = (mintInfo as { nuts?: unknown }).nuts;
@@ -34,6 +39,7 @@ export function supportsNut29MintQuoteCheck(mintInfo: unknown, method: MintMetho
   );
 }
 
+/** Resolves Coco's bounded NUT-29 check limit, or null when the metadata is incompatible. */
 export function getNut29MintQuoteCheckLimit(mintInfo: unknown, method: MintMethod): number | null {
   if (!supportsNut29MintQuoteCheck(mintInfo, method)) return null;
   const nuts = (mintInfo as { nuts: Record<string, unknown> }).nuts;
@@ -46,8 +52,17 @@ export function getNut29MintQuoteCheckLimit(mintInfo: unknown, method: MintMetho
 
 export type MintQuoteBatchRequestResult =
   | { kind: 'single'; attemptedQuoteIds: [string] }
-  | { kind: 'batch'; attemptedQuoteIds: string[]; response: unknown[] };
+  | {
+      kind: 'batch';
+      attemptedQuoteIds: string[];
+      response: unknown[];
+      errorsByQuoteId: Map<string, MintOperationError>;
+    };
 
+/**
+ * Owns NUT-29 request policy: capability fallback, bounded retries, effective-limit
+ * downshifts, exact quote-error isolation, and incompatibility reset on mint refresh.
+ */
 export class MintQuoteBatchTransport {
   private readonly effectiveLimit = new Map<string, number>();
   private readonly incompatibleGroups = new Set<string>();
@@ -58,24 +73,26 @@ export class MintQuoteBatchTransport {
     private readonly logger?: Logger,
   ) {
     eventBus.on('mint:updated', ({ mint }) => {
-      const groupPrefix = `${normalizeMintUrl(mint.mintUrl)}::`;
-      for (const groupKey of this.incompatibleGroups) {
-        if (groupKey.startsWith(groupPrefix)) this.incompatibleGroups.delete(groupKey);
-      }
-      for (const groupKey of this.effectiveLimit.keys()) {
-        if (groupKey.startsWith(groupPrefix)) this.effectiveLimit.delete(groupKey);
+      const mintUrl = normalizeMintUrl(mint.mintUrl);
+      for (const method of MINT_METHODS) {
+        const groupKey = mintQuoteGroupKey(mintUrl, method);
+        this.incompatibleGroups.delete(groupKey);
+        this.effectiveLimit.delete(groupKey);
       }
     });
   }
 
+  /** Runs one batch transport opportunity without interpreting or persisting observations. */
   async check(
     mintUrl: string,
     method: MintMethod,
     quoteIds: string[],
     limit: number | null,
+    onAttempt?: (quoteIds: string[]) => void,
   ): Promise<MintQuoteBatchRequestResult> {
-    const groupKey = `${mintUrl}::${method}`;
+    const groupKey = mintQuoteGroupKey(mintUrl, method);
     if (limit === null || this.incompatibleGroups.has(groupKey)) {
+      onAttempt?.([quoteIds[0]!]);
       return { kind: 'single', attemptedQuoteIds: [quoteIds[0]!] };
     }
 
@@ -85,19 +102,22 @@ export class MintQuoteBatchTransport {
     );
     while (true) {
       try {
-        const response = await this.checkWithIsolation(mintUrl, method, attemptedQuoteIds);
-        return { kind: 'batch', attemptedQuoteIds, response };
+        onAttempt?.(attemptedQuoteIds);
+        const isolated = await this.checkWithIsolation(mintUrl, method, attemptedQuoteIds);
+        return { kind: 'batch', attemptedQuoteIds, ...isolated };
       } catch (error) {
         if (
           error instanceof HttpResponseError &&
           (error.status === 404 || error.status === 405 || error.status === 501)
         ) {
           this.incompatibleGroups.add(groupKey);
+          onAttempt?.([attemptedQuoteIds[0]!]);
           return { kind: 'single', attemptedQuoteIds: [attemptedQuoteIds[0]!] };
         }
         if (!(error instanceof MintOperationError) || error.code !== 11017) throw error;
         if (attemptedQuoteIds.length <= 1) {
           this.incompatibleGroups.add(groupKey);
+          onAttempt?.([attemptedQuoteIds[0]!]);
           return { kind: 'single', attemptedQuoteIds: [attemptedQuoteIds[0]!] };
         }
         const loweredLimit = Math.max(1, Math.floor(attemptedQuoteIds.length / 2));
@@ -111,13 +131,16 @@ export class MintQuoteBatchTransport {
     mintUrl: string,
     method: MintMethod,
     quoteIds: string[],
-  ): Promise<unknown[]> {
+  ): Promise<{
+    response: unknown[];
+    errorsByQuoteId: Map<string, MintOperationError>;
+  }> {
     try {
       const response = await this.requestWithRetry(mintUrl, method, quoteIds);
       if (!Array.isArray(response)) {
         throw new ProofValidationError('Mint quote batch check returned a non-array response');
       }
-      return response;
+      return { response, errorsByQuoteId: new Map() };
     } catch (error) {
       if (!this.isConfirmedQuoteSpecificValidationError(error, quoteIds)) throw error;
       if (quoteIds.length === 1) {
@@ -127,13 +150,16 @@ export class MintQuoteBatchTransport {
           quoteId: quoteIds[0],
           code: error.code,
         });
-        return [];
+        return { response: [], errorsByQuoteId: new Map([[error.quoteId, error]]) };
       }
 
       const midpoint = Math.floor(quoteIds.length / 2);
       const left = await this.checkWithIsolation(mintUrl, method, quoteIds.slice(0, midpoint));
       const right = await this.checkWithIsolation(mintUrl, method, quoteIds.slice(midpoint));
-      return [...left, ...right];
+      return {
+        response: [...left.response, ...right.response],
+        errorsByQuoteId: new Map([...left.errorsByQuoteId, ...right.errorsByQuoteId]),
+      };
     }
   }
 
@@ -168,11 +194,7 @@ export class MintQuoteBatchTransport {
   private isConfirmedQuoteSpecificValidationError(
     error: unknown,
     quoteIds: string[],
-  ): error is MintOperationError {
-    return (
-      error instanceof MintOperationError &&
-      error.code === 10000 &&
-      quoteIds.some((quoteId) => error.message.includes(quoteId))
-    );
+  ): error is QuoteSpecificMintOperationError {
+    return error instanceof QuoteSpecificMintOperationError && quoteIds.includes(error.quoteId);
   }
 }
