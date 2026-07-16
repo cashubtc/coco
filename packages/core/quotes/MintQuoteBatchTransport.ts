@@ -1,7 +1,6 @@
 import type { EventBus } from '../events/EventBus.ts';
 import type { CoreEvents } from '../events/types.ts';
 import type { MintAdapter } from '../infra/MintAdapter.ts';
-import { QuoteSpecificMintOperationError } from '../infra/MintQuoteBatchError.ts';
 import { mintQuoteGroupKey } from '../infra/MintQuotePollingKey.ts';
 import type { Logger } from '../logging/Logger.ts';
 import {
@@ -9,6 +8,7 @@ import {
   MintOperationError,
   NetworkError,
   ProofValidationError,
+  StructuredMintOperationError,
 } from '../models/Error.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import { normalizeMintUrl } from '../utils.ts';
@@ -150,7 +150,7 @@ export class MintQuoteBatchTransport {
           quoteId: quoteIds[0],
           code: error.code,
         });
-        return { response: [], errorsByQuoteId: new Map([[error.quoteId, error]]) };
+        return { response: [], errorsByQuoteId: new Map([[error.data.quote as string, error]]) };
       }
 
       const midpoint = Math.floor(quoteIds.length / 2);
@@ -194,7 +194,11 @@ export class MintQuoteBatchTransport {
   private isConfirmedQuoteSpecificValidationError(
     error: unknown,
     quoteIds: string[],
-  ): error is QuoteSpecificMintOperationError {
-    return error instanceof QuoteSpecificMintOperationError && quoteIds.includes(error.quoteId);
+  ): error is StructuredMintOperationError {
+    return (
+      error instanceof StructuredMintOperationError &&
+      typeof error.data.quote === 'string' &&
+      quoteIds.includes(error.data.quote)
+    );
   }
 }

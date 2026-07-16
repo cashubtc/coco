@@ -37,7 +37,6 @@ import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
-import { QuoteSpecificMintOperationError } from '../../infra/MintQuoteBatchError.ts';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import {
@@ -45,6 +44,7 @@ import {
   MintOperationError,
   NetworkError,
   QuoteIdentityConflictError,
+  StructuredMintOperationError,
 } from '../../models/Error';
 
 describe('MintOperationService', () => {
@@ -792,21 +792,25 @@ describe('MintOperationService', () => {
     });
     const peerResponse = createDeferred<unknown>();
     const peerStarted = createDeferred();
+    const explicitStarted = createDeferred();
     (mintAdapter.checkMintQuoteBatch as Mock<any>)
       .mockImplementationOnce(async () => {
         peerStarted.resolve();
         return peerResponse.promise;
       })
-      .mockResolvedValueOnce([
-        {
-          quote: quoteId,
-          request: `request-${quoteId}`,
-          amount: 10,
-          unit: 'sat',
-          expiry: null,
-          state: 'PAID',
-        },
-      ]);
+      .mockImplementationOnce(async () => {
+        explicitStarted.resolve();
+        return [
+          {
+            quote: quoteId,
+            request: `request-${quoteId}`,
+            amount: 10,
+            unit: 'sat',
+            expiry: null,
+            state: 'PAID',
+          },
+        ];
+      });
 
     const watcherCheck = quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [
       'quote-peer',
@@ -814,7 +818,7 @@ describe('MintOperationService', () => {
     ]);
     await peerStarted.promise;
     const explicitCheck = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
-    for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+    await explicitStarted.promise;
 
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(2);
     peerResponse.resolve([
@@ -1161,7 +1165,9 @@ describe('MintOperationService', () => {
     (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementation(
       async (_mintUrl: string, _method: string, requested: string[]) => {
         if (requested.includes('quote-bad')) {
-          throw new QuoteSpecificMintOperationError(10000, 'unknown quote', 'quote-bad');
+          throw new StructuredMintOperationError(10000, 'unknown quote', {
+            quote: 'quote-bad',
+          });
         }
         return requested.map((quote) => ({
           quote,
@@ -1223,7 +1229,9 @@ describe('MintOperationService', () => {
     (mintService.getMintInfo as Mock<any>).mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    const rejection = new QuoteSpecificMintOperationError(10000, 'unknown quote', quoteId);
+    const rejection = new StructuredMintOperationError(10000, 'unknown quote', {
+      quote: quoteId,
+    });
     (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValue(rejection);
 
     await expect(quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId })).rejects.toBe(rejection);

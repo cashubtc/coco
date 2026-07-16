@@ -3,8 +3,12 @@ import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
 import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
-import { QuoteSpecificMintOperationError } from '../../infra/MintQuoteBatchError.ts';
-import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  NetworkError,
+  MintOperationError,
+  StructuredMintOperationError,
+} from '../../models/Error.ts';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -151,10 +155,10 @@ describe('RequestRateLimiter', () => {
         endpoint: 'https://mint.test/v1/mint/quote/bolt11/check',
         method: 'POST',
       });
-      throw new Error('Expected QuoteSpecificMintOperationError');
+      throw new Error('Expected StructuredMintOperationError');
     } catch (error) {
-      expect(error).toBeInstanceOf(QuoteSpecificMintOperationError);
-      expect((error as QuoteSpecificMintOperationError).quoteId).toBe('quote-bad');
+      expect(error).toBeInstanceOf(StructuredMintOperationError);
+      expect((error as StructuredMintOperationError).data.quote).toBe('quote-bad');
     }
   });
 
