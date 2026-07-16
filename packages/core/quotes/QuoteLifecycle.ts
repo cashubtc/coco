@@ -423,7 +423,7 @@ export class QuoteLifecycle {
 
     const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
     const quote = await this.persistCanonicalMintQuote(refreshed);
-    this.markMintQuoteCheckObservationPersisted(quote.mintUrl, quote.method, quote.quoteId);
+    this.markMintQuoteCheckAttemptSettled(quote.mintUrl, quote.method, quote.quoteId);
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
@@ -452,16 +452,13 @@ export class QuoteLifecycle {
     }
 
     const joined = new Map<string, Promise<MintQuote>>();
-    const uncheckedQuoteIds: string[] = [];
-    for (const quoteId of uniqueQuoteIds) {
-      const key = mintQuoteWorkKey(normalizedMintUrl, method, quoteId);
-      const inFlight = this.mintQuoteChecksInFlight.get(key);
-      if (inFlight?.joinable && quoteId !== ownedInFlightQuoteId) {
-        joined.set(quoteId, inFlight.promise);
-      } else {
-        uncheckedQuoteIds.push(quoteId);
-      }
-    }
+    const uncheckedQuoteIds = this.joinMintQuoteChecksInFlight(
+      normalizedMintUrl,
+      method,
+      uniqueQuoteIds,
+      joined,
+      ownedInFlightQuoteId,
+    );
 
     let check!: Promise<MintQuotePollingCheckResult>;
     const registeredQuoteWork: Promise<MintQuote>[] = [];
@@ -512,15 +509,34 @@ export class QuoteLifecycle {
     check =
       uncheckedQuoteIds.length === 0
         ? Promise.resolve({ attemptedQuoteIds: [], observations: [] })
-        : Promise.resolve().then(() =>
-            this.performMintQuotePollingCheck(
+        : Promise.resolve().then(async () => {
+            const limit =
+              knownLimit === undefined
+                ? getNut29MintQuoteCheckLimit(
+                    await this.mintService.getMintInfo(normalizedMintUrl),
+                    method,
+                  )
+                : knownLimit;
+            // Capability discovery yields. Partition again so work started during that await is
+            // joined before the transport registers and sends this opportunity.
+            const stillUncheckedQuoteIds = this.joinMintQuoteChecksInFlight(
               normalizedMintUrl,
               method,
               uncheckedQuoteIds,
-              knownLimit,
+              joined,
+              ownedInFlightQuoteId,
+            );
+            if (stillUncheckedQuoteIds.length === 0) {
+              return { attemptedQuoteIds: [], observations: [] };
+            }
+            return this.performMintQuotePollingCheck(
+              normalizedMintUrl,
+              method,
+              stillUncheckedQuoteIds,
+              limit,
               registerAttemptedQuoteWork,
-            ),
-          );
+            );
+          });
 
     const result = await check;
     await Promise.allSettled(registeredQuoteWork);
@@ -550,22 +566,36 @@ export class QuoteLifecycle {
     return combinedResult;
   }
 
+  /** Registers watcher interests that explicit checks may recruit into spare batch capacity. */
   registerMintQuotePollingInterestProvider(provider: MintQuotePollingInterestProvider): () => void {
     this.mintQuotePollingInterestProviders.add(provider);
     return () => this.mintQuotePollingInterestProviders.delete(provider);
+  }
+
+  /** Partitions quote IDs into joinable existing work and IDs requiring a new transport check. */
+  private joinMintQuoteChecksInFlight(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+    joined: Map<string, Promise<MintQuote>>,
+    ownedInFlightQuoteId?: string,
+  ): string[] {
+    return quoteIds.filter((quoteId) => {
+      if (quoteId === ownedInFlightQuoteId) return true;
+      const inFlight = this.mintQuoteChecksInFlight.get(mintQuoteWorkKey(mintUrl, method, quoteId));
+      if (!inFlight?.joinable) return true;
+      joined.set(quoteId, inFlight.promise);
+      return false;
+    });
   }
 
   private async performMintQuotePollingCheck(
     normalizedMintUrl: string,
     method: MintMethod,
     uniqueQuoteIds: string[],
-    knownLimit?: number | null,
+    limit: number | null,
     onAttempt?: (quoteIds: string[]) => void,
   ): Promise<MintQuotePollingCheckResult> {
-    const limit =
-      knownLimit === undefined
-        ? getNut29MintQuoteCheckLimit(await this.mintService.getMintInfo(normalizedMintUrl), method)
-        : knownLimit;
     const request = await this.mintQuoteBatchTransport.check(
       normalizedMintUrl,
       method,
@@ -650,8 +680,11 @@ export class QuoteLifecycle {
         await this.resolveAndPersistMintQuoteSnapshot(normalizedMintUrl, method, snapshot),
       );
     }
-    for (const { quote } of persistedObservations) {
-      this.markMintQuoteCheckObservationPersisted(quote.mintUrl, quote.method, quote.quoteId);
+    // Every attempted sibling has reached a terminal observation outcome. Make all of their
+    // work non-joinable before events so a listener can start the later check required for a
+    // missing, invalid, or isolated-error entry without waiting on this enclosing check.
+    for (const quoteId of attemptedQuoteIds) {
+      this.markMintQuoteCheckAttemptSettled(normalizedMintUrl, method, quoteId);
     }
     for (const { quote, remoteStateChanged } of persistedObservations) {
       await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
@@ -1028,12 +1061,12 @@ export class QuoteLifecycle {
       method,
       snapshot,
     );
-    this.markMintQuoteCheckObservationPersisted(quote.mintUrl, quote.method, quote.quoteId);
+    this.markMintQuoteCheckAttemptSettled(quote.mintUrl, quote.method, quote.quoteId);
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
 
-  private markMintQuoteCheckObservationPersisted(
+  private markMintQuoteCheckAttemptSettled(
     mintUrl: string,
     method: MintMethod,
     quoteId: string,

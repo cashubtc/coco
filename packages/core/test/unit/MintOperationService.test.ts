@@ -77,6 +77,11 @@ describe('MintOperationService', () => {
     return { promise, resolve, reject } as const;
   }
 
+  type TestMock = ReturnType<typeof mock>;
+  const getMintInfoMock = () => mintService.getMintInfo as unknown as TestMock;
+  const checkMintQuoteMock = () => mintAdapter.checkMintQuote as unknown as TestMock;
+  const checkMintQuoteBatchMock = () => mintAdapter.checkMintQuoteBatch as unknown as TestMock;
+
   const makeProof = (secret: string): Proof =>
     ({
       id: keysetId,
@@ -667,13 +672,13 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: {
         '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
         '29': { methods: ['bolt11'], max_batch_size: 10 },
       },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: quoteId,
         request: 'lnbc1test',
@@ -706,10 +711,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementation(
+    checkMintQuoteBatchMock().mockImplementation(
       async (_mintUrl: string, _method: string, requested: string[]) =>
         requested.map((quote) => ({
           quote,
@@ -766,12 +771,12 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
     const response = createDeferred<unknown>();
     const started = createDeferred();
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementationOnce(async () => {
+    checkMintQuoteBatchMock().mockImplementationOnce(async () => {
       started.resolve();
       return response.promise;
     });
@@ -807,10 +812,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValue([
+    checkMintQuoteBatchMock().mockResolvedValue([
       {
         quote: quoteId,
         request: 'lnbc1test',
@@ -848,12 +853,12 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
     const response = createDeferred<unknown>();
     const started = createDeferred();
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementationOnce(async () => {
+    checkMintQuoteBatchMock().mockImplementationOnce(async () => {
       started.resolve();
       return response.promise;
     });
@@ -879,6 +884,61 @@ describe('MintOperationService', () => {
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
   });
 
+  it('watcher work joins an explicit check that starts during capability lookup', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    const watcherCapability = createDeferred<{
+      nuts: { '29': { methods: string[]; max_batch_size: number } };
+    }>();
+    const watcherCapabilityStarted = createDeferred();
+    getMintInfoMock()
+      .mockImplementationOnce(async () => {
+        watcherCapabilityStarted.resolve();
+        return watcherCapability.promise;
+      })
+      .mockResolvedValue({
+        nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
+      });
+    const explicitResponse = createDeferred<unknown>();
+    const explicitStarted = createDeferred();
+    checkMintQuoteBatchMock().mockImplementationOnce(async () => {
+      explicitStarted.resolve();
+      return explicitResponse.promise;
+    });
+
+    const watcherCheck = quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]);
+    await watcherCapabilityStarted.promise;
+    const explicitCheck = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+    await explicitStarted.promise;
+    watcherCapability.resolve({
+      nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
+    });
+    explicitResponse.resolve([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+    ]);
+    await expect(explicitCheck).resolves.toMatchObject({ quoteId, state: 'PAID' });
+    await expect(watcherCheck).resolves.toMatchObject({
+      attemptedQuoteIds: [quoteId],
+      observations: [expect.objectContaining({ quote: quoteId, state: 'PAID' })],
+    });
+    expect(checkMintQuoteBatchMock()).toHaveBeenCalledTimes(1);
+  });
+
   it('batch-check polling persists every peer before emitting quote updates', async () => {
     for (const id of ['quote-a', 'quote-b']) {
       await quoteRepo.upsertMintQuote(
@@ -892,10 +952,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockResolvedValueOnce(
         ['quote-a', 'quote-b'].map((quote) => ({
           quote,
@@ -937,6 +997,60 @@ describe('MintOperationService', () => {
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(2);
   });
 
+  it('allows an update listener to refresh a missing batch sibling', async () => {
+    for (const id of ['quote-a', 'quote-b']) {
+      await quoteRepo.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: id,
+          request: `request-${id}`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: null,
+          state: 'UNPAID',
+        }),
+      );
+    }
+    getMintInfoMock().mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
+    });
+    checkMintQuoteBatchMock()
+      .mockResolvedValueOnce([
+        {
+          quote: 'quote-a',
+          request: 'request-quote-a',
+          amount: 10,
+          unit: 'sat',
+          expiry: null,
+          state: 'PAID',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          quote: 'quote-b',
+          request: 'request-quote-b',
+          amount: 10,
+          unit: 'sat',
+          expiry: null,
+          state: 'PAID',
+        },
+      ]);
+    eventBus.once('mint-quote:updated', async () => {
+      await quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId: 'quote-b' });
+    });
+
+    const check = quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [
+      'quote-a',
+      'quote-b',
+    ]);
+    const outcome = await Promise.race([
+      check.then(() => 'completed' as const),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+    ]);
+
+    expect(outcome).toBe('completed');
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshMintQuote does not join watcher work that excluded it at the batch limit', async () => {
     for (const id of ['quote-peer', quoteId]) {
       await quoteRepo.upsertMintQuote(
@@ -950,13 +1064,13 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 1 } },
     });
     const peerResponse = createDeferred<unknown>();
     const peerStarted = createDeferred();
     const explicitStarted = createDeferred();
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockImplementationOnce(async () => {
         peerStarted.resolve();
         return peerResponse.promise;
@@ -1009,10 +1123,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: 'extra-quote',
         request: 'extra-request',
@@ -1044,13 +1158,13 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: {
         '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
         '29': { max_batch_size: 2 },
       },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: 'quote-b',
         request: 'request-quote-b',
@@ -1103,10 +1217,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: 'quote-a',
         request: 'wrong-request',
@@ -1163,10 +1277,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: quoteId,
         request: 'lnbc1test',
@@ -1204,10 +1318,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+    checkMintQuoteBatchMock().mockResolvedValueOnce([
       {
         quote: quoteId,
         request: 'lnbc1test',
@@ -1229,10 +1343,10 @@ describe('MintOperationService', () => {
   it('batch-check polling rejects over-issued reusable quote observations', async () => {
     await persistOnchainQuote('onchain-over-issued');
     await persistBolt12Quote('bolt12-over-issued', { amount: Amount.from(12) });
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['onchain', 'bolt12'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockResolvedValueOnce([
         {
           quote: 'onchain-over-issued',
@@ -1279,10 +1393,10 @@ describe('MintOperationService', () => {
   it('batch-check polling rejects method-specific immutable field conflicts', async () => {
     await persistOnchainQuote('onchain-conflict');
     await persistBolt12Quote('bolt12-conflict', { amount: Amount.from(12) });
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['onchain', 'bolt12'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockResolvedValueOnce([
         {
           quote: 'onchain-conflict',
@@ -1332,10 +1446,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 4 } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockRejectedValueOnce(new MintOperationError(11017, 'batch too large'))
       .mockImplementation(async (_mintUrl: string, _method: string, requested: string[]) =>
         requested.map((quote) => ({
@@ -1351,9 +1465,11 @@ describe('MintOperationService', () => {
     const first = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
     const second = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
 
-    expect(
-      (mintAdapter.checkMintQuoteBatch as Mock<any>).mock.calls.map((call) => call[2]),
-    ).toEqual([quoteIds, ['quote-a', 'quote-b'], ['quote-a', 'quote-b']]);
+    expect(checkMintQuoteBatchMock().mock.calls.map((call) => call[2])).toEqual([
+      quoteIds,
+      ['quote-a', 'quote-b'],
+      ['quote-a', 'quote-b'],
+    ]);
     expect(first.attemptedQuoteIds).toEqual(['quote-a', 'quote-b']);
     expect(second.attemptedQuoteIds).toEqual(['quote-a', 'quote-b']);
   });
@@ -1372,10 +1488,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementation(
+    checkMintQuoteBatchMock().mockImplementation(
       async (_mintUrl: string, _method: string, requested: string[]) => {
         if (requested.includes('quote-bad')) {
           throw new StructuredMintOperationError(10000, 'unknown quote', {
@@ -1415,10 +1531,10 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValue(
+    checkMintQuoteBatchMock().mockRejectedValue(
       new MintOperationError(30000, 'authentication required'),
     );
 
@@ -1439,13 +1555,13 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
     const rejection = new StructuredMintOperationError(10000, 'unknown quote', {
       quote: quoteId,
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValue(rejection);
+    checkMintQuoteBatchMock().mockRejectedValue(rejection);
 
     await expect(quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId })).rejects.toBe(rejection);
     await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
@@ -1466,13 +1582,13 @@ describe('MintOperationService', () => {
         }),
       );
     }
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
     });
     const rejection = new StructuredMintOperationError(10000, 'unknown quote', {
       quote: quoteId,
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementation(
+    checkMintQuoteBatchMock().mockImplementation(
       async (_mintUrl: string, _method: string, requested: string[]) => {
         if (requested.includes(quoteId)) throw rejection;
         return requested.map((quote) => ({
@@ -1528,12 +1644,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+    getMintInfoMock().mockResolvedValueOnce({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValue(
-      new NetworkError('connection lost'),
-    );
+    checkMintQuoteBatchMock().mockRejectedValue(new NetworkError('connection lost'));
 
     await expect(
       quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]),
@@ -1556,13 +1670,11 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValueOnce(
-      new HttpResponseError('not found', 404),
-    );
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValue({
+    checkMintQuoteBatchMock().mockRejectedValueOnce(new HttpResponseError('not found', 404));
+    checkMintQuoteMock().mockResolvedValue({
       quote: quoteId,
       request: 'lnbc1test',
       amount: Amount.from(10),
@@ -1589,10 +1701,10 @@ describe('MintOperationService', () => {
         state: 'UNPAID',
       }),
     );
-    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+    getMintInfoMock().mockResolvedValue({
       nuts: { '29': { methods: ['bolt11'] } },
     });
-    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+    checkMintQuoteBatchMock()
       .mockRejectedValueOnce(new HttpResponseError('not found', 404))
       .mockResolvedValueOnce([
         {
@@ -1604,7 +1716,7 @@ describe('MintOperationService', () => {
           state: 'PAID',
         },
       ]);
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValue({
+    checkMintQuoteMock().mockResolvedValue({
       quote: quoteId,
       request: 'lnbc1test',
       amount: Amount.from(10),

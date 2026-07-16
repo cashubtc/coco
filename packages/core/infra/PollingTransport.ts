@@ -488,6 +488,7 @@ export class PollingTransport implements RealTimeTransport, MintQuotePollingInte
     }
   }
 
+  /** Returns eligible queued interests in deterministic scheduler order. */
   getQueuedMintQuoteIds(mintUrl: string, method: MintMethod): string[] {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
     const quoteIds: string[] = [];
