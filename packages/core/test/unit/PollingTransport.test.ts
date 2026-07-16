@@ -519,7 +519,7 @@ describe('PollingTransport unsubscribe during processing', () => {
     };
     const transport = new PollingTransport(
       createMockMintAdapter(),
-      { intervalMs: 1 },
+      { intervalMs: 60_000 },
       new NullLogger(),
       checker,
     );
@@ -556,8 +556,13 @@ describe('PollingTransport unsubscribe during processing', () => {
           state: 'UNPAID' as const,
         })),
       });
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      const scheduler = (transport as any).schedByMint.get(mintUrl);
+      for (let attempt = 0; scheduler.running && attempt < 10; attempt++) {
+        await Promise.resolve();
+      }
 
+      expect(scheduler.running).toBeFalse();
+      expect(scheduler.queue).toEqual([]);
       expect(checker.checkMintQuotesForPolling).toHaveBeenCalledTimes(1);
     } finally {
       transport.closeAll();

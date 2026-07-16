@@ -9,11 +9,11 @@ import {
   NetworkError,
   ProofValidationError,
 } from '../models/Error.ts';
-import { StructuredMintOperationError } from '../infra/StructuredMintOperationError.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import { normalizeMintUrl } from '../utils.ts';
 
 const MINT_METHODS: MintMethod[] = ['bolt11', 'bolt12', 'onchain'];
+const AUTHENTICATION_ERROR_CODE_MIN = 30_000;
 
 /** Returns whether current mint metadata advertises NUT-29 for the requested mint method. */
 export function supportsNut29MintQuoteCheck(mintInfo: unknown, method: MintMethod): boolean {
@@ -61,7 +61,7 @@ type MintQuoteBatchRequestResult =
 
 /**
  * Owns NUT-29 request policy: capability fallback, bounded retries, effective-limit
- * downshifts, exact quote-error isolation, and incompatibility reset on mint refresh.
+ * downshifts, atomic validation-error isolation, and incompatibility reset on mint refresh.
  */
 export class MintQuoteBatchTransport {
   private readonly effectiveLimit = new Map<string, number>();
@@ -88,11 +88,9 @@ export class MintQuoteBatchTransport {
     method: MintMethod,
     quoteIds: string[],
     limit: number | null,
-    onAttempt?: (quoteIds: string[]) => void,
   ): Promise<MintQuoteBatchRequestResult> {
     const groupKey = mintQuoteGroupKey(mintUrl, method);
     if (limit === null || this.incompatibleGroups.has(groupKey)) {
-      onAttempt?.([quoteIds[0]!]);
       return { kind: 'single', attemptedQuoteIds: [quoteIds[0]!] };
     }
 
@@ -102,7 +100,6 @@ export class MintQuoteBatchTransport {
     );
     while (true) {
       try {
-        onAttempt?.(attemptedQuoteIds);
         const isolated = await this.checkWithIsolation(mintUrl, method, attemptedQuoteIds);
         return { kind: 'batch', attemptedQuoteIds, ...isolated };
       } catch (error) {
@@ -111,13 +108,11 @@ export class MintQuoteBatchTransport {
           (error.status === 404 || error.status === 405 || error.status === 501)
         ) {
           this.incompatibleGroups.add(groupKey);
-          onAttempt?.([attemptedQuoteIds[0]!]);
           return { kind: 'single', attemptedQuoteIds: [attemptedQuoteIds[0]!] };
         }
         if (!(error instanceof MintOperationError) || error.code !== 11017) throw error;
         if (attemptedQuoteIds.length <= 1) {
           this.incompatibleGroups.add(groupKey);
-          onAttempt?.([attemptedQuoteIds[0]!]);
           return { kind: 'single', attemptedQuoteIds: [attemptedQuoteIds[0]!] };
         }
         const loweredLimit = Math.max(1, Math.floor(attemptedQuoteIds.length / 2));
@@ -142,7 +137,7 @@ export class MintQuoteBatchTransport {
       }
       return { response, errorsByQuoteId: new Map() };
     } catch (error) {
-      if (!this.isConfirmedQuoteSpecificValidationError(error, quoteIds)) throw error;
+      if (!this.isConfirmedValidationRejection(error)) throw error;
       if (quoteIds.length === 1) {
         this.logger?.warn('Isolated invalid mint quote during NUT-29 batch check', {
           mintUrl,
@@ -150,7 +145,7 @@ export class MintQuoteBatchTransport {
           quoteId: quoteIds[0],
           code: error.code,
         });
-        return { response: [], errorsByQuoteId: new Map([[error.data.quote as string, error]]) };
+        return { response: [], errorsByQuoteId: new Map([[quoteIds[0]!, error]]) };
       }
 
       const midpoint = Math.floor(quoteIds.length / 2);
@@ -191,14 +186,11 @@ export class MintQuoteBatchTransport {
     throw new Error('Unreachable NUT-29 quote check retry state');
   }
 
-  private isConfirmedQuoteSpecificValidationError(
-    error: unknown,
-    quoteIds: string[],
-  ): error is StructuredMintOperationError {
+  private isConfirmedValidationRejection(error: unknown): error is MintOperationError {
     return (
-      error instanceof StructuredMintOperationError &&
-      typeof error.data.quote === 'string' &&
-      quoteIds.includes(error.data.quote)
+      error instanceof MintOperationError &&
+      error.code !== 11017 &&
+      error.code < AUTHENTICATION_ERROR_CODE_MIN
     );
   }
 }

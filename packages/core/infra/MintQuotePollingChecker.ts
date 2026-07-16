@@ -10,15 +10,6 @@ export interface MintQuotePollingCheckResult {
   errorsByQuoteId?: Map<string, Error>;
 }
 
-/** Supplies queued watcher interests that can share an explicit quote-check batch. */
-export interface MintQuotePollingInterestProvider {
-  /**
-   * Returns eligible quote IDs in scheduler order for one normalized mint/method cohort.
-   * IDs under backoff or no longer queued must be omitted.
-   */
-  getQueuedMintQuoteIds(mintUrl: string, method: MintMethod): string[];
-}
-
 /** Canonical quote-check seam used by the polling scheduler. */
 export interface MintQuotePollingChecker {
   checkMintQuotesForPolling(
@@ -26,6 +17,4 @@ export interface MintQuotePollingChecker {
     method: MintMethod,
     quoteIds: string[],
   ): Promise<MintQuotePollingCheckResult>;
-  /** Registers queued watcher interests and returns an idempotent cleanup callback. */
-  registerMintQuotePollingInterestProvider?(provider: MintQuotePollingInterestProvider): () => void;
 }
