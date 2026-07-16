@@ -8,8 +8,8 @@ import {
   MintOperationError,
   NetworkError,
   ProofValidationError,
-  StructuredMintOperationError,
 } from '../models/Error.ts';
+import { StructuredMintOperationError } from '../infra/StructuredMintOperationError.ts';
 import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import { normalizeMintUrl } from '../utils.ts';
 
@@ -50,7 +50,7 @@ export function getNut29MintQuoteCheckLimit(mintInfo: unknown, method: MintMetho
   return Math.min(Number(advertised), 100);
 }
 
-export type MintQuoteBatchRequestResult =
+type MintQuoteBatchRequestResult =
   | { kind: 'single'; attemptedQuoteIds: [string] }
   | {
       kind: 'batch';

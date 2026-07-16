@@ -712,7 +712,7 @@ export class QuoteLifecycle {
     method: MintMethod,
     quoteId: string,
     snapshot: MintMethodQuoteSnapshot,
-  ): Promise<MintQuote> {
+  ): Promise<void> {
     assertMintQuoteBatchSnapshotStructure(method, snapshot);
     const existingQuote = await this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
     if (!existingQuote || snapshot.quote !== quoteId) {
@@ -750,7 +750,6 @@ export class QuoteLifecycle {
         );
       }
     }
-    return existingQuote;
   }
 
   private async refreshResolvedMeltQuote(existingQuote: MeltQuote): Promise<MeltQuote> {

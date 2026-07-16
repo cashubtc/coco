@@ -1,11 +1,7 @@
 import { JSONInt } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger.ts';
-import {
-  HttpResponseError,
-  NetworkError,
-  MintOperationError,
-  StructuredMintOperationError,
-} from '../models/Error';
+import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
+import { StructuredMintOperationError } from './StructuredMintOperationError.ts';
 
 type RequestFunction = <T>(
   options: {

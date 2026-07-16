@@ -354,7 +354,9 @@ export class PollingTransport implements RealTimeTransport, MintQuotePollingInte
       return;
     }
     const tasks = [task];
-    if (this.mintQuoteChecker && this.getMintMethod(task.kind)) {
+    const mintQuoteChecker = this.mintQuoteChecker;
+    const mintMethod = mintQuoteChecker ? this.getMintMethod(task.kind) : undefined;
+    if (mintMethod) {
       for (let index = 0; index < s.queue.length && tasks.length < 100; ) {
         const candidate = s.queue[index];
         if (
@@ -371,9 +373,14 @@ export class PollingTransport implements RealTimeTransport, MintQuotePollingInte
 
     let mintQuoteResult: MintQuotePollingCheckResult | undefined;
     try {
-      if (this.mintQuoteChecker && this.getMintMethod(task.kind)) {
-        mintQuoteResult = await this.performMintQuoteTasks(mintUrl, tasks);
-        this.updateMintQuoteBackoff(mintUrl, task.kind, mintQuoteResult);
+      if (mintQuoteChecker && mintMethod) {
+        mintQuoteResult = await this.performMintQuoteTasks(
+          mintUrl,
+          mintMethod,
+          tasks,
+          mintQuoteChecker,
+        );
+        this.updateMintQuoteBackoff(mintUrl, mintMethod, mintQuoteResult);
       } else {
         await this.performTask(mintUrl, task);
       }
@@ -447,11 +454,9 @@ export class PollingTransport implements RealTimeTransport, MintQuotePollingInte
 
   private updateMintQuoteBackoff(
     mintUrl: string,
-    kind: SubscriptionKind,
+    method: MintMethod,
     result: MintQuotePollingCheckResult,
   ): void {
-    const method = this.getMintMethod(kind);
-    if (!method) return;
     const observed = new Set(result.observations.map((observation) => observation.quote));
     let byMethod = this.mintQuoteBackoff.get(mintUrl);
     if (!byMethod) {
@@ -514,15 +519,11 @@ export class PollingTransport implements RealTimeTransport, MintQuotePollingInte
 
   private async performMintQuoteTasks(
     mintUrl: string,
+    method: MintMethod,
     tasks: Task[],
+    checker: MintQuotePollingChecker,
   ): Promise<MintQuotePollingCheckResult> {
-    const first = tasks[0];
-    const method = first ? this.getMintMethod(first.kind) : undefined;
-    if (!first || !method || !this.mintQuoteChecker) {
-      return { attemptedQuoteIds: [], observations: [] };
-    }
-
-    const result = await this.mintQuoteChecker.checkMintQuotesForPolling(
+    const result = await checker.checkMintQuotesForPolling(
       mintUrl,
       method,
       Array.from(new Set(tasks.map((task) => task.filter!).filter(Boolean))),
