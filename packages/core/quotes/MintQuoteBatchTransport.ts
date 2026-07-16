@@ -57,6 +57,7 @@ type MintQuoteBatchRequestResult =
       attemptedQuoteIds: string[];
       response: unknown[];
       errorsByQuoteId: Map<string, MintOperationError>;
+      deferredError?: unknown;
     };
 
 /**
@@ -129,6 +130,7 @@ export class MintQuoteBatchTransport {
   ): Promise<{
     response: unknown[];
     errorsByQuoteId: Map<string, MintOperationError>;
+    deferredError?: unknown;
   }> {
     try {
       const response = await this.requestWithRetry(mintUrl, method, quoteIds);
@@ -150,10 +152,17 @@ export class MintQuoteBatchTransport {
 
       const midpoint = Math.floor(quoteIds.length / 2);
       const left = await this.checkWithIsolation(mintUrl, method, quoteIds.slice(0, midpoint));
-      const right = await this.checkWithIsolation(mintUrl, method, quoteIds.slice(midpoint));
+      if (left.deferredError !== undefined) return left;
+      let right: Awaited<ReturnType<MintQuoteBatchTransport['checkWithIsolation']>>;
+      try {
+        right = await this.checkWithIsolation(mintUrl, method, quoteIds.slice(midpoint));
+      } catch (deferredError) {
+        return { ...left, deferredError };
+      }
       return {
         response: [...left.response, ...right.response],
         errorsByQuoteId: new Map([...left.errorsByQuoteId, ...right.errorsByQuoteId]),
+        ...(right.deferredError === undefined ? {} : { deferredError: right.deferredError }),
       };
     }
   }

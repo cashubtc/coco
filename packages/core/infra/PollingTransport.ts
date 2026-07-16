@@ -404,6 +404,9 @@ export class PollingTransport implements RealTimeTransport {
             ...tasks.filter((completedTask) => attempted.has(completedTask.filter ?? '')),
           ]
         : tasks;
+      if (mintMethod) {
+        this.rotateMintQuoteGroupBehindPeers(s, task.kind);
+      }
       const completedUnsubscribed = new Set<string>();
       for (const completedTask of requeueTasks) {
         const wasUnsubscribed = completedTask.subId && unsubscribed?.has(completedTask.subId);
@@ -422,6 +425,17 @@ export class PollingTransport implements RealTimeTransport {
         void this.maybeRun(mintUrl);
       }, delay);
     }
+  }
+
+  private rotateMintQuoteGroupBehindPeers(
+    scheduler: MintScheduler,
+    completedKind: SubscriptionKind,
+  ): void {
+    const peers = scheduler.queue.filter((queuedTask) => queuedTask.kind !== completedKind);
+    const remainingGroup = scheduler.queue.filter(
+      (queuedTask) => queuedTask.kind === completedKind,
+    );
+    scheduler.queue = [...peers, ...remainingGroup];
   }
 
   private markSchedulerIdle(scheduler: MintScheduler): void {

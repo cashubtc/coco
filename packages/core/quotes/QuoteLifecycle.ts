@@ -463,7 +463,7 @@ export class QuoteLifecycle {
         settleExplicitWork,
       );
     }
-    const { attemptedQuoteIds, response, errorsByQuoteId } = request;
+    const { attemptedQuoteIds, response, errorsByQuoteId, deferredError } = request;
 
     const rawByQuoteId = new Map<string, MintMethodQuoteSnapshot[]>();
     for (const raw of response) {
@@ -539,6 +539,7 @@ export class QuoteLifecycle {
     for (const { quote, remoteStateChanged } of persistedObservations) {
       await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     }
+    if (deferredError !== undefined) throw deferredError;
 
     return { attemptedQuoteIds, observations, errorsByQuoteId };
   }

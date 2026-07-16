@@ -279,6 +279,55 @@ describe('PollingTransport subscription kinds', () => {
     transport.closeAll();
   });
 
+  it('rotates peer work ahead of the remainder of a large mint-quote cohort', async () => {
+    const quoteStarted = createDeferred();
+    const releaseQuote = createDeferred();
+    const proofChecked = createDeferred();
+    const order: string[] = [];
+    const adapter = createMockMintAdapter();
+    (adapter.checkProofStates as ReturnType<typeof mock>).mockImplementation(async () => {
+      order.push('proof');
+      proofChecked.resolve();
+      return [];
+    });
+    const checker = {
+      checkMintQuotesForPolling: mock(async (_mintUrl, _method, quoteIds: string[]) => {
+        order.push('mint');
+        if (checker.checkMintQuotesForPolling.mock.calls.length === 1) {
+          expect(quoteIds).toHaveLength(100);
+          quoteStarted.resolve();
+          await releaseQuote.promise;
+        }
+        return { attemptedQuoteIds: quoteIds, observations: [] };
+      }),
+    };
+    const transport = new PollingTransport(adapter, { intervalMs: 0 }, new NullLogger(), checker);
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        kind: 'bolt11_mint_quote',
+        subId: 'large-mint-sub',
+        filters: Array.from({ length: 101 }, (_, index) => `quote-${index}`),
+      },
+      id: 1,
+    });
+    await quoteStarted.promise;
+
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'proof_state', subId: 'proof-sub', filters: ['Y-1'] },
+      id: 2,
+    });
+    releaseQuote.resolve();
+
+    await proofChecked.promise;
+    expect(order.slice(0, 2)).toEqual(['mint', 'proof']);
+    transport.closeAll();
+  });
+
   it('keeps watched mint quotes eligible after a failed batch opportunity', async () => {
     const retried = createDeferred();
     const checker = {

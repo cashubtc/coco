@@ -1179,6 +1179,32 @@ describe('MintOperationService', () => {
     });
   });
 
+  it('persists a successful isolation branch before surfacing a later transport failure', async () => {
+    const quoteIds = ['quote-a', 'quote-b'];
+    await persistUnpaidBolt11Quotes(...quoteIds);
+    getMintInfoMock().mockResolvedValue(nut29MintInfo());
+    checkMintQuoteBatchMock().mockImplementation(
+      async (_mintUrl: string, _method: string, requested: string[]) => {
+        if (requested.length === 2) {
+          throw new MintOperationError(10000, 'invalid quote in request');
+        }
+        if (requested[0] === 'quote-b') throw new NetworkError('connection lost');
+        return requested.map((quote) => bolt11BatchObservation(quote));
+      },
+    );
+
+    await expect(
+      quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds),
+    ).rejects.toThrow('connection lost');
+
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-a')).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-b')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
   it('does not split an unconfirmed whole-request protocol rejection', async () => {
     await persistUnpaidBolt11Quotes('quote-a', 'quote-b');
     getMintInfoMock().mockResolvedValue(nut29MintInfo());
