@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import { PollingTransport } from '../../infra/PollingTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
+import type { MintQuotePollingCheckResult } from '../../infra/MintQuotePollingChecker';
 import { NullLogger } from '../../logging';
 
 type PollingMessage = {
@@ -503,6 +504,65 @@ describe('PollingTransport proof state batching', () => {
 
 describe('PollingTransport unsubscribe during processing', () => {
   const mintUrl = 'https://mint.example.com';
+
+  it('does not repoll sibling filters after a batched subscription is removed', async () => {
+    const started = createDeferred();
+    const firstResult = createDeferred<MintQuotePollingCheckResult>();
+    const checker = {
+      checkMintQuotesForPolling: mock(async (_mintUrl, _method, quoteIds: string[]) => {
+        if (checker.checkMintQuotesForPolling.mock.calls.length === 1) {
+          started.resolve();
+          return firstResult.promise;
+        }
+        return { attemptedQuoteIds: quoteIds, observations: [] };
+      }),
+    };
+    const transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      checker,
+    );
+    const subId = 'batched-unsubscribe-sub';
+    transport.on(mintUrl, 'message', () => {});
+
+    try {
+      transport.send(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          kind: 'bolt11_mint_quote',
+          subId,
+          filters: ['quote-1', 'quote-2'],
+        },
+        id: 1,
+      });
+      await started.promise;
+
+      transport.send(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'unsubscribe',
+        params: { subId },
+        id: 2,
+      });
+      firstResult.resolve({
+        attemptedQuoteIds: ['quote-1', 'quote-2'],
+        observations: ['quote-1', 'quote-2'].map((quote) => ({
+          quote,
+          request: `${quote}-request`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: null,
+          state: 'UNPAID' as const,
+        })),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      expect(checker.checkMintQuotesForPolling).toHaveBeenCalledTimes(1);
+    } finally {
+      transport.closeAll();
+    }
+  });
 
   it('should not re-enqueue task if unsubscribed during processing', async () => {
     // Create adapter with delay to simulate slow API call

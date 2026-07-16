@@ -65,6 +65,11 @@ const MINT_QUOTE_STATE_RANK: Record<string, number> = {
 
 class MintQuoteBatchWorkNotAttemptedError extends Error {}
 
+type MintQuoteRefreshWork = {
+  promise: Promise<MintQuote>;
+  joinable: boolean;
+};
+
 function isMintQuoteStateDowngrade(
   existing: MintMethodRemoteState,
   incoming: MintMethodRemoteState,
@@ -81,6 +86,18 @@ function hasReusableSettlementAmounts(snapshot: {
   amount_issued?: unknown;
 }): boolean {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
+}
+
+function assertReusableMintQuoteBatchAmounts(
+  method: 'onchain' | 'bolt12',
+  amountPaid: AmountLike,
+  amountIssued: AmountLike,
+): void {
+  if (Amount.from(amountPaid).lessThan(Amount.from(amountIssued))) {
+    throw new ProofValidationError(
+      `${method} mint quote batch observation has amount_issued greater than amount_paid`,
+    );
+  }
 }
 
 function getMintQuoteSnapshotFingerprint(
@@ -151,15 +168,13 @@ function assertMintQuoteBatchSnapshotStructure(
 
   if (method === 'onchain') {
     const onchain = snapshot as MintMethodQuoteSnapshot<'onchain'>;
-    Amount.from(onchain.amount_paid);
-    Amount.from(onchain.amount_issued);
+    assertReusableMintQuoteBatchAmounts(method, onchain.amount_paid, onchain.amount_issued);
     return;
   }
 
   const bolt12 = snapshot as MintMethodQuoteSnapshot<'bolt12'>;
   if (bolt12.amount != null) Amount.from(bolt12.amount);
-  Amount.from(bolt12.amount_paid);
-  Amount.from(bolt12.amount_issued);
+  assertReusableMintQuoteBatchAmounts(method, bolt12.amount_paid, bolt12.amount_issued);
 }
 
 function getRemoteStateChange(
@@ -309,7 +324,7 @@ export class QuoteLifecycle {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly mintQuoteBatchTransport: MintQuoteBatchTransport;
-  private readonly mintQuoteRefreshInFlight = new Map<string, Promise<MintQuote>>();
+  private readonly mintQuoteRefreshInFlight = new Map<string, MintQuoteRefreshWork>();
 
   constructor(deps: QuoteLifecycleDeps) {
     this.mintHandlerProvider = deps.mintHandlerProvider;
@@ -349,8 +364,8 @@ export class QuoteLifecycle {
       existingQuote.quoteId,
     );
     const existing = this.mintQuoteRefreshInFlight.get(key);
-    if (existing) {
-      return existing.catch((error) => {
+    if (existing?.joinable) {
+      return existing.promise.catch((error) => {
         if (!(error instanceof MintQuoteBatchWorkNotAttemptedError)) throw error;
         if (this.mintQuoteRefreshInFlight.get(key) === existing) {
           this.mintQuoteRefreshInFlight.delete(key);
@@ -359,12 +374,14 @@ export class QuoteLifecycle {
       });
     }
 
+    let work!: MintQuoteRefreshWork;
     const refresh = this.performRefreshResolvedMintQuote(existingQuote).finally(() => {
-      if (this.mintQuoteRefreshInFlight.get(key) === refresh) {
+      if (this.mintQuoteRefreshInFlight.get(key) === work) {
         this.mintQuoteRefreshInFlight.delete(key);
       }
     });
-    this.mintQuoteRefreshInFlight.set(key, refresh);
+    work = { promise: refresh, joinable: true };
+    this.mintQuoteRefreshInFlight.set(key, work);
     return refresh;
   }
 
@@ -402,6 +419,7 @@ export class QuoteLifecycle {
 
     const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
     const quote = await this.persistCanonicalMintQuote(refreshed);
+    this.markMintQuoteRefreshWorkPersisted(quote.mintUrl, quote.method, quote.quoteId);
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
@@ -429,8 +447,8 @@ export class QuoteLifecycle {
     for (const quoteId of uniqueQuoteIds) {
       const key = mintQuoteWorkKey(normalizedMintUrl, method, quoteId);
       const inFlight = this.mintQuoteRefreshInFlight.get(key);
-      if (inFlight && quoteId !== ownedInFlightQuoteId) {
-        joined.set(quoteId, inFlight);
+      if (inFlight?.joinable && quoteId !== ownedInFlightQuoteId) {
+        joined.set(quoteId, inFlight.promise);
       } else {
         uncheckedQuoteIds.push(quoteId);
       }
@@ -442,7 +460,7 @@ export class QuoteLifecycle {
       for (const quoteId of attemptedQuoteIds) {
         if (quoteId === ownedInFlightQuoteId) continue;
         const key = mintQuoteWorkKey(normalizedMintUrl, method, quoteId);
-        if (this.mintQuoteRefreshInFlight.has(key)) continue;
+        if (this.mintQuoteRefreshInFlight.get(key)?.joinable) continue;
         const quoteWork = check.then(async (result) => {
           const isolatedError = result.errorsByQuoteId?.get(quoteId);
           if (isolatedError) throw isolatedError;
@@ -463,9 +481,10 @@ export class QuoteLifecycle {
           return persisted;
         });
         registeredQuoteWork.push(quoteWork);
-        this.mintQuoteRefreshInFlight.set(key, quoteWork);
+        const work: MintQuoteRefreshWork = { promise: quoteWork, joinable: true };
+        this.mintQuoteRefreshInFlight.set(key, work);
         const cleanup = () => {
-          if (this.mintQuoteRefreshInFlight.get(key) === quoteWork) {
+          if (this.mintQuoteRefreshInFlight.get(key) === work) {
             this.mintQuoteRefreshInFlight.delete(key);
           }
         };
@@ -606,7 +625,7 @@ export class QuoteLifecycle {
         | MintMethodQuoteSnapshot
         | undefined;
       if (!snapshot) continue;
-      await this.recordMintQuoteSnapshot(normalizedMintUrl, method, snapshot);
+      await this.recordMintQuotePollingSnapshot(normalizedMintUrl, method, snapshot);
       observations.push(snapshot);
     }
 
@@ -620,7 +639,7 @@ export class QuoteLifecycle {
   ): Promise<MintQuotePollingCheckResult> {
     const snapshot = await this.mintAdapter.checkMintQuote(mintUrl, method, quoteId);
     await this.requireAttributableBatchObservation(mintUrl, method, quoteId, snapshot);
-    await this.recordMintQuoteSnapshot(mintUrl, method, snapshot);
+    await this.recordMintQuotePollingSnapshot(mintUrl, method, snapshot);
     return {
       attemptedQuoteIds: [quoteId],
       observations: [snapshot],
@@ -962,13 +981,42 @@ export class QuoteLifecycle {
     method: MintMethod,
     snapshot: MintMethodQuoteSnapshot,
   ): Promise<MintQuote> {
+    return this.recordMintQuoteSnapshotInternal(mintUrl, method, snapshot, false);
+  }
+
+  private async recordMintQuotePollingSnapshot(
+    mintUrl: string,
+    method: MintMethod,
+    snapshot: MintMethodQuoteSnapshot,
+  ): Promise<MintQuote> {
+    return this.recordMintQuoteSnapshotInternal(mintUrl, method, snapshot, true);
+  }
+
+  private async recordMintQuoteSnapshotInternal(
+    mintUrl: string,
+    method: MintMethod,
+    snapshot: MintMethodQuoteSnapshot,
+    releaseInFlightBeforeEmit: boolean,
+  ): Promise<MintQuote> {
     const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
       mintUrl,
       method,
       snapshot,
     );
+    if (releaseInFlightBeforeEmit) {
+      this.markMintQuoteRefreshWorkPersisted(quote.mintUrl, quote.method, quote.quoteId);
+    }
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
+  }
+
+  private markMintQuoteRefreshWorkPersisted(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): void {
+    const work = this.mintQuoteRefreshInFlight.get(mintQuoteWorkKey(mintUrl, method, quoteId));
+    if (work) work.joinable = false;
   }
 
   async recordMintQuoteObservation(

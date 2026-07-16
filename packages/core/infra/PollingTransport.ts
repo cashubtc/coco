@@ -383,14 +383,16 @@ export class PollingTransport implements RealTimeTransport {
             ...tasks.filter((completedTask) => attempted.has(completedTask.filter ?? '')),
           ]
         : tasks;
+      const completedUnsubscribed = new Set<string>();
       for (const completedTask of requeueTasks) {
         const wasUnsubscribed = completedTask.subId && unsubscribed?.has(completedTask.subId);
         if (wasUnsubscribed) {
-          unsubscribed!.delete(completedTask.subId!);
+          completedUnsubscribed.add(completedTask.subId!);
         } else {
           s.queue.push(completedTask);
         }
       }
+      for (const subId of completedUnsubscribed) unsubscribed!.delete(subId);
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
       // Schedule next attempt when allowed

@@ -732,6 +732,47 @@ describe('MintOperationService', () => {
     expect(firstResult).toEqual(secondResult);
   });
 
+  it('refreshMintQuote allows a quote-update listener to refresh the same quote', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValue([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      },
+    ]);
+    let reentrantRefresh: Promise<unknown> | undefined;
+    eventBus.once('mint-quote:updated', async () => {
+      reentrantRefresh = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+      await reentrantRefresh;
+    });
+
+    const refresh = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+    const outcome = await Promise.race([
+      refresh.then(() => 'completed' as const),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+    ]);
+
+    expect(outcome).toBe('completed');
+    expect(reentrantRefresh).toBeDefined();
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshMintQuote joins identical watcher-created in-flight NUT-29 work', async () => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromBolt11Response(mintUrl, {
@@ -1061,6 +1102,56 @@ describe('MintOperationService', () => {
     await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
       state: 'UNPAID',
     });
+  });
+
+  it('batch-check polling rejects over-issued reusable quote observations', async () => {
+    await persistOnchainQuote('onchain-over-issued');
+    await persistBolt12Quote('bolt12-over-issued', { amount: Amount.from(12) });
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['onchain', 'bolt12'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+      .mockResolvedValueOnce([
+        {
+          quote: 'onchain-over-issued',
+          request: 'bc1qtest',
+          unit: 'sat',
+          expiry: null,
+          pubkey: '02'.padEnd(66, '1'),
+          amount_paid: 10,
+          amount_issued: 11,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          quote: 'bolt12-over-issued',
+          request: 'lno1test',
+          amount: 12,
+          unit: 'sat',
+          expiry: null,
+          pubkey: '02'.padEnd(66, '2'),
+          amount_paid: 10,
+          amount_issued: 11,
+        },
+      ]);
+
+    const onchain = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'onchain', [
+      'onchain-over-issued',
+    ]);
+    const bolt12 = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt12', [
+      'bolt12-over-issued',
+    ]);
+
+    expect(onchain.observations).toEqual([]);
+    expect(bolt12.observations).toEqual([]);
+    const storedOnchain = await quoteLifecycle.getMintQuote(
+      mintUrl,
+      'onchain',
+      'onchain-over-issued',
+    );
+    const storedBolt12 = await quoteLifecycle.getMintQuote(mintUrl, 'bolt12', 'bolt12-over-issued');
+    expect(storedOnchain?.reusable && storedOnchain.quoteData.amountIssued.toString()).toBe('0');
+    expect(storedBolt12?.reusable && storedBolt12.quoteData.amountIssued.toString()).toBe('0');
   });
 
   it('batch-check polling rejects method-specific immutable field conflicts', async () => {
