@@ -25,6 +25,9 @@ import {
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
 import { isMintQuoteExpired } from '../models/MintQuoteExpiry';
 import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
   ProofValidationError,
   QuoteIdentityConflictError,
   UnknownMintError,
@@ -72,6 +75,131 @@ function hasReusableSettlementAmounts(snapshot: {
   amount_issued?: unknown;
 }): boolean {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
+}
+
+function supportsNut29MintQuoteCheck(mintInfo: unknown, method: MintMethod): boolean {
+  if (!mintInfo || typeof mintInfo !== 'object') return false;
+  const nuts = (mintInfo as { nuts?: unknown }).nuts;
+  if (!nuts || typeof nuts !== 'object') return false;
+  const settings = (nuts as Record<string, unknown>)['29'];
+  if (!settings || typeof settings !== 'object') return false;
+  const methods = (settings as { methods?: unknown }).methods;
+  if (methods !== undefined) {
+    return Array.isArray(methods) && methods.includes(method);
+  }
+  const nut4 = (nuts as Record<string, unknown>)['4'];
+  const mintMethods =
+    nut4 && typeof nut4 === 'object' ? (nut4 as { methods?: unknown }).methods : undefined;
+  return (
+    Array.isArray(mintMethods) &&
+    mintMethods.some(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        (entry as { method?: unknown }).method === method,
+    )
+  );
+}
+
+function getNut29MintQuoteCheckLimit(mintInfo: unknown, method: MintMethod): number | null {
+  if (!supportsNut29MintQuoteCheck(mintInfo, method)) return null;
+  const nuts = (mintInfo as { nuts: Record<string, unknown> }).nuts;
+  const settings = nuts['29'] as { max_batch_size?: unknown };
+  const advertised = settings.max_batch_size;
+  if (advertised === undefined) return 100;
+  if (!Number.isSafeInteger(advertised) || Number(advertised) < 1) return null;
+  return Math.min(Number(advertised), 100);
+}
+
+export interface MintQuotePollingCheckResult {
+  attemptedQuoteIds: string[];
+  observations: MintMethodQuoteSnapshot[];
+}
+
+function getMintQuoteSnapshotFingerprint(
+  method: MintMethod,
+  snapshot: MintMethodQuoteSnapshot,
+): string {
+  const base = {
+    quote: snapshot.quote,
+    request: snapshot.request,
+    unit: normalizeUnit(snapshot.unit),
+    expiry: snapshot.expiry,
+    pubkey: snapshot.pubkey ?? null,
+  };
+  if (method === 'bolt11') {
+    const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
+    return JSON.stringify({
+      ...base,
+      amount: Amount.from(bolt11.amount).toString(),
+      state: bolt11.state,
+    });
+  }
+  if (method === 'onchain') {
+    const onchain = snapshot as MintMethodQuoteSnapshot<'onchain'>;
+    return JSON.stringify({
+      ...base,
+      amountPaid: Amount.from(onchain.amount_paid).toString(),
+      amountIssued: Amount.from(onchain.amount_issued).toString(),
+    });
+  }
+  const bolt12 = snapshot as MintMethodQuoteSnapshot<'bolt12'>;
+  return JSON.stringify({
+    ...base,
+    amount: bolt12.amount == null ? null : Amount.from(bolt12.amount).toString(),
+    amountPaid: Amount.from(bolt12.amount_paid).toString(),
+    amountIssued: Amount.from(bolt12.amount_issued).toString(),
+  });
+}
+
+function assertMintQuoteBatchSnapshotStructure(
+  method: MintMethod,
+  snapshot: MintMethodQuoteSnapshot,
+): void {
+  if (
+    typeof snapshot.quote !== 'string' ||
+    snapshot.quote.length === 0 ||
+    typeof snapshot.request !== 'string' ||
+    snapshot.request.length === 0 ||
+    typeof snapshot.unit !== 'string' ||
+    (snapshot.expiry !== null &&
+      snapshot.expiry !== undefined &&
+      !Number.isSafeInteger(snapshot.expiry)) ||
+    (snapshot.pubkey !== undefined && typeof snapshot.pubkey !== 'string')
+  ) {
+    throw new ProofValidationError('Mint quote batch observation has invalid base fields');
+  }
+
+  if (method === 'bolt11') {
+    const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
+    const amount = Amount.from(bolt11.amount);
+    if (
+      amount.isZero() ||
+      (bolt11.state !== 'UNPAID' && bolt11.state !== 'PAID' && bolt11.state !== 'ISSUED')
+    ) {
+      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+    }
+    return;
+  }
+
+  if (method === 'onchain') {
+    const onchain = snapshot as MintMethodQuoteSnapshot<'onchain'>;
+    Amount.from(onchain.amount_paid);
+    Amount.from(onchain.amount_issued);
+    return;
+  }
+
+  const bolt12 = snapshot as MintMethodQuoteSnapshot<'bolt12'>;
+  if (bolt12.amount != null) Amount.from(bolt12.amount);
+  Amount.from(bolt12.amount_paid);
+  Amount.from(bolt12.amount_issued);
+}
+
+function isTransientMintQuoteCheckError(error: unknown): boolean {
+  return (
+    error instanceof NetworkError ||
+    (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
+  );
 }
 
 function getRemoteStateChange(
@@ -220,6 +348,9 @@ export class QuoteLifecycle {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly mintQuoteRefreshInFlight = new Map<string, Promise<MintQuote>>();
+  private readonly effectiveMintQuoteBatchLimit = new Map<string, number>();
+  private readonly incompatibleMintQuoteBatchUntil = new Map<string, number>();
 
   constructor(deps: QuoteLifecycleDeps) {
     this.mintHandlerProvider = deps.mintHandlerProvider;
@@ -247,7 +378,45 @@ export class QuoteLifecycle {
     };
   }
 
-  private async refreshResolvedMintQuote(existingQuote: MintQuote): Promise<MintQuote> {
+  private refreshResolvedMintQuote(existingQuote: MintQuote): Promise<MintQuote> {
+    const key = `${existingQuote.mintUrl}::${existingQuote.method}::${existingQuote.quoteId}`;
+    const existing = this.mintQuoteRefreshInFlight.get(key);
+    if (existing) return existing;
+
+    const refresh = this.performRefreshResolvedMintQuote(existingQuote).finally(() => {
+      if (this.mintQuoteRefreshInFlight.get(key) === refresh) {
+        this.mintQuoteRefreshInFlight.delete(key);
+      }
+    });
+    this.mintQuoteRefreshInFlight.set(key, refresh);
+    return refresh;
+  }
+
+  private async performRefreshResolvedMintQuote(existingQuote: MintQuote): Promise<MintQuote> {
+    const mintInfo = await this.mintService.getMintInfo(existingQuote.mintUrl);
+    if (supportsNut29MintQuoteCheck(mintInfo, existingQuote.method)) {
+      const result = await this.checkMintQuotesForPolling(
+        existingQuote.mintUrl,
+        existingQuote.method,
+        [existingQuote.quoteId],
+        getNut29MintQuoteCheckLimit(mintInfo, existingQuote.method),
+      );
+      if (!result.observations.some((snapshot) => snapshot.quote === existingQuote.quoteId)) {
+        throw new ProofValidationError(
+          `Mint quote batch check did not return a usable observation for ${existingQuote.quoteId}`,
+        );
+      }
+      const persisted = await this.mintQuoteRepository.getMintQuote(
+        existingQuote.mintUrl,
+        existingQuote.method,
+        existingQuote.quoteId,
+      );
+      if (!persisted) {
+        throw new Error(`Mint quote ${existingQuote.quoteId} disappeared after batch observation`);
+      }
+      return persisted;
+    }
+
     const handler = this.mintHandlerProvider.get(existingQuote.method);
     const refreshed = await handler.fetchRemoteQuote({
       ...this.buildDeps(),
@@ -258,6 +427,271 @@ export class QuoteLifecycle {
     const quote = await this.persistCanonicalMintQuote(refreshed);
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
+  }
+
+  /** Runs one polling opportunity for one normalized mint/method quote-check cohort. */
+  async checkMintQuotesForPolling(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+    knownLimit?: number | null,
+  ): Promise<MintQuotePollingCheckResult> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    if (!(await this.mintService.isTrustedMint(normalizedMintUrl))) {
+      throw new UnknownMintError(`Mint ${normalizedMintUrl} is not trusted`);
+    }
+
+    const uniqueQuoteIds = Array.from(new Set(quoteIds));
+    if (uniqueQuoteIds.length === 0) {
+      return { attemptedQuoteIds: [], observations: [] };
+    }
+
+    const limit =
+      knownLimit === undefined
+        ? getNut29MintQuoteCheckLimit(await this.mintService.getMintInfo(normalizedMintUrl), method)
+        : knownLimit;
+    const groupKey = `${normalizedMintUrl}::${method}`;
+    const incompatibleUntil = this.incompatibleMintQuoteBatchUntil.get(groupKey) ?? 0;
+    if (limit === null || incompatibleUntil > Date.now()) {
+      return this.checkSingleMintQuoteForPolling(normalizedMintUrl, method, uniqueQuoteIds[0]!);
+    }
+    const effectiveLimit = Math.min(
+      limit,
+      this.effectiveMintQuoteBatchLimit.get(groupKey) ?? limit,
+    );
+    let attemptedQuoteIds = uniqueQuoteIds.slice(0, effectiveLimit);
+    let response: unknown;
+    while (true) {
+      try {
+        response = await this.checkMintQuoteBatchWithIsolation(
+          normalizedMintUrl,
+          method,
+          attemptedQuoteIds,
+        );
+        break;
+      } catch (error) {
+        if (
+          error instanceof HttpResponseError &&
+          (error.status === 404 || error.status === 405 || error.status === 501)
+        ) {
+          this.incompatibleMintQuoteBatchUntil.set(groupKey, Date.now() + 5 * 60_000);
+          return this.checkSingleMintQuoteForPolling(
+            normalizedMintUrl,
+            method,
+            attemptedQuoteIds[0]!,
+          );
+        }
+        if (!(error instanceof MintOperationError) || error.code !== 11017) {
+          throw error;
+        }
+        if (attemptedQuoteIds.length <= 1) {
+          this.incompatibleMintQuoteBatchUntil.set(groupKey, Date.now() + 5 * 60_000);
+          return this.checkSingleMintQuoteForPolling(
+            normalizedMintUrl,
+            method,
+            attemptedQuoteIds[0]!,
+          );
+        }
+        const loweredLimit = Math.max(1, Math.floor(attemptedQuoteIds.length / 2));
+        this.effectiveMintQuoteBatchLimit.set(groupKey, loweredLimit);
+        attemptedQuoteIds = attemptedQuoteIds.slice(0, loweredLimit);
+      }
+    }
+    if (!Array.isArray(response)) {
+      throw new ProofValidationError('Mint quote batch check returned a non-array response');
+    }
+
+    const rawByQuoteId = new Map<string, MintMethodQuoteSnapshot[]>();
+    for (const raw of response) {
+      if (!raw || typeof raw !== 'object') {
+        this.logger?.warn('Ignoring identity-less mint quote batch response element', {
+          mintUrl: normalizedMintUrl,
+          method,
+        });
+        continue;
+      }
+      const quoteId = (raw as { quote?: unknown }).quote;
+      if (typeof quoteId !== 'string' || !attemptedQuoteIds.includes(quoteId)) {
+        this.logger?.warn('Ignoring extra or identity-less mint quote batch response element', {
+          mintUrl: normalizedMintUrl,
+          method,
+          quoteId: typeof quoteId === 'string' ? quoteId : undefined,
+        });
+        continue;
+      }
+      const candidates = rawByQuoteId.get(quoteId) ?? [];
+      candidates.push(raw as MintMethodQuoteSnapshot);
+      rawByQuoteId.set(quoteId, candidates);
+    }
+
+    const observations: MintMethodQuoteSnapshot[] = [];
+    for (const quoteId of attemptedQuoteIds) {
+      const candidates = rawByQuoteId.get(quoteId) ?? [];
+      const validByFingerprint = new Map<string, MintMethodQuoteSnapshot>();
+      for (const snapshot of candidates) {
+        try {
+          await this.requireAttributableBatchObservation(
+            normalizedMintUrl,
+            method,
+            quoteId,
+            snapshot,
+          );
+          validByFingerprint.set(getMintQuoteSnapshotFingerprint(method, snapshot), snapshot);
+        } catch (error) {
+          this.logger?.warn('Ignoring invalid mint quote batch observation', {
+            mintUrl: normalizedMintUrl,
+            method,
+            quoteId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (validByFingerprint.size > 1) {
+        this.logger?.warn('Ignoring conflicting duplicate mint quote batch observations', {
+          mintUrl: normalizedMintUrl,
+          method,
+          quoteId,
+        });
+        continue;
+      }
+
+      const snapshot = validByFingerprint.values().next().value as
+        | MintMethodQuoteSnapshot
+        | undefined;
+      if (!snapshot) continue;
+      await this.recordMintQuoteSnapshot(normalizedMintUrl, method, snapshot);
+      observations.push(snapshot);
+    }
+
+    return { attemptedQuoteIds, observations };
+  }
+
+  private async checkSingleMintQuoteForPolling(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+  ): Promise<MintQuotePollingCheckResult> {
+    const snapshot = await this.mintAdapter.checkMintQuote(mintUrl, method, quoteId);
+    await this.requireAttributableBatchObservation(mintUrl, method, quoteId, snapshot);
+    await this.recordMintQuoteSnapshot(mintUrl, method, snapshot);
+    return {
+      attemptedQuoteIds: [quoteId],
+      observations: [snapshot],
+    };
+  }
+
+  private async checkMintQuoteBatchWithIsolation(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+  ): Promise<unknown[]> {
+    try {
+      const response = await this.requestMintQuoteBatchWithRetry(mintUrl, method, quoteIds);
+      if (!Array.isArray(response)) {
+        throw new ProofValidationError('Mint quote batch check returned a non-array response');
+      }
+      return response;
+    } catch (error) {
+      if (!(error instanceof MintOperationError) || error.code === 11017) {
+        throw error;
+      }
+      if (quoteIds.length === 1) {
+        this.logger?.warn('Isolated invalid mint quote during NUT-29 batch check', {
+          mintUrl,
+          method,
+          quoteId: quoteIds[0],
+          code: error.code,
+        });
+        return [];
+      }
+
+      const midpoint = Math.floor(quoteIds.length / 2);
+      const left = await this.checkMintQuoteBatchWithIsolation(
+        mintUrl,
+        method,
+        quoteIds.slice(0, midpoint),
+      );
+      const right = await this.checkMintQuoteBatchWithIsolation(
+        mintUrl,
+        method,
+        quoteIds.slice(midpoint),
+      );
+      return [...left, ...right];
+    }
+  }
+
+  private async requestMintQuoteBatchWithRetry(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+  ): Promise<unknown> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.mintAdapter.checkMintQuoteBatch(mintUrl, method, quoteIds);
+      } catch (error) {
+        if (!isTransientMintQuoteCheckError(error) || attempt === maxAttempts) {
+          throw error;
+        }
+        const delayMs = 10 * 2 ** (attempt - 1);
+        this.logger?.warn('Transient NUT-29 quote check failed; retrying', {
+          mintUrl,
+          method,
+          quoteCount: quoteIds.length,
+          attempt,
+          delayMs,
+        });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    throw new Error('Unreachable NUT-29 quote check retry state');
+  }
+
+  private async requireAttributableBatchObservation(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    snapshot: MintMethodQuoteSnapshot,
+  ): Promise<MintQuote> {
+    assertMintQuoteBatchSnapshotStructure(method, snapshot);
+    const existingQuote = await this.mintQuoteRepository.getMintQuote(mintUrl, method, quoteId);
+    if (!existingQuote || snapshot.quote !== quoteId) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} batch observation is not attributable to canonical storage`,
+      );
+    }
+    if (
+      snapshot.request !== existingQuote.request ||
+      normalizeUnit(snapshot.unit) !== existingQuote.unit ||
+      (snapshot.pubkey ?? undefined) !== (existingQuote.pubkey ?? undefined)
+    ) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} batch observation conflicts with canonical identity fields`,
+      );
+    }
+    if (
+      existingQuote.method === 'bolt11' &&
+      !Amount.from((snapshot as MintMethodQuoteSnapshot<'bolt11'>).amount).equals(
+        existingQuote.amount,
+      )
+    ) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
+      );
+    }
+    if (existingQuote.method === 'bolt12' && existingQuote.quoteData.amount) {
+      const incomingAmount = (snapshot as MintMethodQuoteSnapshot<'bolt12'>).amount;
+      if (
+        incomingAmount == null ||
+        !Amount.from(incomingAmount).equals(existingQuote.quoteData.amount)
+      ) {
+        throw new ProofValidationError(
+          `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
+        );
+      }
+    }
+    return existingQuote;
   }
 
   private async refreshResolvedMeltQuote(existingQuote: MeltQuote): Promise<MeltQuote> {

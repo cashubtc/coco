@@ -8,6 +8,7 @@ import type {
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
+import type { MintMethod, MintMethodQuoteSnapshot } from '../operations/mint/MintMethodHandler.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -22,6 +23,17 @@ type MintScheduler = {
   running: boolean;
   hasProofBatchTask: boolean;
 };
+
+export interface MintQuotePollingChecker {
+  checkMintQuotesForPolling(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+  ): Promise<{
+    attemptedQuoteIds: string[];
+    observations: MintMethodQuoteSnapshot[];
+  }>;
+}
 
 const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
   'bolt11_mint_quote',
@@ -41,6 +53,7 @@ export class PollingTransport implements RealTimeTransport {
   private readonly logger?: Logger;
   private readonly mintAdapter: MintAdapter;
   private readonly options: Required<PollingOptions>;
+  private readonly mintQuoteChecker?: MintQuotePollingChecker;
   private readonly listenersByMint = new Map<
     string,
     Map<'open' | 'message' | 'error' | 'close', Set<(event: any) => void>>
@@ -55,9 +68,15 @@ export class PollingTransport implements RealTimeTransport {
   private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
 
-  constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
+  constructor(
+    mintAdapter: MintAdapter,
+    options?: PollingOptions,
+    logger?: Logger,
+    mintQuoteChecker?: MintQuotePollingChecker,
+  ) {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
+    this.mintQuoteChecker = mintQuoteChecker;
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };
@@ -319,23 +338,38 @@ export class PollingTransport implements RealTimeTransport {
 
     s.running = true;
     const task = s.queue.shift()!;
+    const tasks = [task];
+    if (this.mintQuoteChecker && this.getMintMethod(task.kind)) {
+      for (let index = 0; index < s.queue.length && tasks.length < 100; ) {
+        const candidate = s.queue[index];
+        if (candidate?.kind === task.kind) {
+          tasks.push(candidate);
+          s.queue.splice(index, 1);
+        } else {
+          index++;
+        }
+      }
+    }
 
     try {
-      await this.performTask(mintUrl, task);
-
-      // Re-enqueue for fairness, but only if not unsubscribed during processing
-      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
-      const wasUnsubscribed = task.subId && unsubscribed?.has(task.subId);
-
-      if (wasUnsubscribed) {
-        // Task was unsubscribed during processing, don't re-enqueue
-        unsubscribed!.delete(task.subId!);
+      if (this.mintQuoteChecker && this.getMintMethod(task.kind)) {
+        await this.performMintQuoteTasks(mintUrl, tasks);
       } else {
-        s.queue.push(task);
+        await this.performTask(mintUrl, task);
       }
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
     } finally {
+      // Keep active interests eligible after both successful and failed polling opportunities.
+      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      for (const completedTask of tasks) {
+        const wasUnsubscribed = completedTask.subId && unsubscribed?.has(completedTask.subId);
+        if (wasUnsubscribed) {
+          unsubscribed!.delete(completedTask.subId!);
+        } else {
+          s.queue.push(completedTask);
+        }
+      }
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
       // Schedule next attempt when allowed
@@ -343,6 +377,42 @@ export class PollingTransport implements RealTimeTransport {
       setTimeout(() => {
         void this.maybeRun(mintUrl);
       }, delay);
+    }
+  }
+
+  private getMintMethod(kind: SubscriptionKind): MintMethod | undefined {
+    switch (kind) {
+      case 'bolt11_mint_quote':
+        return 'bolt11';
+      case 'bolt12_mint_quote':
+        return 'bolt12';
+      case 'onchain_mint_quote':
+        return 'onchain';
+      default:
+        return undefined;
+    }
+  }
+
+  private async performMintQuoteTasks(mintUrl: string, tasks: Task[]): Promise<void> {
+    const first = tasks[0];
+    const method = first ? this.getMintMethod(first.kind) : undefined;
+    if (!first || !method || !this.mintQuoteChecker) return;
+
+    const result = await this.mintQuoteChecker.checkMintQuotesForPolling(
+      mintUrl,
+      method,
+      Array.from(new Set(tasks.map((task) => task.filter!).filter(Boolean))),
+    );
+    for (const observation of result.observations) {
+      for (const task of tasks) {
+        if (task.filter !== observation.quote || !task.subId) continue;
+        const notification: WsNotification<unknown> = {
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: { subId: task.subId, payload: observation },
+        };
+        this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
+      }
     }
   }
 

@@ -2,7 +2,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { RealTimeTransport } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
-import { PollingTransport } from './PollingTransport.ts';
+import { PollingTransport, type MintQuotePollingChecker } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
 import { generateSubId } from '../utils.ts';
 
@@ -46,6 +46,7 @@ export class SubscriptionManager {
   private readonly wsFactory?: WebSocketFactory;
   private readonly mintAdapter: MintAdapter;
   private readonly options: Required<SubscriptionManagerOptions>;
+  private readonly mintQuoteChecker?: MintQuotePollingChecker;
   private paused = false;
 
   constructor(
@@ -53,9 +54,11 @@ export class SubscriptionManager {
     mintAdapter: MintAdapter,
     logger?: Logger,
     options?: SubscriptionManagerOptions,
+    mintQuoteChecker?: MintQuotePollingChecker,
   ) {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
+    this.mintQuoteChecker = mintQuoteChecker;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
       fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
@@ -96,6 +99,7 @@ export class SubscriptionManager {
           fastPollingIntervalMs: this.options.fastPollingIntervalMs,
         },
         this.logger,
+        this.mintQuoteChecker,
       );
     } else {
       // No wsFactory available, use polling only at fast interval
@@ -103,6 +107,7 @@ export class SubscriptionManager {
         this.mintAdapter,
         { intervalMs: this.options.fastPollingIntervalMs },
         this.logger,
+        this.mintQuoteChecker,
       );
     }
     this.transportByMint.set(mintUrl, t);

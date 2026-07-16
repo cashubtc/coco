@@ -39,7 +39,12 @@ import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { QuoteIdentityConflictError } from '../../models/Error';
+import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
+  QuoteIdentityConflictError,
+} from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -295,6 +300,12 @@ describe('MintOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
+      getMintInfo: mock(async () => ({
+        nuts: {
+          '4': { methods: [], disabled: false },
+          '5': { methods: [], disabled: false },
+        },
+      })),
       assertMethodUnitSupported: mock(async () => {}),
     } as unknown as MintService;
 
@@ -322,6 +333,7 @@ describe('MintOperationService', () => {
         expiry: Math.floor(Date.now() / 1000) + 3600,
         state: 'PAID',
       })),
+      checkMintQuoteBatch: mock(async () => []),
     } as unknown as MintAdapter;
 
     quoteLifecycle = new QuoteLifecycle({
@@ -639,6 +651,497 @@ describe('MintOperationService', () => {
     ).rejects.toThrow('was not found');
 
     expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
+  });
+
+  it('refreshMintQuote uses an advertised NUT-29 batch check and persists its observation', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: {
+        '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+        '29': { methods: ['bolt11'], max_batch_size: 10 },
+      },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      },
+    ]);
+
+    const refreshed = await quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledWith(mintUrl, 'bolt11', [quoteId]);
+    expect(handler.fetchRemoteQuote).not.toHaveBeenCalled();
+    expect(refreshed.method).toBe('bolt11');
+    if (refreshed.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(refreshed.state).toBe('PAID');
+  });
+
+  it('refreshMintQuote joins identical in-flight NUT-29 checks', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'], max_batch_size: 10 } },
+    });
+    const response = createDeferred<unknown>();
+    const started = createDeferred();
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementationOnce(async () => {
+      started.resolve();
+      return response.promise;
+    });
+
+    const first = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+    const second = quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId });
+    await started.promise;
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+
+    response.resolve([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      },
+    ]);
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toEqual(secondResult);
+  });
+
+  it('refreshMintQuote fails when its NUT-29 response has no usable requested observation', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: 'extra-quote',
+        request: 'extra-request',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+    ]);
+
+    await expect(quoteLifecycle.refreshMintQuoteById({ mintUrl, quoteId })).rejects.toThrow(
+      `did not return a usable observation for ${quoteId}`,
+    );
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling deduplicates deterministically and respects the advertised limit', async () => {
+    for (const id of ['quote-a', 'quote-b', 'quote-c']) {
+      await quoteRepo.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: id,
+          request: `request-${id}`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+        }),
+      );
+    }
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: {
+        '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+        '29': { max_batch_size: 2 },
+      },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: 'quote-b',
+        request: 'request-quote-b',
+        amount: 10,
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      },
+      {
+        quote: 'quote-a',
+        request: 'request-quote-a',
+        amount: 10,
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [
+      'quote-a',
+      'quote-a',
+      'quote-b',
+      'quote-c',
+    ]);
+
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledWith(mintUrl, 'bolt11', [
+      'quote-a',
+      'quote-b',
+    ]);
+    expect(result.attemptedQuoteIds).toEqual(['quote-a', 'quote-b']);
+    expect(result.observations.map((quote) => quote.quote)).toEqual(['quote-a', 'quote-b']);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-a')).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-c')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling persists attributable observations despite malformed, extra, and missing peers', async () => {
+    for (const id of ['quote-a', 'quote-b', 'quote-c']) {
+      await quoteRepo.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: id,
+          request: `request-${id}`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+        }),
+      );
+    }
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: 'quote-a',
+        request: 'wrong-request',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+      { quote: 'identity-only-malformed-peer' },
+      {
+        quote: 'quote-b',
+        request: 'request-quote-b',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+      {
+        quote: 'extra-quote',
+        request: 'extra-request',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [
+      'quote-a',
+      'quote-b',
+      'quote-c',
+    ]);
+
+    expect(result.observations.map((quote) => quote.quote)).toEqual(['quote-b']);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-a')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-b')).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-c')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling rejects conflicting duplicate observations for one quote', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'PAID',
+      },
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]);
+
+    expect(result.observations).toEqual([]);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling rejects structurally invalid method responses', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockResolvedValueOnce([
+      {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: 10,
+        unit: 'sat',
+        expiry: null,
+        state: 'UNKNOWN',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]);
+
+    expect(result.observations).toEqual([]);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling rejects method-specific immutable field conflicts', async () => {
+    await persistOnchainQuote('onchain-conflict');
+    await persistBolt12Quote('bolt12-conflict', { amount: Amount.from(12) });
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['onchain', 'bolt12'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+      .mockResolvedValueOnce([
+        {
+          quote: 'onchain-conflict',
+          request: 'bc1qtest',
+          unit: 'sat',
+          expiry: null,
+          pubkey: 'different-pubkey',
+          amount_paid: 10,
+          amount_issued: 0,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          quote: 'bolt12-conflict',
+          request: 'lno1test',
+          amount: 13,
+          unit: 'sat',
+          expiry: null,
+          pubkey: '02'.padEnd(66, '2'),
+          amount_paid: 20,
+          amount_issued: 0,
+        },
+      ]);
+
+    const onchain = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'onchain', [
+      'onchain-conflict',
+    ]);
+    const bolt12 = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt12', [
+      'bolt12-conflict',
+    ]);
+
+    expect(onchain.observations).toEqual([]);
+    expect(bolt12.observations).toEqual([]);
+  });
+
+  it('batch-check polling lowers the effective limit after NUT-29 error 11017', async () => {
+    const quoteIds = ['quote-a', 'quote-b', 'quote-c', 'quote-d'];
+    for (const id of quoteIds) {
+      await quoteRepo.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: id,
+          request: `request-${id}`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: null,
+          state: 'UNPAID',
+        }),
+      );
+    }
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'], max_batch_size: 4 } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>)
+      .mockRejectedValueOnce(new MintOperationError(11017, 'batch too large'))
+      .mockImplementation(async (_mintUrl: string, _method: string, requested: string[]) =>
+        requested.map((quote) => ({
+          quote,
+          request: `request-${quote}`,
+          amount: 10,
+          unit: 'sat',
+          expiry: null,
+          state: 'PAID',
+        })),
+      );
+
+    const first = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
+    const second = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
+
+    expect(
+      (mintAdapter.checkMintQuoteBatch as Mock<any>).mock.calls.map((call) => call[2]),
+    ).toEqual([quoteIds, ['quote-a', 'quote-b'], ['quote-a', 'quote-b']]);
+    expect(first.attemptedQuoteIds).toEqual(['quote-a', 'quote-b']);
+    expect(second.attemptedQuoteIds).toEqual(['quote-a', 'quote-b']);
+  });
+
+  it('batch-check polling splits confirmed validation errors and isolates one bad quote', async () => {
+    const quoteIds = ['quote-a', 'quote-bad', 'quote-c'];
+    for (const id of quoteIds) {
+      await quoteRepo.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: id,
+          request: `request-${id}`,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: null,
+          state: 'UNPAID',
+        }),
+      );
+    }
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockImplementation(
+      async (_mintUrl: string, _method: string, requested: string[]) => {
+        if (requested.includes('quote-bad')) {
+          throw new MintOperationError(10000, 'unknown quote');
+        }
+        return requested.map((quote) => ({
+          quote,
+          request: `request-${quote}`,
+          amount: 10,
+          unit: 'sat',
+          expiry: null,
+          state: 'PAID',
+        }));
+      },
+    );
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
+
+    expect(result.attemptedQuoteIds).toEqual(quoteIds);
+    expect(result.observations.map((quote) => quote.quote)).toEqual(['quote-a', 'quote-c']);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-bad')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling retries transient transport failures without changing canonical state', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValueOnce({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValue(
+      new NetworkError('connection lost'),
+    );
+
+    await expect(
+      quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]),
+    ).rejects.toThrow('connection lost');
+
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(3);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId)).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('batch-check polling falls back to single checks after endpoint incompatibility', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: null,
+        state: 'UNPAID',
+      }),
+    );
+    (mintService.getMintInfo as Mock<any>).mockResolvedValue({
+      nuts: { '29': { methods: ['bolt11'] } },
+    });
+    (mintAdapter.checkMintQuoteBatch as Mock<any>).mockRejectedValueOnce(
+      new HttpResponseError('not found', 404),
+    );
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValue({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: null,
+      state: 'PAID',
+    });
+
+    await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]);
+    await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', [quoteId]);
+
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+    expect(mintAdapter.checkMintQuote).toHaveBeenCalledTimes(2);
   });
 
   it('refreshMintQuote keeps the method-aware exact refresh path for internal callers', async () => {
