@@ -26,6 +26,7 @@ type MintScheduler = {
   queue: Task[];
   running: boolean;
   hasProofBatchTask: boolean;
+  idleWaiters: Set<() => void>;
 };
 
 type MintQuoteBackoff = {
@@ -299,6 +300,13 @@ export class PollingTransport implements RealTimeTransport {
     }
   }
 
+  /** Resolves after the mint's currently running polling opportunity settles. */
+  async waitForIdle(mintUrl: string): Promise<void> {
+    const scheduler = this.schedByMint.get(mintUrl);
+    if (!scheduler?.running) return;
+    await new Promise<void>((resolve) => scheduler.idleWaiters.add(resolve));
+  }
+
   /**
    * Set a custom polling interval for a specific mint.
    * If not set, the default interval from constructor options is used.
@@ -321,7 +329,13 @@ export class PollingTransport implements RealTimeTransport {
   private ensureScheduler(mintUrl: string): MintScheduler {
     let s = this.schedByMint.get(mintUrl);
     if (!s) {
-      s = { nextAllowedAt: 0, queue: [], running: false, hasProofBatchTask: false };
+      s = {
+        nextAllowedAt: 0,
+        queue: [],
+        running: false,
+        hasProofBatchTask: false,
+        idleWaiters: new Set(),
+      };
       this.schedByMint.set(mintUrl, s);
       // Initialize maps for proof batching
       if (!this.proofQueueByMint.get(mintUrl)) this.proofQueueByMint.set(mintUrl, []);
@@ -343,7 +357,7 @@ export class PollingTransport implements RealTimeTransport {
     s.running = true;
     const task = this.takeNextEligibleTask(mintUrl, s, now);
     if (!task) {
-      s.running = false;
+      this.markSchedulerIdle(s);
       this.scheduleNextEligibleMintQuoteTask(mintUrl, s, now);
       return;
     }
@@ -401,13 +415,19 @@ export class PollingTransport implements RealTimeTransport {
       }
       for (const subId of completedUnsubscribed) unsubscribed!.delete(subId);
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
-      s.running = false;
+      this.markSchedulerIdle(s);
       // Schedule next attempt when allowed
       const delay = Math.max(0, s.nextAllowedAt - Date.now());
       setTimeout(() => {
         void this.maybeRun(mintUrl);
       }, delay);
     }
+  }
+
+  private markSchedulerIdle(scheduler: MintScheduler): void {
+    scheduler.running = false;
+    for (const resolve of scheduler.idleWaiters) resolve();
+    scheduler.idleWaiters.clear();
   }
 
   private getMintQuoteBackoff(mintUrl: string, task: Task): MintQuoteBackoff | undefined {

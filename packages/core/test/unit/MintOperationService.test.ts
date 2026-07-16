@@ -38,7 +38,6 @@ import type { WalletService } from '../../services/WalletService';
 import type { ProofService } from '../../services/ProofService';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { PollingTransport } from '../../infra/PollingTransport';
-import { StructuredMintOperationError } from '../../infra/StructuredMintOperationError';
 import { NullLogger } from '../../logging';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
@@ -47,6 +46,7 @@ import {
   MintOperationError,
   NetworkError,
   QuoteIdentityConflictError,
+  StructuredMintOperationError,
 } from '../../models/Error';
 
 describe('MintOperationService', () => {

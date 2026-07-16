@@ -5,7 +5,7 @@ import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import type { MintQuotePollingChecker } from './MintQuotePollingChecker.ts';
 import { HybridTransport } from './HybridTransport.ts';
-import { generateSubId } from '../utils.ts';
+import { generateSubId, normalizeMintUrl } from '../utils.ts';
 
 import type {
   WsRequest,
@@ -232,6 +232,7 @@ export class SubscriptionManager {
     if (!filters || filters.length === 0) {
       throw new Error('filters must be a non-empty array');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     this.ensureMessageListener(mintUrl);
 
     // Check if there's already an active subscription with the same filters
@@ -359,6 +360,7 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('SubscriptionManager: unsubscribe called', {
       mintUrl,
       subId,
@@ -414,6 +416,7 @@ export class SubscriptionManager {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Closing all subscriptions for mint', { mintUrl });
 
     // Get all subscriptions for this mint

@@ -195,6 +195,22 @@ describe('SubscriptionManager pause/resume', () => {
     await subManager.unsubscribe(mintUrl, subId);
   });
 
+  it('reuses one subscription budget for equivalent normalized mint URLs', async () => {
+    const first = await subManager.subscribe('https://MINT.example.com:443/', 'bolt11_mint_quote', [
+      'quote1',
+    ]);
+    const second = await subManager.subscribe('https://mint.example.com', 'bolt11_mint_quote', [
+      'quote1',
+    ]);
+
+    expect(second.subId).toBe(first.subId);
+    expect(
+      mockTransport.sentMessages.filter((message) => message.method === 'subscribe'),
+    ).toHaveLength(1);
+
+    await second.unsubscribe();
+  });
+
   it('should handle pause with multiple active subscriptions', async () => {
     const mintUrl1 = 'https://mint1.example.com';
     const mintUrl2 = 'https://mint2.example.com';

@@ -3,8 +3,12 @@ import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
 import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
-import { StructuredMintOperationError } from '../../infra/StructuredMintOperationError.ts';
-import { HttpResponseError, NetworkError, MintOperationError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  NetworkError,
+  MintOperationError,
+  StructuredMintOperationError,
+} from '../../models/Error.ts';
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 

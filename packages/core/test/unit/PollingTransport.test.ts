@@ -170,6 +170,115 @@ describe('PollingTransport subscription kinds', () => {
     transport.closeAll();
   });
 
+  it('adds late watcher interests to the next polling opportunity', async () => {
+    const firstStarted = createDeferred();
+    const firstResult = createDeferred<MintQuotePollingCheckResult>();
+    const secondQuoteIds = createDeferred<string[]>();
+    const checker = {
+      checkMintQuotesForPolling: mock(async (_mintUrl, _method, quoteIds: string[]) => {
+        if (checker.checkMintQuotesForPolling.mock.calls.length === 1) {
+          firstStarted.resolve();
+          return firstResult.promise;
+        }
+        secondQuoteIds.resolve(quoteIds);
+        return { attemptedQuoteIds: quoteIds, observations: [] };
+      }),
+    };
+    const transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 0 },
+      new NullLogger(),
+      checker,
+    );
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_mint_quote', subId: 'first-sub', filters: ['quote-1'] },
+      id: 1,
+    });
+    await firstStarted.promise;
+
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_mint_quote', subId: 'late-sub', filters: ['quote-2'] },
+      id: 2,
+    });
+    firstResult.resolve({
+      attemptedQuoteIds: ['quote-1'],
+      observations: [
+        {
+          quote: 'quote-1',
+          request: 'quote-1-request',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: null,
+          state: 'UNPAID',
+        },
+      ],
+    });
+
+    await expect(secondQuoteIds.promise).resolves.toEqual(['quote-2', 'quote-1']);
+    await transport.waitForIdle(mintUrl);
+    transport.closeAll();
+  });
+
+  it('rotates proof and melt work ahead of a repeated mint-quote cohort', async () => {
+    const quoteStarted = createDeferred();
+    const releaseQuote = createDeferred();
+    const meltChecked = createDeferred();
+    const order: string[] = [];
+    const adapter = createMockMintAdapter();
+    (adapter.checkProofStates as ReturnType<typeof mock>).mockImplementation(async () => {
+      order.push('proof');
+      return [];
+    });
+    (adapter.checkMeltQuoteState as ReturnType<typeof mock>).mockImplementation(async () => {
+      order.push('melt');
+      meltChecked.resolve();
+      return {};
+    });
+    const checker = {
+      checkMintQuotesForPolling: mock(async (_mintUrl, _method, quoteIds: string[]) => {
+        order.push('mint');
+        if (checker.checkMintQuotesForPolling.mock.calls.length === 1) {
+          quoteStarted.resolve();
+          await releaseQuote.promise;
+        }
+        return { attemptedQuoteIds: quoteIds, observations: [] };
+      }),
+    };
+    const transport = new PollingTransport(adapter, { intervalMs: 0 }, new NullLogger(), checker);
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_mint_quote', subId: 'mint-sub', filters: ['quote-1'] },
+      id: 1,
+    });
+    await quoteStarted.promise;
+
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'proof_state', subId: 'proof-sub', filters: ['Y-1'] },
+      id: 2,
+    });
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { kind: 'bolt11_melt_quote', subId: 'melt-sub', filters: ['melt-1'] },
+      id: 3,
+    });
+    releaseQuote.resolve();
+
+    await meltChecked.promise;
+    await transport.waitForIdle(mintUrl);
+    expect(order.slice(0, 3)).toEqual(['mint', 'proof', 'melt']);
+    transport.closeAll();
+  });
+
   it('keeps watched mint quotes eligible after a failed batch opportunity', async () => {
     const retried = createDeferred();
     const checker = {
@@ -519,7 +628,7 @@ describe('PollingTransport unsubscribe during processing', () => {
     };
     const transport = new PollingTransport(
       createMockMintAdapter(),
-      { intervalMs: 60_000 },
+      { intervalMs: 0 },
       new NullLogger(),
       checker,
     );
@@ -556,13 +665,10 @@ describe('PollingTransport unsubscribe during processing', () => {
           state: 'UNPAID' as const,
         })),
       });
-      const scheduler = (transport as any).schedByMint.get(mintUrl);
-      for (let attempt = 0; scheduler.running && attempt < 10; attempt++) {
-        await Promise.resolve();
-      }
+      await transport.waitForIdle(mintUrl);
+      transport.resume();
+      await transport.waitForIdle(mintUrl);
 
-      expect(scheduler.running).toBeFalse();
-      expect(scheduler.queue).toEqual([]);
       expect(checker.checkMintQuotesForPolling).toHaveBeenCalledTimes(1);
     } finally {
       transport.closeAll();
