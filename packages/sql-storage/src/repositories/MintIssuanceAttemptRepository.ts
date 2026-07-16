@@ -24,8 +24,9 @@ interface AttemptRow {
   quoteAmountsJson: string;
   signingRequirementsJson: string;
   outputDataJson: string;
-  counterStart: number;
-  counterEnd: number;
+  counterStart: number | null;
+  counterEnd: number | null;
+  counterRangeKnown: number;
   requestJson: string;
   createdAt: number;
   updatedAt: number;
@@ -66,8 +67,9 @@ function attemptParams(attempt: MintIssuanceAttempt): SqlValue[] {
     JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
     JSON.stringify(attempt.signingRequirements),
     JSON.stringify(attempt.outputData),
-    attempt.counterStart,
-    attempt.counterEnd,
+    attempt.counterStart ?? 0,
+    attempt.counterEnd ?? 0,
+    attempt.counterStart === undefined ? 0 : 1,
     serializeRequest(attempt.request),
     attempt.createdAt,
     attempt.updatedAt,
@@ -95,8 +97,8 @@ function rowToAttempt(row: AttemptRow, memberOperationIds: string[]): MintIssuan
       row.signingRequirementsJson,
     ) as Array<MintIssuanceSigningRequirement | null>,
     outputData: JSON.parse(row.outputDataJson) as SerializedOutputData,
-    counterStart: row.counterStart,
-    counterEnd: row.counterEnd,
+    counterStart: row.counterRangeKnown ? (row.counterStart ?? undefined) : undefined,
+    counterEnd: row.counterRangeKnown ? (row.counterEnd ?? undefined) : undefined,
     request: deserializeRequest(row.requestJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -117,9 +119,10 @@ export class SqliteMintIssuanceAttemptRepository implements MintIssuanceAttemptR
       await tx.run(
         `INSERT INTO coco_cashu_mint_issuance_attempts (
           id, mintUrl, method, unit, keysetId, state, quoteIdsJson, quoteAmountsJson,
-          signingRequirementsJson, outputDataJson, counterStart, counterEnd, requestJson,
+          signingRequirementsJson, outputDataJson, counterStart, counterEnd, counterRangeKnown,
+          requestJson,
           createdAt, updatedAt, submittedAt, recoveryStartedAt, recoveredAt, terminalErrorJson
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         attemptParams(attempt),
       );
       await this.replaceMembers(tx, attempt);

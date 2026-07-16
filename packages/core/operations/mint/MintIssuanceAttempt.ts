@@ -54,10 +54,10 @@ export interface MintIssuanceAttempt {
   quoteAmounts: Amount[];
   signingRequirements: Array<MintIssuanceSigningRequirement | null>;
   outputData: SerializedOutputData;
-  /** Inclusive deterministic counter start. */
-  counterStart: number;
-  /** Exclusive deterministic counter end. */
-  counterEnd: number;
+  /** Inclusive deterministic counter start, absent when legacy history cannot prove the range. */
+  counterStart?: number;
+  /** Exclusive deterministic counter end, absent when legacy history cannot prove the range. */
+  counterEnd?: number;
   request: MintIssuanceRequestMetadata;
   createdAt: number;
   updatedAt: number;
@@ -118,15 +118,24 @@ export function normalizeMintIssuanceAttempt(attempt: MintIssuanceAttempt): Mint
   ) {
     throw new Error('Mint issuance attempt member metadata must have matching lengths');
   }
-  if (!Number.isSafeInteger(attempt.counterStart) || attempt.counterStart < 0) {
-    throw new Error('counterStart must be a non-negative safe integer');
+  const hasCounterStart = attempt.counterStart !== undefined;
+  const hasCounterEnd = attempt.counterEnd !== undefined;
+  if (hasCounterStart !== hasCounterEnd) {
+    throw new Error('Mint issuance attempt counter range must be wholly known or wholly unknown');
   }
-  if (!Number.isSafeInteger(attempt.counterEnd) || attempt.counterEnd < attempt.counterStart) {
-    throw new Error('counterEnd must be a safe integer at or after counterStart');
-  }
-  const outputCount = attempt.outputData.keep.length + attempt.outputData.send.length;
-  if (attempt.counterEnd - attempt.counterStart !== outputCount) {
-    throw new Error('Mint issuance attempt counter range must exactly cover persisted outputs');
+  if (hasCounterStart && hasCounterEnd) {
+    const counterStart = attempt.counterStart!;
+    const counterEnd = attempt.counterEnd!;
+    if (!Number.isSafeInteger(counterStart) || counterStart < 0) {
+      throw new Error('counterStart must be a non-negative safe integer');
+    }
+    if (!Number.isSafeInteger(counterEnd) || counterEnd < counterStart) {
+      throw new Error('counterEnd must be a safe integer at or after counterStart');
+    }
+    const outputCount = attempt.outputData.keep.length + attempt.outputData.send.length;
+    if (counterEnd - counterStart !== outputCount) {
+      throw new Error('Mint issuance attempt counter range must exactly cover persisted outputs');
+    }
   }
   if (attempt.request.kind === 'single') {
     if (memberCount !== 1 || attempt.request.quoteId !== attempt.quoteIds[0]) {
