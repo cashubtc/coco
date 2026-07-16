@@ -50,6 +50,12 @@ A Quote-backed Operation for one mint quote. It remains individually observable 
 or together with other Mint Operations.
 _Avoid_: Mint request, mint batch member
 
+**Successful Mint Operation**:
+A Mint Operation for which Coco possesses the exact proofs attributable to its issuance attempt.
+A remotely issued quote without those proofs is a terminal failure because another wallet may have
+redeemed it.
+_Avoid_: Issued quote, completed mint
+
 **Mint Issuance Attempt**:
 One atomic effort to turn one or more eligible Mint Operations at a single mint into wallet proofs.
 Its members share the same issuance and recovery outcome.
@@ -64,6 +70,13 @@ _Avoid_: User batch, quote group
 A mint response that reports the current remote state of a quote and is recorded into Coco's
 canonical quote row before any Quote-backed Operation is advanced from it.
 _Avoid_: Quote refresh, subscription update
+
+**Attributable Quote Observation**:
+A Quote Observation whose quote identity and method-specific fields safely bind it to exactly one
+requested canonical quote. Coco may record an Attributable Quote Observation from an otherwise
+off-protocol batch-check response; malformed, missing, conflicting, or unattributable peers do not
+invalidate it.
+_Avoid_: Valid batch response, positional quote result
 
 **Quote Identity**:
 A methodless reference to a mint or melt quote by mint URL and quote ID. Mint quote identities and
