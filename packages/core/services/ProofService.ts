@@ -38,7 +38,12 @@ import {
   normalizeUnitAmount,
   type UnitAmount,
 } from '../amounts.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import {
+  deserializeOutputData,
+  mapProofToCoreProof,
+  serializeOutputData,
+  type SerializedOutputData,
+} from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
@@ -263,6 +268,44 @@ export class ProofService {
       outputs: data.keep.length + data.send.length,
     });
     return { keep: data.keep, send: data.send, sendAmount, keepAmount };
+  }
+
+  /**
+   * Builds the exact deterministic outputs for a mint issuance attempt without mutating counters.
+   * The caller owns persisting the returned output data and advancing the counter in one transaction.
+   */
+  async createMintOutputsAtCounter(
+    mintUrl: string,
+    intent: UnitAmount,
+    counterStart: number,
+  ): Promise<{
+    keysetId: string;
+    outputData: SerializedOutputData;
+    counterStart: number;
+    counterEnd: number;
+  }> {
+    if (!Number.isSafeInteger(counterStart) || counterStart < 0) {
+      throw new ProofValidationError('counterStart must be a non-negative safe integer');
+    }
+
+    const { amount, unit } = normalizeUnitAmount(intent);
+    if (amount.isZero()) {
+      throw new ProofValidationError('Mint output amount must be positive');
+    }
+
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+    const seed = await this.seedService.getSeed();
+    const keep = this.outputDataCreator.createDeterministicData(amount, seed, counterStart, keys);
+    if (keep.length === 0) {
+      throw new ProofValidationError('Failed to create deterministic outputs for mint operation');
+    }
+
+    return {
+      keysetId: keys.id,
+      outputData: serializeOutputData({ keep, send: [] }),
+      counterStart,
+      counterEnd: counterStart + keep.length,
+    };
   }
 
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {
@@ -1017,7 +1060,12 @@ export class ProofService {
   async recoverProofsFromOutputData(
     mintUrl: string,
     serializedOutputData: SerializedOutputData,
-    options: { unit: string; createdByOperationId?: string; persistRecoveredProofs?: boolean },
+    options: {
+      unit: string;
+      createdByOperationId?: string;
+      createdByAttemptId?: string;
+      persistRecoveredProofs?: boolean;
+    },
   ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
@@ -1098,6 +1146,7 @@ export class ProofService {
         mapProofToCoreProof(mintUrl, 'ready', unspentProofs, {
           unit,
           createdByOperationId: options?.createdByOperationId,
+          createdByAttemptId: options?.createdByAttemptId,
         }),
       );
     }

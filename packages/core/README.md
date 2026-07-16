@@ -231,6 +231,9 @@ Mint Issuance Attempts are adapter-facing recovery records. They preserve exact 
 outputs, counters, and request metadata, while `CoreProof.createdByAttemptId` provides queryable
 proof provenance without removing legacy operation provenance.
 
+New fixed-amount BOLT11 redemptions allocate outputs and attach a single-member attempt atomically,
+then persist the exact proofs and terminal operation/attempt outcome before outcome events fire.
+
 The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
 
 ## Public API surface

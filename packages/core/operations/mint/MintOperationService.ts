@@ -52,6 +52,7 @@ import {
 import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+import type { MintIssuanceCoordinator } from './MintIssuanceCoordinator.ts';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
@@ -71,6 +72,7 @@ export class MintOperationService {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly issuanceCoordinator?: MintIssuanceCoordinator;
 
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
@@ -88,6 +90,7 @@ export class MintOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    issuanceCoordinator?: MintIssuanceCoordinator,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -100,6 +103,7 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.issuanceCoordinator = issuanceCoordinator;
   }
 
   private buildDeps() {
@@ -132,7 +136,10 @@ export class MintOperationService {
   }
 
   isOperationLocked(operationId: string): boolean {
-    return this.operationIdLock.isLocked(operationId);
+    return (
+      this.operationIdLock.isLocked(operationId) ||
+      Boolean(this.issuanceCoordinator?.isCoordinating(operationId))
+    );
   }
 
   isRecoveryInProgress(): boolean {
@@ -350,6 +357,15 @@ export class MintOperationService {
 
   async execute(operationId: string): Promise<MintOperation> {
     const operation = await this.mintOperationRepository.getById(operationId);
+    if (!operation) {
+      throw new Error(`Operation ${operationId} not found`);
+    }
+    if (isTerminalOperation(operation)) {
+      return toMintOperation(operation);
+    }
+    if (this.issuanceCoordinator && operation.attemptId) {
+      return this.issuanceCoordinator.coordinate(operationId);
+    }
     if (operation?.state === 'pending') {
       const quote = await this.quoteLifecycle.getMintQuote(
         operation.mintUrl,
@@ -360,6 +376,9 @@ export class MintOperationService {
         return toMintOperation(
           await this.claimReusableQuoteOperation(operation as PendingMintOperation),
         );
+      }
+      if (this.issuanceCoordinator && operation.method === 'bolt11' && !quote?.reusable) {
+        return this.issuanceCoordinator.coordinate(operationId);
       }
     }
 
@@ -412,21 +431,12 @@ export class MintOperationService {
             }
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
-            //CODEX: Where does recovery actually happen?
             const proofsRecovered = await this.ensureOutputsSaved(executing);
-            const error = proofsRecovered
-              ? undefined
-              : `Recovered issued quote ${executing.quoteId} but no proofs could be restored`;
-
-            if (error) {
-              this.logger?.warn('Mint quote was already issued but proofs could not be recovered', {
-                operationId: executing.id,
-                mintUrl: executing.mintUrl,
-                quoteId: executing.quoteId,
-              });
+            if (!proofsRecovered) {
+              const error = `Recovered issued quote ${executing.quoteId} but no proofs could be restored`;
+              return await this.failOperation(executing, error);
             }
-
-            return await this.finalizeIssuedOperation(executing, error);
+            return await this.finalizeIssuedOperation(executing);
           }
           case 'FAILED':
             throw new Error(result.error ?? 'Mint execution failed');
@@ -462,6 +472,9 @@ export class MintOperationService {
     }
 
     if (operation.state === 'executing') {
+      if (operation.attemptId && this.issuanceCoordinator) {
+        return this.issuanceCoordinator.coordinate(operationId);
+      }
       await this.recoverExecutingOperation(operation as ExecutingMintOperation);
       const updated = await this.mintOperationRepository.getById(operationId);
       if (updated && isTerminalOperation(updated)) {
@@ -591,6 +604,11 @@ export class MintOperationService {
 
       const executing = current as ExecutingMintOperation;
 
+      if (executing.attemptId && this.issuanceCoordinator) {
+        await this.issuanceCoordinator.coordinate(executing.id);
+        return;
+      }
+
       if (await this.hasSavedOutputs(executing)) {
         await this.finalizeIssuedOperation(executing);
         return;
@@ -621,7 +639,7 @@ export class MintOperationService {
           if (await this.ensureOutputsSaved(executing)) {
             await this.finalizeIssuedOperation(executing);
           } else {
-            await this.transitionToPending(
+            await this.failOperation(
               executing,
               `Recovered issued quote ${executing.quoteId} but no proofs could be restored`,
             );

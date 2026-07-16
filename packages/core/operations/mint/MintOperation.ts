@@ -5,10 +5,10 @@
  *          ^         |
  *          +---------+-> failed
  *
- * - init: Quote-bound local mint intent persisted before prepare has attached output data
- * - pending: Deterministic outputData persisted; quote may now settle remotely
- * - executing: Mint or recovery call in progress
- * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
+ * - init: Quote-bound local mint intent persisted before prepare has attached quote details
+ * - pending: Quote details are durable; a new BOLT11 operation is not attached to an attempt
+ * - executing: A durable attempt owns exact outputs while mint or recovery I/O may be in progress
+ * - finalized: The exact attempt-attributed proofs and terminal attempt outcome are durable
  * - failed: Operation reached a terminal non-issued state (for example, quote expiry)
  */
 export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' | 'failed';

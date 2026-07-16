@@ -241,6 +241,8 @@ describe('MintBolt11Handler', () => {
 
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
       expect(result.quoteId).toBe(importedQuote.quote);
+      expect(result.outputData).toEqual({ keep: [], send: [] });
+      expect(proofService.createOutputsAndIncrementCounters).not.toHaveBeenCalled();
     });
 
     it('normalizes quote unit comparison and persists the operation unit', async () => {
