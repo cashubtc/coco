@@ -169,7 +169,7 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
   });
 
-  it('execute only allows pending operations', async () => {
+  it('execute delegates pending, executing, and terminal operations to the service', async () => {
     const result = await api.execute(pendingOperation.id);
 
     expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
@@ -183,7 +183,14 @@ describe('MintOpsApi', () => {
       } as MintOperation,
     );
 
-    await expect(api.execute(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
+    await expect(api.execute(pendingOperation.id)).resolves.toEqual(result);
+
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      result,
+    );
+
+    await expect(api.execute(pendingOperation.id)).resolves.toEqual(result);
+    expect(mintOperationService.execute).toHaveBeenCalledTimes(3);
   });
 
   it('get and listByQuote delegate to the service', async () => {

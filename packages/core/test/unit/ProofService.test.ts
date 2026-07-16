@@ -117,6 +117,41 @@ describe('ProofService', () => {
     OutputData.createSingleDeterministicData = originalCreateSingleDeterministicData;
   });
 
+  describe('createMintOutputsAtCounter', () => {
+    it('derives exact outputs at the supplied counter without advancing persistence', async () => {
+      const generated = [
+        new OutputData(
+          { amount: Amount.from(5), id: keysetId, B_: 'B_mint_output' },
+          1n,
+          new TextEncoder().encode('mint-output'),
+        ),
+      ];
+      const createDeterministicData = mock(() => generated);
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        makeOutputDataCreator({ createDeterministicData }),
+      );
+
+      const result = await service.createMintOutputsAtCounter(mintUrl, unitAmount(5), 7);
+
+      expect(createDeterministicData).toHaveBeenCalledWith(Amount.from(5), makeSeed(), 7, {
+        id: keysetId,
+      });
+      expect(result.keysetId).toBe(keysetId);
+      expect(result.counterStart).toBe(7);
+      expect(result.counterEnd).toBe(8);
+      expect(result.outputData.keep).toHaveLength(1);
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toBeNull();
+    });
+  });
+
   describe('createOutputsAndIncrementCounters', () => {
     it('delegates deterministic keep and send outputs to the supplied creator', async () => {
       const keepOutputs = [

@@ -1481,7 +1481,7 @@ describe('MintOperationService', () => {
     expect(stored?.error).toBe('Recovered: quote not issued remotely');
   });
 
-  it('recoverExecutingOperation returns to pending when proofs are not recoverable', async () => {
+  it('recoverExecutingOperation fails terminally when issued proofs are not recoverable', async () => {
     const op = makeExecutingOp('exec-3');
     await operationRepo.create(op);
 
@@ -1491,7 +1491,10 @@ describe('MintOperationService', () => {
     await service.recoverExecutingOperation(op);
 
     const stored = await operationRepo.getById(op.id);
-    expect(stored?.state).toBe('pending');
+    expect(stored?.state).toBe('failed');
+    expect(stored?.terminalFailure?.reason).toBe(
+      `Recovered issued quote ${op.quoteId} but no proofs could be restored`,
+    );
   });
 
   it('recoverExecutingOperation finalizes expired quotes as terminal failures', async () => {
@@ -1558,22 +1561,22 @@ describe('MintOperationService', () => {
     await expect(service.getOperationByQuote(mintUrl, 'bolt11', quoteId)).resolves.toBeNull();
   });
 
-  it('execute finalizes when already issued proofs cannot be restored', async () => {
+  it('execute fails terminally when already issued proofs cannot be restored', async () => {
     const pendingOp = makePendingOp('pending-2');
     await operationRepo.create(pendingOp);
 
     (handler.execute as Mock<any>).mockResolvedValueOnce({ status: 'ALREADY_ISSUED' });
     (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([]);
 
-    const finalized = await service.execute(pendingOp.id);
+    const failed = await service.execute(pendingOp.id);
 
     const stored = await operationRepo.getById(pendingOp.id);
 
-    expect(finalized.state).toBe('finalized');
-    expect(finalized.error).toBe(
+    expect(failed.state).toBe('failed');
+    expect(failed.error).toBe(
       `Recovered issued quote ${pendingOp.quoteId} but no proofs could be restored`,
     );
-    expect(stored?.state).toBe('finalized');
+    expect(stored?.state).toBe('failed');
     expect(stored?.error).toBe(
       `Recovered issued quote ${pendingOp.quoteId} but no proofs could be restored`,
     );

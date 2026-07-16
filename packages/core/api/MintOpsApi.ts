@@ -60,17 +60,9 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
     );
   }
 
-  /**
-   * Executes a pending mint operation and returns the latest operation state.
-   */
+  /** Executes or joins a mint operation and returns its latest state. */
   async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
     const operation = await this.resolveOperation(operationOrId);
-    if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'pending'.`,
-      );
-    }
-
     return toMintOperation(await this.mintOperationService.execute(operation.id));
   }
 
