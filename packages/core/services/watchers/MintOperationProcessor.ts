@@ -116,7 +116,7 @@ export class MintOperationProcessor {
           quoteId,
         );
         for (const operation of operations) {
-          if (operation.state === 'pending') {
+          if (operation.state === 'pending' || operation.state === 'executing') {
             this.enqueue(mintUrl, operation.id, operation.method);
           }
         }

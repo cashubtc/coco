@@ -179,6 +179,56 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
   });
 
+  it('resumes an executing migrated operation when its quote becomes paid', async () => {
+    mockMintOperationService = {
+      async getOperationsForQuote() {
+        return [
+          {
+            id: 'migrated-mint-op',
+            state: 'executing',
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+        ];
+      },
+      async finalize(operationId: string) {
+        finalizeCalls.push(operationId);
+      },
+    } as unknown as MintOperationService;
+
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
+
+    await processor.start();
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'bolt11',
+      quoteId: 'migrated-quote',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'migrated-quote',
+        quote: 'migrated-quote',
+        state: 'PAID',
+      } as any,
+    });
+
+    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
+
+    expect(finalizeCalls).toEqual(['migrated-mint-op']);
+  });
+
   it('claims reusable onchain quotes with locally claimable balance from mint-quote:updated', async () => {
     await processor.start();
 
