@@ -435,6 +435,53 @@ describe('PollingTransport subscription kinds', () => {
     transport.closeAll();
   });
 
+  it('applies quote backoff after a partially failed isolation result', async () => {
+    const secondCheck = createDeferred<string[]>();
+    const checker = {
+      checkMintQuotesForPolling: mock(async (_mintUrl, _method, quoteIds: string[]) => {
+        if (checker.checkMintQuotesForPolling.mock.calls.length === 1) {
+          return {
+            attemptedQuoteIds: quoteIds,
+            observations: [
+              {
+                quote: 'quote-good',
+                request: 'quote-good-request',
+                amount: Amount.from(10),
+                unit: 'sat',
+                expiry: null,
+                state: 'UNPAID' as const,
+              },
+            ],
+            errorsByQuoteId: new Map([['quote-bad', new Error('invalid quote')]]),
+            partialFailure: { error: new Error('later branch failed') },
+          };
+        }
+        secondCheck.resolve(quoteIds);
+        return { attemptedQuoteIds: quoteIds, observations: [] };
+      }),
+    };
+    const transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 0 },
+      new NullLogger(),
+      checker,
+    );
+    transport.on(mintUrl, 'message', () => {});
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        kind: 'bolt11_mint_quote',
+        subId: 'partial-failure-sub',
+        filters: ['quote-bad', 'quote-good'],
+      },
+      id: 1,
+    });
+
+    await expect(secondCheck.promise).resolves.toEqual(['quote-good']);
+    transport.closeAll();
+  });
+
   it('polls onchain mint quotes with checkMintQuote', async () => {
     const checkMintQuote = mock(() =>
       Promise.resolve({

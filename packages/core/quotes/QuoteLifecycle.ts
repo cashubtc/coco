@@ -463,7 +463,7 @@ export class QuoteLifecycle {
         settleExplicitWork,
       );
     }
-    const { attemptedQuoteIds, response, errorsByQuoteId, deferredError } = request;
+    const { attemptedQuoteIds, response, errorsByQuoteId, partialFailure } = request;
 
     const rawByQuoteId = new Map<string, MintMethodQuoteSnapshot[]>();
     for (const raw of response) {
@@ -539,9 +539,7 @@ export class QuoteLifecycle {
     for (const { quote, remoteStateChanged } of persistedObservations) {
       await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     }
-    if (deferredError !== undefined) throw deferredError;
-
-    return { attemptedQuoteIds, observations, errorsByQuoteId };
+    return { attemptedQuoteIds, observations, errorsByQuoteId, partialFailure };
   }
 
   private async checkSingleMintQuoteForPolling(

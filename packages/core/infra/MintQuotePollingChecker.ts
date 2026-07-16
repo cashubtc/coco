@@ -8,6 +8,8 @@ export interface MintQuotePollingCheckResult {
   observations: MintMethodQuoteSnapshot[];
   /** Quote-specific protocol failures isolated without discarding healthy peers. */
   errorsByQuoteId?: Map<string, Error>;
+  /** A later split branch failed after earlier branches produced usable partial results. */
+  partialFailure?: { error: unknown };
 }
 
 /** Canonical quote-check seam used by the polling scheduler. */

@@ -1179,7 +1179,34 @@ describe('MintOperationService', () => {
     });
   });
 
-  it('persists a successful isolation branch before surfacing a later transport failure', async () => {
+  it('returns isolated errors and observations before a later transport failure', async () => {
+    const quoteIds = ['quote-bad', 'quote-good', 'quote-late-a', 'quote-late-b'];
+    await persistUnpaidBolt11Quotes(...quoteIds);
+    getMintInfoMock().mockResolvedValue(nut29MintInfo());
+    checkMintQuoteBatchMock().mockImplementation(
+      async (_mintUrl: string, _method: string, requested: string[]) => {
+        if (requested.includes('quote-bad')) {
+          throw new MintOperationError(10000, 'invalid quote in request');
+        }
+        if (requested.includes('quote-late-a')) throw new NetworkError('connection lost');
+        return requested.map((quote) => bolt11BatchObservation(quote));
+      },
+    );
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
+
+    expect(result.errorsByQuoteId?.has('quote-bad')).toBe(true);
+    expect(result.observations.map((observation) => observation.quote)).toEqual(['quote-good']);
+    expect(result.partialFailure?.error).toBeInstanceOf(NetworkError);
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-good')).resolves.toMatchObject({
+      state: 'PAID',
+    });
+    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-bad')).resolves.toMatchObject({
+      state: 'UNPAID',
+    });
+  });
+
+  it('represents an undefined partial branch rejection explicitly', async () => {
     const quoteIds = ['quote-a', 'quote-b'];
     await persistUnpaidBolt11Quotes(...quoteIds);
     getMintInfoMock().mockResolvedValue(nut29MintInfo());
@@ -1188,21 +1215,15 @@ describe('MintOperationService', () => {
         if (requested.length === 2) {
           throw new MintOperationError(10000, 'invalid quote in request');
         }
-        if (requested[0] === 'quote-b') throw new NetworkError('connection lost');
+        if (requested[0] === 'quote-b') throw undefined;
         return requested.map((quote) => bolt11BatchObservation(quote));
       },
     );
 
-    await expect(
-      quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds),
-    ).rejects.toThrow('connection lost');
+    const result = await quoteLifecycle.checkMintQuotesForPolling(mintUrl, 'bolt11', quoteIds);
 
-    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-a')).resolves.toMatchObject({
-      state: 'PAID',
-    });
-    await expect(quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-b')).resolves.toMatchObject({
-      state: 'UNPAID',
-    });
+    expect(result.partialFailure).toEqual({ error: undefined });
+    expect(result.observations.map((observation) => observation.quote)).toEqual(['quote-a']);
   });
 
   it('does not split an unconfirmed whole-request protocol rejection', async () => {

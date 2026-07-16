@@ -388,6 +388,13 @@ export class PollingTransport implements RealTimeTransport {
           tasks,
           mintQuoteChecker,
         );
+        if (mintQuoteResult.partialFailure) {
+          this.logger?.error('Mint quote polling opportunity completed partially', {
+            mintUrl,
+            method: mintMethod,
+            err: mintQuoteResult.partialFailure.error,
+          });
+        }
         this.updateMintQuoteBackoff(mintUrl, mintMethod, mintQuoteResult);
       } else {
         await this.performTask(mintUrl, task);
