@@ -4,6 +4,7 @@ import {
   decodeLegacyMintOperationMigrationRecord,
   LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX,
   planLegacyMintOperationMigration,
+  serializeLegacyMintIssuanceAttempt,
   type LegacyMintOperationMigrationRecord,
 } from '../../repositories/LegacyMintOperationMigration.ts';
 
@@ -155,5 +156,47 @@ describe('planLegacyMintOperationMigration', () => {
         updatedAt: 2_000,
       }),
     ).toThrow('invalid outputDataJson');
+  });
+
+  it('decodes terminal failure metadata and serializes its migrated attempt', () => {
+    const outputDataJson = JSON.stringify(outputData('keyset-1', 'failed'));
+    const decoded = decodeLegacyMintOperationMigrationRecord({
+      id: 'failed',
+      mintUrl: 'https://mint.test',
+      quoteId: 'quote-failed',
+      method: 'onchain',
+      unit: 'sat',
+      amount: '1',
+      state: 'failed',
+      outputDataJson,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      error: 'legacy error',
+      terminalFailureJson: JSON.stringify({
+        reason: 'quote expired',
+        code: 'QUOTE_EXPIRED',
+        retryable: false,
+        observedAt: 1_900,
+      }),
+    });
+
+    expect(decoded.terminalFailure).toEqual({
+      reason: 'quote expired',
+      code: 'QUOTE_EXPIRED',
+      retryable: false,
+      observedAt: 1_900,
+    });
+
+    const [{ attempt } = {}] = planLegacyMintOperationMigration([decoded]);
+    expect(attempt).toBeDefined();
+    expect(serializeLegacyMintIssuanceAttempt(attempt!, outputDataJson)).toEqual({
+      quoteIdsJson: '["quote-failed"]',
+      quoteAmountsJson: '["1"]',
+      signingRequirementsJson: '[null]',
+      outputDataJson,
+      requestJson: '{"kind":"single","quoteId":"quote-failed"}',
+      terminalErrorJson:
+        '{"message":"quote expired","code":"QUOTE_EXPIRED","details":{"retryable":false,"observedAt":1900}}',
+    });
   });
 });

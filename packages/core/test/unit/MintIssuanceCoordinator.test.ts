@@ -124,6 +124,45 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     );
   }
 
+  async function seedLegacyBolt12Attempt(
+    legacyOperationId: string,
+    state: 'prepared' | 'recovering',
+  ): Promise<{ operation: ExecutingMintOperationRecord<'bolt12'>; attempt: MintIssuanceAttempt }> {
+    const legacyAttemptId = `legacy-mint-operation:${legacyOperationId}`;
+    const operation: ExecutingMintOperationRecord<'bolt12'> = {
+      ...pendingOperation(),
+      id: legacyOperationId,
+      method: 'bolt12',
+      state: 'executing',
+      quoteId: `quote-${legacyOperationId}`,
+      request: 'bolt12-request',
+      pubkey: 'quote-pubkey',
+      outputData,
+      attemptId: legacyAttemptId,
+    };
+    const now = Date.now();
+    const attempt: MintIssuanceAttempt = {
+      id: legacyAttemptId,
+      mintUrl,
+      method: 'bolt12',
+      unit: 'sat',
+      keysetId,
+      state,
+      memberOperationIds: [legacyOperationId],
+      quoteIds: [operation.quoteId],
+      quoteAmounts: [Amount.from(10)],
+      signingRequirements: [null],
+      outputData,
+      request: { kind: 'single', quoteId: operation.quoteId },
+      createdAt: now,
+      updatedAt: now,
+      ...(state === 'recovering' ? { submittedAt: now, recoveryStartedAt: now } : {}),
+    };
+    await repositories.mintOperationRepository.create(operation);
+    await repositories.mintIssuanceAttemptRepository.create(attempt);
+    return { operation, attempt };
+  }
+
   beforeEach(async () => {
     repositories = new MemoryRepositories();
     eventBus = new EventBus<CoreEvents>();
@@ -412,6 +451,78 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(operation?.state).toBe('failed');
     expect(attempt?.state).toBe('failed');
     expect(attempt?.terminalError?.code).toBe('EXACT_PROOFS_UNRECOVERABLE');
+  });
+
+  it('dispatches a migrated prepared BOLT12 attempt through its method handler', async () => {
+    const { operation, attempt } = await seedLegacyBolt12Attempt(
+      'legacy-prepared-bolt12',
+      'prepared',
+    );
+    const execute = mock(async () => ({ status: 'ISSUED' as const, proofs: [proof] }));
+    const recoverExecuting = mock(async () => ({ status: 'PENDING' as const }));
+    const handler = { execute, recoverExecuting } as unknown as MintMethodHandler<'bolt12'>;
+    const handlerGet = mock(() => handler);
+    const legacyCoordinator = new MintIssuanceCoordinator({
+      repositories,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      mintHandlerProvider: { get: handlerGet } as unknown as MintHandlerProvider,
+      eventBus,
+    });
+
+    const result = await legacyCoordinator.coordinate(operation.id);
+
+    expect(result.state).toBe('finalized');
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(recoverExecuting).not.toHaveBeenCalled();
+    expect(handlerGet).toHaveBeenCalledWith('bolt12');
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'succeeded',
+    );
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, outputSecret))
+        ?.createdByAttemptId,
+    ).toBe(attempt.id);
+  });
+
+  it('fails a migrated recovering BOLT12 attempt when its handler reports terminal', async () => {
+    const { operation, attempt } = await seedLegacyBolt12Attempt(
+      'legacy-terminal-bolt12',
+      'recovering',
+    );
+    const execute = mock(async () => ({ status: 'ALREADY_ISSUED' as const }));
+    const recoverExecuting = mock(async () => ({
+      status: 'TERMINAL' as const,
+      error: 'quote can no longer be claimed',
+    }));
+    const handler = { execute, recoverExecuting } as unknown as MintMethodHandler<'bolt12'>;
+    const legacyCoordinator = new MintIssuanceCoordinator({
+      repositories,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      mintHandlerProvider: { get: mock(() => handler) } as unknown as MintHandlerProvider,
+      eventBus,
+    });
+
+    const result = await legacyCoordinator.coordinate(operation.id);
+    const failedOperation = await repositories.mintOperationRepository.getById(operation.id);
+    const failedAttempt = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+
+    expect(result.state).toBe('failed');
+    expect(execute).not.toHaveBeenCalled();
+    expect(recoverExecuting).toHaveBeenCalledTimes(1);
+    expect(failedOperation).toMatchObject({
+      state: 'failed',
+      error: 'quote can no longer be claimed',
+    });
+    expect(failedAttempt).toMatchObject({
+      state: 'failed',
+      terminalError: { message: 'quote can no longer be claimed' },
+    });
   });
 
   it('finalizes a migrated non-BOLT11 recovering attempt from its persisted exact proofs', async () => {
