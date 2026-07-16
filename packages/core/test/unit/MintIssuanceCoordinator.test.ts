@@ -8,7 +8,11 @@ import { MintOperationError } from '../../models/Error.ts';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 import { MintIssuanceCoordinator } from '../../operations/mint/MintIssuanceCoordinator.ts';
-import type { PendingMintOperationRecord } from '../../operations/mint/MintOperation.ts';
+import type { MintIssuanceAttempt } from '../../operations/mint/MintIssuanceAttempt.ts';
+import type {
+  ExecutingMintOperationRecord,
+  PendingMintOperationRecord,
+} from '../../operations/mint/MintOperation.ts';
 import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { MintMethodHandler } from '../../operations/mint/MintMethodHandler.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
@@ -408,5 +412,74 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(operation?.state).toBe('failed');
     expect(attempt?.state).toBe('failed');
     expect(attempt?.terminalError?.code).toBe('EXACT_PROOFS_UNRECOVERABLE');
+  });
+
+  it('finalizes a migrated non-BOLT11 recovering attempt from its persisted exact proofs', async () => {
+    const legacyOperationId = 'legacy-bolt12-operation';
+    const legacyAttemptId = `legacy-mint-operation:${legacyOperationId}`;
+    const legacyOperation: ExecutingMintOperationRecord<'bolt12'> = {
+      ...pendingOperation(),
+      id: legacyOperationId,
+      method: 'bolt12',
+      state: 'executing',
+      quoteId: 'quote-bolt12',
+      request: 'bolt12-request',
+      pubkey: 'quote-pubkey',
+      outputData,
+      attemptId: legacyAttemptId,
+    };
+    await repositories.mintOperationRepository.create(legacyOperation);
+    const legacyAttempt: MintIssuanceAttempt = {
+      id: legacyAttemptId,
+      mintUrl,
+      method: 'bolt12',
+      unit: 'sat',
+      keysetId,
+      state: 'recovering',
+      memberOperationIds: [legacyOperationId],
+      quoteIds: ['quote-bolt12'],
+      quoteAmounts: [Amount.from(10)],
+      signingRequirements: [null],
+      outputData,
+      request: { kind: 'single', quoteId: 'quote-bolt12' },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      submittedAt: Date.now(),
+      recoveryStartedAt: Date.now(),
+    };
+    await repositories.mintIssuanceAttemptRepository.create(legacyAttempt);
+    await repositories.proofRepository.saveProofs(mintUrl, [
+      {
+        ...proof,
+        mintUrl,
+        unit: 'sat',
+        state: 'ready',
+        createdByOperationId: legacyOperationId,
+      },
+    ]);
+    const handlerGet = mock(() => {
+      throw new Error('handler recovery should not run when exact proofs are already persisted');
+    });
+    const legacyCoordinator = new MintIssuanceCoordinator({
+      repositories,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter,
+      mintHandlerProvider: { get: handlerGet } as unknown as MintHandlerProvider,
+      eventBus,
+    });
+
+    const result = await legacyCoordinator.coordinate(legacyOperationId);
+
+    expect(result.state).toBe('finalized');
+    expect((await repositories.mintIssuanceAttemptRepository.getById(legacyAttemptId))?.state).toBe(
+      'succeeded',
+    );
+    expect(handlerGet).not.toHaveBeenCalled();
+    expect(
+      (await repositories.proofRepository.getProofBySecret(mintUrl, outputSecret))
+        ?.createdByOperationId,
+    ).toBe(legacyOperationId);
   });
 });

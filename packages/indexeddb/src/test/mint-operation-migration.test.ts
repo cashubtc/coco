@@ -32,21 +32,23 @@ const legacyMintOutput = (suffix: string, keysetId = 'legacy-keyset') => ({
   keep: [
     {
       blindedMessage: { amount: '1', id: keysetId, B_: `B_${suffix}` },
-      blindingFactor: suffix,
-      secret: suffix,
+      blindingFactor: '1',
+      secret: Array.from(suffix, (character) =>
+        character.charCodeAt(0).toString(16).padStart(2, '0'),
+      ).join(''),
     },
   ],
   send: [],
 });
 
-async function seedVersion32(name: string, counter = 14): Promise<void> {
+async function seedVersion32(name: string, corruptPendingOutput = false): Promise<void> {
   const db = new IdbDb({ name });
   db.version(32).stores(VERSION_32_STORES);
   await db.open();
   await db.table('coco_cashu_counters').add({
     mintUrl: 'https://mint.test',
     keysetId: 'legacy-keyset',
-    counter,
+    counter: 14,
   });
   await db.table('coco_cashu_proofs').add({
     mintUrl: 'https://mint.test',
@@ -66,7 +68,7 @@ async function seedVersion32(name: string, counter = 14): Promise<void> {
       id: 'pending-op',
       state: 'pending',
       createdAt: 2,
-      outputDataJson: JSON.stringify(legacyMintOutput('pending')),
+      outputDataJson: corruptPendingOutput ? '{' : JSON.stringify(legacyMintOutput('pending')),
     },
     {
       id: 'executing-op',
@@ -86,6 +88,12 @@ async function seedVersion32(name: string, counter = 14): Promise<void> {
       createdAt: 5,
       outputDataJson: JSON.stringify(legacyMintOutput('failed')),
     },
+    {
+      id: 'bolt12-executing-op',
+      state: 'executing',
+      createdAt: 6,
+      outputDataJson: JSON.stringify(legacyMintOutput('bolt12-executing')),
+    },
   ];
   await db.table('coco_cashu_mint_operations').bulkAdd(
     rows.map((row) => ({
@@ -94,7 +102,7 @@ async function seedVersion32(name: string, counter = 14): Promise<void> {
       quoteId: `quote-${row.id}`,
       updatedAt: row.createdAt + 10,
       error: row.state === 'failed' ? 'quote expired' : null,
-      method: 'bolt11',
+      method: row.id === 'bolt12-executing-op' ? 'bolt12' : 'bolt11',
       methodDataJson: '{}',
       amount: '1',
       unit: 'sat',
@@ -131,13 +139,21 @@ describe('legacy Mint Operation IndexedDB migration', () => {
         'recovering',
         'succeeded',
         'failed',
+        'recovering',
       ]);
       expect(attempts.map((attempt) => [attempt.counterStart, attempt.counterEnd])).toEqual([
-        [10, 11],
-        [11, 12],
-        [12, 13],
-        [13, 14],
+        [null, null],
+        [null, null],
+        [null, null],
+        [null, null],
+        [null, null],
       ]);
+      expect(attempts.every((attempt) => attempt.counterRangeKnown === false)).toBe(true);
+      const hydrated = await repositories.mintIssuanceAttemptRepository.getById(
+        'legacy-mint-operation:pending-op',
+      );
+      expect(hydrated?.counterStart).toBeUndefined();
+      expect(hydrated?.counterEnd).toBeUndefined();
       expect(attempts[0]).toMatchObject({
         id: 'legacy-mint-operation:pending-op',
         memberOperationIds: ['pending-op'],
@@ -163,7 +179,7 @@ describe('legacy Mint Operation IndexedDB migration', () => {
       repositories.db.close();
       const restarted = new IndexedDbRepositories({ name });
       await restarted.init();
-      expect(await restarted.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(4);
+      expect(await restarted.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(5);
       restarted.db.close();
     } finally {
       repositories.db.close();
@@ -171,12 +187,12 @@ describe('legacy Mint Operation IndexedDB migration', () => {
     }
   });
 
-  it('rolls back a failed upgrade and resumes after the legacy counter is repaired', async () => {
+  it('rolls back a failed upgrade and resumes after corrupt legacy output JSON is repaired', async () => {
     const name = `coco_mint_operation_resume_${crypto.randomUUID()}`;
-    await seedVersion32(name, 3);
+    await seedVersion32(name, true);
     const failing = new IndexedDbRepositories({ name });
     try {
-      await expect(failing.init()).rejects.toThrow('cannot cover');
+      await expect(failing.init()).rejects.toThrow('invalid outputDataJson');
       failing.db.close();
 
       const repair = new IdbDb({ name });
@@ -187,14 +203,14 @@ describe('legacy Mint Operation IndexedDB migration', () => {
         state: 'pending',
         attemptId: null,
       });
-      await repair
-        .table('coco_cashu_counters')
-        .update(['https://mint.test', 'legacy-keyset'], { counter: 14 });
+      await repair.table('coco_cashu_mint_operations').update('pending-op', {
+        outputDataJson: JSON.stringify(legacyMintOutput('pending')),
+      });
       repair.close();
 
       const resumed = new IndexedDbRepositories({ name });
       await resumed.init();
-      expect(await resumed.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(4);
+      expect(await resumed.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(5);
       resumed.db.close();
     } finally {
       failing.db.close();

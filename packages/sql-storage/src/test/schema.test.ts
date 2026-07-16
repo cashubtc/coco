@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { ensureSchemaUpTo, MIGRATIONS, type SqlDatabase } from '../index.ts';
+import {
+  ensureSchemaUpTo,
+  MIGRATIONS,
+  SqliteMintIssuanceAttemptRepository,
+  type SqlDatabase,
+} from '../index.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 
 const EXPECTED_MIGRATION_IDS = [
@@ -111,18 +116,23 @@ const legacyMintOutput = (suffix: string, keysetId = 'legacy-keyset') => ({
   keep: [
     {
       blindedMessage: { amount: '1', id: keysetId, B_: `B_${suffix}` },
-      blindingFactor: suffix,
-      secret: suffix,
+      blindingFactor: '1',
+      secret: Array.from(suffix, (character) =>
+        character.charCodeAt(0).toString(16).padStart(2, '0'),
+      ).join(''),
     },
   ],
   send: [],
 });
 
-async function seedLegacyMintOperations(db: SqlDatabase, counter = 14): Promise<void> {
+async function seedLegacyMintOperations(
+  db: SqlDatabase,
+  corruptPendingOutput = false,
+): Promise<void> {
   await db.run(`INSERT INTO coco_cashu_counters (mintUrl, keysetId, counter) VALUES (?, ?, ?)`, [
     'https://mint.test',
     'legacy-keyset',
-    counter,
+    14,
   ]);
   await db.run(
     `INSERT INTO coco_cashu_proofs (
@@ -147,7 +157,7 @@ async function seedLegacyMintOperations(db: SqlDatabase, counter = 14): Promise<
       id: 'pending-op',
       state: 'pending',
       createdAt: 2,
-      outputDataJson: JSON.stringify(legacyMintOutput('pending')),
+      outputDataJson: corruptPendingOutput ? '{' : JSON.stringify(legacyMintOutput('pending')),
     },
     {
       id: 'executing-op',
@@ -168,9 +178,15 @@ async function seedLegacyMintOperations(db: SqlDatabase, counter = 14): Promise<
       outputDataJson: JSON.stringify(legacyMintOutput('failed')),
     },
     {
+      id: 'bolt12-executing-op',
+      state: 'executing',
+      createdAt: 6,
+      outputDataJson: JSON.stringify(legacyMintOutput('bolt12-executing')),
+    },
+    {
       id: 'empty-pending-op',
       state: 'pending',
-      createdAt: 6,
+      createdAt: 7,
       outputDataJson: JSON.stringify({ keep: [], send: [] }),
     },
   ];
@@ -189,7 +205,7 @@ async function seedLegacyMintOperations(db: SqlDatabase, counter = 14): Promise<
         row.createdAt,
         row.createdAt + 10,
         row.state === 'failed' ? 'quote expired' : null,
-        'bolt11',
+        row.id === 'bolt12-executing-op' ? 'bolt12' : 'bolt11',
         '{}',
         '1',
         'sat',
@@ -354,11 +370,12 @@ describe('shared SQL schema migrations', () => {
         state: string;
         quoteIdsJson: string;
         outputDataJson: string;
-        counterStart: number;
-        counterEnd: number;
+        counterStart: number | null;
+        counterEnd: number | null;
+        counterRangeKnown: number;
         terminalErrorJson: string | null;
       }>(
-        `SELECT id, state, quoteIdsJson, outputDataJson, counterStart, counterEnd,
+        `SELECT id, state, quoteIdsJson, outputDataJson, counterStart, counterEnd, counterRangeKnown,
                 terminalErrorJson
          FROM coco_cashu_mint_issuance_attempts ORDER BY createdAt ASC, id ASC`,
       );
@@ -367,13 +384,21 @@ describe('shared SQL schema migrations', () => {
         'recovering',
         'succeeded',
         'failed',
+        'recovering',
       ]);
       expect(attempts.map((attempt) => [attempt.counterStart, attempt.counterEnd])).toEqual([
-        [10, 11],
-        [11, 12],
-        [12, 13],
-        [13, 14],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
       ]);
+      expect(attempts.every((attempt) => attempt.counterRangeKnown === 0)).toBe(true);
+      const hydrated = await new SqliteMintIssuanceAttemptRepository(db).getById(
+        'legacy-mint-operation:pending-op',
+      );
+      expect(hydrated?.counterStart).toBeUndefined();
+      expect(hydrated?.counterEnd).toBeUndefined();
       expect(attempts[0]).toMatchObject({
         id: 'legacy-mint-operation:pending-op',
         quoteIdsJson: '["quote-pending-op"]',
@@ -406,6 +431,11 @@ describe('shared SQL schema migrations', () => {
           attemptId: 'legacy-mint-operation:finalized-op',
         },
         { id: 'failed-op', state: 'failed', attemptId: 'legacy-mint-operation:failed-op' },
+        {
+          id: 'bolt12-executing-op',
+          state: 'executing',
+          attemptId: 'legacy-mint-operation:bolt12-executing-op',
+        },
         { id: 'empty-pending-op', state: 'pending', attemptId: null },
       ]);
       expect(
@@ -427,9 +457,9 @@ describe('shared SQL schema migrations', () => {
     'rolls back an interrupted legacy Mint Operation migration and resumes',
     async (db) => {
       await ensureSchemaUpTo(db, '039_migrate_legacy_mint_operations');
-      await seedLegacyMintOperations(db, 3);
+      await seedLegacyMintOperations(db, true);
 
-      await expect(ensureSchemaUpTo(db)).rejects.toThrow('cannot cover');
+      await expect(ensureSchemaUpTo(db)).rejects.toThrow('invalid outputDataJson');
       expect(
         await db.get('SELECT id FROM coco_cashu_migrations WHERE id = ?', [
           '039_migrate_legacy_mint_operations',
@@ -446,16 +476,16 @@ describe('shared SQL schema migrations', () => {
         ]),
       ).toEqual({ state: 'pending', attemptId: null });
 
-      await db.run('UPDATE coco_cashu_counters SET counter = ? WHERE keysetId = ?', [
-        14,
-        'legacy-keyset',
+      await db.run('UPDATE coco_cashu_mint_operations SET outputDataJson = ? WHERE id = ?', [
+        JSON.stringify(legacyMintOutput('pending')),
+        'pending-op',
       ]);
       await ensureSchemaUpTo(db);
       expect(
         await db.get<{ count: number }>(
           'SELECT COUNT(*) AS count FROM coco_cashu_mint_issuance_attempts',
         ),
-      ).toEqual({ count: 4 });
+      ).toEqual({ count: 5 });
     },
   );
 

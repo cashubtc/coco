@@ -9,17 +9,24 @@ import type {
   MintOperationFailure,
   MintOperationState,
 } from '../operations/mint/index.ts';
-import { normalizeMintUrl, type SerializedOutputData } from '../utils.ts';
+import {
+  deserializeOutputData,
+  normalizeMintUrl,
+  serializeAmount,
+  type SerializedOutputData,
+} from '../utils.ts';
 
+/** Stable identifier prefix for attempts synthesized from pre-attempt Mint Operations. */
 export const LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX = 'legacy-mint-operation:';
 
+/** Storage-neutral legacy Mint Operation fields consumed by the migration planner. */
 export interface LegacyMintOperationMigrationRecord {
   id: string;
   mintUrl: string;
-  quoteId: string;
-  method: MintMethod;
-  unit: string;
-  amount: AmountLike;
+  quoteId?: string;
+  method?: MintMethod;
+  unit?: string;
+  amount?: AmountLike;
   state: MintOperationState;
   outputData?: SerializedOutputData;
   attemptId?: string;
@@ -29,29 +36,164 @@ export interface LegacyMintOperationMigrationRecord {
   terminalFailure?: MintOperationFailure;
 }
 
-export interface LegacyMintCounterSnapshot {
-  mintUrl: string;
-  keysetId: string;
-  counter: number;
+/** Raw persisted fields accepted by the shared legacy-row decoder. */
+export interface PersistedLegacyMintOperationMigrationRecord {
+  id: unknown;
+  mintUrl: unknown;
+  quoteId?: unknown;
+  method?: unknown;
+  unit?: unknown;
+  amount?: unknown;
+  state: unknown;
+  outputDataJson?: unknown;
+  attemptId?: unknown;
+  createdAt: unknown;
+  updatedAt: unknown;
+  error?: unknown;
+  terminalFailureJson?: unknown;
 }
 
+/** One operation update and exact attempt record produced by the migration planner. */
 export interface LegacyMintOperationMigrationPlanEntry {
   operationId: string;
   operationState: MintOperationState;
   attempt: MintIssuanceAttempt;
 }
 
-interface Candidate {
-  operation: LegacyMintOperationMigrationRecord;
-  mintUrl: string;
-  unit: string;
-  keysetId: string;
-  outputCount: number;
-  counterStart?: number;
+/** Adapter-ready JSON fields shared by SQL and IndexedDB migration writers. */
+export interface SerializedLegacyMintIssuanceAttempt {
+  quoteIdsJson: string;
+  quoteAmountsJson: string;
+  signingRequirementsJson: string;
+  outputDataJson: string;
+  requestJson: string;
+  terminalErrorJson: string | null;
 }
 
-function groupKey(mintUrl: string, keysetId: string): string {
-  return JSON.stringify([mintUrl, keysetId]);
+const MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
+const MINT_OPERATION_STATES = new Set<MintOperationState>([
+  'init',
+  'pending',
+  'executing',
+  'finalized',
+  'failed',
+]);
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Legacy Mint Operation ${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requiredString(value, field);
+}
+
+function timestamp(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Legacy Mint Operation ${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function parseJson(value: unknown, field: string, operationId: string): unknown {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`Legacy Mint Operation ${operationId} ${field} must be serialized JSON`);
+  }
+  try {
+    return JSON.parse(value);
+  } catch (cause) {
+    throw new Error(`Legacy Mint Operation ${operationId} has invalid ${field}`, { cause });
+  }
+}
+
+function parseTerminalFailure(
+  value: unknown,
+  operationId: string,
+): MintOperationFailure | undefined {
+  const parsed = parseJson(value, 'terminalFailureJson', operationId);
+  if (parsed === undefined) return undefined;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Legacy Mint Operation ${operationId} has invalid terminalFailureJson`);
+  }
+  const failure = parsed as Record<string, unknown>;
+  const reason = requiredString(failure.reason, `${operationId} terminal failure reason`);
+  const observedAt = timestamp(failure.observedAt, `${operationId} terminal failure observedAt`);
+  if (failure.code !== undefined && typeof failure.code !== 'string') {
+    throw new Error(`Legacy Mint Operation ${operationId} terminal failure code must be a string`);
+  }
+  if (failure.retryable !== undefined && typeof failure.retryable !== 'boolean') {
+    throw new Error(
+      `Legacy Mint Operation ${operationId} terminal failure retryable must be a boolean`,
+    );
+  }
+  return {
+    reason,
+    observedAt,
+    ...(failure.code === undefined ? {} : { code: failure.code }),
+    ...(failure.retryable === undefined ? {} : { retryable: failure.retryable }),
+  };
+}
+
+/**
+ * Validates and decodes a persisted legacy operation without inventing missing migration data.
+ */
+export function decodeLegacyMintOperationMigrationRecord(
+  input: PersistedLegacyMintOperationMigrationRecord,
+): LegacyMintOperationMigrationRecord {
+  const id = requiredString(input.id, 'id');
+  if (
+    typeof input.state !== 'string' ||
+    !MINT_OPERATION_STATES.has(input.state as MintOperationState)
+  ) {
+    throw new Error(`Legacy Mint Operation ${id} has invalid state ${String(input.state)}`);
+  }
+  if (
+    input.method !== undefined &&
+    input.method !== null &&
+    (typeof input.method !== 'string' || !MINT_METHODS.has(input.method as MintMethod))
+  ) {
+    throw new Error(`Legacy Mint Operation ${id} has invalid method ${String(input.method)}`);
+  }
+
+  const parsedOutputData = parseJson(input.outputDataJson, 'outputDataJson', id);
+  let outputData: SerializedOutputData | undefined;
+  if (parsedOutputData !== undefined) {
+    try {
+      outputData = parsedOutputData as SerializedOutputData;
+      deserializeOutputData(outputData);
+    } catch (cause) {
+      throw new Error(`Legacy Mint Operation ${id} has invalid outputDataJson`, { cause });
+    }
+  }
+
+  let amount: Amount | undefined;
+  if (input.amount !== undefined && input.amount !== null) {
+    try {
+      amount = Amount.from(input.amount as AmountLike);
+    } catch (cause) {
+      throw new Error(`Legacy Mint Operation ${id} has invalid amount`, { cause });
+    }
+  }
+
+  return {
+    id,
+    mintUrl: requiredString(input.mintUrl, `${id} mintUrl`),
+    quoteId: optionalString(input.quoteId, `${id} quoteId`),
+    method: input.method as MintMethod | undefined,
+    unit: optionalString(input.unit, `${id} unit`),
+    amount,
+    state: input.state as MintOperationState,
+    outputData,
+    attemptId: optionalString(input.attemptId, `${id} attemptId`),
+    createdAt: timestamp(input.createdAt, `${id} createdAt`),
+    updatedAt: timestamp(input.updatedAt, `${id} updatedAt`),
+    error: optionalString(input.error, `${id} error`),
+    terminalFailure: parseTerminalFailure(input.terminalFailureJson, id),
+  };
 }
 
 function attemptState(state: MintOperationState): MintIssuanceAttemptState {
@@ -85,17 +227,39 @@ function terminalError(operation: LegacyMintOperationMigrationRecord) {
   };
 }
 
+function requireAttemptFields(operation: LegacyMintOperationMigrationRecord): {
+  quoteId: string;
+  method: MintMethod;
+  unit: string;
+  amount: AmountLike;
+} {
+  if (
+    !operation.quoteId ||
+    !operation.method ||
+    !operation.unit ||
+    operation.amount === undefined
+  ) {
+    throw new Error(`Legacy Mint Operation ${operation.id} is missing required attempt data`);
+  }
+  return {
+    quoteId: operation.quoteId,
+    method: operation.method,
+    unit: operation.unit,
+    amount: operation.amount,
+  };
+}
+
 /**
  * Builds deterministic, storage-neutral migration records for legacy Mint Operations.
  *
- * Counter ranges are assigned from the already-consumed suffix of each keyset counter. The
- * counter itself is an input snapshot and is never changed by this planner.
+ * Historical output counter ranges cannot be reconstructed from serialized outputs. Migrated
+ * attempts therefore leave the range unknown while the adapter preserves the current counter rows
+ * byte-for-byte. Exact outputs remain sufficient for recovery.
  */
 export function planLegacyMintOperationMigration(
   operations: LegacyMintOperationMigrationRecord[],
-  counters: LegacyMintCounterSnapshot[],
 ): LegacyMintOperationMigrationPlanEntry[] {
-  const candidates: Candidate[] = [];
+  const plan: LegacyMintOperationMigrationPlanEntry[] = [];
 
   for (const operation of operations) {
     if (operation.state === 'init' || operation.attemptId || !operation.outputData) continue;
@@ -109,79 +273,22 @@ export function planLegacyMintOperationMigration(
     if (!keysetId) {
       throw new Error(`Legacy Mint Operation ${operation.id} has no output keyset`);
     }
-    candidates.push({
-      operation,
-      mintUrl: normalizeMintUrl(operation.mintUrl),
-      unit: normalizeUnit(operation.unit),
-      keysetId,
-      outputCount: outputs.length,
-    });
-  }
-
-  candidates.sort(
-    (a, b) =>
-      a.operation.createdAt - b.operation.createdAt || a.operation.id.localeCompare(b.operation.id),
-  );
-
-  const countersByGroup = new Map<string, number>();
-  for (const counter of counters) {
-    const key = groupKey(normalizeMintUrl(counter.mintUrl), counter.keysetId);
-    const known = countersByGroup.get(key);
-    if (known !== undefined && known !== counter.counter) {
-      throw new Error(`Conflicting legacy counter snapshots for keyset ${counter.keysetId}`);
-    }
-    countersByGroup.set(key, counter.counter);
-  }
-
-  const candidatesByGroup = new Map<string, Candidate[]>();
-  for (const candidate of candidates) {
-    const key = groupKey(candidate.mintUrl, candidate.keysetId);
-    const grouped = candidatesByGroup.get(key) ?? [];
-    grouped.push(candidate);
-    candidatesByGroup.set(key, grouped);
-  }
-
-  for (const [key, grouped] of candidatesByGroup) {
-    const counter = countersByGroup.get(key);
-    if (counter === undefined) {
-      throw new Error(
-        `Legacy counter is missing for Mint Operation ${grouped[0]!.operation.id} keyset ${grouped[0]!.keysetId}`,
-      );
-    }
-    const outputCount = grouped.reduce((sum, candidate) => sum + candidate.outputCount, 0);
-    if (!Number.isSafeInteger(counter) || counter < outputCount) {
-      throw new Error(
-        `Legacy counter ${counter} cannot cover ${outputCount} outputs for keyset ${grouped[0]!.keysetId}`,
-      );
-    }
-    let cursor = counter - outputCount;
-    for (const candidate of grouped) {
-      candidate.counterStart = cursor;
-      cursor += candidate.outputCount;
-    }
-  }
-
-  return candidates.map(({ operation, mintUrl, unit, keysetId, outputCount, counterStart }) => {
-    if (counterStart === undefined || !operation.outputData) {
-      throw new Error(`Legacy Mint Operation ${operation.id} has no assigned counter range`);
-    }
+    const { quoteId, method, unit, amount } = requireAttemptFields(operation);
     const state = attemptState(operation.state);
     const wasSubmitted = operation.state !== 'pending';
     const attempt: MintIssuanceAttempt = {
       id: `${LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX}${operation.id}`,
-      mintUrl,
-      method: operation.method,
-      unit,
+      mintUrl: normalizeMintUrl(operation.mintUrl),
+      method,
+      unit: normalizeUnit(unit),
       keysetId,
       state,
       memberOperationIds: [operation.id],
-      quoteIds: [operation.quoteId],
-      quoteAmounts: [Amount.from(operation.amount)],
+      quoteIds: [quoteId],
+      quoteAmounts: [Amount.from(amount)],
       signingRequirements: [null],
       outputData: operation.outputData,
-      counterStart,
-      counterEnd: counterStart + outputCount,
-      request: { kind: 'single', quoteId: operation.quoteId },
+      request: { kind: 'single', quoteId },
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
       ...(wasSubmitted ? { submittedAt: operation.updatedAt } : {}),
@@ -189,10 +296,27 @@ export function planLegacyMintOperationMigration(
       ...(state === 'succeeded' ? { recoveredAt: operation.updatedAt } : {}),
       ...(state === 'failed' ? { terminalError: terminalError(operation) } : {}),
     };
-    return {
+    plan.push({
       operationId: operation.id,
       operationState: operation.state === 'pending' ? 'executing' : operation.state,
       attempt,
-    };
-  });
+    });
+  }
+
+  return plan;
+}
+
+/** Serializes shared attempt fields while retaining the adapter's exact output JSON bytes. */
+export function serializeLegacyMintIssuanceAttempt(
+  attempt: MintIssuanceAttempt,
+  outputDataJson: string,
+): SerializedLegacyMintIssuanceAttempt {
+  return {
+    quoteIdsJson: JSON.stringify(attempt.quoteIds),
+    quoteAmountsJson: JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
+    signingRequirementsJson: JSON.stringify(attempt.signingRequirements),
+    outputDataJson,
+    requestJson: JSON.stringify(attempt.request),
+    terminalErrorJson: attempt.terminalError ? JSON.stringify(attempt.terminalError) : null,
+  };
 }

@@ -1,12 +1,12 @@
 import {
+  decodeLegacyMintOperationMigrationRecord,
   normalizeMintUrl,
   planLegacyMintOperationMigration,
   serializeAmount,
+  serializeLegacyMintIssuanceAttempt,
   stringifyJson,
-  type LegacyMintOperationMigrationRecord,
-  type SerializedOutputData,
 } from '@cashu/coco-core/adapter';
-import type { CounterRow, IdbDb, MintIssuanceAttemptRow, MintOperationRow } from './db.ts';
+import type { IdbDb, MintIssuanceAttemptRow, MintOperationRow } from './db.ts';
 
 function normalizeStoredAmount(value: unknown): string | null | undefined {
   if (value === null || value === undefined) return value;
@@ -1140,31 +1140,31 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
         '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
     })
     .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_mint_issuance_attempts')
+        .toCollection()
+        .modify((row: MintIssuanceAttemptRow) => {
+          if (row.counterRangeKnown === undefined) row.counterRangeKnown = true;
+        });
       const rows = (await tx.table('coco_cashu_mint_operations').toArray()) as MintOperationRow[];
-      const counters = (await tx.table('coco_cashu_counters').toArray()) as CounterRow[];
-      const operations = rows.map(
-        (row) =>
-          ({
-            id: row.id,
-            mintUrl: row.mintUrl,
-            quoteId: row.quoteId ?? '',
-            method: row.method as LegacyMintOperationMigrationRecord['method'],
-            unit: row.unit ?? '',
-            amount: row.amount ?? 0,
-            state: row.state,
-            outputData: row.outputDataJson
-              ? (JSON.parse(row.outputDataJson) as SerializedOutputData)
-              : undefined,
-            attemptId: row.attemptId ?? undefined,
-            createdAt: row.createdAt * 1_000,
-            updatedAt: row.updatedAt * 1_000,
-            error: row.error ?? undefined,
-            terminalFailure: row.terminalFailureJson
-              ? JSON.parse(row.terminalFailureJson)
-              : undefined,
-          }) satisfies LegacyMintOperationMigrationRecord,
+      const operations = rows.map((row) =>
+        decodeLegacyMintOperationMigrationRecord({
+          id: row.id,
+          mintUrl: row.mintUrl,
+          quoteId: row.quoteId,
+          method: row.method,
+          unit: row.unit,
+          amount: row.amount,
+          state: row.state,
+          outputDataJson: row.outputDataJson,
+          attemptId: row.attemptId,
+          createdAt: row.createdAt * 1_000,
+          updatedAt: row.updatedAt * 1_000,
+          error: row.error,
+          terminalFailureJson: row.terminalFailureJson,
+        }),
       );
-      const plan = planLegacyMintOperationMigration(operations, counters);
+      const plan = planLegacyMintOperationMigration(operations);
       const rowsById = new Map(rows.map((row) => [row.id, row]));
 
       for (const entry of plan) {
@@ -1173,6 +1173,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
           throw new Error(`Legacy Mint Operation ${entry.operationId} lost its serialized outputs`);
         }
         const attempt = entry.attempt;
+        const serialized = serializeLegacyMintIssuanceAttempt(attempt, source.outputDataJson);
         await tx.table('coco_cashu_mint_issuance_attempts').add({
           id: attempt.id,
           mintUrl: attempt.mintUrl,
@@ -1181,19 +1182,20 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
           keysetId: attempt.keysetId,
           state: attempt.state,
           memberOperationIds: [...attempt.memberOperationIds],
-          quoteIdsJson: JSON.stringify(attempt.quoteIds),
-          quoteAmountsJson: JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
-          signingRequirementsJson: JSON.stringify(attempt.signingRequirements),
-          outputDataJson: source.outputDataJson,
-          counterStart: attempt.counterStart,
-          counterEnd: attempt.counterEnd,
-          requestJson: JSON.stringify(attempt.request),
+          quoteIdsJson: serialized.quoteIdsJson,
+          quoteAmountsJson: serialized.quoteAmountsJson,
+          signingRequirementsJson: serialized.signingRequirementsJson,
+          outputDataJson: serialized.outputDataJson,
+          counterStart: attempt.counterStart ?? null,
+          counterEnd: attempt.counterEnd ?? null,
+          counterRangeKnown: false,
+          requestJson: serialized.requestJson,
           createdAt: attempt.createdAt,
           updatedAt: attempt.updatedAt,
           submittedAt: attempt.submittedAt ?? null,
           recoveryStartedAt: attempt.recoveryStartedAt ?? null,
           recoveredAt: attempt.recoveredAt ?? null,
-          terminalErrorJson: attempt.terminalError ? JSON.stringify(attempt.terminalError) : null,
+          terminalErrorJson: serialized.terminalErrorJson,
         } satisfies MintIssuanceAttemptRow);
         await tx.table('coco_cashu_mint_operations').update(entry.operationId, {
           state: entry.operationState,

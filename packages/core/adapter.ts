@@ -101,11 +101,14 @@ export {
 } from './utils.ts';
 export type { SerializedOutput, SerializedOutputData, StoredBlindedMessage } from './utils.ts';
 export {
+  decodeLegacyMintOperationMigrationRecord,
   LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX,
   planLegacyMintOperationMigration,
+  serializeLegacyMintIssuanceAttempt,
 } from './repositories/LegacyMintOperationMigration.ts';
 export type {
-  LegacyMintCounterSnapshot,
   LegacyMintOperationMigrationPlanEntry,
   LegacyMintOperationMigrationRecord,
+  PersistedLegacyMintOperationMigrationRecord,
+  SerializedLegacyMintIssuanceAttempt,
 } from './repositories/LegacyMintOperationMigration.ts';

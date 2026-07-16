@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { Amount } from '@cashu/cashu-ts';
 import {
+  decodeLegacyMintOperationMigrationRecord,
   LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX,
   planLegacyMintOperationMigration,
   type LegacyMintOperationMigrationRecord,
@@ -10,8 +11,10 @@ const outputData = (keysetId: string, suffix: string) => ({
   keep: [
     {
       blindedMessage: { amount: '1', id: keysetId, B_: `B_${suffix}` },
-      blindingFactor: suffix,
-      secret: suffix,
+      blindingFactor: '1',
+      secret: Array.from(suffix, (character) =>
+        character.charCodeAt(0).toString(16).padStart(2, '0'),
+      ).join(''),
     },
   ],
   send: [],
@@ -39,24 +42,21 @@ function operation(
 
 describe('planLegacyMintOperationMigration', () => {
   it('maps legacy lifecycle states into single-member attempts without changing counters', () => {
-    const plan = planLegacyMintOperationMigration(
-      [
-        operation('pending', 'pending', { createdAt: 1_000 }),
-        operation('executing', 'executing', { createdAt: 2_000 }),
-        operation('finalized', 'finalized', { createdAt: 3_000 }),
-        operation('failed', 'failed', {
-          createdAt: 4_000,
-          error: 'quote expired',
-          terminalFailure: {
-            reason: 'quote expired',
-            code: 'QUOTE_EXPIRED',
-            retryable: false,
-            observedAt: 1_900,
-          },
-        }),
-      ],
-      [{ mintUrl: 'https://mint.test', keysetId: 'keyset-1', counter: 10 }],
-    );
+    const plan = planLegacyMintOperationMigration([
+      operation('pending', 'pending', { createdAt: 1_000 }),
+      operation('executing', 'executing', { createdAt: 2_000 }),
+      operation('finalized', 'finalized', { createdAt: 3_000 }),
+      operation('failed', 'failed', {
+        createdAt: 4_000,
+        error: 'quote expired',
+        terminalFailure: {
+          reason: 'quote expired',
+          code: 'QUOTE_EXPIRED',
+          retryable: false,
+          observedAt: 1_900,
+        },
+      }),
+    ]);
 
     expect(plan.map(({ attempt }) => attempt.state)).toEqual([
       'prepared',
@@ -70,12 +70,8 @@ describe('planLegacyMintOperationMigration', () => {
       'finalized',
       'failed',
     ]);
-    expect(plan.map(({ attempt }) => [attempt.counterStart, attempt.counterEnd])).toEqual([
-      [6, 7],
-      [7, 8],
-      [8, 9],
-      [9, 10],
-    ]);
+    expect(plan.every(({ attempt }) => attempt.counterStart === undefined)).toBe(true);
+    expect(plan.every(({ attempt }) => attempt.counterEnd === undefined)).toBe(true);
     expect(plan[0]!.attempt).toMatchObject({
       id: `${LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX}pending`,
       mintUrl: 'https://mint.test',
@@ -95,19 +91,16 @@ describe('planLegacyMintOperationMigration', () => {
   });
 
   it('leaves init, output-less, and already attached operations unchanged', () => {
-    const plan = planLegacyMintOperationMigration(
-      [
-        operation('init', 'init', { outputData: undefined }),
-        operation('pending-empty', 'pending', { outputData: { keep: [], send: [] } }),
-        operation('attached', 'executing', { attemptId: 'existing-attempt' }),
-      ],
-      [{ mintUrl: 'https://mint.test', keysetId: 'keyset-1', counter: 10 }],
-    );
+    const plan = planLegacyMintOperationMigration([
+      operation('init', 'init', { outputData: undefined }),
+      operation('pending-empty', 'pending', { outputData: { keep: [], send: [] } }),
+      operation('attached', 'executing', { attemptId: 'existing-attempt' }),
+    ]);
 
     expect(plan).toEqual([]);
   });
 
-  it('rejects ambiguous keysets and counter ranges that cannot cover legacy outputs', () => {
+  it('rejects ambiguous keysets without inferring a historical counter range', () => {
     const mixedKeysets = operation('mixed', 'executing', {
       outputData: {
         keep: outputData('keyset-1', 'one').keep,
@@ -115,17 +108,52 @@ describe('planLegacyMintOperationMigration', () => {
       },
     });
 
+    expect(() => planLegacyMintOperationMigration([mixedKeysets])).toThrow('multiple keysets');
+  });
+
+  it('decodes persisted fields strictly and preserves optional init data', () => {
+    const decoded = decodeLegacyMintOperationMigrationRecord({
+      id: 'pending',
+      mintUrl: 'https://mint.test',
+      quoteId: 'quote-pending',
+      method: 'bolt12',
+      unit: 'sat',
+      amount: '1',
+      state: 'pending',
+      outputDataJson: JSON.stringify(outputData('keyset-1', 'pending')),
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    expect(decoded).toMatchObject({ id: 'pending', method: 'bolt12', quoteId: 'quote-pending' });
+    expect(String(decoded.amount)).toBe('1');
+
+    expect(
+      decodeLegacyMintOperationMigrationRecord({
+        id: 'init',
+        mintUrl: 'https://mint.test',
+        state: 'init',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+    ).toMatchObject({ id: 'init', state: 'init' });
+  });
+
+  it('rejects missing attempt data and corrupt persisted JSON', () => {
     expect(() =>
-      planLegacyMintOperationMigration(
-        [mixedKeysets],
-        [{ mintUrl: 'https://mint.test', keysetId: 'keyset-1', counter: 10 }],
-      ),
-    ).toThrow('multiple keysets');
+      planLegacyMintOperationMigration([
+        operation('missing-quote', 'pending', { quoteId: undefined }),
+      ]),
+    ).toThrow('missing required attempt data');
+
     expect(() =>
-      planLegacyMintOperationMigration(
-        [operation('too-many', 'executing')],
-        [{ mintUrl: 'https://mint.test', keysetId: 'keyset-1', counter: 0 }],
-      ),
-    ).toThrow('cannot cover');
+      decodeLegacyMintOperationMigrationRecord({
+        id: 'corrupt',
+        mintUrl: 'https://mint.test',
+        state: 'pending',
+        outputDataJson: '{',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+    ).toThrow('invalid outputDataJson');
   });
 });

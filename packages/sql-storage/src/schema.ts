@@ -1,11 +1,10 @@
 import {
+  decodeLegacyMintOperationMigrationRecord,
   normalizeMintUrl,
   planLegacyMintOperationMigration,
-  serializeAmount,
-  type LegacyMintOperationMigrationRecord,
+  serializeLegacyMintIssuanceAttempt,
   type MintMethod,
   type MintOperationState,
-  type SerializedOutputData,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 
@@ -75,36 +74,37 @@ interface LegacyMintOperationRow {
 }
 
 async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
+  const attemptColumns = await getTableColumns(db, 'coco_cashu_mint_issuance_attempts');
+  if (!attemptColumns.has('counterRangeKnown')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_mint_issuance_attempts
+       ADD COLUMN counterRangeKnown INTEGER NOT NULL DEFAULT 1`,
+    );
+  }
   const rows = await db.all<LegacyMintOperationRow>(
     `SELECT id, mintUrl, quoteId, method, unit, amount, state, outputDataJson, attemptId,
             createdAt, updatedAt, error, terminalFailureJson
      FROM coco_cashu_mint_operations
      ORDER BY createdAt ASC, id ASC`,
   );
-  const counters = await db.all<{ mintUrl: string; keysetId: string; counter: number }>(
-    'SELECT mintUrl, keysetId, counter FROM coco_cashu_counters',
+  const operations = rows.map((row) =>
+    decodeLegacyMintOperationMigrationRecord({
+      id: row.id,
+      mintUrl: row.mintUrl,
+      quoteId: row.quoteId,
+      method: row.method,
+      unit: row.unit,
+      amount: row.amount,
+      state: row.state,
+      outputDataJson: row.outputDataJson,
+      attemptId: row.attemptId,
+      createdAt: row.createdAt * 1_000,
+      updatedAt: row.updatedAt * 1_000,
+      error: row.error,
+      terminalFailureJson: row.terminalFailureJson,
+    }),
   );
-  const operations = rows.map(
-    (row) =>
-      ({
-        id: row.id,
-        mintUrl: row.mintUrl,
-        quoteId: row.quoteId,
-        method: row.method,
-        unit: row.unit,
-        amount: row.amount,
-        state: row.state,
-        outputData: row.outputDataJson
-          ? (JSON.parse(row.outputDataJson) as SerializedOutputData)
-          : undefined,
-        attemptId: row.attemptId ?? undefined,
-        createdAt: row.createdAt * 1_000,
-        updatedAt: row.updatedAt * 1_000,
-        error: row.error ?? undefined,
-        terminalFailure: row.terminalFailureJson ? JSON.parse(row.terminalFailureJson) : undefined,
-      }) satisfies LegacyMintOperationMigrationRecord,
-  );
-  const plan = planLegacyMintOperationMigration(operations, counters);
+  const plan = planLegacyMintOperationMigration(operations);
   const rowsById = new Map(rows.map((row) => [row.id, row]));
 
   for (const entry of plan) {
@@ -113,12 +113,14 @@ async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
     if (!source?.outputDataJson) {
       throw new Error(`Legacy Mint Operation ${entry.operationId} lost its serialized outputs`);
     }
+    const serialized = serializeLegacyMintIssuanceAttempt(attempt, source.outputDataJson);
     await db.run(
       `INSERT INTO coco_cashu_mint_issuance_attempts (
         id, mintUrl, method, unit, keysetId, state, quoteIdsJson, quoteAmountsJson,
-        signingRequirementsJson, outputDataJson, counterStart, counterEnd, requestJson,
+        signingRequirementsJson, outputDataJson, counterStart, counterEnd, counterRangeKnown,
+        requestJson,
         createdAt, updatedAt, submittedAt, recoveryStartedAt, recoveredAt, terminalErrorJson
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         attempt.id,
         attempt.mintUrl,
@@ -126,19 +128,20 @@ async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
         attempt.unit,
         attempt.keysetId,
         attempt.state,
-        JSON.stringify(attempt.quoteIds),
-        JSON.stringify(attempt.quoteAmounts.map(serializeAmount)),
-        JSON.stringify(attempt.signingRequirements),
-        source.outputDataJson,
-        attempt.counterStart,
-        attempt.counterEnd,
-        JSON.stringify(attempt.request),
+        serialized.quoteIdsJson,
+        serialized.quoteAmountsJson,
+        serialized.signingRequirementsJson,
+        serialized.outputDataJson,
+        attempt.counterStart ?? 0,
+        attempt.counterEnd ?? 0,
+        attempt.counterStart === undefined ? 0 : 1,
+        serialized.requestJson,
         attempt.createdAt,
         attempt.updatedAt,
         attempt.submittedAt ?? null,
         attempt.recoveryStartedAt ?? null,
         attempt.recoveredAt ?? null,
-        attempt.terminalError ? JSON.stringify(attempt.terminalError) : null,
+        serialized.terminalErrorJson,
       ],
     );
     await db.run(
