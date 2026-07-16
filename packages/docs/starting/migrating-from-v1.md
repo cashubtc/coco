@@ -253,7 +253,9 @@ const offMelt = manager.on('melt-quote:updated', ({ mintUrl, quoteId, quote }) =
 ```
 
 Use `manager.quotes.*.refresh({ mintUrl, quoteId })` when resuming or when your
-app wants to explicitly check remote quote state. Use operation APIs and
+app wants to explicitly check remote quote state. Explicit refreshes check only the requested
+quote; they do not join or recruit background NUT-29 quote-check batches, whose all-or-nothing
+validation could otherwise couple the caller to an unrelated quote. Use operation APIs and
 operation events such as `mint-op:finalized`, `mint-op:failed`,
 `melt-op:finalized`, or `melt-op:rolled-back` when the app needs to wait for
 value movement to reach a terminal state.
