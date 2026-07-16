@@ -12,7 +12,9 @@ import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
 import type {
   MintQuotePollingChecker,
   MintQuotePollingCheckResult,
+  MintQuotePollingInterestProvider,
 } from './MintQuotePollingChecker.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -47,11 +49,12 @@ export interface PollingOptions {
   intervalMs?: number; // minimum interval between requests per mint
 }
 
-export class PollingTransport implements RealTimeTransport {
+export class PollingTransport implements RealTimeTransport, MintQuotePollingInterestProvider {
   private readonly logger?: Logger;
   private readonly mintAdapter: MintAdapter;
   private readonly options: Required<PollingOptions>;
   private readonly mintQuoteChecker?: MintQuotePollingChecker;
+  private readonly unregisterMintQuotePollingInterestProvider?: () => void;
   private readonly listenersByMint = new Map<
     string,
     Map<'open' | 'message' | 'error' | 'close', Set<(event: any) => void>>
@@ -79,6 +82,8 @@ export class PollingTransport implements RealTimeTransport {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
     this.mintQuoteChecker = mintQuoteChecker;
+    this.unregisterMintQuotePollingInterestProvider =
+      mintQuoteChecker?.registerMintQuotePollingInterestProvider?.(this);
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };
@@ -264,6 +269,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   closeAll(): void {
+    this.unregisterMintQuotePollingInterestProvider?.();
     this.schedByMint.clear();
     this.listenersByMint.clear();
     this.proofQueueByMint.clear();
@@ -480,6 +486,29 @@ export class PollingTransport implements RealTimeTransport {
       default:
         return undefined;
     }
+  }
+
+  getQueuedMintQuoteIds(mintUrl: string, method: MintMethod): string[] {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const quoteIds: string[] = [];
+    const seen = new Set<string>();
+    const now = Date.now();
+    for (const [scheduledMintUrl, scheduler] of this.schedByMint) {
+      if (normalizeMintUrl(scheduledMintUrl) !== normalizedMintUrl) continue;
+      for (const task of scheduler.queue) {
+        if (
+          this.getMintMethod(task.kind) !== method ||
+          !task.filter ||
+          !this.isMintQuoteTaskEligible(scheduledMintUrl, task, now) ||
+          seen.has(task.filter)
+        ) {
+          continue;
+        }
+        seen.add(task.filter);
+        quoteIds.push(task.filter);
+      }
+    }
+    return quoteIds;
   }
 
   private async performMintQuoteTasks(

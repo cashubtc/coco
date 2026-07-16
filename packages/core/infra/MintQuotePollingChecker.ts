@@ -6,6 +6,10 @@ export interface MintQuotePollingCheckResult {
   errorsByQuoteId?: Map<string, Error>;
 }
 
+export interface MintQuotePollingInterestProvider {
+  getQueuedMintQuoteIds(mintUrl: string, method: MintMethod): string[];
+}
+
 /** Canonical quote-check seam used by the polling scheduler. */
 export interface MintQuotePollingChecker {
   checkMintQuotesForPolling(
@@ -13,4 +17,5 @@ export interface MintQuotePollingChecker {
     method: MintMethod,
     quoteIds: string[],
   ): Promise<MintQuotePollingCheckResult>;
+  registerMintQuotePollingInterestProvider?(provider: MintQuotePollingInterestProvider): () => void;
 }
