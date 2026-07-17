@@ -37,6 +37,8 @@ export interface CocoConfig {
       baseRetryDelayMs?: number;
       initialEnqueueDelayMs?: number;
       autoClaimMintQuotes?: boolean;
+      forceSingleRedemption?: boolean;
+      batchRedemptionDenylist?: string[];
     };
     meltSettlementProcessor?: {
       disabled?: boolean;
@@ -54,6 +56,11 @@ export interface CocoConfig {
 - outputDataCreator (optional): A session-wide strategy used only to construct Cashu output material. See [Custom output construction](#custom-output-construction).
 - watchers (optional): Can be used to disable or configure the available watchers. See [Watchers & Processors](./watchers-processors.md) for more information
 - processors (optional): Can be used to disable or configure the available processors. See [Watchers & Processors](./watchers-processors.md) for more information
+
+`mintOperationProcessor` uses NUT-29 Mint Batches by default when a trusted mint advertises
+compatible BOLT11 support. Set `forceSingleRedemption` to disable processor batch redemption
+globally, or list mint URLs in `batchRedemptionDenylist` to disable it for selected mints. Denylist
+URLs are normalized. These controls do not disable automatic settlement or NUT-29 quote checking.
 
 ## Custom output construction
 

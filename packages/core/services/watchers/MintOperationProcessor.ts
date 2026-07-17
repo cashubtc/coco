@@ -52,6 +52,7 @@ export class MintOperationProcessor {
   private offUntrusted?: () => void;
   private claimingQuotes = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
+  private lastTurnWasBolt11Cohort = false;
 
   private handlers = new Map<string, OperationHandler>();
   private readonly processIntervalMs: number;
@@ -377,7 +378,13 @@ export class MintOperationProcessor {
 
     // Find next item that's ready to process
     const now = Date.now();
-    const readyIndex = this.queue.findIndex((item) => item.nextRetryAt <= now);
+    let readyIndex = this.queue.findIndex((item) => item.nextRetryAt <= now);
+    if (this.lastTurnWasBolt11Cohort) {
+      const readyNonBolt11Index = this.queue.findIndex(
+        (item) => item.method !== 'bolt11' && item.nextRetryAt <= now,
+      );
+      if (readyNonBolt11Index !== -1) readyIndex = readyNonBolt11Index;
+    }
 
     if (readyIndex === -1) {
       // No items ready yet, schedule for when the next one will be
@@ -390,12 +397,28 @@ export class MintOperationProcessor {
       return;
     }
 
+    const readyItem = this.queue[readyIndex];
+    if (readyItem?.method === 'bolt11' && this.supportsProcessorCoordination()) {
+      this.processing = true;
+      try {
+        await this.processReadyBolt11Cohort(now);
+      } catch (err) {
+        this.logger?.error('Failed to coordinate ready Mint Operations', { err });
+      } finally {
+        this.lastTurnWasBolt11Cohort = true;
+        this.processing = false;
+        if (this.running) this.scheduleNextProcess();
+      }
+      return;
+    }
+
     // Remove item from queue
     const [item] = this.queue.splice(readyIndex, 1);
     if (!item) {
       // This shouldn't happen, but handle it gracefully
       return;
     }
+    this.lastTurnWasBolt11Cohort = false;
     this.processing = true;
 
     try {
@@ -434,6 +457,77 @@ export class MintOperationProcessor {
     this.logger?.info('Successfully processed mint operation', { mintUrl, operationId, method });
   }
 
+  private supportsProcessorCoordination(): boolean {
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    return (
+      typeof operations.scheduleIssuance === 'function' &&
+      typeof operations.coordinateScheduledIssuance === 'function' &&
+      typeof operations.getOperation === 'function'
+    );
+  }
+
+  private async processReadyBolt11Cohort(now: number): Promise<void> {
+    const ready = this.queue.filter((item) => item.method === 'bolt11' && item.nextRetryAt <= now);
+    for (const item of ready) {
+      this.mintOperations.scheduleIssuance(item.operationId);
+    }
+    try {
+      await this.mintOperations.coordinateScheduledIssuance();
+    } catch (error) {
+      await this.reconcileReadyBolt11Items(ready, error);
+      throw error;
+    }
+    await this.reconcileReadyBolt11Items(ready);
+  }
+
+  private async reconcileReadyBolt11Items(ready: QueueItem[], error?: unknown): Promise<void> {
+    const removable = new Set<string>();
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    for (const item of ready) {
+      const operation = await this.mintOperations.getOperation(item.operationId);
+      if (!operation || operation.state === 'finalized' || operation.state === 'failed') {
+        removable.add(this.queueItemKey(item));
+        continue;
+      }
+      if (operation.state === 'pending') {
+        const remainsScheduled =
+          typeof operations.isIssuanceScheduled === 'function' &&
+          operations.isIssuanceScheduled(item.operationId);
+        const wasSelected =
+          typeof operations.wasIssuanceSelectedInLastTurn === 'function' &&
+          operations.wasIssuanceSelectedInLastTurn(item.operationId);
+        if (error !== undefined && wasSelected) {
+          operations.unscheduleIssuance?.(item.operationId);
+          if (!this.scheduleNetworkRetry(item, error)) {
+            removable.add(this.queueItemKey(item));
+          }
+        } else if (!remainsScheduled) {
+          removable.add(this.queueItemKey(item));
+        }
+        continue;
+      }
+      if (operation.state !== 'executing' || error === undefined) continue;
+      if (
+        typeof operations.wasIssuanceSelectedInLastTurn !== 'function' ||
+        !operations.wasIssuanceSelectedInLastTurn(item.operationId)
+      ) {
+        continue;
+      }
+
+      const canRetry =
+        typeof operations.canRetryIssuance === 'function' &&
+        (await operations.canRetryIssuance(item.operationId));
+      if (!canRetry || !this.scheduleNetworkRetry(item, error)) {
+        removable.add(this.queueItemKey(item));
+      }
+    }
+    this.queue = this.queue.filter((item) => !removable.has(this.queueItemKey(item)));
+  }
+
+  private queueItemKey(item: Pick<QueueItem, 'mintUrl' | 'operationId'>): string {
+    return `${item.mintUrl}::${item.operationId}`;
+  }
+
   private handleProcessingError(item: QueueItem, err: unknown): void {
     const { mintUrl, operationId } = item;
 
@@ -457,32 +551,40 @@ export class MintOperationProcessor {
       return;
     }
 
-    if (err instanceof NetworkError || (err instanceof Error && err.message.includes('network'))) {
-      item.retryCount++;
-      if (item.retryCount <= this.maxRetries) {
-        const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
-        item.nextRetryAt = Date.now() + delay;
-
-        this.logger?.warn('Network error, will retry', {
-          mintUrl,
-          operationId,
-          attempt: item.retryCount,
-          maxRetries: this.maxRetries,
-          retryInMs: delay,
-        });
-
-        this.queue.push(item);
-        return;
-      }
-
-      this.logger?.error('Max retries exceeded for network error', {
-        mintUrl,
-        operationId,
-        maxRetries: this.maxRetries,
-      });
+    if (this.isNetworkError(err)) {
+      if (this.scheduleNetworkRetry(item, err)) this.queue.push(item);
       return;
     }
 
     this.logger?.error('Failed to process mint operation', { mintUrl, operationId, err });
+  }
+
+  private scheduleNetworkRetry(item: QueueItem, err: unknown): boolean {
+    if (!this.isNetworkError(err)) return false;
+
+    item.retryCount++;
+    if (item.retryCount > this.maxRetries) {
+      this.logger?.error('Max retries exceeded for network error', {
+        mintUrl: item.mintUrl,
+        operationId: item.operationId,
+        maxRetries: this.maxRetries,
+      });
+      return false;
+    }
+
+    const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
+    item.nextRetryAt = Date.now() + delay;
+    this.logger?.warn('Network error, will retry', {
+      mintUrl: item.mintUrl,
+      operationId: item.operationId,
+      attempt: item.retryCount,
+      maxRetries: this.maxRetries,
+      retryInMs: delay,
+    });
+    return true;
+  }
+
+  private isNetworkError(err: unknown): boolean {
+    return err instanceof NetworkError || (err instanceof Error && err.message.includes('network'));
   }
 }

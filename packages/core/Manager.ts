@@ -15,6 +15,7 @@ import {
   MintService,
   MintOperationWatcherService,
   MintOperationProcessor,
+  type MintOperationProcessorOptions,
   MeltQuoteWatcherService,
   MeltSettlementProcessor,
   ProofService,
@@ -33,7 +34,10 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
-import { MintIssuanceCoordinator } from './operations/mint/MintIssuanceCoordinator';
+import {
+  MintIssuanceCoordinator,
+  type ProcessorRedemptionOptions,
+} from './operations/mint/MintIssuanceCoordinator';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import {
@@ -75,15 +79,20 @@ import { PluginHost } from './plugins/PluginHost.ts';
 import type { MintMethodQuoteSnapshot } from './operations/mint';
 import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
+import { Nut29BatchLimitCache } from './quotes/MintQuoteBatchTransport.ts';
 import {
   getMintQuoteAmount,
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
 
-/**
- * Configuration options for initializing the Coco Cashu manager
- */
+/** Configuration for automatic Mint Operation processing and redemption transport policy. */
+export type MintOperationProcessorConfig = MintOperationProcessorOptions &
+  ProcessorRedemptionOptions & {
+    disabled?: boolean;
+  };
+
+/** Configuration options for initializing the Coco Cashu manager. */
 export interface CocoConfig {
   /** Repository implementations for data persistence */
   repo: Repositories;
@@ -139,14 +148,7 @@ export interface CocoConfig {
    */
   processors?: {
     /** Mint operation processor (enabled by default) */
-    mintOperationProcessor?: {
-      disabled?: boolean;
-      processIntervalMs?: number;
-      maxRetries?: number;
-      baseRetryDelayMs?: number;
-      initialEnqueueDelayMs?: number;
-      autoClaimMintQuotes?: boolean;
-    };
+    mintOperationProcessor?: MintOperationProcessorConfig;
     /** Melt settlement processor (enabled by default) */
     meltSettlementProcessor?: {
       disabled?: boolean;
@@ -492,18 +494,14 @@ export class Manager {
     this.mintOperationWatcher = undefined;
   }
 
-  async enableMintOperationProcessor(options?: {
-    processIntervalMs?: number;
-    maxRetries?: number;
-    baseRetryDelayMs?: number;
-    initialEnqueueDelayMs?: number;
-    autoClaimMintQuotes?: boolean;
-  }): Promise<boolean> {
+  /** Starts automatic Mint Operation processing with the requested redemption policy. */
+  async enableMintOperationProcessor(options?: MintOperationProcessorConfig): Promise<boolean> {
     if (this.disposed) return false;
     if (this.mintOperationProcessor?.isRunning()) return false;
     const processorLogger = this.logger.child
       ? this.logger.child({ module: 'MintOperationProcessor' })
       : this.logger;
+    this.mintOperationService.configureProcessorRedemption(options);
     this.mintOperationProcessor = new MintOperationProcessor(
       this.mintOperationService,
       this.quoteLifecycle,
@@ -985,6 +983,7 @@ export class Manager {
       onchain: new MintOnchainHandler(keyRingService),
       bolt12: new MintBolt12Handler(keyRingService),
     });
+    const nut29BatchLimitCache = new Nut29BatchLimitCache();
     const quoteLifecycle = new QuoteLifecycle({
       mintHandlerProvider,
       meltHandlerProvider,
@@ -997,6 +996,7 @@ export class Manager {
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: quoteLifecycleLogger,
+      nut29BatchLimitCache,
     });
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,
@@ -1025,6 +1025,7 @@ export class Manager {
       eventBus: this.eventBus,
       logger: mintIssuanceLogger,
       mintScopedLock,
+      nut29BatchLimitCache,
     });
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,
