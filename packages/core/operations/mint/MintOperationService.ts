@@ -158,6 +158,11 @@ export class MintOperationService {
     this.issuanceCoordinator.schedule(operationId, notBefore);
   }
 
+  /** Removes an operation from the coordinator's ephemeral processor-ready pool. */
+  unscheduleIssuance(operationId: string): void {
+    this.issuanceCoordinator?.unschedule(operationId);
+  }
+
   /** Processes one bounded ready cohort through the issuance coordinator. */
   async coordinateScheduledIssuance(): Promise<void> {
     if (!this.issuanceCoordinator) {

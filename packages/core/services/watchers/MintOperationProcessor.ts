@@ -496,9 +496,12 @@ export class MintOperationProcessor {
         const wasSelected =
           typeof operations.wasIssuanceSelectedInLastTurn === 'function' &&
           operations.wasIssuanceSelectedInLastTurn(item.operationId);
-        if (!remainsScheduled) {
-          removable.add(this.queueItemKey(item));
-        } else if (error !== undefined && wasSelected && !this.scheduleNetworkRetry(item, error)) {
+        if (error !== undefined && wasSelected) {
+          operations.unscheduleIssuance?.(item.operationId);
+          if (!this.scheduleNetworkRetry(item, error)) {
+            removable.add(this.queueItemKey(item));
+          }
+        } else if (!remainsScheduled) {
           removable.add(this.queueItemKey(item));
         }
         continue;

@@ -409,6 +409,15 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(walletMint).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels processor-scheduled issuance before a later coordination turn', () => {
+    service.scheduleIssuance(operationId);
+    expect(service.isIssuanceScheduled(operationId)).toBe(true);
+
+    service.unscheduleIssuance(operationId);
+
+    expect(service.isIssuanceScheduled(operationId)).toBe(false);
+  });
+
   it('redeems a processor-selected cohort through one successful Mint Batch', async () => {
     const peerQuoteId = 'quote-peer';
     const peerOperationId = 'operation-peer';

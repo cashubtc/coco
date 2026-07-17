@@ -333,7 +333,8 @@ export class MintIssuanceCoordinator {
     return `${normalizeMintUrl(operation.mintUrl)}::bolt11::${operation.unit}`;
   }
 
-  private unschedule(operationId: string): void {
+  /** Removes a Mint Operation from the ephemeral processor-ready pool. */
+  unschedule(operationId: string): void {
     this.scheduledOperationIds.delete(operationId);
     this.scheduledNotBefore.delete(operationId);
   }

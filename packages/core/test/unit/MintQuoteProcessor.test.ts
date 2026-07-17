@@ -217,12 +217,14 @@ describe('MintOperationProcessor', () => {
       const coordinateScheduledIssuance = mock(async () => {
         state = 'finalized';
       });
+      const unscheduleIssuance = mock(() => {});
       coordinateScheduledIssuance.mockImplementationOnce(async () => {
         state = stateAfterFailure;
         throw new NetworkError('transient issuance failure');
       });
       mockMintOperationService = {
         scheduleIssuance() {},
+        unscheduleIssuance,
         coordinateScheduledIssuance,
         async getOperation() {
           return operation();
@@ -262,6 +264,10 @@ describe('MintOperationProcessor', () => {
 
       expect(operation().state).toBe('finalized');
       expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(2);
+      expect(unscheduleIssuance).toHaveBeenCalledTimes(stateAfterFailure === 'pending' ? 1 : 0);
+      if (stateAfterFailure === 'pending') {
+        expect(unscheduleIssuance).toHaveBeenCalledWith(operation().id);
+      }
       await processor.stop();
     }
   });
