@@ -10,10 +10,12 @@ export type ScriptedStep<T> = { kind: 'return'; value: T } | { kind: 'throw'; er
 export class ScriptedMintIssuanceTransport {
   readonly batchSubmissions: BatchMintPreview[] = [];
   readonly quoteChecks: Array<{ mintUrl: string; method: MintMethod; quoteIds: string[] }> = [];
+  readonly restoreRequests: Array<{ mintUrl: string; attemptId?: string }> = [];
 
   constructor(
     private readonly batchSteps: ScriptedStep<Proof[]>[],
     private readonly quoteCheckSteps: ScriptedStep<MintMethodQuoteSnapshot[]>[],
+    private readonly restoreSteps: ScriptedStep<Proof[]>[] = [],
   ) {}
 
   completeBatchMint = async (preview: BatchMintPreview): Promise<Proof[]> => {
@@ -28,6 +30,15 @@ export class ScriptedMintIssuanceTransport {
   ): Promise<MintMethodQuoteSnapshot[]> => {
     this.quoteChecks.push({ mintUrl, method, quoteIds: [...quoteIds] });
     return this.runNext(this.quoteCheckSteps, 'NUT-29 quote check');
+  };
+
+  restoreExactOutputs = async (
+    mintUrl: string,
+    _outputData: unknown,
+    options: { createdByAttemptId?: string },
+  ): Promise<Proof[]> => {
+    this.restoreRequests.push({ mintUrl, attemptId: options.createdByAttemptId });
+    return this.runNext(this.restoreSteps, 'NUT-09 Restore');
   };
 
   private async runNext<T>(steps: ScriptedStep<T>[], boundary: string): Promise<T> {

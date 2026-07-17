@@ -33,7 +33,10 @@ import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { CoreProof, MintInfo } from '../../types.ts';
 import { serializeOutputData } from '../../utils.ts';
-import { ScriptedMintIssuanceTransport } from '../fixtures/ScriptedMintIssuanceTransport.ts';
+import {
+  ScriptedMintIssuanceTransport,
+  type ScriptedStep,
+} from '../fixtures/ScriptedMintIssuanceTransport.ts';
 
 describe('MintOperationService durable single BOLT11 issuance', () => {
   const mintUrl = 'https://mint.test';
@@ -180,6 +183,39 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       outputData: batchOutputData,
       recoveredProof,
     };
+  }
+
+  async function markQuotesIssued(quoteIds: readonly string[]): Promise<void> {
+    for (const issuedQuoteId of quoteIds) {
+      await repositories.mintQuoteRepository.setMintQuoteState(
+        mintUrl,
+        'bolt11',
+        issuedQuoteId,
+        'ISSUED',
+        Date.now(),
+      );
+    }
+  }
+
+  async function setQuoteUnpaid(quoteId: string, expiry: number): Promise<void> {
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1ambiguouspeer',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'UNPAID',
+      }),
+    );
+  }
+
+  function scriptExactOutputRestore(...steps: ScriptedStep<Proof[]>[]) {
+    const scripted = new ScriptedMintIssuanceTransport([], [], steps);
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(
+      scripted.restoreExactOutputs,
+    );
+    return scripted;
   }
 
   function createService(): MintOperationService {
@@ -1125,16 +1161,8 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
   it('recovers the complete exact batch proof set when every member is issued', async () => {
     const { attempt, operationIds, quoteIds, recoveredProof } = await createAmbiguousBatch();
-    for (const recoveredQuoteId of quoteIds) {
-      await repositories.mintQuoteRepository.setMintQuoteState(
-        mintUrl,
-        'bolt11',
-        recoveredQuoteId,
-        'ISSUED',
-        Date.now(),
-      );
-    }
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([recoveredProof]);
+    await markQuotesIssued(quoteIds);
+    const scripted = scriptExactOutputRestore({ kind: 'return', value: [recoveredProof] });
 
     const result = await coordinator.coordinate(operationIds[0]);
 
@@ -1145,6 +1173,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(
       await repositories.proofRepository.getProofBySecret(mintUrl, recoveredProof.secret),
     ).toMatchObject({ state: 'ready', createdByAttemptId: attempt.id });
+    expect(scripted.restoreRequests).toEqual([{ mintUrl, attemptId: attempt.id }]);
     expect(walletBatchMint).toHaveBeenCalledTimes(1);
   });
 
@@ -1205,16 +1234,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
   it('requeues independently observed PAID and unexpired UNPAID members', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
-    await repositories.mintQuoteRepository.upsertMintQuote(
-      mintQuoteFromBolt11Response(mintUrl, {
-        quote: quoteIds[1],
-        request: 'lnbc1ambiguouspeer',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) + 3600,
-        state: 'UNPAID',
-      }),
-    );
+    await setQuoteUnpaid(quoteIds[1], Math.floor(Date.now() / 1000) + 3600);
 
     await coordinator.coordinate(operationIds[0]);
 
@@ -1233,16 +1253,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
   it('requeues a PAID member while failing an independently observed expired UNPAID member', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
-    await repositories.mintQuoteRepository.upsertMintQuote(
-      mintQuoteFromBolt11Response(mintUrl, {
-        quote: quoteIds[1],
-        request: 'lnbc1ambiguouspeer',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) - 1,
-        state: 'UNPAID',
-      }),
-    );
+    await setQuoteUnpaid(quoteIds[1], Math.floor(Date.now() / 1000) - 1);
 
     await coordinator.coordinate(operationIds[1]);
 
@@ -1284,16 +1295,8 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       outputData: partialOutputData,
       recoveredProof: partialProof,
     });
-    for (const recoveredQuoteId of quoteIds) {
-      await repositories.mintQuoteRepository.setMintQuoteState(
-        mintUrl,
-        'bolt11',
-        recoveredQuoteId,
-        'ISSUED',
-        Date.now(),
-      );
-    }
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([partialProof]);
+    await markQuotesIssued(quoteIds);
+    const scripted = scriptExactOutputRestore({ kind: 'return', value: [partialProof] });
 
     await coordinator.coordinate(operationIds[0]);
 
@@ -1310,20 +1313,14 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(
       (await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.terminalError?.code,
     ).toBe('CRITICAL_PARTIAL_SIGNING');
+    expect(scripted.restoreRequests).toHaveLength(1);
     await expect(service.canRetryIssuance(operationIds[1])).resolves.toBe(false);
   });
 
   it('fails every member when exact-output restoration proves no batch outputs exist', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
-    for (const recoveredQuoteId of quoteIds) {
-      await repositories.mintQuoteRepository.setMintQuoteState(
-        mintUrl,
-        'bolt11',
-        recoveredQuoteId,
-        'ISSUED',
-        Date.now(),
-      );
-    }
+    await markQuotesIssued(quoteIds);
+    const scripted = scriptExactOutputRestore({ kind: 'return', value: [] });
 
     await coordinator.coordinate(operationIds[0]);
 
@@ -1337,22 +1334,16 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(
       (await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.terminalError?.code,
     ).toBe('EXACT_PROOFS_UNRECOVERABLE');
+    expect(scripted.restoreRequests).toHaveLength(1);
   });
 
   it('keeps the batch recoverable when exact-output restoration is unusable', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
-    for (const recoveredQuoteId of quoteIds) {
-      await repositories.mintQuoteRepository.setMintQuoteState(
-        mintUrl,
-        'bolt11',
-        recoveredQuoteId,
-        'ISSUED',
-        Date.now(),
-      );
-    }
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockRejectedValueOnce(
-      new Error('malformed restore response'),
-    );
+    await markQuotesIssued(quoteIds);
+    const scripted = scriptExactOutputRestore({
+      kind: 'throw',
+      error: new Error('malformed restore response'),
+    });
 
     const result = await coordinator.coordinate(operationIds[0]);
 
@@ -1367,6 +1358,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         ),
       ),
     ).toEqual(['executing', 'executing']);
+    expect(scripted.restoreRequests).toHaveLength(1);
   });
 
   it('recovers deterministically across malformed submission and quote-check transport faults', async () => {
