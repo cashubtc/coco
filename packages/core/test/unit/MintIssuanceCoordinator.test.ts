@@ -1204,6 +1204,31 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(walletBatchMint).toHaveBeenCalledTimes(1);
   });
 
+  it('propagates retryable quote-check failures after preserving batch recovery state', async () => {
+    const { attempt, operationIds } = await createAmbiguousBatch();
+    const networkFailure = new NetworkError('recovery quote check disconnected');
+    checkMintQuoteBatch.mockRejectedValue(networkFailure);
+
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toBe(networkFailure);
+
+    const serverFailure = new HttpResponseError('recovery quote check unavailable', 503);
+    checkMintQuoteBatch.mockRejectedValue(serverFailure);
+    await expect(coordinator.coordinate(operationIds[1])).rejects.toBe(serverFailure);
+
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'recovering',
+    );
+    expect(
+      await Promise.all(
+        operationIds.map(
+          async (id) => (await repositories.mintOperationRepository.getById(id))?.state,
+        ),
+      ),
+    ).toEqual(['executing', 'executing']);
+    await expect(service.canRetryIssuance(operationIds[0])).resolves.toBe(true);
+    expect(checkMintQuoteBatch).toHaveBeenCalledTimes(6);
+  });
+
   it('fails issued members and requeues claimable members for mixed recovery states', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
     await repositories.mintQuoteRepository.setMintQuoteState(
@@ -1424,7 +1449,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
 
     service = createService();
-    await expect(service.finalize(operationId)).resolves.toMatchObject({ state: 'executing' });
+    await expect(service.finalize(operationId)).rejects.toBe(networkFailure);
     await expect(service.finalize(peerOperationId)).resolves.toMatchObject({ state: 'executing' });
     await expect(service.finalize(operationId)).resolves.toMatchObject({ state: 'finalized' });
 

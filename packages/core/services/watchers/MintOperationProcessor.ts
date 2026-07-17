@@ -1,7 +1,7 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
-import { MintOperationError, NetworkError } from '../../models/Error';
+import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error';
 import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -585,6 +585,10 @@ export class MintOperationProcessor {
   }
 
   private isNetworkError(err: unknown): boolean {
-    return err instanceof NetworkError || (err instanceof Error && err.message.includes('network'));
+    return (
+      err instanceof NetworkError ||
+      (err instanceof HttpResponseError && (err.status === 429 || err.status >= 500)) ||
+      (err instanceof Error && err.message.includes('network'))
+    );
   }
 }

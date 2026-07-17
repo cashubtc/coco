@@ -6,7 +6,12 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerP
 import type { MintQuotePollingChecker } from '../../infra/MintQuotePollingChecker.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { Logger } from '../../logging/Logger.ts';
-import { HttpResponseError, MintOperationError, UnknownMintError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
+  UnknownMintError,
+} from '../../models/Error.ts';
 import {
   getMintQuoteAmount,
   getMintQuoteRemoteState,
@@ -1355,6 +1360,12 @@ export class MintIssuanceCoordinator {
       );
     } catch (error) {
       await this.markRecovering(recovering, error);
+      if (
+        error instanceof NetworkError ||
+        (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
+      ) {
+        throw error;
+      }
       return;
     }
 

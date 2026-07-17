@@ -4,7 +4,7 @@ import { MintOperationProcessor } from '../../services/watchers/MintOperationPro
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
-import { MintOperationError, NetworkError } from '../../models/Error';
+import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
@@ -789,7 +789,7 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-5']);
   });
 
-  it('retries network errors with exponential backoff', async () => {
+  it('retries transient transport errors with exponential backoff', async () => {
     let attemptCount = 0;
     const attemptTimes: number[] = [];
 
@@ -797,9 +797,10 @@ describe('MintOperationProcessor', () => {
       async finalize(operationId: string) {
         attemptCount++;
         attemptTimes.push(Date.now());
-        if (attemptCount <= 2) {
+        if (attemptCount === 1) {
           throw new NetworkError(`network failure for ${operationId}`);
         }
+        if (attemptCount === 2) throw new HttpResponseError('mint unavailable', 503);
         finalizeCalls.push(operationId);
       },
     } as unknown as MintOperationService;
