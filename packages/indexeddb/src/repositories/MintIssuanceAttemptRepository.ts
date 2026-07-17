@@ -135,6 +135,17 @@ export class IdbMintIssuanceAttemptRepository implements MintIssuanceAttemptRepo
     return rows[0] ? rowToAttempt(rows[0]) : null;
   }
 
+  async listByMintUrl(mintUrl: string): Promise<MintIssuanceAttempt[]> {
+    const rows = (await this.db
+      .table('coco_cashu_mint_issuance_attempts')
+      .where('mintUrl')
+      .equals(normalizeMintUrl(mintUrl))
+      .toArray()) as MintIssuanceAttemptRow[];
+    return rows
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      .map(rowToAttempt);
+  }
+
   async listRecoverable(mintUrl?: string): Promise<MintIssuanceAttempt[]> {
     const normalizedMintUrl = mintUrl ? normalizeMintUrl(mintUrl) : undefined;
     const rows = (await this.db

@@ -30,7 +30,7 @@ export type MintIssuanceRequestMetadata =
       quoteAmounts: Amount[];
     };
 
-/** Structured terminal failure retained with a rejected or locally failed attempt. */
+/** Structured rejection/recovery classification or terminal local failure metadata. */
 export interface MintIssuanceAttemptError {
   message: string;
   code?: string;

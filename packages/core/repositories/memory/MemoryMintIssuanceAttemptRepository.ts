@@ -38,6 +38,14 @@ export class MemoryMintIssuanceAttemptRepository implements MintIssuanceAttemptR
     return attempts[0] ? normalizeMintIssuanceAttempt(attempts[0]) : null;
   }
 
+  async listByMintUrl(mintUrl: string): Promise<MintIssuanceAttempt[]> {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    return Array.from(this.attempts.values())
+      .filter((attempt) => attempt.mintUrl === normalizedMintUrl)
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      .map(normalizeMintIssuanceAttempt);
+  }
+
   async listRecoverable(mintUrl?: string): Promise<MintIssuanceAttempt[]> {
     const normalizedMintUrl = mintUrl ? normalizeMintUrl(mintUrl) : undefined;
     return Array.from(this.attempts.values())

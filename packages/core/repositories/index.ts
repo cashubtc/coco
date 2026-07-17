@@ -311,6 +311,8 @@ export interface MintIssuanceAttemptRepository {
   getById(id: string): Promise<MintIssuanceAttempt | null>;
   /** Returns the newest attempt containing the member, including historical rejected attempts. */
   getByMemberOperationId(operationId: string): Promise<MintIssuanceAttempt | null>;
+  /** Lists every attempt for a mint in deterministic creation order. */
+  listByMintUrl(mintUrl: string): Promise<MintIssuanceAttempt[]>;
   /** Lists prepared, possibly submitted, and recovering attempts in deterministic order. */
   listRecoverable(mintUrl?: string): Promise<MintIssuanceAttempt[]>;
 }

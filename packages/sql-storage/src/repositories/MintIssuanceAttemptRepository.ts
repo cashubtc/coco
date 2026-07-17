@@ -177,6 +177,18 @@ export class SqliteMintIssuanceAttemptRepository implements MintIssuanceAttemptR
     return row ? rowToAttempt(row, await this.getMembers(row.id, this.db)) : null;
   }
 
+  async listByMintUrl(mintUrl: string): Promise<MintIssuanceAttempt[]> {
+    const rows = await this.db.all<AttemptRow>(
+      `SELECT * FROM coco_cashu_mint_issuance_attempts
+       WHERE mintUrl = ?
+       ORDER BY createdAt ASC, id ASC`,
+      [normalizeMintUrl(mintUrl)],
+    );
+    return Promise.all(
+      rows.map(async (row) => rowToAttempt(row, await this.getMembers(row.id, this.db))),
+    );
+  }
+
   async listRecoverable(mintUrl?: string): Promise<MintIssuanceAttempt[]> {
     const params: SqlValue[] = [];
     let where = "state IN ('prepared', 'submitting', 'recovering')";
