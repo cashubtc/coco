@@ -75,6 +75,7 @@ implementation details. They are not app-facing root API.
 - [x] NUT-23
 - [ ] NUT-24
 - [ ] NUT-25
+- [x] NUT-29 (target-isolated and background mint quote checks)
 
 ## Quick start
 

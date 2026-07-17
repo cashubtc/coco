@@ -73,10 +73,15 @@ _Avoid_: Quote refresh, subscription update
 
 **Attributable Quote Observation**:
 A Quote Observation whose quote identity and method-specific fields safely bind it to exactly one
-requested canonical quote. Coco may record an Attributable Quote Observation from an otherwise
-off-protocol batch-check response; malformed, missing, conflicting, or unattributable peers do not
-invalidate it.
+requested canonical quote. Coco may record an Attributable Quote Observation from a successful but
+otherwise off-protocol batch-check response; an atomically rejected request produces no
+observations.
 _Avoid_: Valid batch response, positional quote result
+
+**Explicit Quote Check**:
+A caller-scoped request to observe one canonical quote immediately. It is target-isolated and does
+not recruit Background Watcher interests or join multi-quote watcher work.
+_Avoid_: Foreground batch, priority watcher check
 
 **Quote Identity**:
 A methodless reference to a mint or melt quote by mint URL and quote ID. Mint quote identities and

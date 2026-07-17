@@ -1,7 +1,7 @@
 import { Amount, type OutputData, type Proof } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MintAdapter } from '../../infra/MintAdapter.ts';
-import type { MintRequestProvider } from '../../infra/MintRequestProvider.ts';
+import type { MintRequestFn, MintRequestProvider } from '../../infra/MintRequestProvider.ts';
 
 const mintUrl = 'https://mint.test';
 const expiry = Math.floor(Date.now() / 1000) + 3600;
@@ -100,6 +100,48 @@ describe('MintAdapter', () => {
       meltOnchain: mock(async () => ({ ...onchainMeltQuote, state: 'PENDING' as const })),
     };
     installFakeMint(adapter, fakeMint);
+  });
+
+  it('sends batch quote checks through the authenticated request provider', async () => {
+    const request: MintRequestFn = mock(async ({ endpoint, method, requestBody, headers }) => {
+      if (endpoint === `${mintUrl}/v1/info`) {
+        return {
+          ...mintInfo,
+          nuts: {
+            ...mintInfo.nuts,
+            '22': {
+              bat_max_mint: 10,
+              protected_endpoints: [{ method: 'POST', path: '/v1/mint/quote/bolt11/check' }],
+            },
+          },
+        } as never;
+      }
+
+      expect(endpoint).toBe(`${mintUrl}/v1/mint/quote/bolt11/check`);
+      expect(method).toBe('POST');
+      expect(requestBody).toEqual({ quotes: ['quote-1', 'quote-2'] });
+      expect(headers).toEqual({ 'Blind-auth': 'blind-auth-token' });
+      return [{ quote: 'quote-1' }, { quote: 'quote-2' }] as never;
+    });
+    const provider = {
+      getBlindAuthToken: mock(async () => 'blind-auth-token'),
+      getCAT: mock(() => undefined),
+      setCAT: mock(() => undefined),
+    };
+    requestProvider = {
+      getRequestFn: mock(() => request),
+    } as unknown as MintRequestProvider;
+    adapter = new MintAdapter(requestProvider);
+    adapter.setAuthProvider(mintUrl, provider);
+
+    await expect(
+      adapter.checkMintQuoteBatch(mintUrl, 'bolt11', ['quote-1', 'quote-2']),
+    ).resolves.toEqual([{ quote: 'quote-1' }, { quote: 'quote-2' }]);
+
+    expect(provider.getBlindAuthToken).toHaveBeenCalledWith({
+      method: 'POST',
+      path: '/v1/mint/quote/bolt11/check',
+    });
   });
 
   it('manages mint auth providers and invalidates cached mint instances', () => {

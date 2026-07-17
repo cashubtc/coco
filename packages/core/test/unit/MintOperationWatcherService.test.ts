@@ -209,6 +209,54 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
+  it('stops a terminal quote without removing an active sibling watch', async () => {
+    const quote1 = makeBolt11Quote();
+    const quote2 = {
+      ...makeBolt11Quote(),
+      quoteId: 'quote-2',
+      quote: 'quote-2',
+      request: 'lnbc1peer',
+    };
+    const callbacks = new Map<string, (payload: MintQuoteBolt11Response) => Promise<void>>();
+    const unsubscribes = new Map<string, Mock<any>>();
+    subscribe.mockImplementation(
+      async (
+        _mintUrl: string,
+        _kind: string,
+        filters: string[],
+        next: (payload: MintQuoteBolt11Response) => Promise<void>,
+      ) => {
+        const watchedQuoteId = filters[0]!;
+        const stop = mock(async () => {});
+        callbacks.set(watchedQuoteId, next);
+        unsubscribes.set(watchedQuoteId, stop);
+        return { subId: `sub-${watchedQuoteId}`, unsubscribe: stop };
+      },
+    );
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
+        getPendingMintQuotes: mock(async () => [quote1, quote2]),
+      }),
+      options: { watchExistingPendingOnStart: false },
+    });
+
+    await watcher.start();
+    await callbacks.get(quote1.quoteId)?.({
+      quote: quote1.quoteId,
+      request: quote1.request,
+      amount: quote1.amount,
+      unit: quote1.unit,
+      expiry: quote1.expiry,
+      state: 'ISSUED',
+    });
+
+    expect(unsubscribes.get(quote1.quoteId)).toHaveBeenCalledTimes(1);
+    expect(unsubscribes.get(quote2.quoteId)).not.toHaveBeenCalled();
+
+    await watcher.stop();
+    expect(unsubscribes.get(quote2.quoteId)).toHaveBeenCalledTimes(1);
+  });
+
   it('watches pending canonical onchain mint quotes', async () => {
     const watcher = makeWatcher({
       quoteLifecycle: makeQuoteLifecycle({

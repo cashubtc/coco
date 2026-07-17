@@ -3,8 +3,9 @@ import type { WebSocketFactory } from './WsConnectionManager.ts';
 import type { RealTimeTransport } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
+import type { MintQuotePollingChecker } from './MintQuotePollingChecker.ts';
 import { HybridTransport } from './HybridTransport.ts';
-import { generateSubId } from '../utils.ts';
+import { generateSubId, normalizeMintUrl } from '../utils.ts';
 
 import type {
   WsRequest,
@@ -46,6 +47,7 @@ export class SubscriptionManager {
   private readonly wsFactory?: WebSocketFactory;
   private readonly mintAdapter: MintAdapter;
   private readonly options: Required<SubscriptionManagerOptions>;
+  private readonly mintQuoteChecker?: MintQuotePollingChecker;
   private paused = false;
 
   constructor(
@@ -53,9 +55,11 @@ export class SubscriptionManager {
     mintAdapter: MintAdapter,
     logger?: Logger,
     options?: SubscriptionManagerOptions,
+    mintQuoteChecker?: MintQuotePollingChecker,
   ) {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
+    this.mintQuoteChecker = mintQuoteChecker;
     this.options = {
       slowPollingIntervalMs: options?.slowPollingIntervalMs ?? 20000,
       fastPollingIntervalMs: options?.fastPollingIntervalMs ?? 5000,
@@ -96,6 +100,7 @@ export class SubscriptionManager {
           fastPollingIntervalMs: this.options.fastPollingIntervalMs,
         },
         this.logger,
+        this.mintQuoteChecker,
       );
     } else {
       // No wsFactory available, use polling only at fast interval
@@ -103,6 +108,7 @@ export class SubscriptionManager {
         this.mintAdapter,
         { intervalMs: this.options.fastPollingIntervalMs },
         this.logger,
+        this.mintQuoteChecker,
       );
     }
     this.transportByMint.set(mintUrl, t);
@@ -217,6 +223,26 @@ export class SubscriptionManager {
     this.openHandlerByMint.set(mintUrl, onOpen);
   }
 
+  private createUnsubscribeHandler<TPayload>(
+    active: ActiveSubscription<unknown>,
+    callback?: SubscriptionCallback<TPayload>,
+    ownsSubscription = false,
+  ): UnsubscribeHandler {
+    return async () => {
+      const current = this.subscriptions.get(active.subId);
+      if (!current) return;
+
+      if (callback) {
+        current.callbacks.delete(callback as SubscriptionCallback<unknown>);
+        if (current.callbacks.size > 0) return;
+      } else if (!ownsSubscription && current.callbacks.size > 0) {
+        return;
+      }
+
+      await this.unsubscribe(active.mintUrl, active.subId);
+    };
+  }
+
   async subscribe<TPayload = unknown>(
     mintUrl: string,
     kind: SubscriptionKind,
@@ -226,6 +252,7 @@ export class SubscriptionManager {
     if (!filters || filters.length === 0) {
       throw new Error('filters must be a non-empty array');
     }
+    mintUrl = normalizeMintUrl(mintUrl);
     this.ensureMessageListener(mintUrl);
 
     // Check if there's already an active subscription with the same filters
@@ -250,15 +277,7 @@ export class SubscriptionManager {
         }
         return {
           subId: existingSubId,
-          unsubscribe: async () => {
-            if (onNotification) {
-              this.removeCallback(existingSubId, onNotification);
-            }
-            // Only unsubscribe if no callbacks remain
-            if (existingSub.callbacks.size === 0) {
-              await this.unsubscribe(mintUrl, existingSubId);
-            }
-          },
+          unsubscribe: this.createUnsubscribeHandler(existingSub, onNotification),
         };
       }
     }
@@ -310,9 +329,7 @@ export class SubscriptionManager {
       });
       return {
         subId,
-        unsubscribe: async () => {
-          await this.unsubscribe(mintUrl, subId);
-        },
+        unsubscribe: this.createUnsubscribeHandler(active, onNotification, true),
       };
     }
 
@@ -334,9 +351,7 @@ export class SubscriptionManager {
 
     return {
       subId,
-      unsubscribe: async () => {
-        await this.unsubscribe(mintUrl, subId);
-      },
+      unsubscribe: this.createUnsubscribeHandler(active, onNotification, true),
     };
   }
 
@@ -353,6 +368,7 @@ export class SubscriptionManager {
   }
 
   async unsubscribe(mintUrl: string, subId: string): Promise<void> {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.debug('SubscriptionManager: unsubscribe called', {
       mintUrl,
       subId,
@@ -408,6 +424,7 @@ export class SubscriptionManager {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.logger?.info('Closing all subscriptions for mint', { mintUrl });
 
     // Get all subscriptions for this mint

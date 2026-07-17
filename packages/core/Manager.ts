@@ -318,7 +318,6 @@ export class Manager {
     });
     this.mintAdapter = new MintAdapter(this.mintRequestProvider);
 
-    this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
@@ -346,6 +345,11 @@ export class Manager {
     this.meltOperationService = core.meltOperationService;
     this.meltOperationRepository = core.meltOperationRepository;
     this.quoteLifecycle = core.quoteLifecycle;
+    this.subscriptions = this.createSubscriptionManager(
+      webSocketFactory,
+      subscriptions,
+      this.quoteLifecycle,
+    );
     this.authSessionService = core.authSessionService;
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
@@ -801,6 +805,7 @@ export class Manager {
   private createSubscriptionManager(
     webSocketFactory?: WebSocketFactory,
     subscriptionOptions?: CocoConfig['subscriptions'],
+    mintQuoteChecker?: QuoteLifecycle,
   ): SubscriptionManager {
     const wsLogger = this.getChildLogger('SubscriptionManager');
     // Detect global WebSocket if available, otherwise require injected factory
@@ -821,10 +826,23 @@ export class Manager {
         this.mintAdapter,
         { intervalMs: options.fastPollingIntervalMs },
         wsLogger,
+        mintQuoteChecker,
       );
-      return new SubscriptionManager(polling, this.mintAdapter, wsLogger, options);
+      return new SubscriptionManager(
+        polling,
+        this.mintAdapter,
+        wsLogger,
+        options,
+        mintQuoteChecker,
+      );
     }
-    return new SubscriptionManager(wsFactoryToUse, this.mintAdapter, wsLogger, options);
+    return new SubscriptionManager(
+      wsFactoryToUse,
+      this.mintAdapter,
+      wsLogger,
+      options,
+      mintQuoteChecker,
+    );
   }
 
   private buildCoreServices(

@@ -94,12 +94,16 @@ after reload without creating or loading a mint operation:
 - `listPending({ method? })` lists canonical quote rows that have not reached
   `ISSUED`
 - `refresh({ mintUrl, quoteId })` checks the remote quote state and
-  persists the canonical quote update before emitting `mint-quote:updated`
+  persists the canonical quote update before emitting `mint-quote:updated`; explicit refreshes are
+  target-isolated and never recruit unrelated background quote interests
 
 `mint-quote:updated` is emitted when a quote is created/imported or remote
 settlement state changes. Stable metadata-only updates do not emit. Importing a
 quote can therefore start watcher interest, but it does not create history or a
 mint operation; call `coco.ops.mint.prepare(...)` when you want to redeem it.
+Compatible watcher interests may share NUT-29 batch checks. Those background batches are separate
+from an explicit `refresh()`, because NUT-29 rejects the whole check when any requested quote is
+unknown or malformed.
 Use `coco.on('mint-quote:updated', ...)` for live application quote state, and
 use `mint-op:finalized`, `mint-op:failed`, or `coco.ops.mint.finalize(...)` for
 issuance completion.

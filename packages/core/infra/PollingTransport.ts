@@ -8,6 +8,11 @@ import type {
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
+import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
+import type {
+  MintQuotePollingChecker,
+  MintQuotePollingCheckResult,
+} from './MintQuotePollingChecker.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -21,6 +26,12 @@ type MintScheduler = {
   queue: Task[];
   running: boolean;
   hasProofBatchTask: boolean;
+  idleWaiters: Set<() => void>;
+};
+
+type MintQuoteBackoff = {
+  failures: number;
+  nextEligibleAt: number;
 };
 
 const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
@@ -41,6 +52,7 @@ export class PollingTransport implements RealTimeTransport {
   private readonly logger?: Logger;
   private readonly mintAdapter: MintAdapter;
   private readonly options: Required<PollingOptions>;
+  private readonly mintQuoteChecker?: MintQuotePollingChecker;
   private readonly listenersByMint = new Map<
     string,
     Map<'open' | 'message' | 'error' | 'close', Set<(event: any) => void>>
@@ -51,13 +63,23 @@ export class PollingTransport implements RealTimeTransport {
   private readonly yToSubsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly subToYsByMint = new Map<string, Map<string, Set<string>>>();
   private readonly intervalByMint = new Map<string, number>();
+  private readonly mintQuoteBackoff = new Map<
+    string,
+    Map<MintMethod, Map<string, MintQuoteBackoff>>
+  >();
   // Track unsubscribed subIds to prevent re-enqueuing tasks that are currently being processed
   private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
 
-  constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
+  constructor(
+    mintAdapter: MintAdapter,
+    options?: PollingOptions,
+    logger?: Logger,
+    mintQuoteChecker?: MintQuotePollingChecker,
+  ) {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
+    this.mintQuoteChecker = mintQuoteChecker;
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };
@@ -251,6 +273,7 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.clear();
     this.intervalByMint.clear();
     this.unsubscribedByMint.clear();
+    this.mintQuoteBackoff.clear();
   }
 
   closeMint(mintUrl: string): void {
@@ -262,6 +285,7 @@ export class PollingTransport implements RealTimeTransport {
     this.subToYsByMint.delete(mintUrl);
     this.intervalByMint.delete(mintUrl);
     this.unsubscribedByMint.delete(mintUrl);
+    this.mintQuoteBackoff.delete(mintUrl);
   }
 
   pause(): void {
@@ -274,6 +298,13 @@ export class PollingTransport implements RealTimeTransport {
     for (const mintUrl of this.schedByMint.keys()) {
       void this.maybeRun(mintUrl);
     }
+  }
+
+  /** Resolves after the mint's currently running polling opportunity settles. */
+  async waitForIdle(mintUrl: string): Promise<void> {
+    const scheduler = this.schedByMint.get(mintUrl);
+    if (!scheduler?.running) return;
+    await new Promise<void>((resolve) => scheduler.idleWaiters.add(resolve));
   }
 
   /**
@@ -298,7 +329,13 @@ export class PollingTransport implements RealTimeTransport {
   private ensureScheduler(mintUrl: string): MintScheduler {
     let s = this.schedByMint.get(mintUrl);
     if (!s) {
-      s = { nextAllowedAt: 0, queue: [], running: false, hasProofBatchTask: false };
+      s = {
+        nextAllowedAt: 0,
+        queue: [],
+        running: false,
+        hasProofBatchTask: false,
+        idleWaiters: new Set(),
+      };
       this.schedByMint.set(mintUrl, s);
       // Initialize maps for proof batching
       if (!this.proofQueueByMint.get(mintUrl)) this.proofQueueByMint.set(mintUrl, []);
@@ -318,32 +355,202 @@ export class PollingTransport implements RealTimeTransport {
     if (s.queue.length === 0) return;
 
     s.running = true;
-    const task = s.queue.shift()!;
+    const task = this.takeNextEligibleTask(mintUrl, s, now);
+    if (!task) {
+      this.markSchedulerIdle(s);
+      this.scheduleNextEligibleMintQuoteTask(mintUrl, s, now);
+      return;
+    }
+    const tasks = [task];
+    const mintQuoteChecker = this.mintQuoteChecker;
+    const mintMethod = mintQuoteChecker ? this.getMintMethod(task.kind) : undefined;
+    if (mintMethod) {
+      for (let index = 0; index < s.queue.length && tasks.length < 100; ) {
+        const candidate = s.queue[index];
+        if (
+          candidate?.kind === task.kind &&
+          this.isMintQuoteTaskEligible(mintUrl, candidate, now)
+        ) {
+          tasks.push(candidate);
+          s.queue.splice(index, 1);
+        } else {
+          index++;
+        }
+      }
+    }
 
+    let mintQuoteResult: MintQuotePollingCheckResult | undefined;
     try {
-      await this.performTask(mintUrl, task);
-
-      // Re-enqueue for fairness, but only if not unsubscribed during processing
-      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
-      const wasUnsubscribed = task.subId && unsubscribed?.has(task.subId);
-
-      if (wasUnsubscribed) {
-        // Task was unsubscribed during processing, don't re-enqueue
-        unsubscribed!.delete(task.subId!);
+      if (mintQuoteChecker && mintMethod) {
+        mintQuoteResult = await this.performMintQuoteTasks(
+          mintUrl,
+          mintMethod,
+          tasks,
+          mintQuoteChecker,
+        );
+        if (mintQuoteResult.partialFailure) {
+          this.logger?.error('Mint quote polling opportunity completed partially', {
+            mintUrl,
+            method: mintMethod,
+            err: mintQuoteResult.partialFailure.error,
+          });
+        }
+        this.updateMintQuoteBackoff(mintUrl, mintMethod, mintQuoteResult);
       } else {
-        s.queue.push(task);
+        await this.performTask(mintUrl, task);
       }
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
     } finally {
+      // Keep active interests eligible after both successful and failed polling opportunities.
+      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+      const attempted = new Set(mintQuoteResult?.attemptedQuoteIds ?? []);
+      const requeueTasks = mintQuoteResult
+        ? [
+            ...tasks.filter((completedTask) => !attempted.has(completedTask.filter ?? '')),
+            ...tasks.filter((completedTask) => attempted.has(completedTask.filter ?? '')),
+          ]
+        : tasks;
+      if (mintMethod) {
+        this.rotateMintQuoteGroupBehindPeers(s, task.kind);
+      }
+      const completedUnsubscribed = new Set<string>();
+      for (const completedTask of requeueTasks) {
+        const wasUnsubscribed = completedTask.subId && unsubscribed?.has(completedTask.subId);
+        if (wasUnsubscribed) {
+          completedUnsubscribed.add(completedTask.subId!);
+        } else {
+          s.queue.push(completedTask);
+        }
+      }
+      for (const subId of completedUnsubscribed) unsubscribed!.delete(subId);
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
-      s.running = false;
+      this.markSchedulerIdle(s);
       // Schedule next attempt when allowed
       const delay = Math.max(0, s.nextAllowedAt - Date.now());
       setTimeout(() => {
         void this.maybeRun(mintUrl);
       }, delay);
     }
+  }
+
+  private rotateMintQuoteGroupBehindPeers(
+    scheduler: MintScheduler,
+    completedKind: SubscriptionKind,
+  ): void {
+    const peers = scheduler.queue.filter((queuedTask) => queuedTask.kind !== completedKind);
+    const remainingGroup = scheduler.queue.filter(
+      (queuedTask) => queuedTask.kind === completedKind,
+    );
+    scheduler.queue = [...peers, ...remainingGroup];
+  }
+
+  private markSchedulerIdle(scheduler: MintScheduler): void {
+    scheduler.running = false;
+    for (const resolve of scheduler.idleWaiters) resolve();
+    scheduler.idleWaiters.clear();
+  }
+
+  private getMintQuoteBackoff(mintUrl: string, task: Task): MintQuoteBackoff | undefined {
+    const method = this.getMintMethod(task.kind);
+    return method && task.filter
+      ? this.mintQuoteBackoff.get(mintUrl)?.get(method)?.get(task.filter)
+      : undefined;
+  }
+
+  private isMintQuoteTaskEligible(mintUrl: string, task: Task, now: number): boolean {
+    return (this.getMintQuoteBackoff(mintUrl, task)?.nextEligibleAt ?? 0) <= now;
+  }
+
+  private takeNextEligibleTask(
+    mintUrl: string,
+    scheduler: MintScheduler,
+    now: number,
+  ): Task | undefined {
+    const index = scheduler.queue.findIndex((task) =>
+      this.isMintQuoteTaskEligible(mintUrl, task, now),
+    );
+    if (index < 0) return undefined;
+    return scheduler.queue.splice(index, 1)[0];
+  }
+
+  private scheduleNextEligibleMintQuoteTask(
+    mintUrl: string,
+    scheduler: MintScheduler,
+    now: number,
+  ): void {
+    const nextEligibleAt = scheduler.queue.reduce((earliest, task) => {
+      const candidate = this.getMintQuoteBackoff(mintUrl, task)?.nextEligibleAt;
+      return candidate === undefined ? earliest : Math.min(earliest, candidate);
+    }, Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(nextEligibleAt)) return;
+    setTimeout(() => void this.maybeRun(mintUrl), Math.max(0, nextEligibleAt - now));
+  }
+
+  private updateMintQuoteBackoff(
+    mintUrl: string,
+    method: MintMethod,
+    result: MintQuotePollingCheckResult,
+  ): void {
+    const observed = new Set(result.observations.map((observation) => observation.quote));
+    let byMethod = this.mintQuoteBackoff.get(mintUrl);
+    if (!byMethod) {
+      byMethod = new Map();
+      this.mintQuoteBackoff.set(mintUrl, byMethod);
+    }
+    let byQuote = byMethod.get(method);
+    if (!byQuote) {
+      byQuote = new Map();
+      byMethod.set(method, byQuote);
+    }
+    for (const quoteId of result.attemptedQuoteIds) {
+      if (observed.has(quoteId)) {
+        byQuote.delete(quoteId);
+        continue;
+      }
+      const failures = (byQuote.get(quoteId)?.failures ?? 0) + 1;
+      const baseDelay = Math.max(1_000, this.getIntervalForMint(mintUrl));
+      const delayMs = Math.min(60_000, baseDelay * 2 ** Math.min(failures, 6));
+      byQuote.set(quoteId, { failures, nextEligibleAt: Date.now() + delayMs });
+    }
+  }
+
+  private getMintMethod(kind: SubscriptionKind): MintMethod | undefined {
+    switch (kind) {
+      case 'bolt11_mint_quote':
+        return 'bolt11';
+      case 'bolt12_mint_quote':
+        return 'bolt12';
+      case 'onchain_mint_quote':
+        return 'onchain';
+      default:
+        return undefined;
+    }
+  }
+
+  private async performMintQuoteTasks(
+    mintUrl: string,
+    method: MintMethod,
+    tasks: Task[],
+    checker: MintQuotePollingChecker,
+  ): Promise<MintQuotePollingCheckResult> {
+    const result = await checker.checkMintQuotesForPolling(
+      mintUrl,
+      method,
+      Array.from(new Set(tasks.map((task) => task.filter!).filter(Boolean))),
+    );
+    for (const observation of result.observations) {
+      for (const task of tasks) {
+        if (task.filter !== observation.quote || !task.subId) continue;
+        const notification: WsNotification<unknown> = {
+          jsonrpc: '2.0',
+          method: 'subscribe',
+          params: { subId: task.subId, payload: observation },
+        };
+        this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
+      }
+    }
+    return result;
   }
 
   private async performTask(mintUrl: string, task: Task): Promise<void> {

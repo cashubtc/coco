@@ -195,6 +195,58 @@ describe('SubscriptionManager pause/resume', () => {
     await subManager.unsubscribe(mintUrl, subId);
   });
 
+  it('reuses one subscription budget for equivalent normalized mint URLs', async () => {
+    const first = await subManager.subscribe('https://MINT.example.com:443/', 'bolt11_mint_quote', [
+      'quote1',
+    ]);
+    const second = await subManager.subscribe('https://mint.example.com', 'bolt11_mint_quote', [
+      'quote1',
+    ]);
+
+    expect(second.subId).toBe(first.subId);
+    expect(
+      mockTransport.sentMessages.filter((message) => message.method === 'subscribe'),
+    ).toHaveLength(1);
+
+    await second.unsubscribe();
+  });
+
+  it('keeps a shared subscription active when its creator removes its callback', async () => {
+    const mintUrl = 'https://mint.example.com';
+    const creatorCallback = mock(() => {});
+    const sharedCallback = mock(() => {});
+    const creator = await subManager.subscribe(
+      mintUrl,
+      'bolt11_mint_quote',
+      ['quote1'],
+      creatorCallback,
+    );
+    const shared = await subManager.subscribe(
+      mintUrl,
+      'bolt11_mint_quote',
+      ['quote1'],
+      sharedCallback,
+    );
+
+    await creator.unsubscribe();
+    mockTransport.triggerMessage(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: { subId: creator.subId, payload: { quote: 'quote1', state: 'PAID' } },
+    });
+
+    expect(
+      mockTransport.sentMessages.filter((message) => message.method === 'unsubscribe'),
+    ).toHaveLength(0);
+    expect(creatorCallback).not.toHaveBeenCalled();
+    expect(sharedCallback).toHaveBeenCalledWith({ quote: 'quote1', state: 'PAID' });
+
+    await shared.unsubscribe();
+    expect(
+      mockTransport.sentMessages.filter((message) => message.method === 'unsubscribe'),
+    ).toHaveLength(1);
+  });
+
   it('should handle pause with multiple active subscriptions', async () => {
     const mintUrl1 = 'https://mint1.example.com';
     const mintUrl2 = 'https://mint2.example.com';

@@ -1,6 +1,11 @@
 import { JSONInt } from '@cashu/cashu-ts';
 import type { Logger } from '../logging/Logger.ts';
-import { HttpResponseError, NetworkError, MintOperationError } from '../models/Error';
+import {
+  HttpResponseError,
+  NetworkError,
+  MintOperationError,
+  StructuredMintOperationError,
+} from '../models/Error';
 
 type RequestFunction = <T>(
   options: {
@@ -151,6 +156,12 @@ export class RequestRateLimiter {
         typeof (errorData as any).detail === 'string';
       if (hasProtocolError) {
         const { code, detail } = errorData as { code: number; detail: string };
+        const data = Object.fromEntries(
+          Object.entries(errorData).filter(([key]) => key !== 'code' && key !== 'detail'),
+        );
+        if (Object.keys(data).length > 0) {
+          throw new StructuredMintOperationError(code, detail, data);
+        }
         throw new MintOperationError(code, detail);
       }
 
