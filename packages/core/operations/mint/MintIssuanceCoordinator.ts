@@ -108,6 +108,7 @@ export class MintIssuanceCoordinator {
   private forceSingleRedemption = false;
   private batchRedemptionDenylist = new Set<string>();
   private lastSelectedGroupKey?: string;
+  private lastProcessorSelection = new Set<string>();
 
   constructor(options: MintIssuanceCoordinatorOptions) {
     this.repositories = options.repositories;
@@ -169,7 +170,31 @@ export class MintIssuanceCoordinator {
     return this.activeByOperationId.has(operationId);
   }
 
+  /** Returns whether a Mint Operation remains in the ephemeral processor-ready pool. */
+  isScheduled(operationId: string): boolean {
+    return this.scheduledOperationIds.has(operationId);
+  }
+
+  /** Returns whether the last processor turn selected a Mint Operation for coordination. */
+  wasSelectedInLastProcessorTurn(operationId: string): boolean {
+    return this.lastProcessorSelection.has(operationId);
+  }
+
+  /** Returns whether the current attempt can safely make progress through coordinate(). */
+  async canRetry(operationId: string): Promise<boolean> {
+    const operation = await this.repositories.mintOperationRepository.getById(operationId);
+    if (!operation || isTerminalOperation(operation)) return false;
+    if (operation.state !== 'executing' || !operation.attemptId) return false;
+
+    const attempt = await this.repositories.mintIssuanceAttemptRepository.getById(
+      operation.attemptId,
+    );
+    if (!attempt || isTerminalAttempt(attempt)) return false;
+    return attempt.request.kind !== 'batch' || attempt.state === 'prepared';
+  }
+
   private async coordinateScheduled(): Promise<void> {
+    this.lastProcessorSelection.clear();
     const scheduled = (
       await Promise.all(
         [...this.scheduledOperationIds]
@@ -196,6 +221,7 @@ export class MintIssuanceCoordinator {
         continue;
       }
       if (operation.attemptId) {
+        this.lastProcessorSelection.add(operationId);
         this.unschedule(operationId);
         await this.coordinate(operationId);
         return;
@@ -239,6 +265,7 @@ export class MintIssuanceCoordinator {
     group.sort(
       (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
     );
+    this.lastProcessorSelection = new Set(group.map((operation) => operation.id));
 
     const limit = await this.getProcessorBatchLimit(group[0]!.mintUrl);
     const uniqueQuoteIds = new Set<string>();
@@ -249,12 +276,15 @@ export class MintIssuanceCoordinator {
         return true;
       })
       .slice(0, limit);
+    this.lastProcessorSelection = new Set(selected.map((operation) => operation.id));
     const created = await this.createBolt11Attempt(selected, selected.length > 1);
     if (!created.newlyCreated) {
+      this.lastProcessorSelection = new Set([created.operationId]);
       this.unschedule(created.operationId);
       await this.coordinate(created.operationId);
       return;
     }
+    this.lastProcessorSelection = new Set(created.operations.map((operation) => operation.id));
     for (const operation of created.operations) {
       this.unschedule(operation.id);
     }

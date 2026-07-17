@@ -202,6 +202,192 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual([]);
   });
 
+  it('retries safe pending and attached issuance after a transient coordinator failure', async () => {
+    for (const stateAfterFailure of ['pending', 'executing'] as const) {
+      let state: 'pending' | 'executing' | 'finalized' = 'pending';
+      const operation = () => ({
+        id: `mint-op-retry-${stateAfterFailure}`,
+        state,
+        mintUrl: 'https://mint.test',
+        method: 'bolt11' as const,
+        quoteId: `quote-retry-${stateAfterFailure}`,
+        amount: Amount.from(10),
+        unit: 'sat' as const,
+      });
+      const coordinateScheduledIssuance = mock(async () => {
+        state = 'finalized';
+      });
+      coordinateScheduledIssuance.mockImplementationOnce(async () => {
+        state = stateAfterFailure;
+        throw new NetworkError('transient issuance failure');
+      });
+      mockMintOperationService = {
+        scheduleIssuance() {},
+        coordinateScheduledIssuance,
+        async getOperation() {
+          return operation();
+        },
+        async canRetryIssuance() {
+          return true;
+        },
+        isIssuanceScheduled() {
+          return true;
+        },
+        wasIssuanceSelectedInLastTurn() {
+          return true;
+        },
+        async claimPendingMintQuotes() {
+          return [];
+        },
+      } as unknown as MintOperationService;
+      processor = new MintOperationProcessor(
+        mockMintOperationService,
+        mockQuoteLifecycle,
+        bus,
+        undefined,
+        {
+          processIntervalMs: 1,
+          baseRetryDelayMs: 1,
+          initialEnqueueDelayMs: 0,
+        },
+      );
+      await processor.start();
+      await bus.emit('mint-op:requeue', {
+        mintUrl: operation().mintUrl,
+        operationId: operation().id,
+        operation: operation() as CoreEvents['mint-op:requeue']['operation'],
+      });
+
+      await processor.waitForCompletion();
+
+      expect(operation().state).toBe('finalized');
+      expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(2);
+      await processor.stop();
+    }
+  });
+
+  it('drains a pending BOLT11 item that the coordinator declines as ineligible', async () => {
+    let markRepeated!: () => void;
+    const repeated = new Promise<void>((resolve) => {
+      markRepeated = resolve;
+    });
+    const operation = {
+      id: 'mint-op-ineligible',
+      state: 'pending' as const,
+      mintUrl: 'https://mint.test',
+      method: 'bolt11' as const,
+      quoteId: 'quote-ineligible',
+      amount: Amount.from(10),
+      unit: 'sat' as const,
+    };
+    const coordinateScheduledIssuance = mock(async () => {
+      markRepeated();
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {});
+    mockMintOperationService = {
+      scheduleIssuance() {},
+      coordinateScheduledIssuance,
+      async getOperation() {
+        return operation;
+      },
+      isIssuanceScheduled() {
+        return false;
+      },
+      async claimPendingMintQuotes() {
+        return [];
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: operation.mintUrl,
+      operationId: operation.id,
+      operation: operation as CoreEvents['mint-op:requeue']['operation'],
+    });
+
+    const drainedBeforeRepeat = await Promise.race([
+      processor.waitForCompletion().then(() => true),
+      repeated.then(() => false),
+    ]);
+
+    expect(drainedBeforeRepeat).toBe(true);
+    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps eligible unselected work after another cohort fails', async () => {
+    const states = new Map<string, 'pending' | 'executing' | 'finalized'>([
+      ['mint-op-selected', 'pending'],
+      ['mint-op-unselected', 'pending'],
+    ]);
+    const coordinateScheduledIssuance = mock(async () => {
+      states.set('mint-op-unselected', 'finalized');
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {
+      states.set('mint-op-selected', 'executing');
+      throw new Error('selected cohort failed validation');
+    });
+    mockMintOperationService = {
+      scheduleIssuance() {},
+      coordinateScheduledIssuance,
+      async getOperation(operationId: string) {
+        return {
+          id: operationId,
+          state: states.get(operationId),
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+        };
+      },
+      async canRetryIssuance() {
+        return false;
+      },
+      isIssuanceScheduled(operationId: string) {
+        return operationId === 'mint-op-unselected';
+      },
+      wasIssuanceSelectedInLastTurn(operationId: string) {
+        return operationId === 'mint-op-selected';
+      },
+      async claimPendingMintQuotes() {
+        return [];
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+    for (const operationId of states.keys()) {
+      await bus.emit('mint-op:requeue', {
+        mintUrl: 'https://mint.test',
+        operationId,
+        operation: {
+          id: operationId,
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+        } as CoreEvents['mint-op:requeue']['operation'],
+      });
+    }
+
+    await processor.waitForCompletion();
+
+    expect(states.get('mint-op-unselected')).toBe('finalized');
+    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(2);
+  });
+
   it('rotates ready non-BOLT11 work ahead of the next BOLT11 cohort', async () => {
     const turns: string[] = [];
     let markNonBolt11Processed!: () => void;

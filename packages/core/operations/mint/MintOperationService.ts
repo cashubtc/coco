@@ -166,6 +166,21 @@ export class MintOperationService {
     await this.issuanceCoordinator.coordinate();
   }
 
+  /** Returns whether an attached issuance attempt is safe for the processor to retry. */
+  async canRetryIssuance(operationId: string): Promise<boolean> {
+    return (await this.issuanceCoordinator?.canRetry(operationId)) ?? false;
+  }
+
+  /** Returns whether an operation remains scheduled for a later processor coordination turn. */
+  isIssuanceScheduled(operationId: string): boolean {
+    return this.issuanceCoordinator?.isScheduled(operationId) ?? false;
+  }
+
+  /** Returns whether the last processor turn selected an operation for coordination. */
+  wasIssuanceSelectedInLastTurn(operationId: string): boolean {
+    return this.issuanceCoordinator?.wasSelectedInLastProcessorTurn(operationId) ?? false;
+  }
+
   isRecoveryInProgress(): boolean {
     return this.recoveryLock !== null;
   }

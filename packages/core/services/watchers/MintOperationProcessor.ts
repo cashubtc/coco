@@ -403,7 +403,6 @@ export class MintOperationProcessor {
       try {
         await this.processReadyBolt11Cohort(now);
       } catch (err) {
-        await this.removeAttachedOrTerminalBolt11Items(now);
         this.logger?.error('Failed to coordinate ready Mint Operations', { err });
       } finally {
         this.lastTurnWasBolt11Cohort = true;
@@ -472,28 +471,50 @@ export class MintOperationProcessor {
     for (const item of ready) {
       this.mintOperations.scheduleIssuance(item.operationId);
     }
-    await this.mintOperations.coordinateScheduledIssuance();
-
-    const completed = new Set<string>();
-    for (const item of ready) {
-      const operation = await this.mintOperations.getOperation(item.operationId);
-      if (operation?.state === 'finalized' || operation?.state === 'failed') {
-        completed.add(this.queueItemKey(item));
-      }
+    try {
+      await this.mintOperations.coordinateScheduledIssuance();
+    } catch (error) {
+      await this.reconcileReadyBolt11Items(ready, error);
+      throw error;
     }
-    this.queue = this.queue.filter((item) => !completed.has(this.queueItemKey(item)));
+    await this.reconcileReadyBolt11Items(ready);
   }
 
-  private async removeAttachedOrTerminalBolt11Items(now: number): Promise<void> {
+  private async reconcileReadyBolt11Items(ready: QueueItem[], error?: unknown): Promise<void> {
     const removable = new Set<string>();
-    for (const item of this.queue) {
-      if (item.method !== 'bolt11' || item.nextRetryAt > now) continue;
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    for (const item of ready) {
       const operation = await this.mintOperations.getOperation(item.operationId);
+      if (!operation || operation.state === 'finalized' || operation.state === 'failed') {
+        removable.add(this.queueItemKey(item));
+        continue;
+      }
+      if (operation.state === 'pending') {
+        const remainsScheduled =
+          typeof operations.isIssuanceScheduled === 'function' &&
+          operations.isIssuanceScheduled(item.operationId);
+        const wasSelected =
+          typeof operations.wasIssuanceSelectedInLastTurn === 'function' &&
+          operations.wasIssuanceSelectedInLastTurn(item.operationId);
+        if (!remainsScheduled) {
+          removable.add(this.queueItemKey(item));
+        } else if (error !== undefined && wasSelected && !this.scheduleNetworkRetry(item, error)) {
+          removable.add(this.queueItemKey(item));
+        }
+        continue;
+      }
+      if (operation.state !== 'executing' || error === undefined) continue;
       if (
-        operation?.state === 'executing' ||
-        operation?.state === 'finalized' ||
-        operation?.state === 'failed'
+        typeof operations.wasIssuanceSelectedInLastTurn !== 'function' ||
+        !operations.wasIssuanceSelectedInLastTurn(item.operationId)
       ) {
+        continue;
+      }
+
+      const canRetry =
+        typeof operations.canRetryIssuance === 'function' &&
+        (await operations.canRetryIssuance(item.operationId));
+      if (!canRetry || !this.scheduleNetworkRetry(item, error)) {
         removable.add(this.queueItemKey(item));
       }
     }
@@ -527,32 +548,40 @@ export class MintOperationProcessor {
       return;
     }
 
-    if (err instanceof NetworkError || (err instanceof Error && err.message.includes('network'))) {
-      item.retryCount++;
-      if (item.retryCount <= this.maxRetries) {
-        const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
-        item.nextRetryAt = Date.now() + delay;
-
-        this.logger?.warn('Network error, will retry', {
-          mintUrl,
-          operationId,
-          attempt: item.retryCount,
-          maxRetries: this.maxRetries,
-          retryInMs: delay,
-        });
-
-        this.queue.push(item);
-        return;
-      }
-
-      this.logger?.error('Max retries exceeded for network error', {
-        mintUrl,
-        operationId,
-        maxRetries: this.maxRetries,
-      });
+    if (this.isNetworkError(err)) {
+      if (this.scheduleNetworkRetry(item, err)) this.queue.push(item);
       return;
     }
 
     this.logger?.error('Failed to process mint operation', { mintUrl, operationId, err });
+  }
+
+  private scheduleNetworkRetry(item: QueueItem, err: unknown): boolean {
+    if (!this.isNetworkError(err)) return false;
+
+    item.retryCount++;
+    if (item.retryCount > this.maxRetries) {
+      this.logger?.error('Max retries exceeded for network error', {
+        mintUrl: item.mintUrl,
+        operationId: item.operationId,
+        maxRetries: this.maxRetries,
+      });
+      return false;
+    }
+
+    const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
+    item.nextRetryAt = Date.now() + delay;
+    this.logger?.warn('Network error, will retry', {
+      mintUrl: item.mintUrl,
+      operationId: item.operationId,
+      attempt: item.retryCount,
+      maxRetries: this.maxRetries,
+      retryInMs: delay,
+    });
+    return true;
+  }
+
+  private isNetworkError(err: unknown): boolean {
+    return err instanceof NetworkError || (err instanceof Error && err.message.includes('network'));
   }
 }

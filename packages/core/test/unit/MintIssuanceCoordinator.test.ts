@@ -5,7 +5,7 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
-import { MintOperationError } from '../../models/Error.ts';
+import { MintOperationError, NetworkError } from '../../models/Error.ts';
 import { getMintQuoteRemoteState, mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 import { MintIssuanceCoordinator } from '../../operations/mint/MintIssuanceCoordinator.ts';
@@ -481,6 +481,65 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         quote_amounts: [Amount.from(10), Amount.from(10)],
       },
     });
+  });
+
+  it('retries single attempts while deferring ambiguous Mint Batch recovery', async () => {
+    walletMint.mockRejectedValueOnce(new NetworkError('single transport unavailable'));
+    await expect(service.execute(operationId)).rejects.toThrow('single transport unavailable');
+    await expect(service.canRetryIssuance(operationId)).resolves.toBe(true);
+
+    const batchAttemptId = 'attempt-batch-recovering';
+    const batchOperationIds = ['operation-batch-a', 'operation-batch-b'];
+    const batchQuoteIds = ['quote-batch-a', 'quote-batch-b'];
+    const batchOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_deferred-batch-output' },
+          4n,
+          new TextEncoder().encode('deferred-batch-output'),
+        ),
+      ],
+      send: [],
+    });
+    for (const [index, batchOperationId] of batchOperationIds.entries()) {
+      const batchQuoteId = batchQuoteIds[index]!;
+      await repositories.mintOperationRepository.create({
+        ...pendingOperation(),
+        id: batchOperationId,
+        state: 'executing',
+        quoteId: batchQuoteId,
+        request: `lnbc1${batchQuoteId}`,
+        outputData: batchOutputData,
+        attemptId: batchAttemptId,
+        createdAt: pendingOperation().createdAt + index + 1,
+      });
+    }
+    const now = Date.now();
+    await repositories.mintIssuanceAttemptRepository.create({
+      id: batchAttemptId,
+      mintUrl,
+      method: 'bolt11',
+      unit: 'sat',
+      keysetId,
+      state: 'recovering',
+      memberOperationIds: batchOperationIds,
+      quoteIds: batchQuoteIds,
+      quoteAmounts: [Amount.from(10), Amount.from(10)],
+      signingRequirements: [null, null],
+      outputData: batchOutputData,
+      request: {
+        kind: 'batch',
+        quoteIds: batchQuoteIds,
+        quoteAmounts: [Amount.from(10), Amount.from(10)],
+      },
+      createdAt: now,
+      updatedAt: now,
+      submittedAt: now,
+      recoveryStartedAt: now,
+    });
+
+    await expect(service.canRetryIssuance(batchOperationIds[0]!)).resolves.toBe(false);
+    await expect(service.canRetryIssuance(batchOperationIds[1]!)).resolves.toBe(false);
   });
 
   it('lets an explicit target join its processor-created Mint Batch', async () => {
