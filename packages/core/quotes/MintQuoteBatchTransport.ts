@@ -60,25 +60,45 @@ type MintQuoteBatchRequestResult =
       partialFailure?: { error: unknown };
     };
 
+/** Session-scoped effective NUT-29 limits shared by quote checks and redemption. */
+export class Nut29BatchLimitCache {
+  private readonly limits = new Map<string, number>();
+
+  get(groupKey: string, advertisedLimit: number): number {
+    return Math.min(advertisedLimit, this.limits.get(groupKey) ?? advertisedLimit);
+  }
+
+  lower(groupKey: string, limit: number): void {
+    const current = this.limits.get(groupKey);
+    this.limits.set(groupKey, current === undefined ? limit : Math.min(current, limit));
+  }
+
+  reset(groupKey: string): void {
+    this.limits.delete(groupKey);
+  }
+}
+
 /**
  * Owns NUT-29 request policy: capability fallback, bounded retries, effective-limit
  * downshifts, atomic validation-error isolation, and incompatibility reset on mint refresh.
  */
 export class MintQuoteBatchTransport {
-  private readonly effectiveLimit = new Map<string, number>();
   private readonly incompatibleGroups = new Set<string>();
+  private readonly batchLimitCache: Nut29BatchLimitCache;
 
   constructor(
     private readonly mintAdapter: MintAdapter,
     eventBus: EventBus<CoreEvents>,
     private readonly logger?: Logger,
+    batchLimitCache?: Nut29BatchLimitCache,
   ) {
+    this.batchLimitCache = batchLimitCache ?? new Nut29BatchLimitCache();
     eventBus.on('mint:updated', ({ mint }) => {
       const mintUrl = normalizeMintUrl(mint.mintUrl);
       for (const method of MINT_METHODS) {
         const groupKey = mintQuoteGroupKey(mintUrl, method);
         this.incompatibleGroups.delete(groupKey);
-        this.effectiveLimit.delete(groupKey);
+        this.batchLimitCache.reset(groupKey);
       }
     });
   }
@@ -95,10 +115,7 @@ export class MintQuoteBatchTransport {
       return { kind: 'single', attemptedQuoteIds: [quoteIds[0]!] };
     }
 
-    let attemptedQuoteIds = quoteIds.slice(
-      0,
-      Math.min(limit, this.effectiveLimit.get(groupKey) ?? limit),
-    );
+    let attemptedQuoteIds = quoteIds.slice(0, this.batchLimitCache.get(groupKey, limit));
     while (true) {
       try {
         const isolated = await this.checkWithIsolation(mintUrl, method, attemptedQuoteIds);
@@ -117,7 +134,7 @@ export class MintQuoteBatchTransport {
           return { kind: 'single', attemptedQuoteIds: [attemptedQuoteIds[0]!] };
         }
         const loweredLimit = Math.max(1, Math.floor(attemptedQuoteIds.length / 2));
-        this.effectiveLimit.set(groupKey, loweredLimit);
+        this.batchLimitCache.lower(groupKey, loweredLimit);
         attemptedQuoteIds = attemptedQuoteIds.slice(0, loweredLimit);
       }
     }

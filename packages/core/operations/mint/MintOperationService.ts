@@ -52,7 +52,10 @@ import {
 import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
-import type { MintIssuanceCoordinator } from './MintIssuanceCoordinator.ts';
+import type {
+  MintIssuanceCoordinator,
+  ProcessorRedemptionOptions,
+} from './MintIssuanceCoordinator.ts';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
@@ -140,6 +143,27 @@ export class MintOperationService {
       this.operationIdLock.isLocked(operationId) ||
       Boolean(this.issuanceCoordinator?.isCoordinating(operationId))
     );
+  }
+
+  /** Configures automatic redemption without changing explicit execution semantics. */
+  configureProcessorRedemption(options?: ProcessorRedemptionOptions): void {
+    this.issuanceCoordinator?.configureProcessorRedemption(options);
+  }
+
+  /** Adds an operation to the coordinator's ephemeral processor-ready pool. */
+  scheduleIssuance(operationId: string, notBefore?: number): void {
+    if (!this.issuanceCoordinator) {
+      throw new Error('Mint issuance coordinator is unavailable');
+    }
+    this.issuanceCoordinator.schedule(operationId, notBefore);
+  }
+
+  /** Processes one bounded ready cohort through the issuance coordinator. */
+  async coordinateScheduledIssuance(): Promise<void> {
+    if (!this.issuanceCoordinator) {
+      throw new Error('Mint issuance coordinator is unavailable');
+    }
+    await this.issuanceCoordinator.coordinate();
   }
 
   isRecoveryInProgress(): boolean {

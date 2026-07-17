@@ -52,6 +52,7 @@ export class MintOperationProcessor {
   private offUntrusted?: () => void;
   private claimingQuotes = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
+  private lastTurnWasBolt11Cohort = false;
 
   private handlers = new Map<string, OperationHandler>();
   private readonly processIntervalMs: number;
@@ -377,7 +378,13 @@ export class MintOperationProcessor {
 
     // Find next item that's ready to process
     const now = Date.now();
-    const readyIndex = this.queue.findIndex((item) => item.nextRetryAt <= now);
+    let readyIndex = this.queue.findIndex((item) => item.nextRetryAt <= now);
+    if (this.lastTurnWasBolt11Cohort) {
+      const readyNonBolt11Index = this.queue.findIndex(
+        (item) => item.method !== 'bolt11' && item.nextRetryAt <= now,
+      );
+      if (readyNonBolt11Index !== -1) readyIndex = readyNonBolt11Index;
+    }
 
     if (readyIndex === -1) {
       // No items ready yet, schedule for when the next one will be
@@ -390,12 +397,29 @@ export class MintOperationProcessor {
       return;
     }
 
+    const readyItem = this.queue[readyIndex];
+    if (readyItem?.method === 'bolt11' && this.supportsProcessorCoordination()) {
+      this.processing = true;
+      try {
+        await this.processReadyBolt11Cohort(now);
+      } catch (err) {
+        await this.removeAttachedOrTerminalBolt11Items(now);
+        this.logger?.error('Failed to coordinate ready Mint Operations', { err });
+      } finally {
+        this.lastTurnWasBolt11Cohort = true;
+        this.processing = false;
+        if (this.running) this.scheduleNextProcess();
+      }
+      return;
+    }
+
     // Remove item from queue
     const [item] = this.queue.splice(readyIndex, 1);
     if (!item) {
       // This shouldn't happen, but handle it gracefully
       return;
     }
+    this.lastTurnWasBolt11Cohort = false;
     this.processing = true;
 
     try {
@@ -432,6 +456,52 @@ export class MintOperationProcessor {
 
     await handler.process(mintUrl, operationId);
     this.logger?.info('Successfully processed mint operation', { mintUrl, operationId, method });
+  }
+
+  private supportsProcessorCoordination(): boolean {
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    return (
+      typeof operations.scheduleIssuance === 'function' &&
+      typeof operations.coordinateScheduledIssuance === 'function' &&
+      typeof operations.getOperation === 'function'
+    );
+  }
+
+  private async processReadyBolt11Cohort(now: number): Promise<void> {
+    const ready = this.queue.filter((item) => item.method === 'bolt11' && item.nextRetryAt <= now);
+    for (const item of ready) {
+      this.mintOperations.scheduleIssuance(item.operationId);
+    }
+    await this.mintOperations.coordinateScheduledIssuance();
+
+    const completed = new Set<string>();
+    for (const item of ready) {
+      const operation = await this.mintOperations.getOperation(item.operationId);
+      if (operation?.state === 'finalized' || operation?.state === 'failed') {
+        completed.add(this.queueItemKey(item));
+      }
+    }
+    this.queue = this.queue.filter((item) => !completed.has(this.queueItemKey(item)));
+  }
+
+  private async removeAttachedOrTerminalBolt11Items(now: number): Promise<void> {
+    const removable = new Set<string>();
+    for (const item of this.queue) {
+      if (item.method !== 'bolt11' || item.nextRetryAt > now) continue;
+      const operation = await this.mintOperations.getOperation(item.operationId);
+      if (
+        operation?.state === 'executing' ||
+        operation?.state === 'finalized' ||
+        operation?.state === 'failed'
+      ) {
+        removable.add(this.queueItemKey(item));
+      }
+    }
+    this.queue = this.queue.filter((item) => !removable.has(this.queueItemKey(item)));
+  }
+
+  private queueItemKey(item: Pick<QueueItem, 'mintUrl' | 'operationId'>): string {
+    return `${item.mintUrl}::${item.operationId}`;
   }
 
   private handleProcessingError(item: QueueItem, err: unknown): void {

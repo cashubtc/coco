@@ -14,6 +14,7 @@ import { mintQuoteWorkKey } from '../infra/MintQuotePollingKey.ts';
 import {
   getNut29MintQuoteCheckLimit,
   MintQuoteBatchTransport,
+  type Nut29BatchLimitCache,
   supportsNut29MintQuoteCheck,
 } from './MintQuoteBatchTransport.ts';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
@@ -307,6 +308,7 @@ export interface QuoteLifecycleDeps {
   mintAdapter: MintAdapter;
   eventBus: EventBus<CoreEvents>;
   logger?: Logger;
+  nut29BatchLimitCache?: Nut29BatchLimitCache;
 }
 
 export class QuoteLifecycle {
@@ -340,6 +342,7 @@ export class QuoteLifecycle {
       deps.mintAdapter,
       deps.eventBus,
       deps.logger,
+      deps.nut29BatchLimitCache,
     );
   }
 
