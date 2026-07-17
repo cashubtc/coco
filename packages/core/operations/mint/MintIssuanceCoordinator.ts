@@ -3,14 +3,16 @@ import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
+import type { MintQuotePollingChecker } from '../../infra/MintQuotePollingChecker.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { Logger } from '../../logging/Logger.ts';
-import { MintOperationError, UnknownMintError } from '../../models/Error.ts';
+import { HttpResponseError, MintOperationError, UnknownMintError } from '../../models/Error.ts';
 import {
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   type MintQuote,
 } from '../../models/MintQuote.ts';
+import { isMintQuoteExpired } from '../../models/MintQuoteExpiry.ts';
 import {
   getNut29MintQuoteCheckLimit,
   Nut29BatchLimitCache,
@@ -25,6 +27,7 @@ import {
   generateSubId,
   mapProofToCoreProof,
   normalizeMintUrl,
+  serializeOutputData,
 } from '../../utils.ts';
 import { MintScopedLock } from '../MintScopedLock.ts';
 import type { MintIssuanceAttempt } from './MintIssuanceAttempt.ts';
@@ -54,6 +57,7 @@ interface MintIssuanceCoordinatorOptions {
   logger?: Logger;
   mintScopedLock?: MintScopedLock;
   nut29BatchLimitCache?: Nut29BatchLimitCache;
+  mintQuotePollingChecker?: MintQuotePollingChecker;
 }
 
 type CreatedAttempt =
@@ -67,6 +71,62 @@ type CreatedAttempt =
       operations: ExecutingMintOperationRecord<'bolt11'>[];
       newlyCreated: true;
     };
+
+type ConfirmedBatchRejectionKind = 'state' | 'batch-size' | 'incompatibility' | 'validation';
+
+interface ConfirmedBatchRejection {
+  kind: ConfirmedBatchRejectionKind;
+  error: Error;
+  protocolCode?: number;
+  httpStatus?: number;
+}
+
+const CONFIRMED_BATCH_REJECTION_CODE = 'CONFIRMED_BATCH_REJECTION';
+const AUTHENTICATION_ERROR_CODE_MIN = 30_000;
+const NUT29_BATCH_SIZE_ERROR_CODE = 11_017;
+const MINT_QUOTE_STATE_ERROR_CODES = new Set([20_001, 20_002]);
+const INCOMPATIBLE_ENDPOINT_STATUSES = new Set([404, 405, 501]);
+const CONFIRMED_BATCH_REJECTION_KINDS: ConfirmedBatchRejectionKind[] = [
+  'state',
+  'batch-size',
+  'incompatibility',
+  'validation',
+];
+
+interface ConfirmedBatchRejectionProgress {
+  kind: ConfirmedBatchRejectionKind;
+  observedQuoteIds: string[];
+  capabilityUpdatedAt?: number;
+  replacementBatchLimit?: number;
+}
+
+function isConfirmedBatchRejectionKind(value: unknown): value is ConfirmedBatchRejectionKind {
+  return (
+    typeof value === 'string' && CONFIRMED_BATCH_REJECTION_KINDS.some((kind) => kind === value)
+  );
+}
+
+function getConfirmedBatchRejectionProgress(
+  attempt: MintIssuanceAttempt,
+): ConfirmedBatchRejectionProgress | null {
+  if (attempt.terminalError?.code !== CONFIRMED_BATCH_REJECTION_CODE) return null;
+  const details = attempt.terminalError.details;
+  const kind = details?.kind;
+  if (!isConfirmedBatchRejectionKind(kind)) return null;
+  const observedQuoteIds = details?.observedQuoteIds;
+  return {
+    kind,
+    observedQuoteIds: Array.isArray(observedQuoteIds)
+      ? observedQuoteIds.filter((quoteId): quoteId is string => typeof quoteId === 'string')
+      : [],
+    capabilityUpdatedAt:
+      typeof details?.capabilityUpdatedAt === 'number' ? details.capabilityUpdatedAt : undefined,
+    replacementBatchLimit:
+      typeof details?.replacementBatchLimit === 'number'
+        ? details.replacementBatchLimit
+        : undefined,
+  };
+}
 
 export interface ProcessorRedemptionOptions {
   /** Force every processor turn to create at most a single-member attempt. */
@@ -101,8 +161,11 @@ export class MintIssuanceCoordinator {
   private readonly logger?: Logger;
   private readonly mintScopedLock: MintScopedLock;
   private readonly nut29BatchLimitCache: Nut29BatchLimitCache;
+  private readonly mintQuotePollingChecker?: MintQuotePollingChecker;
   private readonly scheduledOperationIds = new Set<string>();
   private readonly scheduledNotBefore = new Map<string, number>();
+  private readonly singleFallbackOperationIds = new Set<string>();
+  private readonly incompatibleRedemptionGroups = new Set<string>();
   private readonly activeByOperationId: Map<string, Promise<MintOperation>>;
   private readonly activeByAttemptId: Map<string, Promise<void>>;
   private forceSingleRedemption = false;
@@ -127,6 +190,7 @@ export class MintIssuanceCoordinator {
     this.logger = options.logger;
     this.mintScopedLock = options.mintScopedLock ?? new MintScopedLock();
     this.nut29BatchLimitCache = options.nut29BatchLimitCache ?? new Nut29BatchLimitCache();
+    this.mintQuotePollingChecker = options.mintQuotePollingChecker;
   }
 
   /** Adds a Mint Operation to the ephemeral processor-ready pool. */
@@ -189,7 +253,9 @@ export class MintIssuanceCoordinator {
     const attempt = await this.repositories.mintIssuanceAttemptRepository.getById(
       operation.attemptId,
     );
-    if (!attempt || isTerminalAttempt(attempt)) return false;
+    if (!attempt) return false;
+    if (this.isConfirmedBatchRejection(attempt)) return true;
+    if (isTerminalAttempt(attempt)) return false;
     return attempt.request.kind !== 'batch' || attempt.state === 'prepared';
   }
 
@@ -215,12 +281,20 @@ export class MintIssuanceCoordinator {
       );
     });
 
+    let deferredRejectedOperationId: string | undefined;
     for (const { operationId, operation } of scheduled) {
       if (!operation || isTerminalOperation(operation)) {
         this.unschedule(operationId);
         continue;
       }
       if (operation.attemptId) {
+        const attempt = await this.repositories.mintIssuanceAttemptRepository.getById(
+          operation.attemptId,
+        );
+        if (attempt && this.isConfirmedBatchRejection(attempt)) {
+          deferredRejectedOperationId ??= operationId;
+          continue;
+        }
         this.lastProcessorSelection.add(operationId);
         this.unschedule(operationId);
         await this.coordinate(operationId);
@@ -250,7 +324,14 @@ export class MintIssuanceCoordinator {
       }
       candidates.push(bolt11Operation);
     }
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      if (deferredRejectedOperationId) {
+        this.lastProcessorSelection.add(deferredRejectedOperationId);
+        this.unschedule(deferredRejectedOperationId);
+        await this.coordinate(deferredRejectedOperationId);
+      }
+      return;
+    }
 
     const groups = new Map<string, PendingMintOperationRecord<'bolt11'>[]>();
     for (const candidate of candidates) {
@@ -266,10 +347,15 @@ export class MintIssuanceCoordinator {
       (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
     );
     this.lastProcessorSelection = new Set(group.map((operation) => operation.id));
+    await this.restoreConfirmedRejectionPolicies(group);
 
-    const limit = await this.getProcessorBatchLimit(group[0]!.mintUrl);
+    const forcedSingle = group.find((operation) =>
+      this.singleFallbackOperationIds.has(operation.id),
+    );
+    const selectionPool = forcedSingle ? [forcedSingle] : group;
+    const limit = forcedSingle ? 1 : await this.getProcessorBatchLimit(group[0]!.mintUrl);
     const uniqueQuoteIds = new Set<string>();
-    const selected = group
+    const selected = selectionPool
       .filter((operation) => {
         if (uniqueQuoteIds.has(operation.quoteId)) return false;
         uniqueQuoteIds.add(operation.quoteId);
@@ -277,7 +363,7 @@ export class MintIssuanceCoordinator {
       })
       .slice(0, limit);
     this.lastProcessorSelection = new Set(selected.map((operation) => operation.id));
-    const created = await this.createBolt11Attempt(selected, selected.length > 1);
+    const created = await this.createBolt11Attempt(selected, selected.length > 1 && !forcedSingle);
     if (!created.newlyCreated) {
       this.lastProcessorSelection = new Set([created.operationId]);
       this.unschedule(created.operationId);
@@ -286,6 +372,7 @@ export class MintIssuanceCoordinator {
     }
     this.lastProcessorSelection = new Set(created.operations.map((operation) => operation.id));
     for (const operation of created.operations) {
+      this.singleFallbackOperationIds.delete(operation.id);
       this.unschedule(operation.id);
     }
 
@@ -311,6 +398,7 @@ export class MintIssuanceCoordinator {
         const completed = await this.requireOperation(operation.id);
         return toMintOperation(completed);
       });
+      void join.catch(() => undefined);
       joins.set(operation.id, join);
       this.activeByOperationId.set(operation.id, join);
     }
@@ -333,6 +421,47 @@ export class MintIssuanceCoordinator {
     return `${normalizeMintUrl(operation.mintUrl)}::bolt11::${operation.unit}`;
   }
 
+  private async restoreConfirmedRejectionPolicies(
+    operations: PendingMintOperationRecord<'bolt11'>[],
+  ): Promise<void> {
+    const mintUrl = normalizeMintUrl(operations[0]!.mintUrl);
+    const groupKey = mintQuoteGroupKey(mintUrl, 'bolt11');
+    this.incompatibleRedemptionGroups.delete(groupKey);
+    const [mint, mintAttempts] = await Promise.all([
+      this.repositories.mintRepository.getMintByUrl(mintUrl),
+      this.repositories.mintIssuanceAttemptRepository.listByMintUrl(mintUrl),
+    ]);
+
+    for (const attempt of mintAttempts) {
+      if (attempt.method !== 'bolt11' || attempt.state !== 'rejected') continue;
+      const progress = getConfirmedBatchRejectionProgress(attempt);
+      if (!progress || progress.kind === 'validation') continue;
+      const capabilityHasRefreshed =
+        mint !== null &&
+        progress.capabilityUpdatedAt !== undefined &&
+        mint.updatedAt > progress.capabilityUpdatedAt;
+      if (capabilityHasRefreshed) continue;
+      if (progress.kind === 'incompatibility') {
+        this.incompatibleRedemptionGroups.add(groupKey);
+      } else if (progress.replacementBatchLimit !== undefined) {
+        this.nut29BatchLimitCache.lower(groupKey, progress.replacementBatchLimit);
+      }
+    }
+
+    for (const operation of operations) {
+      this.singleFallbackOperationIds.delete(operation.id);
+      const previousAttempt =
+        await this.repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operation.id);
+      if (!previousAttempt || previousAttempt.state !== 'rejected') continue;
+      const progress = getConfirmedBatchRejectionProgress(previousAttempt);
+      if (!progress) continue;
+
+      if (progress.kind === 'validation') {
+        this.singleFallbackOperationIds.add(operation.id);
+      }
+    }
+  }
+
   /** Removes a Mint Operation from the ephemeral processor-ready pool. */
   unschedule(operationId: string): void {
     this.scheduledOperationIds.delete(operationId);
@@ -350,19 +479,18 @@ export class MintIssuanceCoordinator {
 
   private async getProcessorBatchLimit(mintUrl: string): Promise<number> {
     const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const groupKey = mintQuoteGroupKey(normalizedMintUrl, 'bolt11');
     if (
       this.forceSingleRedemption ||
       this.batchRedemptionDenylist.has(normalizedMintUrl) ||
+      this.incompatibleRedemptionGroups.has(groupKey) ||
       !(await this.mintService.isTrustedMint(normalizedMintUrl))
     ) {
       return 1;
     }
     const mintInfo = await this.mintService.getMintInfo(normalizedMintUrl);
     const advertisedLimit = getNut29MintQuoteCheckLimit(mintInfo, 'bolt11') ?? 1;
-    return this.nut29BatchLimitCache.get(
-      mintQuoteGroupKey(normalizedMintUrl, 'bolt11'),
-      advertisedLimit,
-    );
+    return this.nut29BatchLimitCache.get(groupKey, advertisedLimit);
   }
 
   private isEligibleProcessorCandidate(
@@ -414,6 +542,10 @@ export class MintIssuanceCoordinator {
       case 'submitting':
       case 'recovering':
         if (attempt.request.kind === 'batch') {
+          if (this.isConfirmedBatchRejection(attempt)) {
+            const members = await this.requireExecutingBolt11Members(attempt);
+            return this.reconcileConfirmedBatchRejection(attempt, members, operationId);
+          }
           throw new Error(`Mint Batch ${attempt.id} requires exact-attempt recovery`);
         }
         return this.reconcileSingleAttempt(attempt, operation);
@@ -426,7 +558,19 @@ export class MintIssuanceCoordinator {
         }
         return toMintOperation(completed);
       }
-      case 'rejected':
+      case 'rejected': {
+        if (
+          this.isConfirmedBatchRejection(attempt) &&
+          operation.state === 'executing' &&
+          operation.attemptId === attempt.id
+        ) {
+          const members = await this.getUnreconciledBolt11Members(attempt);
+          return this.reconcileConfirmedBatchRejection(attempt, members, operationId);
+        }
+        const completed = await this.requireOperation(operationId);
+        if (isTerminalOperation(completed)) return toMintOperation(completed);
+        throw new Error(`Rejected attempt ${attempt.id} has non-terminal operation ${operationId}`);
+      }
       case 'failed': {
         const completed = await this.requireOperation(operationId);
         if (isTerminalOperation(completed)) return toMintOperation(completed);
@@ -483,15 +627,18 @@ export class MintIssuanceCoordinator {
         throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
       }
       let revalidatedLimit = 1;
-      if (allowBatch && !this.forceSingleRedemption && !this.batchRedemptionDenylist.has(mintUrl)) {
+      const groupKey = mintQuoteGroupKey(mintUrl, 'bolt11');
+      if (
+        allowBatch &&
+        !this.forceSingleRedemption &&
+        !this.batchRedemptionDenylist.has(mintUrl) &&
+        !this.incompatibleRedemptionGroups.has(groupKey)
+      ) {
         const mintInfo = await this.mintService.getMintInfo(mintUrl);
         const advertisedLimit = supportsNut29MintQuoteCheck(mintInfo, 'bolt11')
           ? (getNut29MintQuoteCheckLimit(mintInfo, 'bolt11') ?? 1)
           : 1;
-        revalidatedLimit = this.nut29BatchLimitCache.get(
-          mintQuoteGroupKey(mintUrl, 'bolt11'),
-          advertisedLimit,
-        );
+        revalidatedLimit = this.nut29BatchLimitCache.get(groupKey, advertisedLimit);
       }
       currentCandidates = currentCandidates.slice(0, revalidatedLimit);
       const first = currentCandidates[0]! as PendingMintOperationRecord<'bolt11'>;
@@ -692,6 +839,20 @@ export class MintIssuanceCoordinator {
     });
   }
 
+  private async getUnreconciledBolt11Members(
+    attempt: MintIssuanceAttempt,
+  ): Promise<ExecutingMintOperationRecord<'bolt11'>[]> {
+    const operations = await Promise.all(
+      attempt.memberOperationIds.map((operationId) => this.requireOperation(operationId)),
+    );
+    return operations.filter(
+      (operation): operation is ExecutingMintOperationRecord<'bolt11'> =>
+        operation.state === 'executing' &&
+        operation.method === 'bolt11' &&
+        operation.attemptId === attempt.id,
+    );
+  }
+
   private assertEligibleSingleQuote(
     operation: PendingMintOperationRecord<'bolt11'>,
     quote: MintQuote | null,
@@ -782,6 +943,224 @@ export class MintIssuanceCoordinator {
     }
   }
 
+  private classifyConfirmedBatchRejection(error: unknown): ConfirmedBatchRejection | null {
+    if (error instanceof HttpResponseError && INCOMPATIBLE_ENDPOINT_STATUSES.has(error.status)) {
+      return { kind: 'incompatibility', error, httpStatus: error.status };
+    }
+    if (!(error instanceof MintOperationError) || error.code >= AUTHENTICATION_ERROR_CODE_MIN) {
+      return null;
+    }
+    if (error.code === NUT29_BATCH_SIZE_ERROR_CODE) {
+      return { kind: 'batch-size', error, protocolCode: error.code };
+    }
+    if (MINT_QUOTE_STATE_ERROR_CODES.has(error.code)) {
+      return { kind: 'state', error, protocolCode: error.code };
+    }
+    return { kind: 'validation', error, protocolCode: error.code };
+  }
+
+  private isConfirmedBatchRejection(attempt: MintIssuanceAttempt): boolean {
+    return getConfirmedBatchRejectionProgress(attempt) !== null;
+  }
+
+  private async markConfirmedBatchRejection(
+    attempt: MintIssuanceAttempt,
+    rejection: ConfirmedBatchRejection,
+  ): Promise<MintIssuanceAttempt> {
+    return this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!current) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      if (isTerminalAttempt(current)) return current;
+      const mint = await tx.mintRepository.getMintByUrl(current.mintUrl);
+      const now = Date.now();
+      const rejected: MintIssuanceAttempt = {
+        ...current,
+        state: 'rejected',
+        recoveryStartedAt: current.recoveryStartedAt ?? now,
+        updatedAt: now,
+        terminalError: {
+          message: rejection.error.message,
+          code: CONFIRMED_BATCH_REJECTION_CODE,
+          details: {
+            kind: rejection.kind,
+            protocolCode: rejection.protocolCode,
+            httpStatus: rejection.httpStatus,
+            observedQuoteIds: [],
+            capabilityUpdatedAt: mint?.updatedAt,
+            replacementBatchLimit:
+              rejection.kind === 'batch-size'
+                ? Math.max(1, Math.floor(current.memberOperationIds.length / 2))
+                : undefined,
+          },
+        },
+      };
+      await tx.mintIssuanceAttemptRepository.update(rejected);
+      return rejected;
+    });
+  }
+
+  /**
+   * Reconciles only conclusively unissued batches. Canonical quote observations commit before any
+   * member advances; the attempt is already terminal before any observed member is requeued; and
+   * missing members remain attached for later checks without blocking fresh-output replacements.
+   */
+  private async reconcileConfirmedBatchRejection(
+    attempt: MintIssuanceAttempt,
+    operations: ExecutingMintOperationRecord<'bolt11'>[],
+    targetOperationId: string,
+  ): Promise<MintOperation> {
+    const progress = getConfirmedBatchRejectionProgress(attempt);
+    if (!progress) throw new Error(`Mint Batch ${attempt.id} lost its rejection classification`);
+    const { kind } = progress;
+    const observedQuoteIds = new Set(progress.observedQuoteIds);
+    const unreconciledQuoteIds = attempt.quoteIds.filter(
+      (quoteId) => !observedQuoteIds.has(quoteId),
+    );
+    const newlyObservedQuoteIds = new Set<string>();
+    if (kind === 'state' || kind === 'validation') {
+      if (!this.mintQuotePollingChecker) {
+        throw new Error(`Mint Batch ${attempt.id} cannot recheck its canonical quotes`);
+      }
+      const result = await this.mintQuotePollingChecker.checkMintQuotesForPolling(
+        attempt.mintUrl,
+        'bolt11',
+        unreconciledQuoteIds,
+      );
+      for (const observation of result.observations) {
+        if (unreconciledQuoteIds.includes(observation.quote)) {
+          newlyObservedQuoteIds.add(observation.quote);
+        }
+      }
+    } else {
+      for (const quoteId of unreconciledQuoteIds) newlyObservedQuoteIds.add(quoteId);
+    }
+    if (newlyObservedQuoteIds.size === 0) {
+      return toMintOperation(await this.requireOperation(targetOperationId));
+    }
+
+    const quotesById = new Map<string, MintQuote<'bolt11'>>();
+    for (const quoteId of newlyObservedQuoteIds) {
+      const quote = await this.repositories.mintQuoteRepository.getMintQuote(
+        attempt.mintUrl,
+        'bolt11',
+        quoteId,
+      );
+      if (!quote || quote.method !== 'bolt11') {
+        throw new Error(`Mint Batch ${attempt.id} lost canonical quote ${quoteId}`);
+      }
+      quotesById.set(quoteId, quote);
+    }
+
+    const now = Date.now();
+    const reconciled = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!currentAttempt) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      const currentProgress = getConfirmedBatchRejectionProgress(currentAttempt);
+      if (!currentProgress) {
+        throw new Error(`Mint Batch ${attempt.id} lost its rejection classification`);
+      }
+      const currentObservedQuoteIds = new Set(currentProgress.observedQuoteIds);
+      const pendingOperations: PendingMintOperationRecord<'bolt11'>[] = [];
+      const failedOperations: FailedMintOperationRecord<'bolt11'>[] = [];
+      for (const operation of operations) {
+        const memberIndex = attempt.memberOperationIds.indexOf(operation.id);
+        const quoteId = attempt.quoteIds[memberIndex];
+        if (!quoteId || !newlyObservedQuoteIds.has(quoteId)) continue;
+        const current = await tx.mintOperationRepository.getById(operation.id);
+        if (
+          !current ||
+          current.state !== 'executing' ||
+          current.method !== 'bolt11' ||
+          current.attemptId !== attempt.id
+        ) {
+          currentObservedQuoteIds.add(quoteId);
+          continue;
+        }
+        const executing = current as ExecutingMintOperationRecord<'bolt11'>;
+        const quote = quotesById.get(quoteId)!;
+        const remoteState = getMintQuoteRemoteState(quote);
+        if (remoteState === 'PAID' || (remoteState === 'UNPAID' && !isMintQuoteExpired(quote))) {
+          const pending: PendingMintOperationRecord<'bolt11'> = {
+            ...executing,
+            state: 'pending',
+            attemptId: undefined,
+            outputData: serializeOutputData({ keep: [], send: [] }),
+            error: undefined,
+            terminalFailure: undefined,
+            updatedAt: now,
+          };
+          await tx.mintOperationRepository.update(pending);
+          pendingOperations.push(pending);
+          currentObservedQuoteIds.add(quoteId);
+          continue;
+        }
+
+        const error =
+          remoteState === 'ISSUED'
+            ? `Mint quote ${current.quoteId} was issued but its exact proofs could not be recovered`
+            : `Mint quote ${current.quoteId} expired before issuance`;
+        const failed: FailedMintOperationRecord<'bolt11'> = {
+          ...executing,
+          state: 'failed',
+          attemptId: attempt.id,
+          outputData: attempt.outputData,
+          error,
+          terminalFailure: { reason: error, observedAt: now },
+          updatedAt: now,
+        };
+        await tx.mintOperationRepository.update(failed);
+        failedOperations.push(failed);
+        currentObservedQuoteIds.add(quoteId);
+      }
+      const rejectionReconciled = currentObservedQuoteIds.size === attempt.quoteIds.length;
+      const updatedAttempt: MintIssuanceAttempt = {
+        ...currentAttempt,
+        state: 'rejected',
+        updatedAt: now,
+        recoveredAt: rejectionReconciled ? now : currentAttempt.recoveredAt,
+        terminalError: {
+          ...currentAttempt.terminalError!,
+          details: {
+            ...currentAttempt.terminalError?.details,
+            observedQuoteIds: attempt.quoteIds.filter((quoteId) =>
+              currentObservedQuoteIds.has(quoteId),
+            ),
+          },
+        },
+      };
+      await tx.mintIssuanceAttemptRepository.update(updatedAttempt);
+      return { pendingOperations, failedOperations };
+    });
+    const groupKey = mintQuoteGroupKey(attempt.mintUrl, 'bolt11');
+    if (kind === 'batch-size' && progress.replacementBatchLimit !== undefined) {
+      this.nut29BatchLimitCache.lower(groupKey, progress.replacementBatchLimit);
+    }
+    if (kind === 'incompatibility') {
+      this.incompatibleRedemptionGroups.add(groupKey);
+    }
+    if (kind === 'validation') {
+      for (const operation of reconciled.pendingOperations) {
+        this.singleFallbackOperationIds.add(operation.id);
+      }
+    }
+    for (const operation of reconciled.pendingOperations) {
+      this.schedule(operation.id);
+      await this.eventBus.emit('mint-op:requeue', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: toMintOperation(operation),
+      });
+    }
+    for (const operation of reconciled.failedOperations) {
+      await this.eventBus.emit('mint-op:failed', {
+        mintUrl: operation.mintUrl,
+        operationId: operation.id,
+        operation: toMintOperation(operation),
+      });
+    }
+    return toMintOperation(await this.requireOperation(targetOperationId));
+  }
+
   private async dispatchBatchAttempt(
     attempt: MintIssuanceAttempt,
     operations: ExecutingMintOperationRecord<'bolt11'>[],
@@ -829,6 +1208,11 @@ export class MintIssuanceCoordinator {
       this.assertExactProofSet(attempt, proofs);
       return this.completeBatchAttempt(attempt, operations, proofs, false, targetOperationId);
     } catch (error) {
+      const rejection = this.classifyConfirmedBatchRejection(error);
+      if (rejection) {
+        const recovering = await this.markConfirmedBatchRejection(submitting, rejection);
+        return this.reconcileConfirmedBatchRejection(recovering, operations, targetOperationId);
+      }
       const recovering = await this.markRecovering(submitting, error);
       if (isTerminalAttempt(recovering)) {
         return this.requireTerminalOperation(targetOperationId, recovering.id);

@@ -5,8 +5,12 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
-import { MintOperationError, NetworkError } from '../../models/Error.ts';
-import { getMintQuoteRemoteState, mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
+import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error.ts';
+import {
+  getMintQuoteRemoteState,
+  mintQuoteFromBolt11Response,
+  mintQuoteToMethodSnapshot,
+} from '../../models/MintQuote.ts';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 import { MintIssuanceCoordinator } from '../../operations/mint/MintIssuanceCoordinator.ts';
 import type { MintIssuanceAttempt } from '../../operations/mint/MintIssuanceAttempt.ts';
@@ -42,6 +46,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
   let walletBatchMint: Mock<(preview: BatchMintPreview) => Promise<Proof[]>>;
   let createMintOutputsAtCounter: Mock<ProofService['createMintOutputsAtCounter']>;
   let getMintInfo: Mock<MintService['getMintInfo']>;
+  let checkMintQuoteBatch: Mock<MintAdapter['checkMintQuoteBatch']>;
   let nut29BatchLimitCache: Nut29BatchLimitCache;
   let coordinator: MintIssuanceCoordinator;
   let service: MintOperationService;
@@ -88,6 +93,31 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     updatedAt: Date.now(),
   });
 
+  async function seedPeerOperation(
+    peerQuoteId: string,
+    peerOperationId: string,
+    request: string,
+    createdAtOffset = 1,
+  ): Promise<void> {
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: peerQuoteId,
+        request,
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+    await repositories.mintOperationRepository.create({
+      ...pendingOperation(),
+      id: peerOperationId,
+      quoteId: peerQuoteId,
+      request,
+      createdAt: pendingOperation().createdAt + createdAtOffset,
+    });
+  }
+
   function createService(): MintOperationService {
     const handler = {
       checkPending: mock(async () => ({
@@ -121,6 +151,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       eventBus,
       mintScopedLock,
       nut29BatchLimitCache,
+      mintQuotePollingChecker: quoteLifecycle,
     });
 
     return new MintOperationService(
@@ -207,6 +238,19 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       createMintOutputsAtCounter,
       recoverProofsFromOutputData: mock(async () => []),
     } as unknown as ProofService;
+    checkMintQuoteBatch = mock(async (_mintUrl, method, quoteIds: string[]) =>
+      Promise.all(
+        quoteIds.map(async (requestedQuoteId) => {
+          const quote = await repositories.mintQuoteRepository.getMintQuote(
+            mintUrl,
+            method,
+            requestedQuoteId,
+          );
+          if (!quote) throw new Error(`Missing test quote ${requestedQuoteId}`);
+          return mintQuoteToMethodSnapshot(quote);
+        }),
+      ),
+    );
     mintAdapter = {
       checkMintQuote: mock(async () => ({
         quote: quoteId,
@@ -216,6 +260,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         expiry: Math.floor(Date.now() / 1000) + 3600,
         state: 'PAID' as const,
       })),
+      checkMintQuoteBatch,
     } as unknown as MintAdapter;
 
     await repositories.mintRepository.addNewMint({
@@ -438,23 +483,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       secret: batchSecret,
       C: 'C_batch-output-secret',
     };
-    await repositories.mintQuoteRepository.upsertMintQuote(
-      mintQuoteFromBolt11Response(mintUrl, {
-        quote: peerQuoteId,
-        request: 'lnbc1peer',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) + 3600,
-        state: 'PAID',
-      }),
-    );
-    await repositories.mintOperationRepository.create({
-      ...pendingOperation(),
-      id: peerOperationId,
-      quoteId: peerQuoteId,
-      request: 'lnbc1peer',
-      createdAt: pendingOperation().createdAt + 1,
-    });
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1peer');
     createMintOutputsAtCounter.mockResolvedValueOnce({
       keysetId,
       outputData: batchOutputData,
@@ -490,6 +519,473 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         quote_amounts: [Amount.from(10), Amount.from(10)],
       },
     });
+  });
+
+  it('requeues a conclusively unissued Mint Batch and succeeds through fresh outputs', async () => {
+    const peerQuoteId = 'quote-peer';
+    const peerOperationId = 'operation-peer';
+    const rejectedOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_rejected-batch-output' },
+          2n,
+          new TextEncoder().encode('rejected-batch-output'),
+        ),
+      ],
+      send: [],
+    });
+    const freshOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_fresh-batch-output' },
+          3n,
+          new TextEncoder().encode('fresh-batch-output'),
+        ),
+      ],
+      send: [],
+    });
+    const freshProof: Proof = {
+      id: keysetId,
+      amount: Amount.from(20),
+      secret: 'fresh-batch-output',
+      C: 'C_fresh-batch-output',
+    };
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1peer');
+    createMintOutputsAtCounter
+      .mockResolvedValueOnce({
+        keysetId,
+        outputData: rejectedOutputData,
+        counterStart: 0,
+        counterEnd: 1,
+      })
+      .mockResolvedValueOnce({
+        keysetId,
+        outputData: freshOutputData,
+        counterStart: 1,
+        counterEnd: 2,
+      });
+    walletBatchMint
+      .mockRejectedValueOnce(new MintOperationError(20001, 'Mint quote is not paid'))
+      .mockResolvedValueOnce([freshProof]);
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    const rejectedOperation = await repositories.mintOperationRepository.getById(operationId);
+    const rejectedAttempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(rejectedAttempt?.state).toBe('rejected');
+    expect(rejectedOperation).toMatchObject({ state: 'pending', attemptId: undefined });
+    expect(await repositories.mintOperationRepository.getById(peerOperationId)).toMatchObject({
+      state: 'pending',
+      attemptId: undefined,
+    });
+
+    await coordinator.coordinate();
+
+    const completedOperation = await repositories.mintOperationRepository.getById(operationId);
+    const freshAttempt = await repositories.mintIssuanceAttemptRepository.getById(
+      completedOperation!.attemptId!,
+    );
+    expect(freshAttempt).toMatchObject({ state: 'succeeded', counterStart: 1, counterEnd: 2 });
+    expect(freshAttempt?.id).not.toBe(rejectedAttempt?.id);
+    expect(freshAttempt?.outputData).toEqual(freshOutputData);
+    expect(freshAttempt?.outputData).not.toEqual(rejectedOutputData);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(2);
+  });
+
+  it('isolates invalid recovery checks and reconciles each observed quote independently', async () => {
+    const peerQuoteId = 'quote-invalid-peer';
+    const peerOperationId = 'operation-invalid-peer';
+    const batchOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_isolated-batch-output' },
+          4n,
+          new TextEncoder().encode('isolated-batch-output'),
+        ),
+      ],
+      send: [],
+    });
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1invalidpeer');
+    createMintOutputsAtCounter.mockResolvedValueOnce({
+      keysetId,
+      outputData: batchOutputData,
+      counterStart: 0,
+      counterEnd: 1,
+    });
+    walletBatchMint.mockRejectedValueOnce(new MintOperationError(20002, 'Quote state conflict'));
+    checkMintQuoteBatch.mockImplementation(
+      async (_mint: string, _method: string, quoteIds: string[]) => {
+        if (quoteIds.includes(peerQuoteId)) {
+          throw new MintOperationError(10000, 'invalid quote in recovery check');
+        }
+        return [
+          {
+            ...mintQuoteToMethodSnapshot(
+              (await repositories.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', quoteId))!,
+            ),
+            state: 'ISSUED',
+          },
+        ];
+      },
+    );
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    const rejected =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(rejected?.state).toBe('rejected');
+    expect(rejected?.terminalError?.details?.observedQuoteIds).toEqual([quoteId]);
+    expect((await repositories.mintOperationRepository.getById(operationId))?.state).toBe('failed');
+    expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
+      'executing',
+    );
+    expect(
+      getMintQuoteRemoteState(
+        (await repositories.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', peerQuoteId))!,
+      ),
+    ).toBe('PAID');
+
+    checkMintQuoteBatch.mockResolvedValue([]);
+
+    await coordinator.coordinate(peerOperationId);
+
+    expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
+      'executing',
+    );
+    expect(
+      (await repositories.mintIssuanceAttemptRepository.getById(rejected!.id))?.terminalError
+        ?.details?.observedQuoteIds,
+    ).toEqual([quoteId]);
+  });
+
+  it('lowers the effective limit and rechunks a rejected Mint Batch with fresh counters', async () => {
+    const peerQuoteId = 'quote-limit-peer';
+    const peerOperationId = 'operation-limit-peer';
+    const rejectedOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_limit-rejected-output' },
+          5n,
+          new TextEncoder().encode('limit-rejected-output'),
+        ),
+      ],
+      send: [],
+    });
+    const freshOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(10), id: keysetId, B_: 'B_limit-fresh-output' },
+          6n,
+          new TextEncoder().encode('limit-fresh-output'),
+        ),
+      ],
+      send: [],
+    });
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1limitpeer');
+    createMintOutputsAtCounter
+      .mockResolvedValueOnce({
+        keysetId,
+        outputData: rejectedOutputData,
+        counterStart: 0,
+        counterEnd: 1,
+      })
+      .mockResolvedValueOnce({
+        keysetId,
+        outputData: freshOutputData,
+        counterStart: 1,
+        counterEnd: 2,
+      });
+    walletBatchMint.mockRejectedValueOnce(new MintOperationError(11017, 'Batch too large'));
+    walletMint.mockResolvedValueOnce([
+      {
+        id: keysetId,
+        amount: Amount.from(10),
+        secret: 'limit-fresh-output',
+        C: 'C_limit-fresh-output',
+      },
+    ]);
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    const rejected =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(rejected?.state).toBe('rejected');
+    expect(nut29BatchLimitCache.get(mintQuoteGroupKey(mintUrl, 'bolt11'), 100)).toBe(1);
+
+    nut29BatchLimitCache = new Nut29BatchLimitCache();
+    service = createService();
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    const first = await repositories.mintOperationRepository.getById(operationId);
+    const peer = await repositories.mintOperationRepository.getById(peerOperationId);
+    const replacement = await repositories.mintIssuanceAttemptRepository.getById(first!.attemptId!);
+    expect(first?.state).toBe('finalized');
+    expect(peer?.state).toBe('pending');
+    expect(replacement).toMatchObject({
+      state: 'succeeded',
+      request: { kind: 'single', quoteId },
+      counterStart: 1,
+      counterEnd: 2,
+    });
+    expect(replacement?.outputData).not.toEqual(rejectedOutputData);
+    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
+  });
+
+  it('falls back directly to fresh singles after one validation eligibility recheck', async () => {
+    const peerQuoteId = 'quote-validation-peer';
+    const peerOperationId = 'operation-validation-peer';
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1validationpeer');
+    const attempts = [
+      { secret: 'validation-rejected', amount: 20 },
+      { secret: 'validation-single-a', amount: 10 },
+      { secret: 'validation-single-b', amount: 10 },
+    ];
+    createMintOutputsAtCounter.mockImplementation(async (_mint, _intent, counterStart: number) => {
+      const fixture = attempts[counterStart]!;
+      return {
+        keysetId,
+        outputData: serializeOutputData({
+          keep: [
+            new OutputData(
+              {
+                amount: Amount.from(fixture.amount),
+                id: keysetId,
+                B_: `B_${fixture.secret}`,
+              },
+              BigInt(counterStart + 10),
+              new TextEncoder().encode(fixture.secret),
+            ),
+          ],
+          send: [],
+        }),
+        counterStart,
+        counterEnd: counterStart + 1,
+      };
+    });
+    walletBatchMint.mockRejectedValueOnce(
+      new MintOperationError(10000, 'Invalid batch redemption request'),
+    );
+    walletMint
+      .mockResolvedValueOnce([
+        {
+          id: keysetId,
+          amount: Amount.from(10),
+          secret: 'validation-single-a',
+          C: 'C_validation-single-a',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: keysetId,
+          amount: Amount.from(10),
+          secret: 'validation-single-b',
+          C: 'C_validation-single-b',
+        },
+      ]);
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    nut29BatchLimitCache = new Nut29BatchLimitCache();
+    service = createService();
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+    await coordinator.coordinate();
+
+    expect((await repositories.mintOperationRepository.getById(operationId))?.state).toBe(
+      'finalized',
+    );
+    expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
+      'finalized',
+    );
+    expect(walletBatchMint).toHaveBeenCalledTimes(1);
+    expect(walletMint).toHaveBeenCalledTimes(2);
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+    expect((await repositories.counterRepository.getCounter(mintUrl, keysetId))?.counter).toBe(3);
+  });
+
+  it('uses fresh singles after endpoint incompatibility until capability refresh', async () => {
+    const peerQuoteId = 'quote-incompatible-peer';
+    const peerOperationId = 'operation-incompatible-peer';
+    const laterOperations = [
+      { quoteId: 'quote-incompatible-later-a', operationId: 'operation-incompatible-later-a' },
+      { quoteId: 'quote-incompatible-later-b', operationId: 'operation-incompatible-later-b' },
+      { quoteId: 'quote-incompatible-later-c', operationId: 'operation-incompatible-later-c' },
+    ];
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1incompatiblepeer');
+    const fixtures = [
+      { secret: 'incompatible-rejected', amount: 20 },
+      { secret: 'incompatible-single-a', amount: 10 },
+      { secret: 'incompatible-single-b', amount: 10 },
+      { secret: 'incompatible-later-single', amount: 10 },
+      { secret: 'incompatible-refreshed-batch', amount: 20 },
+    ];
+    createMintOutputsAtCounter.mockImplementation(async (_mint, _intent, counterStart: number) => {
+      const fixture = fixtures[counterStart]!;
+      return {
+        keysetId,
+        outputData: serializeOutputData({
+          keep: [
+            new OutputData(
+              {
+                amount: Amount.from(fixture.amount),
+                id: keysetId,
+                B_: `B_${fixture.secret}`,
+              },
+              BigInt(counterStart + 20),
+              new TextEncoder().encode(fixture.secret),
+            ),
+          ],
+          send: [],
+        }),
+        counterStart,
+        counterEnd: counterStart + 1,
+      };
+    });
+    walletBatchMint
+      .mockRejectedValueOnce(new HttpResponseError('NUT-29 method unavailable', 405))
+      .mockResolvedValueOnce([
+        {
+          id: keysetId,
+          amount: Amount.from(20),
+          secret: 'incompatible-refreshed-batch',
+          C: 'C_incompatible-refreshed-batch',
+        },
+      ]);
+    for (const secret of [
+      'incompatible-single-a',
+      'incompatible-single-b',
+      'incompatible-later-single',
+    ]) {
+      walletMint.mockResolvedValueOnce([
+        {
+          id: keysetId,
+          amount: Amount.from(10),
+          secret,
+          C: `C_${secret}`,
+        },
+      ]);
+    }
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+
+    nut29BatchLimitCache = new Nut29BatchLimitCache();
+    service = createService();
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await coordinator.coordinate();
+    await coordinator.coordinate();
+
+    expect((await repositories.mintOperationRepository.getById(operationId))?.state).toBe(
+      'finalized',
+    );
+    expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
+      'finalized',
+    );
+    expect(walletMint).toHaveBeenCalledTimes(2);
+
+    for (const [index, later] of laterOperations.entries()) {
+      await seedPeerOperation(
+        later.quoteId,
+        later.operationId,
+        `lnbc1incompatiblelater${index}`,
+        index + 2,
+      );
+    }
+
+    nut29BatchLimitCache = new Nut29BatchLimitCache();
+    service = createService();
+    for (const later of laterOperations) coordinator.schedule(later.operationId);
+    await coordinator.coordinate();
+
+    const beforeRefreshStates = await Promise.all(
+      laterOperations.map(
+        async ({ operationId: laterOperationId }) =>
+          (await repositories.mintOperationRepository.getById(laterOperationId))?.state,
+      ),
+    );
+    expect(beforeRefreshStates.filter((state) => state === 'finalized')).toHaveLength(1);
+    expect(beforeRefreshStates.filter((state) => state === 'pending')).toHaveLength(2);
+    expect(walletBatchMint).toHaveBeenCalledTimes(1);
+    expect(walletMint).toHaveBeenCalledTimes(3);
+
+    const mintBeforeRefresh = await repositories.mintRepository.getMintByUrl(mintUrl);
+    await repositories.mintRepository.updateMint({
+      ...mintBeforeRefresh!,
+      updatedAt: mintBeforeRefresh!.updatedAt + 1,
+    });
+    await eventBus.emit('mint:updated', {
+      mint: await repositories.mintRepository.getMintByUrl(mintUrl),
+      keysets: [],
+    });
+    await coordinator.coordinate();
+
+    const afterRefreshStates = await Promise.all(
+      laterOperations.map(
+        async ({ operationId: laterOperationId }) =>
+          (await repositories.mintOperationRepository.getById(laterOperationId))?.state,
+      ),
+    );
+    expect(afterRefreshStates).toEqual(['finalized', 'finalized', 'finalized']);
+    expect(walletBatchMint).toHaveBeenCalledTimes(2);
+    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
+  });
+
+  it('preserves an ambiguous Mint Batch without creating fallback attempts', async () => {
+    const peerQuoteId = 'quote-ambiguous-peer';
+    const peerOperationId = 'operation-ambiguous-peer';
+    const ambiguousOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: 'B_ambiguous-batch-output' },
+          30n,
+          new TextEncoder().encode('ambiguous-batch-output'),
+        ),
+      ],
+      send: [],
+    });
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1ambiguouspeer');
+    createMintOutputsAtCounter.mockResolvedValueOnce({
+      keysetId,
+      outputData: ambiguousOutputData,
+      counterStart: 0,
+      counterEnd: 1,
+    });
+    walletBatchMint.mockRejectedValueOnce(new NetworkError('connection lost after submission'));
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await expect(coordinator.coordinate()).rejects.toThrow('connection lost after submission');
+
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(attempt).toMatchObject({
+      state: 'recovering',
+      memberOperationIds: [operationId, peerOperationId],
+      outputData: ambiguousOutputData,
+    });
+    expect((await repositories.mintOperationRepository.getById(operationId))?.state).toBe(
+      'executing',
+    );
+    expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
+      'executing',
+    );
+    expect(await service.canRetryIssuance(operationId)).toBe(false);
+    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
+    expect(createMintOutputsAtCounter).toHaveBeenCalledTimes(1);
   });
 
   it('retries single attempts while deferring ambiguous Mint Batch recovery', async () => {

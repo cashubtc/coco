@@ -1026,6 +1026,7 @@ export class Manager {
       logger: mintIssuanceLogger,
       mintScopedLock,
       nut29BatchLimitCache,
+      mintQuotePollingChecker: quoteLifecycle,
     });
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,

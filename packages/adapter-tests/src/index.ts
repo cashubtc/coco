@@ -490,12 +490,17 @@ export async function runMintIssuanceAttemptRepositoryContract(
         const all = await repositories.mintIssuanceAttemptRepository.listRecoverable();
         const mintOnly =
           await repositories.mintIssuanceAttemptRepository.listRecoverable('https://mint.test/');
+        const mintHistory =
+          await repositories.mintIssuanceAttemptRepository.listByMintUrl('https://mint.test/');
 
         expect(all.map((attempt) => attempt.id).join(',')).toBe(
           'submitting,recovering,prepared,other-mint',
         );
         expect(mintOnly.map((attempt) => attempt.id).join(',')).toBe(
           'submitting,recovering,prepared',
+        );
+        expect(mintHistory.map((attempt) => attempt.id).join(',')).toBe(
+          'submitting,recovering,prepared,succeeded',
         );
         expect(all[3]?.mintUrl).toBe('https://other-mint.test');
       } finally {
