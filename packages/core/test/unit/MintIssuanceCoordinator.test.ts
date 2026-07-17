@@ -5,7 +5,12 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
-import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
+  ProofValidationError,
+} from '../../models/Error.ts';
 import {
   getMintQuoteRemoteState,
   mintQuoteFromBolt11Response,
@@ -28,6 +33,7 @@ import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
 import type { CoreProof, MintInfo } from '../../types.ts';
 import { serializeOutputData } from '../../utils.ts';
+import { ScriptedMintIssuanceTransport } from '../fixtures/ScriptedMintIssuanceTransport.ts';
 
 describe('MintOperationService durable single BOLT11 issuance', () => {
   const mintUrl = 'https://mint.test';
@@ -579,6 +585,79 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     });
   });
 
+  it('resumes a prepared Mint Batch after a crash before its first submission', async () => {
+    const peerOperationId = 'operation-prepared-peer';
+    const peerQuoteId = 'quote-prepared-peer';
+    const batchSecret = 'prepared-batch-output';
+    const batchOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: `B_${batchSecret}` },
+          12n,
+          new TextEncoder().encode(batchSecret),
+        ),
+      ],
+      send: [],
+    });
+    const batchProof: Proof = {
+      id: keysetId,
+      amount: Amount.from(20),
+      secret: batchSecret,
+      C: `C_${batchSecret}`,
+    };
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1preparedpeer');
+    const attemptId = 'attempt-prepared-restart';
+    const preparedAt = Date.now();
+    await repositories.mintOperationRepository.update({
+      ...pendingOperation(),
+      state: 'executing',
+      attemptId,
+      outputData: batchOutputData,
+    });
+    const peer = await repositories.mintOperationRepository.getById(peerOperationId);
+    await repositories.mintOperationRepository.update({
+      ...peer!,
+      state: 'executing',
+      attemptId,
+      outputData: batchOutputData,
+    } as ExecutingMintOperationRecord<'bolt11'>);
+    await repositories.mintIssuanceAttemptRepository.create({
+      id: attemptId,
+      mintUrl,
+      method: 'bolt11',
+      unit: 'sat',
+      keysetId,
+      state: 'prepared',
+      memberOperationIds: [operationId, peerOperationId],
+      quoteIds: [quoteId, peerQuoteId],
+      quoteAmounts: [Amount.from(10), Amount.from(10)],
+      signingRequirements: [null, null],
+      outputData: batchOutputData,
+      counterStart: 0,
+      counterEnd: 1,
+      request: {
+        kind: 'batch',
+        quoteIds: [quoteId, peerQuoteId],
+        quoteAmounts: [Amount.from(10), Amount.from(10)],
+      },
+      createdAt: preparedAt,
+      updatedAt: preparedAt,
+    });
+
+    const prepared =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(prepared?.state).toBe('prepared');
+    expect(walletBatchMint).not.toHaveBeenCalled();
+
+    walletBatchMint.mockResolvedValueOnce([batchProof]);
+    service = createService();
+    await expect(service.finalize(peerOperationId)).resolves.toMatchObject({ state: 'finalized' });
+    expect((await repositories.mintIssuanceAttemptRepository.getById(prepared!.id))?.state).toBe(
+      'succeeded',
+    );
+    expect(walletBatchMint).toHaveBeenCalledTimes(1);
+  });
+
   it('requeues a conclusively unissued Mint Batch and succeeds through fresh outputs', async () => {
     const peerQuoteId = 'quote-peer';
     const peerOperationId = 'operation-peer';
@@ -1124,6 +1203,59 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(walletBatchMint).toHaveBeenCalledTimes(1);
   });
 
+  it('requeues independently observed PAID and unexpired UNPAID members', async () => {
+    const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteIds[1],
+        request: 'lnbc1ambiguouspeer',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+      }),
+    );
+
+    await coordinator.coordinate(operationIds[0]);
+
+    expect(
+      await Promise.all(
+        operationIds.map(
+          async (id) => (await repositories.mintOperationRepository.getById(id))?.state,
+        ),
+      ),
+    ).toEqual(['pending', 'pending']);
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'failed',
+    );
+    expect(operationIds.every((id) => coordinator.isScheduled(id))).toBe(true);
+  });
+
+  it('requeues a PAID member while failing an independently observed expired UNPAID member', async () => {
+    const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteIds[1],
+        request: 'lnbc1ambiguouspeer',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) - 1,
+        state: 'UNPAID',
+      }),
+    );
+
+    await coordinator.coordinate(operationIds[1]);
+
+    const operations = await Promise.all(
+      operationIds.map((id) => repositories.mintOperationRepository.getById(id)),
+    );
+    expect(operations[0]).toMatchObject({ state: 'pending', attemptId: undefined });
+    expect(operations[1]).toMatchObject({ state: 'failed', attemptId: attempt.id });
+    expect(operations[1]?.error).toContain('expired before issuance');
+    expect(coordinator.isScheduled(operationIds[0])).toBe(true);
+    expect(coordinator.isScheduled(operationIds[1])).toBe(false);
+  });
+
   it('saves partial recovered proofs and fails every batch member with one critical error', async () => {
     const firstSecret = 'partial-batch-output-a';
     const secondSecret = 'partial-batch-output-b';
@@ -1181,7 +1313,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     await expect(service.canRetryIssuance(operationIds[1])).resolves.toBe(false);
   });
 
-  it('fails every member when exact-output recovery proves no batch outputs exist', async () => {
+  it('fails every member when exact-output restoration proves no batch outputs exist', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
     for (const recoveredQuoteId of quoteIds) {
       await repositories.mintQuoteRepository.setMintQuoteState(
@@ -1207,7 +1339,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     ).toBe('EXACT_PROOFS_UNRECOVERABLE');
   });
 
-  it('keeps the batch recoverable when exact-output recovery is unusable', async () => {
+  it('keeps the batch recoverable when exact-output restoration is unusable', async () => {
     const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
     for (const recoveredQuoteId of quoteIds) {
       await repositories.mintQuoteRepository.setMintQuoteState(
@@ -1235,6 +1367,83 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         ),
       ),
     ).toEqual(['executing', 'executing']);
+  });
+
+  it('recovers deterministically across malformed submission and quote-check transport faults', async () => {
+    const peerQuoteId = 'quote-scripted-peer';
+    const peerOperationId = 'operation-scripted-peer';
+    const batchSecret = 'scripted-batch-output';
+    const batchOutputData = serializeOutputData({
+      keep: [
+        new OutputData(
+          { amount: Amount.from(20), id: keysetId, B_: `B_${batchSecret}` },
+          41n,
+          new TextEncoder().encode(batchSecret),
+        ),
+      ],
+      send: [],
+    });
+    const batchProof: Proof = {
+      id: keysetId,
+      amount: Amount.from(20),
+      secret: batchSecret,
+      C: `C_${batchSecret}`,
+    };
+    await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1scriptedpeer');
+    const canonicalQuotes = await Promise.all(
+      [quoteId, peerQuoteId].map((id) =>
+        repositories.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', id),
+      ),
+    );
+    const snapshots = canonicalQuotes.map((quote) => mintQuoteToMethodSnapshot(quote!));
+    const networkFailure = new NetworkError('scripted quote-check disconnect');
+    const scripted = new ScriptedMintIssuanceTransport(
+      [
+        {
+          kind: 'return',
+          value: [{ ...batchProof, secret: 'malformed-success-secret' }],
+        },
+        { kind: 'return', value: [batchProof] },
+      ],
+      [
+        { kind: 'throw', error: networkFailure },
+        { kind: 'throw', error: networkFailure },
+        { kind: 'throw', error: networkFailure },
+        {
+          kind: 'throw',
+          error: new ProofValidationError('scripted malformed quote-check body'),
+        },
+        { kind: 'return', value: snapshots },
+      ],
+    );
+    walletBatchMint.mockImplementation(scripted.completeBatchMint);
+    checkMintQuoteBatch.mockImplementation(scripted.checkMintQuoteBatch);
+    createMintOutputsAtCounter.mockResolvedValueOnce({
+      keysetId,
+      outputData: batchOutputData,
+      counterStart: 0,
+      counterEnd: 1,
+    });
+
+    coordinator.schedule(operationId);
+    coordinator.schedule(peerOperationId);
+    await expect(coordinator.coordinate()).rejects.toThrow('exact proof set');
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+
+    service = createService();
+    await expect(service.finalize(operationId)).resolves.toMatchObject({ state: 'executing' });
+    await expect(service.finalize(peerOperationId)).resolves.toMatchObject({ state: 'executing' });
+    await expect(service.finalize(operationId)).resolves.toMatchObject({ state: 'finalized' });
+
+    expect(attempt?.state).toBe('recovering');
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt!.id))?.state).toBe(
+      'succeeded',
+    );
+    expect(scripted.quoteChecks).toHaveLength(5);
+    expect(scripted.batchSubmissions).toHaveLength(2);
+    expect(scripted.batchSubmissions[1]).toEqual(scripted.batchSubmissions[0]);
+    expect(createMintOutputsAtCounter).toHaveBeenCalledTimes(1);
   });
 
   it('isolates atomic validation rejection while checking an ambiguous batch', async () => {

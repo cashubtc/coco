@@ -18,7 +18,7 @@ import {
   Nut29BatchLimitCache,
   supportsNut29MintQuoteCheck,
 } from '../../quotes/MintQuoteBatchTransport.ts';
-import type { Repositories } from '../../repositories/index.ts';
+import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
@@ -98,6 +98,12 @@ interface ConfirmedBatchRejectionProgress {
   observedQuoteIds: string[];
   capabilityUpdatedAt?: number;
   replacementBatchLimit?: number;
+}
+
+interface BatchRecoveryContext {
+  attempt: MintIssuanceAttempt;
+  operations: ExecutingMintOperationRecord<'bolt11'>[];
+  targetOperationId: string;
 }
 
 function isConfirmedBatchRejectionKind(value: unknown): value is ConfirmedBatchRejectionKind {
@@ -1312,16 +1318,22 @@ export class MintIssuanceCoordinator {
     operations: ExecutingMintOperationRecord<'bolt11'>[],
     targetOperationId: string,
   ): Promise<MintOperation> {
+    const context: BatchRecoveryContext = { attempt, operations, targetOperationId };
     return this.runAttemptDispatch(attempt.id, targetOperationId, async () => {
-      await this.performBatchRecovery(attempt, operations, targetOperationId);
+      await this.performBatchRecovery(context);
     });
   }
 
-  private async performBatchRecovery(
-    attempt: MintIssuanceAttempt,
-    operations: ExecutingMintOperationRecord<'bolt11'>[],
-    targetOperationId: string,
-  ): Promise<void> {
+  /**
+   * Reconciles one exact Mint Batch after an ambiguous remote boundary.
+   *
+   * The polling checker persists Attributable Quote Observations before this method reads canonical
+   * rows. A complete all-PAID observation resubmits the immutable request, all-ISSUED invokes
+   * NUT-09 Restore, and other complete state sets reconcile each member independently. Missing or
+   * unusable observations leave the exact attempt and every member recoverable.
+   */
+  private async performBatchRecovery(context: BatchRecoveryContext): Promise<void> {
+    const { attempt, operations, targetOperationId } = context;
     if (
       attempt.request.kind !== 'batch' ||
       operations.length !== attempt.memberOperationIds.length
@@ -1369,17 +1381,14 @@ export class MintIssuanceCoordinator {
       return;
     }
     if (states.every((state) => state === 'ISSUED')) {
-      await this.recoverIssuedBatchAttempt(recovering, operations, targetOperationId);
+      await this.recoverIssuedBatchAttempt({ ...context, attempt: recovering });
       return;
     }
-    await this.reconcileMixedBatchRecovery(recovering, operations, bolt11Quotes, targetOperationId);
+    await this.reconcileMixedBatchRecovery({ ...context, attempt: recovering }, bolt11Quotes);
   }
 
-  private async recoverIssuedBatchAttempt(
-    attempt: MintIssuanceAttempt,
-    operations: ExecutingMintOperationRecord<'bolt11'>[],
-    targetOperationId: string,
-  ): Promise<void> {
+  private async recoverIssuedBatchAttempt(context: BatchRecoveryContext): Promise<void> {
+    const { attempt, operations, targetOperationId } = context;
     let recovered: Proof[];
     try {
       recovered = await this.proofService.recoverProofsFromOutputData(
@@ -1403,8 +1412,7 @@ export class MintIssuanceCoordinator {
     }
     if (recovered.length === 0) {
       await this.failBatchRecovery(
-        attempt,
-        operations,
+        context,
         {
           message: `Mint Batch ${attempt.id} was issued but none of its exact outputs could be recovered`,
           code: 'EXACT_PROOFS_UNRECOVERABLE',
@@ -1421,8 +1429,7 @@ export class MintIssuanceCoordinator {
       return;
     }
     await this.failBatchRecovery(
-      attempt,
-      operations,
+      context,
       {
         message: `Critical partial signing recovered only part of Mint Batch ${attempt.id}`,
         code: 'CRITICAL_PARTIAL_SIGNING',
@@ -1456,11 +1463,10 @@ export class MintIssuanceCoordinator {
   }
 
   private async reconcileMixedBatchRecovery(
-    attempt: MintIssuanceAttempt,
-    operations: ExecutingMintOperationRecord<'bolt11'>[],
+    context: BatchRecoveryContext,
     quotes: MintQuote<'bolt11'>[],
-    targetOperationId: string,
   ): Promise<void> {
+    const { attempt, operations, targetOperationId } = context;
     const now = Date.now();
     const reconciled = await this.repositories.withTransaction(async (tx) => {
       const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
@@ -1473,16 +1479,7 @@ export class MintIssuanceCoordinator {
       const pending: PendingMintOperationRecord<'bolt11'>[] = [];
       const failed: FailedMintOperationRecord<'bolt11'>[] = [];
       for (const [index, operation] of operations.entries()) {
-        const current = await tx.mintOperationRepository.getById(operation.id);
-        if (
-          !current ||
-          current.state !== 'executing' ||
-          current.method !== 'bolt11' ||
-          current.attemptId !== attempt.id
-        ) {
-          throw new Error(`Mint Batch ${attempt.id} no longer owns operation ${operation.id}`);
-        }
-        const executing = current as ExecutingMintOperationRecord<'bolt11'>;
+        const executing = await this.requireOwnedBolt11Member(tx, attempt.id, operation.id);
         const quote = quotes[index]!;
         const state = getMintQuoteRemoteState(quote);
         if (state === 'PAID' || (state === 'UNPAID' && !isMintQuoteExpired(quote))) {
@@ -1501,8 +1498,8 @@ export class MintIssuanceCoordinator {
         }
         const error =
           state === 'ISSUED'
-            ? `Mint quote ${current.quoteId} was issued outside the complete exact Mint Batch proof set`
-            : `Mint quote ${current.quoteId} expired before issuance`;
+            ? `Mint quote ${executing.quoteId} was issued outside the complete exact Mint Batch proof set`
+            : `Mint quote ${executing.quoteId} expired before issuance`;
         const updated: FailedMintOperationRecord<'bolt11'> = {
           ...executing,
           state: 'failed',
@@ -1548,11 +1545,11 @@ export class MintIssuanceCoordinator {
   }
 
   private async failBatchRecovery(
-    attempt: MintIssuanceAttempt,
-    operations: ExecutingMintOperationRecord<'bolt11'>[],
+    context: BatchRecoveryContext,
     terminalError: { message: string; code: string },
     recoveredProofs: Proof[],
   ): Promise<void> {
+    const { attempt, operations } = context;
     const now = Date.now();
     const coreProofs = mapProofToCoreProof(attempt.mintUrl, 'ready', recoveredProofs, {
       unit: attempt.unit,
@@ -1566,16 +1563,7 @@ export class MintIssuanceCoordinator {
         await tx.proofRepository.saveProofs(attempt.mintUrl, coreProofs);
       }
       for (const operation of operations) {
-        const current = await tx.mintOperationRepository.getById(operation.id);
-        if (
-          !current ||
-          current.state !== 'executing' ||
-          current.method !== 'bolt11' ||
-          current.attemptId !== attempt.id
-        ) {
-          throw new Error(`Mint Batch ${attempt.id} no longer owns operation ${operation.id}`);
-        }
-        const executing = current as ExecutingMintOperationRecord<'bolt11'>;
+        const executing = await this.requireOwnedBolt11Member(tx, attempt.id, operation.id);
         const updated: FailedMintOperationRecord<'bolt11'> = {
           ...executing,
           state: 'failed',
@@ -1612,6 +1600,23 @@ export class MintIssuanceCoordinator {
         operation: toMintOperation(operation),
       });
     }
+  }
+
+  private async requireOwnedBolt11Member(
+    tx: RepositoryTransactionScope,
+    attemptId: string,
+    operationId: string,
+  ): Promise<ExecutingMintOperationRecord<'bolt11'>> {
+    const operation = await tx.mintOperationRepository.getById(operationId);
+    if (
+      !operation ||
+      operation.state !== 'executing' ||
+      operation.method !== 'bolt11' ||
+      operation.attemptId !== attemptId
+    ) {
+      throw new Error(`Mint Batch ${attemptId} no longer owns operation ${operationId}`);
+    }
+    return operation as ExecutingMintOperationRecord<'bolt11'>;
   }
 
   private handlerDeps() {
