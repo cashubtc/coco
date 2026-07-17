@@ -1097,27 +1097,38 @@ export class ProofService {
 
     // Call mint restore endpoint
     const restoreResult = await wallet.mint.restore({ outputs: blindedMessages });
+    if (
+      !Array.isArray(restoreResult.outputs) ||
+      !Array.isArray(restoreResult.signatures) ||
+      restoreResult.outputs.length !== restoreResult.signatures.length
+    ) {
+      throw new ProofValidationError('Mint restore response has unpaired outputs and signatures');
+    }
 
     // Match signatures back to outputs and unblind to construct proofs
     const restoredProofs: Proof[] = [];
+    const matchedBlindedMessages = new Set<string>();
     for (let i = 0; i < restoreResult.outputs.length; i++) {
-      const output = allOutputs.find((o) => o.blindedMessage.B_ === restoreResult.outputs[i]?.B_);
+      const restoredOutput = restoreResult.outputs[i];
       const signature = restoreResult.signatures[i];
-      if (output && signature) {
-        const keyset = keysetMap[signature.id];
-        if (!keyset) {
-          this.logger?.warn('Missing keyset for restored signature', { id: signature.id });
-          continue;
-        }
-        assertSameUnit(
-          normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
-          unit,
-          'Restored proof keyset',
-        );
-        restoredProofs.push(
-          output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
-        );
+      const blindedMessage = restoredOutput?.B_;
+      const output = allOutputs.find((candidate) => candidate.blindedMessage.B_ === blindedMessage);
+      if (!output || !signature || !blindedMessage || matchedBlindedMessages.has(blindedMessage)) {
+        throw new ProofValidationError('Mint restore response contains an unattributable output');
       }
+      matchedBlindedMessages.add(blindedMessage);
+      const keyset = keysetMap[signature.id];
+      if (!keyset) {
+        throw new ProofValidationError(`Missing keyset for restored signature ${signature.id}`);
+      }
+      assertSameUnit(
+        normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
+        unit,
+        'Restored proof keyset',
+      );
+      restoredProofs.push(
+        output.toProof(signature, { id: keyset.id, keys: keyset.keypairs as Keys }),
+      );
     }
 
     if (restoredProofs.length === 0) {
@@ -1127,6 +1138,9 @@ export class ProofService {
 
     // Check which proofs are still unspent
     const proofStates = await wallet.checkProofsStates(restoredProofs);
+    if (!Array.isArray(proofStates) || proofStates.length !== restoredProofs.length) {
+      throw new ProofValidationError('Mint proof-state response is incomplete during recovery');
+    }
     const unspentProofs = restoredProofs.filter((_, index) => {
       const state = proofStates[index];
       return state && state.state === 'UNSPENT';

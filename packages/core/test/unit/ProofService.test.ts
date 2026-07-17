@@ -1636,5 +1636,60 @@ describe('ProofService', () => {
       ).rejects.toThrow(UnitMismatchError);
       expect(toProof).not.toHaveBeenCalled();
     });
+
+    it('rejects an unusable restore response instead of treating it as empty recovery', async () => {
+      const B_ = 'unpaired-blinded-output';
+      const serializedOutputData: SerializedOutputData = {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: '1', id: keysetId, B_ },
+            blindingFactor: 'deadbeef',
+            secret: Buffer.from('test-secret').toString('hex'),
+          },
+        ],
+      };
+      const localMintService = {
+        async ensureUpdatedMint() {
+          return {
+            mint: {},
+            keysets: [{ id: keysetId, unit: 'sat', active: true, keypairs: { '1': 'pubkey-1' } }],
+          };
+        },
+      };
+      const localWalletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              mint: {
+                async restore() {
+                  return { outputs: [{ B_, amount: 1, id: keysetId }], signatures: [] };
+                },
+              },
+              async checkProofsStates() {
+                throw new Error('proof states must not be checked for an unusable restore');
+              },
+            },
+          };
+        },
+      };
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        localWalletService as any,
+        localMintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await expect(
+        service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
+          unit: 'sat',
+          persistRecoveredProofs: false,
+        }),
+      ).rejects.toThrow(ProofValidationError);
+    });
   });
 });
