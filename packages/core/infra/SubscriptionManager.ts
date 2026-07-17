@@ -223,6 +223,26 @@ export class SubscriptionManager {
     this.openHandlerByMint.set(mintUrl, onOpen);
   }
 
+  private createUnsubscribeHandler<TPayload>(
+    active: ActiveSubscription<unknown>,
+    callback?: SubscriptionCallback<TPayload>,
+    ownsSubscription = false,
+  ): UnsubscribeHandler {
+    return async () => {
+      const current = this.subscriptions.get(active.subId);
+      if (!current) return;
+
+      if (callback) {
+        current.callbacks.delete(callback as SubscriptionCallback<unknown>);
+        if (current.callbacks.size > 0) return;
+      } else if (!ownsSubscription && current.callbacks.size > 0) {
+        return;
+      }
+
+      await this.unsubscribe(active.mintUrl, active.subId);
+    };
+  }
+
   async subscribe<TPayload = unknown>(
     mintUrl: string,
     kind: SubscriptionKind,
@@ -257,15 +277,7 @@ export class SubscriptionManager {
         }
         return {
           subId: existingSubId,
-          unsubscribe: async () => {
-            if (onNotification) {
-              this.removeCallback(existingSubId, onNotification);
-            }
-            // Only unsubscribe if no callbacks remain
-            if (existingSub.callbacks.size === 0) {
-              await this.unsubscribe(mintUrl, existingSubId);
-            }
-          },
+          unsubscribe: this.createUnsubscribeHandler(existingSub, onNotification),
         };
       }
     }
@@ -317,9 +329,7 @@ export class SubscriptionManager {
       });
       return {
         subId,
-        unsubscribe: async () => {
-          await this.unsubscribe(mintUrl, subId);
-        },
+        unsubscribe: this.createUnsubscribeHandler(active, onNotification, true),
       };
     }
 
@@ -341,9 +351,7 @@ export class SubscriptionManager {
 
     return {
       subId,
-      unsubscribe: async () => {
-        await this.unsubscribe(mintUrl, subId);
-      },
+      unsubscribe: this.createUnsubscribeHandler(active, onNotification, true),
     };
   }
 
