@@ -1467,29 +1467,54 @@ describe('initializeCoco', () => {
           meltSettlementProcessor: { disabled: true },
         },
       });
-      const operation = makePendingMintOperation('mint-op-paid', 'quote-paid');
-      await repositories.mintOperationRepository.create(operation);
-      await repositories.mintQuoteRepository.upsertMintQuote(
-        mintQuoteFromBolt11Response(operation.mintUrl, {
-          quote: operation.quoteId,
-          request: operation.request,
-          amount: operation.amount,
-          unit: operation.unit,
-          expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'PAID',
-        }),
-      );
+      const operations = [
+        makePendingMintOperation('mint-op-paid-a', 'quote-paid-a'),
+        makePendingMintOperation('mint-op-paid-b', 'quote-paid-b'),
+      ];
+      for (const operation of operations) {
+        await repositories.mintOperationRepository.create(operation);
+        await repositories.mintQuoteRepository.upsertMintQuote(
+          mintQuoteFromBolt11Response(operation.mintUrl, {
+            quote: operation.quoteId,
+            request: operation.request,
+            amount: operation.amount,
+            unit: operation.unit,
+            expiry: Math.floor(Date.now() / 1000) + 3600,
+            state: 'PAID',
+          }),
+        );
+      }
 
-      manager['mintService'].isTrustedMint = mock(async () => true);
+      let resolveSecondTrustStarted!: () => void;
+      const secondTrustStarted = new Promise<void>((resolve) => {
+        resolveSecondTrustStarted = resolve;
+      });
+      let releaseSecondTrust!: () => void;
+      const secondTrust = new Promise<void>((resolve) => {
+        releaseSecondTrust = resolve;
+      });
+      let trustChecks = 0;
+      manager['mintService'].isTrustedMint = mock(async () => {
+        trustChecks += 1;
+        if (trustChecks === 2) {
+          resolveSecondTrustStarted();
+          await secondTrust;
+        }
+        return true;
+      });
       const requeuedOperationIds: string[] = [];
       manager.on('mint-op:requeue', ({ operationId }) => {
         requeuedOperationIds.push(operationId);
       });
 
-      const result = await manager.requeuePaidMintQuotes();
+      const resultPromise = manager.requeuePaidMintQuotes();
+      await secondTrustStarted;
+      expect(requeuedOperationIds).toEqual([]);
+      releaseSecondTrust();
+      const result = await resultPromise;
 
-      expect(result.requeued).toEqual([operation.quoteId]);
-      expect(requeuedOperationIds).toEqual([operation.id]);
+      expect(result.requeued).toEqual(operations.map((operation) => operation.quoteId));
+      expect(requeuedOperationIds).toEqual(operations.map((operation) => operation.id));
     });
   });
 

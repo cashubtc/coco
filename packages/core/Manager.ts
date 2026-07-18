@@ -761,24 +761,33 @@ export class Manager {
     return this.logger.child ? this.logger.child({ module: moduleName }) : this.logger;
   }
 
+  /**
+   * Requeues pending operations backed by paid quotes, optionally for one mint.
+   *
+   * Eligibility is resolved for the complete pending set before events are emitted so automatic
+   * processing can consider the eligible operations in one cohort.
+   */
   async requeuePaidMintQuotes(mintUrl?: string): Promise<{ requeued: string[] }> {
     const requeued: string[] = [];
     const pendingOperations = await this.mintOperationService.getPendingOperations();
 
-    for (const operation of pendingOperations) {
-      if (mintUrl && operation.mintUrl !== mintUrl) continue;
+    const eligibleOperations = await Promise.all(
+      pendingOperations.map(async (operation) => {
+        if (mintUrl && operation.mintUrl !== mintUrl) return null;
 
-      const quote = await this.quoteLifecycle.getMintQuote(
-        operation.mintUrl,
-        operation.method,
-        operation.quoteId,
-      );
-      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
+        const quote = await this.quoteLifecycle.getMintQuote(
+          operation.mintUrl,
+          operation.method,
+          operation.quoteId,
+        );
+        if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') return null;
 
-      const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
-      if (!trusted) {
-        continue;
-      }
+        return (await this.mintService.isTrustedMint(operation.mintUrl)) ? operation : null;
+      }),
+    );
+
+    for (const operation of eligibleOperations) {
+      if (!operation) continue;
 
       await this.eventBus.emit('mint-op:requeue', {
         mintUrl: operation.mintUrl,
