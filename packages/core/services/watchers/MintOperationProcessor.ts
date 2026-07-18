@@ -1,7 +1,8 @@
 import type { EventBus, CoreEvents } from '@core/events';
-import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
-import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error';
+import type { Logger } from '../../logging/Logger.ts';
+import { MintOperationError } from '../../models/Error';
+import { isRetryableMintIssuanceError } from '../../models/MintIssuanceRetryError.ts';
 import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -498,7 +499,7 @@ export class MintOperationProcessor {
           operations.wasIssuanceSelectedInLastTurn(item.operationId);
         if (error !== undefined && wasSelected) {
           operations.unscheduleIssuance?.(item.operationId);
-          if (!this.scheduleNetworkRetry(item, error)) {
+          if (!this.scheduleRetry(item, error)) {
             removable.add(this.queueItemKey(item));
           }
         } else if (!remainsScheduled) {
@@ -517,7 +518,7 @@ export class MintOperationProcessor {
       const canRetry =
         typeof operations.canRetryIssuance === 'function' &&
         (await operations.canRetryIssuance(item.operationId));
-      if (!canRetry || !this.scheduleNetworkRetry(item, error)) {
+      if (!canRetry || !this.scheduleRetry(item, error)) {
         removable.add(this.queueItemKey(item));
       }
     }
@@ -551,20 +552,20 @@ export class MintOperationProcessor {
       return;
     }
 
-    if (this.isNetworkError(err)) {
-      if (this.scheduleNetworkRetry(item, err)) this.queue.push(item);
+    if (this.isRetryableError(err)) {
+      if (this.scheduleRetry(item, err)) this.queue.push(item);
       return;
     }
 
     this.logger?.error('Failed to process mint operation', { mintUrl, operationId, err });
   }
 
-  private scheduleNetworkRetry(item: QueueItem, err: unknown): boolean {
-    if (!this.isNetworkError(err)) return false;
+  private scheduleRetry(item: QueueItem, err: unknown): boolean {
+    if (!this.isRetryableError(err)) return false;
 
     item.retryCount++;
     if (item.retryCount > this.maxRetries) {
-      this.logger?.error('Max retries exceeded for network error', {
+      this.logger?.error('Max retries exceeded for retryable mint operation error', {
         mintUrl: item.mintUrl,
         operationId: item.operationId,
         maxRetries: this.maxRetries,
@@ -574,7 +575,7 @@ export class MintOperationProcessor {
 
     const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);
     item.nextRetryAt = Date.now() + delay;
-    this.logger?.warn('Network error, will retry', {
+    this.logger?.warn('Retryable mint operation error, will retry', {
       mintUrl: item.mintUrl,
       operationId: item.operationId,
       attempt: item.retryCount,
@@ -584,11 +585,9 @@ export class MintOperationProcessor {
     return true;
   }
 
-  private isNetworkError(err: unknown): boolean {
+  private isRetryableError(err: unknown): boolean {
     return (
-      err instanceof NetworkError ||
-      (err instanceof HttpResponseError && (err.status === 429 || err.status >= 500)) ||
-      (err instanceof Error && err.message.includes('network'))
+      isRetryableMintIssuanceError(err) || (err instanceof Error && err.message.includes('network'))
     );
   }
 }

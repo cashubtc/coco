@@ -4,7 +4,12 @@ import { MintOperationProcessor } from '../../services/watchers/MintOperationPro
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
-import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error';
+import {
+  HttpResponseError,
+  MintFetchError,
+  MintOperationError,
+  NetworkError,
+} from '../../models/Error';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
@@ -851,6 +856,49 @@ describe('MintOperationProcessor', () => {
       expect(secondRetryDelay).toBeGreaterThan(TEST_RETRY_DELAY * 2 - 20);
       expect(secondRetryDelay).toBeLessThan(TEST_RETRY_DELAY * 2 + 100);
     }
+  });
+
+  it('retries transport failures wrapped by mint refresh errors', async () => {
+    const finalize = mock(async (operationId: string) => {
+      finalizeCalls.push(operationId);
+    });
+    finalize.mockImplementationOnce(async () => {
+      throw new MintFetchError(
+        'https://mint.test',
+        undefined,
+        new HttpResponseError('mint info unavailable', 503),
+      );
+    });
+    mockMintOperationService = {
+      finalize,
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetries: 2,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-wrapped-network',
+      operation: {
+        id: 'mint-op-wrapped-network',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as CoreEvents['mint-op:requeue']['operation'],
+    });
+    await processor.waitForCompletion();
+
+    expect(finalize).toHaveBeenCalledTimes(2);
+    expect(finalizeCalls).toEqual(['mint-op-wrapped-network']);
   });
 
   it('does not retry mint operation errors', async () => {

@@ -6,12 +6,11 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerP
 import type { MintQuotePollingChecker } from '../../infra/MintQuotePollingChecker.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { Logger } from '../../logging/Logger.ts';
+import { HttpResponseError, MintOperationError, UnknownMintError } from '../../models/Error.ts';
 import {
-  HttpResponseError,
-  MintOperationError,
-  NetworkError,
-  UnknownMintError,
-} from '../../models/Error.ts';
+  isRetryableMintIssuanceError,
+  MintIssuanceRetryError,
+} from '../../models/MintIssuanceRetryError.ts';
 import {
   getMintQuoteAmount,
   getMintQuoteRemoteState,
@@ -97,13 +96,6 @@ const CONFIRMED_BATCH_REJECTION_KINDS: ConfirmedBatchRejectionKind[] = [
   'incompatibility',
   'validation',
 ];
-
-function isRetryableTransportError(error: unknown): boolean {
-  return (
-    error instanceof NetworkError ||
-    (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
-  );
-}
 
 interface ConfirmedBatchRejectionProgress {
   kind: ConfirmedBatchRejectionKind;
@@ -313,8 +305,15 @@ export class MintIssuanceCoordinator {
           deferredRejectedOperationId ??= operationId;
           continue;
         }
-        this.lastProcessorSelection.add(operationId);
-        this.unschedule(operationId);
+        const attemptMemberIds = scheduled
+          .filter(
+            (candidate) =>
+              candidate.operation?.state === 'executing' &&
+              candidate.operation.attemptId === operation.attemptId,
+          )
+          .map((candidate) => candidate.operationId);
+        this.lastProcessorSelection = new Set(attemptMemberIds);
+        for (const attemptMemberId of attemptMemberIds) this.unschedule(attemptMemberId);
         await this.coordinate(operationId);
         return;
       }
@@ -1358,25 +1357,23 @@ export class MintIssuanceCoordinator {
         : await this.markRecovering(attempt, new Error('Mint Batch recovery started'));
     if (isTerminalAttempt(recovering) || !this.mintQuotePollingChecker) return;
 
-    let result;
+    let observedQuoteIds: Set<string>;
     try {
-      result = await this.mintQuotePollingChecker.checkMintQuotesForPolling(
-        recovering.mintUrl,
-        'bolt11',
-        recovering.quoteIds,
-      );
+      observedQuoteIds = await this.collectBatchRecoveryObservations(recovering);
     } catch (error) {
-      await this.markRecovering(recovering, error);
-      if (isRetryableTransportError(error)) throw error;
-      return;
+      await this.throwRecoverableBatchError(
+        recovering,
+        this.toRetryableRecoveryError(error, `Mint Batch ${recovering.id} quote check failed`),
+      );
     }
 
-    const observedQuoteIds = new Set(
-      result.observations
-        .map((observation) => observation.quote)
-        .filter((quoteId) => recovering.quoteIds.includes(quoteId)),
-    );
-    if (recovering.quoteIds.some((quoteId) => !observedQuoteIds.has(quoteId))) return;
+    const missingQuoteIds = recovering.quoteIds.filter((quoteId) => !observedQuoteIds.has(quoteId));
+    if (missingQuoteIds.length > 0) {
+      const error = new MintIssuanceRetryError(
+        `Mint Batch ${recovering.id} is missing attributable quote observations for ${missingQuoteIds.join(', ')}`,
+      );
+      await this.throwRecoverableBatchError(recovering, error);
+    }
 
     const quotes = await Promise.all(
       recovering.quoteIds.map((quoteId) =>
@@ -1386,7 +1383,12 @@ export class MintIssuanceCoordinator {
     const bolt11Quotes = quotes.filter(
       (quote): quote is MintQuote<'bolt11'> => quote?.method === 'bolt11',
     );
-    if (bolt11Quotes.length !== recovering.quoteIds.length) return;
+    if (bolt11Quotes.length !== recovering.quoteIds.length) {
+      const error = new MintIssuanceRetryError(
+        `Mint Batch ${recovering.id} is missing canonical quote state after recovery checks`,
+      );
+      await this.throwRecoverableBatchError(recovering, error);
+    }
     const states = bolt11Quotes.map((quote) => getMintQuoteRemoteState(quote));
 
     if (states.every((state) => state === 'PAID')) {
@@ -1398,6 +1400,39 @@ export class MintIssuanceCoordinator {
       return;
     }
     await this.reconcileMixedBatchRecovery({ ...context, attempt: recovering }, bolt11Quotes);
+  }
+
+  private async collectBatchRecoveryObservations(
+    attempt: MintIssuanceAttempt,
+  ): Promise<Set<string>> {
+    const checker = this.mintQuotePollingChecker;
+    if (!checker) throw new Error('Mint quote polling checker is unavailable');
+    const observedQuoteIds = new Set<string>();
+    let remainingQuoteIds = [...attempt.quoteIds];
+    while (remainingQuoteIds.length > 0) {
+      const result = await checker.checkMintQuotesForPolling(
+        attempt.mintUrl,
+        'bolt11',
+        remainingQuoteIds,
+      );
+      const attemptedQuoteIds = result.attemptedQuoteIds.filter((quoteId) =>
+        remainingQuoteIds.includes(quoteId),
+      );
+      if (attemptedQuoteIds.length === 0) {
+        throw new MintIssuanceRetryError(
+          `Mint Batch ${attempt.id} quote recovery made no progress`,
+        );
+      }
+      for (const observation of result.observations) {
+        if (attempt.quoteIds.includes(observation.quote)) {
+          observedQuoteIds.add(observation.quote);
+        }
+      }
+      if (result.partialFailure) throw result.partialFailure.error;
+      const attempted = new Set(attemptedQuoteIds);
+      remainingQuoteIds = remainingQuoteIds.filter((quoteId) => !attempted.has(quoteId));
+    }
+    return observedQuoteIds;
   }
 
   private async recoverIssuedBatchAttempt(context: BatchRecoveryContext): Promise<void> {
@@ -1414,9 +1449,13 @@ export class MintIssuanceCoordinator {
         },
       );
     } catch (error) {
-      await this.markRecovering(attempt, error);
-      if (isRetryableTransportError(error)) throw error;
-      return;
+      return this.throwRecoverableBatchError(
+        attempt,
+        this.toRetryableRecoveryError(
+          error,
+          `Mint Batch ${attempt.id} exact-output recovery failed`,
+        ),
+      );
     }
 
     const validProofs = this.getValidRecoveredProofs(attempt, recovered);
@@ -1436,11 +1475,10 @@ export class MintIssuanceCoordinator {
       return;
     }
     if (validProofs.length === 0) {
-      await this.markRecovering(
-        attempt,
-        new Error(`Mint Batch ${attempt.id} returned unusable recovered proofs`),
+      const error = new MintIssuanceRetryError(
+        `Mint Batch ${attempt.id} returned unusable recovered proofs`,
       );
-      return;
+      await this.throwRecoverableBatchError(attempt, error);
     }
     await this.failBatchRecovery(
       context,
@@ -1450,6 +1488,20 @@ export class MintIssuanceCoordinator {
       },
       validProofs,
     );
+  }
+
+  private toRetryableRecoveryError(error: unknown, context: string): Error {
+    if (isRetryableMintIssuanceError(error) && error instanceof Error) return error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return new MintIssuanceRetryError(`${context}: ${detail}`, error);
+  }
+
+  private async throwRecoverableBatchError(
+    attempt: MintIssuanceAttempt,
+    error: Error,
+  ): Promise<never> {
+    await this.markRecovering(attempt, error);
+    throw error;
   }
 
   private getValidRecoveredProofs(attempt: MintIssuanceAttempt, proofs: Proof[]): Proof[] {

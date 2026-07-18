@@ -7,6 +7,7 @@ import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
 import {
   HttpResponseError,
+  MintFetchError,
   MintOperationError,
   NetworkError,
   ProofValidationError,
@@ -55,6 +56,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
   let walletBatchMint: Mock<(preview: BatchMintPreview) => Promise<Proof[]>>;
   let createMintOutputsAtCounter: Mock<ProofService['createMintOutputsAtCounter']>;
   let getMintInfo: Mock<MintService['getMintInfo']>;
+  let checkMintQuote: Mock<MintAdapter['checkMintQuote']>;
   let checkMintQuoteBatch: Mock<MintAdapter['checkMintQuoteBatch']>;
   let nut29BatchLimitCache: Nut29BatchLimitCache;
   let coordinator: MintIssuanceCoordinator;
@@ -351,15 +353,17 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         }),
       ),
     );
+    checkMintQuote = mock(async (_mintUrl, method, requestedQuoteId) => {
+      const quote = await repositories.mintQuoteRepository.getMintQuote(
+        mintUrl,
+        method,
+        requestedQuoteId,
+      );
+      if (!quote) throw new Error(`Missing test quote ${requestedQuoteId}`);
+      return mintQuoteToMethodSnapshot(quote);
+    });
     mintAdapter = {
-      checkMintQuote: mock(async () => ({
-        quote: quoteId,
-        request: 'lnbc1test',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry: Math.floor(Date.now() / 1000) + 3600,
-        state: 'PAID' as const,
-      })),
+      checkMintQuote,
       checkMintQuoteBatch,
     } as unknown as MintAdapter;
 
@@ -1188,9 +1192,10 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       return quote ? [mintQuoteToMethodSnapshot(quote)] : [];
     });
 
-    const result = await coordinator.coordinate(operationIds[1]);
+    await expect(coordinator.coordinate(operationIds[1])).rejects.toThrow(
+      'missing attributable quote observations',
+    );
 
-    expect(result.state).toBe('executing');
     expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
       'recovering',
     );
@@ -1202,6 +1207,70 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       ),
     ).toEqual(['executing', 'executing']);
     expect(walletBatchMint).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a partial quote-check transport failure after persisting healthy observations', async () => {
+    const { attempt, operationIds } = await createAmbiguousBatch();
+    const networkFailure = new NetworkError('later isolation branch disconnected');
+    checkMintQuoteBatch.mockImplementation(async (_mintUrl, method, quoteIds) => {
+      if (quoteIds.length > 1) {
+        throw new MintOperationError(11000, 'atomic validation rejection');
+      }
+      if (quoteIds[0] === 'quote-ambiguous-peer') throw networkFailure;
+      const quote = await repositories.mintQuoteRepository.getMintQuote(
+        mintUrl,
+        method,
+        quoteIds[0]!,
+      );
+      return quote ? [mintQuoteToMethodSnapshot(quote)] : [];
+    });
+
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toBe(networkFailure);
+
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'recovering',
+    );
+    expect(checkMintQuoteBatch.mock.calls.map((call) => call[2])).toEqual([
+      [quoteId, 'quote-ambiguous-peer'],
+      [quoteId],
+      ['quote-ambiguous-peer'],
+      ['quote-ambiguous-peer'],
+      ['quote-ambiguous-peer'],
+    ]);
+  });
+
+  it('checks every member when batch recovery falls back to single quote checks', async () => {
+    const { operationIds, recoveredProof } = await createAmbiguousBatch();
+    getMintInfo.mockResolvedValue({
+      ...compatibleMintInfo(),
+      nuts: { ...compatibleMintInfo().nuts, '29': undefined },
+    } as MintInfo);
+    walletBatchMint.mockResolvedValueOnce([recoveredProof]);
+
+    const result = await coordinator.coordinate(operationIds[0]);
+
+    expect(result.state).toBe('finalized');
+    expect(checkMintQuote).toHaveBeenCalledTimes(2);
+    expect(checkMintQuote.mock.calls.map((call) => call[2])).toEqual([
+      quoteId,
+      'quote-ambiguous-peer',
+    ]);
+    expect(checkMintQuoteBatch).not.toHaveBeenCalled();
+  });
+
+  it('selects every ready member of a recovering attempt for the same retry backoff', async () => {
+    const { operationIds } = await createAmbiguousBatch();
+    const failure = new NetworkError('batch recovery unavailable');
+    checkMintQuoteBatch.mockRejectedValue(failure);
+    for (const id of operationIds) coordinator.schedule(id);
+
+    await expect(coordinator.coordinate()).rejects.toBe(failure);
+
+    expect(operationIds.map((id) => coordinator.wasSelectedInLastProcessorTurn(id))).toEqual([
+      true,
+      true,
+    ]);
+    expect(operationIds.map((id) => coordinator.isScheduled(id))).toEqual([false, false]);
   });
 
   it('propagates retryable quote-check failures after preserving batch recovery state', async () => {
@@ -1370,9 +1439,10 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       error: new Error('malformed restore response'),
     });
 
-    const result = await coordinator.coordinate(operationIds[0]);
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toThrow(
+      'malformed restore response',
+    );
 
-    expect(result.state).toBe('executing');
     expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
       'recovering',
     );
@@ -1384,6 +1454,51 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       ),
     ).toEqual(['executing', 'executing']);
     expect(scripted.restoreRequests).toHaveLength(1);
+  });
+
+  it('backs off a non-empty restore result that matches none of the exact outputs', async () => {
+    const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
+    await markQuotesIssued(quoteIds);
+    scriptExactOutputRestore({
+      kind: 'return',
+      value: [
+        {
+          id: keysetId,
+          amount: Amount.from(20),
+          secret: 'unattributable-secret',
+          C: 'C_unattributable-secret',
+        },
+      ],
+    });
+
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toThrow(
+      'returned unusable recovered proofs',
+    );
+
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'recovering',
+    );
+    expect(
+      await Promise.all(
+        operationIds.map(
+          async (id) => (await repositories.mintOperationRepository.getById(id))?.state,
+        ),
+      ),
+    ).toEqual(['executing', 'executing']);
+  });
+
+  it('propagates wrapped retryable mint refresh failures before exact-output restoration', async () => {
+    const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
+    await markQuotesIssued(quoteIds);
+    const networkFailure = new NetworkError('mint info unavailable');
+    const wrappedFailure = new MintFetchError(mintUrl, undefined, networkFailure);
+    scriptExactOutputRestore({ kind: 'throw', error: wrappedFailure });
+
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toBe(wrappedFailure);
+
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'recovering',
+    );
   });
 
   it('propagates retryable restore failures after preserving batch recovery state', async () => {
@@ -1477,7 +1592,9 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
     service = createService();
     await expect(service.finalize(operationId)).rejects.toBe(networkFailure);
-    await expect(service.finalize(peerOperationId)).resolves.toMatchObject({ state: 'executing' });
+    await expect(service.finalize(peerOperationId)).rejects.toThrow(
+      'scripted malformed quote-check body',
+    );
     await expect(service.finalize(operationId)).resolves.toMatchObject({ state: 'finalized' });
 
     expect(attempt?.state).toBe('recovering');
