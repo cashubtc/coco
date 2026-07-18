@@ -1141,6 +1141,9 @@ export class ProofService {
     if (!Array.isArray(proofStates) || proofStates.length !== restoredProofs.length) {
       throw new ProofValidationError('Mint proof-state response is incomplete during recovery');
     }
+    if (proofStates.some((state) => state?.state !== 'UNSPENT' && state?.state !== 'SPENT')) {
+      throw new ProofValidationError('Mint proof-state response is indeterminate during recovery');
+    }
     const unspentProofs = restoredProofs.filter((_, index) => {
       const state = proofStates[index];
       return state && state.state === 'UNSPENT';

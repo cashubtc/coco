@@ -289,6 +289,10 @@ describe('MintOperationProcessor', () => {
     });
     coordinateScheduledIssuance.mockImplementationOnce(async () => {
       attemptTimes.push(Date.now());
+      throw new NetworkError('recovery quote check disconnected before observations');
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {
+      attemptTimes.push(Date.now());
       await bus.emit('mint-quote:updated', {
         mintUrl: 'https://mint.test',
         method: 'bolt11',
@@ -360,8 +364,8 @@ describe('MintOperationProcessor', () => {
 
     await processor.waitForCompletion();
 
-    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(2);
-    expect(attemptTimes[1]! - attemptTimes[0]!).toBeGreaterThanOrEqual(TEST_RETRY_DELAY - 20);
+    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(3);
+    expect(attemptTimes[2]! - attemptTimes[1]!).toBeGreaterThanOrEqual(TEST_RETRY_DELAY * 2 - 20);
   });
 
   it('drains a pending BOLT11 item that the coordinator declines as ineligible', async () => {

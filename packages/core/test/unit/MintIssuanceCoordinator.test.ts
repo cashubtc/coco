@@ -214,9 +214,9 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
   function scriptExactOutputRestore(...steps: ScriptedStep<Proof[]>[]) {
     const scripted = new ScriptedMintIssuanceTransport([], [], steps);
-    (proofService.recoverProofsFromOutputData as Mock<any>).mockImplementation(
-      scripted.restoreExactOutputs,
-    );
+    (
+      proofService.recoverProofsFromOutputData as Mock<ProofService['recoverProofsFromOutputData']>
+    ).mockImplementation(scripted.restoreExactOutputs);
     return scripted;
   }
 

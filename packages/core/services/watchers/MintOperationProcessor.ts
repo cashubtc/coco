@@ -475,7 +475,9 @@ export class MintOperationProcessor {
     try {
       await this.mintOperations.coordinateScheduledIssuance();
     } catch (error) {
-      await this.reconcileReadyBolt11Items(this.getSelectedReadyBolt11Items(ready, now), error);
+      const selectedReady = this.getSelectedReadyBolt11Items(ready, now);
+      this.alignSelectedRetryCounts(selectedReady);
+      await this.reconcileReadyBolt11Items(selectedReady, error);
       throw error;
     }
     await this.reconcileReadyBolt11Items(ready);
@@ -501,6 +503,17 @@ export class MintOperationProcessor {
       included.add(key);
     }
     return selected;
+  }
+
+  private alignSelectedRetryCounts(items: QueueItem[]): void {
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    if (typeof operations.wasIssuanceSelectedInLastTurn !== 'function') return;
+
+    const selected = items.filter((item) =>
+      operations.wasIssuanceSelectedInLastTurn?.(item.operationId),
+    );
+    const retryCount = Math.max(0, ...selected.map((item) => item.retryCount));
+    for (const item of selected) item.retryCount = retryCount;
   }
 
   private async reconcileReadyBolt11Items(ready: QueueItem[], error?: unknown): Promise<void> {
