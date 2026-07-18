@@ -4,7 +4,12 @@ import { MintOperationProcessor } from '../../services/watchers/MintOperationPro
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
-import { MintOperationError, NetworkError } from '../../models/Error';
+import {
+  HttpResponseError,
+  MintFetchError,
+  MintOperationError,
+  NetworkError,
+} from '../../models/Error';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
@@ -270,6 +275,97 @@ describe('MintOperationProcessor', () => {
       }
       await processor.stop();
     }
+  });
+
+  it('backs off an attempt peer enqueued while recovery is failing', async () => {
+    const states = new Map<string, 'executing' | 'finalized'>([
+      ['mint-op-recovery', 'executing'],
+      ['mint-op-recovery-peer', 'executing'],
+    ]);
+    const attemptTimes: number[] = [];
+    const coordinateScheduledIssuance = mock(async () => {
+      attemptTimes.push(Date.now());
+      for (const operationId of states.keys()) states.set(operationId, 'finalized');
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {
+      attemptTimes.push(Date.now());
+      throw new NetworkError('recovery quote check disconnected before observations');
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {
+      attemptTimes.push(Date.now());
+      await bus.emit('mint-quote:updated', {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'quote-recovery-peer',
+        quote: mintQuoteFromBolt11Response('https://mint.test', {
+          quote: 'quote-recovery-peer',
+          request: 'lnbc1recoverypeer',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+        }),
+      });
+      throw new NetworkError('recovery quote check disconnected');
+    });
+    mockMintOperationService = {
+      async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
+        const operationId = quoteId.replace('quote', 'mint-op');
+        return [
+          {
+            id: operationId,
+            state: states.get(operationId),
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+        ];
+      },
+      scheduleIssuance() {},
+      coordinateScheduledIssuance,
+      async getOperation(operationId: string) {
+        return {
+          id: operationId,
+          state: states.get(operationId),
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+        };
+      },
+      async canRetryIssuance() {
+        return true;
+      },
+      wasIssuanceSelectedInLastTurn() {
+        return true;
+      },
+      async claimPendingMintQuotes() {
+        return [];
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-recovery',
+      operation: {
+        id: 'mint-op-recovery',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as CoreEvents['mint-op:requeue']['operation'],
+    });
+
+    await processor.waitForCompletion();
+
+    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(3);
+    expect(attemptTimes[2]! - attemptTimes[1]!).toBeGreaterThanOrEqual(TEST_RETRY_DELAY * 2 - 20);
   });
 
   it('drains a pending BOLT11 item that the coordinator declines as ineligible', async () => {
@@ -789,7 +885,7 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual(['mint-op-5']);
   });
 
-  it('retries network errors with exponential backoff', async () => {
+  it('retries transient transport errors with exponential backoff', async () => {
     let attemptCount = 0;
     const attemptTimes: number[] = [];
 
@@ -797,9 +893,10 @@ describe('MintOperationProcessor', () => {
       async finalize(operationId: string) {
         attemptCount++;
         attemptTimes.push(Date.now());
-        if (attemptCount <= 2) {
+        if (attemptCount === 1) {
           throw new NetworkError(`network failure for ${operationId}`);
         }
+        if (attemptCount === 2) throw new HttpResponseError('mint unavailable', 503);
         finalizeCalls.push(operationId);
       },
     } as unknown as MintOperationService;
@@ -850,6 +947,49 @@ describe('MintOperationProcessor', () => {
       expect(secondRetryDelay).toBeGreaterThan(TEST_RETRY_DELAY * 2 - 20);
       expect(secondRetryDelay).toBeLessThan(TEST_RETRY_DELAY * 2 + 100);
     }
+  });
+
+  it('retries transport failures wrapped by mint refresh errors', async () => {
+    const finalize = mock(async (operationId: string) => {
+      finalizeCalls.push(operationId);
+    });
+    finalize.mockImplementationOnce(async () => {
+      throw new MintFetchError(
+        'https://mint.test',
+        undefined,
+        new HttpResponseError('mint info unavailable', 503),
+      );
+    });
+    mockMintOperationService = {
+      finalize,
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetries: 2,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-wrapped-network',
+      operation: {
+        id: 'mint-op-wrapped-network',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as CoreEvents['mint-op:requeue']['operation'],
+    });
+    await processor.waitForCompletion();
+
+    expect(finalize).toHaveBeenCalledTimes(2);
+    expect(finalizeCalls).toEqual(['mint-op-wrapped-network']);
   });
 
   it('does not retry mint operation errors', async () => {

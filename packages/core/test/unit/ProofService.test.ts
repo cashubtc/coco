@@ -6,7 +6,10 @@ import { ProofService } from '../../services/ProofService.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
 import { MemoryCounterRepository } from '../../repositories/memory/MemoryCounterRepository.ts';
 import { CounterService } from '../../services/CounterService.ts';
+import type { KeyRingService } from '../../services/KeyRingService.ts';
+import type { MintService } from '../../services/MintService.ts';
 import { SeedService } from '../../services/SeedService.ts';
+import type { WalletService } from '../../services/WalletService.ts';
 import {
   ProofOperationError,
   ProofValidationError,
@@ -1561,6 +1564,70 @@ describe('ProofService', () => {
       expect(recovered[0]?.C).not.toBe(blindedC_);
     });
 
+    it('rejects indeterminate proof states during exact-output recovery', async () => {
+      const B_ = 'indeterminate-proof-state-output';
+      const serializedOutputData: SerializedOutputData = {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: '1', id: keysetId, B_ },
+            blindingFactor: 'deadbeef',
+            secret: Buffer.from('test-secret').toString('hex'),
+          },
+        ],
+      };
+      OutputData.prototype.toProof = mock(() => ({
+        id: keysetId,
+        amount: Amount.from(1),
+        secret: 'test-secret',
+        C: 'UNBLINDED_C',
+      })) as unknown as typeof OutputData.prototype.toProof;
+      const localMintService = {
+        async ensureUpdatedMint() {
+          return {
+            mint: {},
+            keysets: [{ id: keysetId, unit: 'sat', active: true, keypairs: { '1': 'pubkey-1' } }],
+          };
+        },
+      };
+      const localWalletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              mint: {
+                async restore() {
+                  return {
+                    outputs: [{ B_, amount: 1, id: keysetId }],
+                    signatures: [{ B_, id: keysetId, amount: Amount.from(1), C_: 'BLINDED_C_' }],
+                  };
+                },
+              },
+              async checkProofsStates() {
+                return [{ state: 'PENDING' }];
+              },
+            },
+          };
+        },
+      };
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        localWalletService as unknown as WalletService,
+        localMintService as unknown as MintService,
+        keyRingService as unknown as KeyRingService,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await expect(
+        service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
+          unit: 'sat',
+          persistRecoveredProofs: false,
+        }),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
     it('rejects restored signatures from a different-unit keyset', async () => {
       const B_ = 'mock_blinded_point_B_';
       const serializedOutputData: SerializedOutputData = {
@@ -1620,9 +1687,9 @@ describe('ProofService', () => {
       const service = new ProofService(
         counterService,
         proofRepo,
-        localWalletService as any,
-        localMintService as any,
-        keyRingService as any,
+        localWalletService as unknown as WalletService,
+        localMintService as unknown as MintService,
+        keyRingService as unknown as KeyRingService,
         seedService,
         undefined,
         bus,
@@ -1635,6 +1702,61 @@ describe('ProofService', () => {
         }),
       ).rejects.toThrow(UnitMismatchError);
       expect(toProof).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unusable restore response instead of treating it as empty recovery', async () => {
+      const B_ = 'unpaired-blinded-output';
+      const serializedOutputData: SerializedOutputData = {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: '1', id: keysetId, B_ },
+            blindingFactor: 'deadbeef',
+            secret: Buffer.from('test-secret').toString('hex'),
+          },
+        ],
+      };
+      const localMintService = {
+        async ensureUpdatedMint() {
+          return {
+            mint: {},
+            keysets: [{ id: keysetId, unit: 'sat', active: true, keypairs: { '1': 'pubkey-1' } }],
+          };
+        },
+      };
+      const localWalletService = {
+        async getWalletWithActiveKeysetId() {
+          return {
+            wallet: {
+              mint: {
+                async restore() {
+                  return { outputs: [{ B_, amount: 1, id: keysetId }], signatures: [] };
+                },
+              },
+              async checkProofsStates() {
+                throw new Error('proof states must not be checked for an unusable restore');
+              },
+            },
+          };
+        },
+      };
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        localWalletService as unknown as WalletService,
+        localMintService as unknown as MintService,
+        keyRingService as unknown as KeyRingService,
+        seedService,
+        undefined,
+        bus,
+      );
+
+      await expect(
+        service.recoverProofsFromOutputData(mintUrl, serializedOutputData, {
+          unit: 'sat',
+          persistRecoveredProofs: false,
+        }),
+      ).rejects.toThrow(ProofValidationError);
     });
   });
 });
