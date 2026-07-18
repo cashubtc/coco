@@ -1386,6 +1386,33 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(scripted.restoreRequests).toHaveLength(1);
   });
 
+  it('propagates retryable restore failures after preserving batch recovery state', async () => {
+    const { attempt, operationIds, quoteIds } = await createAmbiguousBatch();
+    await markQuotesIssued(quoteIds);
+    const networkFailure = new NetworkError('restore disconnected');
+    const serverFailure = new HttpResponseError('proof-state check unavailable', 503);
+    const scripted = scriptExactOutputRestore(
+      { kind: 'throw', error: networkFailure },
+      { kind: 'throw', error: serverFailure },
+    );
+
+    await expect(coordinator.coordinate(operationIds[0])).rejects.toBe(networkFailure);
+    await expect(coordinator.coordinate(operationIds[1])).rejects.toBe(serverFailure);
+
+    expect((await repositories.mintIssuanceAttemptRepository.getById(attempt.id))?.state).toBe(
+      'recovering',
+    );
+    expect(
+      await Promise.all(
+        operationIds.map(
+          async (id) => (await repositories.mintOperationRepository.getById(id))?.state,
+        ),
+      ),
+    ).toEqual(['executing', 'executing']);
+    await expect(service.canRetryIssuance(operationIds[0])).resolves.toBe(true);
+    expect(scripted.restoreRequests).toHaveLength(2);
+  });
+
   it('recovers deterministically across malformed submission and quote-check transport faults', async () => {
     const peerQuoteId = 'quote-scripted-peer';
     const peerOperationId = 'operation-scripted-peer';

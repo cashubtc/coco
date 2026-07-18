@@ -98,6 +98,13 @@ const CONFIRMED_BATCH_REJECTION_KINDS: ConfirmedBatchRejectionKind[] = [
   'validation',
 ];
 
+function isRetryableTransportError(error: unknown): boolean {
+  return (
+    error instanceof NetworkError ||
+    (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
+  );
+}
+
 interface ConfirmedBatchRejectionProgress {
   kind: ConfirmedBatchRejectionKind;
   observedQuoteIds: string[];
@@ -1360,12 +1367,7 @@ export class MintIssuanceCoordinator {
       );
     } catch (error) {
       await this.markRecovering(recovering, error);
-      if (
-        error instanceof NetworkError ||
-        (error instanceof HttpResponseError && (error.status === 429 || error.status >= 500))
-      ) {
-        throw error;
-      }
+      if (isRetryableTransportError(error)) throw error;
       return;
     }
 
@@ -1413,6 +1415,7 @@ export class MintIssuanceCoordinator {
       );
     } catch (error) {
       await this.markRecovering(attempt, error);
+      if (isRetryableTransportError(error)) throw error;
       return;
     }
 
