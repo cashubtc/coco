@@ -475,10 +475,32 @@ export class MintOperationProcessor {
     try {
       await this.mintOperations.coordinateScheduledIssuance();
     } catch (error) {
-      await this.reconcileReadyBolt11Items(ready, error);
+      await this.reconcileReadyBolt11Items(this.getSelectedReadyBolt11Items(ready, now), error);
       throw error;
     }
     await this.reconcileReadyBolt11Items(ready);
+  }
+
+  private getSelectedReadyBolt11Items(ready: QueueItem[], now: number): QueueItem[] {
+    const operations = this.mintOperations as Partial<MintOperationService>;
+    if (typeof operations.wasIssuanceSelectedInLastTurn !== 'function') return ready;
+
+    const selected = [...ready];
+    const included = new Set(ready.map((item) => this.queueItemKey(item)));
+    for (const item of this.queue) {
+      const key = this.queueItemKey(item);
+      if (
+        item.method !== 'bolt11' ||
+        item.nextRetryAt > now ||
+        included.has(key) ||
+        !operations.wasIssuanceSelectedInLastTurn(item.operationId)
+      ) {
+        continue;
+      }
+      selected.push(item);
+      included.add(key);
+    }
+    return selected;
   }
 
   private async reconcileReadyBolt11Items(ready: QueueItem[], error?: unknown): Promise<void> {

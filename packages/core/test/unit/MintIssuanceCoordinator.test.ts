@@ -1258,11 +1258,11 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(checkMintQuoteBatch).not.toHaveBeenCalled();
   });
 
-  it('selects every ready member of a recovering attempt for the same retry backoff', async () => {
+  it('selects late-enqueued members of a recovering attempt for the same retry backoff', async () => {
     const { operationIds } = await createAmbiguousBatch();
     const failure = new NetworkError('batch recovery unavailable');
     checkMintQuoteBatch.mockRejectedValue(failure);
-    for (const id of operationIds) coordinator.schedule(id);
+    coordinator.schedule(operationIds[0]!);
 
     await expect(coordinator.coordinate()).rejects.toBe(failure);
 

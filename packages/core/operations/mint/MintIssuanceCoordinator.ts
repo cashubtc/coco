@@ -305,15 +305,15 @@ export class MintIssuanceCoordinator {
           deferredRejectedOperationId ??= operationId;
           continue;
         }
-        const attemptMemberIds = scheduled
+        const scheduledAttemptMemberIds = scheduled
           .filter(
             (candidate) =>
               candidate.operation?.state === 'executing' &&
               candidate.operation.attemptId === operation.attemptId,
           )
           .map((candidate) => candidate.operationId);
-        this.lastProcessorSelection = new Set(attemptMemberIds);
-        for (const attemptMemberId of attemptMemberIds) this.unschedule(attemptMemberId);
+        this.lastProcessorSelection = new Set(attempt?.memberOperationIds ?? [operationId]);
+        for (const attemptMemberId of scheduledAttemptMemberIds) this.unschedule(attemptMemberId);
         await this.coordinate(operationId);
         return;
       }

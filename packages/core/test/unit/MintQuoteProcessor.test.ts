@@ -277,6 +277,93 @@ describe('MintOperationProcessor', () => {
     }
   });
 
+  it('backs off an attempt peer enqueued while recovery is failing', async () => {
+    const states = new Map<string, 'executing' | 'finalized'>([
+      ['mint-op-recovery', 'executing'],
+      ['mint-op-recovery-peer', 'executing'],
+    ]);
+    const attemptTimes: number[] = [];
+    const coordinateScheduledIssuance = mock(async () => {
+      attemptTimes.push(Date.now());
+      for (const operationId of states.keys()) states.set(operationId, 'finalized');
+    });
+    coordinateScheduledIssuance.mockImplementationOnce(async () => {
+      attemptTimes.push(Date.now());
+      await bus.emit('mint-quote:updated', {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'quote-recovery-peer',
+        quote: mintQuoteFromBolt11Response('https://mint.test', {
+          quote: 'quote-recovery-peer',
+          request: 'lnbc1recoverypeer',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+        }),
+      });
+      throw new NetworkError('recovery quote check disconnected');
+    });
+    mockMintOperationService = {
+      async getOperationsForQuote(_mintUrl: string, _method: string, quoteId: string) {
+        const operationId = quoteId.replace('quote', 'mint-op');
+        return [
+          {
+            id: operationId,
+            state: states.get(operationId),
+            mintUrl: 'https://mint.test',
+            method: 'bolt11',
+          },
+        ];
+      },
+      scheduleIssuance() {},
+      coordinateScheduledIssuance,
+      async getOperation(operationId: string) {
+        return {
+          id: operationId,
+          state: states.get(operationId),
+          mintUrl: 'https://mint.test',
+          method: 'bolt11',
+        };
+      },
+      async canRetryIssuance() {
+        return true;
+      },
+      wasIssuanceSelectedInLastTurn() {
+        return true;
+      },
+      async claimPendingMintQuotes() {
+        return [];
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-recovery',
+      operation: {
+        id: 'mint-op-recovery',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as CoreEvents['mint-op:requeue']['operation'],
+    });
+
+    await processor.waitForCompletion();
+
+    expect(coordinateScheduledIssuance).toHaveBeenCalledTimes(2);
+    expect(attemptTimes[1]! - attemptTimes[0]!).toBeGreaterThanOrEqual(TEST_RETRY_DELAY - 20);
+  });
+
   it('drains a pending BOLT11 item that the coordinator declines as ineligible', async () => {
     let markRepeated!: () => void;
     const repeated = new Promise<void>((resolve) => {
