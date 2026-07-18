@@ -135,6 +135,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
   async function createAmbiguousBatch(options?: {
     outputData?: ReturnType<typeof serializeOutputData>;
     recoveredProof?: Proof;
+    submissionError?: Error;
   }): Promise<{
     attempt: MintIssuanceAttempt;
     operationIds: [string, string];
@@ -172,11 +173,13 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       counterStart: 0,
       counterEnd: batchOutputData.keep.length + batchOutputData.send.length,
     });
-    walletBatchMint.mockRejectedValueOnce(new NetworkError('connection lost after submission'));
+    const submissionError =
+      options?.submissionError ?? new NetworkError('connection lost after submission');
+    walletBatchMint.mockRejectedValueOnce(submissionError);
 
     coordinator.schedule(operationId);
     coordinator.schedule(peerOperationId);
-    await expect(coordinator.coordinate()).rejects.toThrow('connection lost after submission');
+    await expect(coordinator.coordinate()).rejects.toThrow(submissionError.message);
 
     const attempt =
       await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
@@ -1163,6 +1166,31 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       'executing',
     );
     expect(await service.canRetryIssuance(operationId)).toBe(true);
+    expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
+    expect(createMintOutputsAtCounter).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps outputs-already-signed batch errors on exact-attempt recovery', async () => {
+    const {
+      attempt,
+      operationIds,
+      outputData: ambiguousOutputData,
+    } = await createAmbiguousBatch({
+      submissionError: new MintOperationError(11003, 'Outputs already signed'),
+    });
+
+    expect(attempt).toMatchObject({
+      state: 'recovering',
+      memberOperationIds: operationIds,
+      outputData: ambiguousOutputData,
+    });
+    expect(
+      await Promise.all(
+        operationIds.map(
+          async (id) => (await repositories.mintOperationRepository.getById(id))?.state,
+        ),
+      ),
+    ).toEqual(['executing', 'executing']);
     expect(mintAdapter.checkMintQuoteBatch).not.toHaveBeenCalled();
     expect(createMintOutputsAtCounter).toHaveBeenCalledTimes(1);
   });

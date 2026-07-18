@@ -3,6 +3,7 @@ import { MintOperationError as CashuMintOperationError } from '@cashu/cashu-ts';
 import type { HeadersInit } from 'bun';
 
 import { RequestRateLimiter } from '../../infra/RequestRateLimiter.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import {
   HttpResponseError,
   NetworkError,
@@ -94,6 +95,52 @@ describe('RequestRateLimiter', () => {
     });
 
     expect(result.amount).toBe(9007199254740993n);
+  });
+
+  it('does not log mint request or response bodies', async () => {
+    const logs: unknown[] = [];
+    const logger: Logger = {
+      error: (message, ...meta) => logs.push({ message, meta }),
+      warn: (message, ...meta) => logs.push({ message, meta }),
+      info: (message, ...meta) => logs.push({ message, meta }),
+      debug: (message, ...meta) => logs.push({ message, meta }),
+    };
+    let requestCount = 0;
+    // @ts-ignore
+    globalThis.fetch = async () => {
+      requestCount++;
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({ signatures: [{ C_: 'blind-signature-secret' }] }), {
+          status: 200,
+        });
+      }
+      return new Response(
+        JSON.stringify({ error: 'rejected-sensitive-output', detail: 'do not log me' }),
+        { status: 400 },
+      );
+    };
+
+    const limiter = new RequestRateLimiter({ logger });
+    await limiter.request({
+      endpoint: 'https://mint.test/v1/mint/bolt11',
+      method: 'POST',
+      requestBody: { outputs: [{ B_: 'blinded-output-secret' }] },
+    });
+    await expect(
+      limiter.request({
+        endpoint: 'https://mint.test/v1/mint/bolt11',
+        method: 'POST',
+        requestBody: { outputs: [{ B_: 'second-blinded-output-secret' }] },
+      }),
+    ).rejects.toBeInstanceOf(HttpResponseError);
+
+    const serializedLogs = JSON.stringify(logs);
+    expect(serializedLogs).toContain('https://mint.test/v1/mint/bolt11');
+    expect(serializedLogs).toContain('400');
+    expect(serializedLogs).not.toContain('blinded-output-secret');
+    expect(serializedLogs).not.toContain('blind-signature-secret');
+    expect(serializedLogs).not.toContain('rejected-sensitive-output');
+    expect(serializedLogs).not.toContain('do not log me');
   });
 
   it('throws HttpResponseError with status and message on non-OK responses', async () => {

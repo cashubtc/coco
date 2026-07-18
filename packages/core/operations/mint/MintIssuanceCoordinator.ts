@@ -87,6 +87,7 @@ interface ConfirmedBatchRejection {
 
 const CONFIRMED_BATCH_REJECTION_CODE = 'CONFIRMED_BATCH_REJECTION';
 const AUTHENTICATION_ERROR_CODE_MIN = 30_000;
+const OUTPUTS_ALREADY_SIGNED_ERROR_CODE = 11_003;
 const NUT29_BATCH_SIZE_ERROR_CODE = 11_017;
 const MINT_QUOTE_STATE_ERROR_CODES = new Set([20_001, 20_002]);
 const INCOMPATIBLE_ENDPOINT_STATUSES = new Set([404, 405, 501]);
@@ -965,7 +966,11 @@ export class MintIssuanceCoordinator {
     if (error instanceof HttpResponseError && INCOMPATIBLE_ENDPOINT_STATUSES.has(error.status)) {
       return { kind: 'incompatibility', error, httpStatus: error.status };
     }
-    if (!(error instanceof MintOperationError) || error.code >= AUTHENTICATION_ERROR_CODE_MIN) {
+    if (
+      !(error instanceof MintOperationError) ||
+      error.code === OUTPUTS_ALREADY_SIGNED_ERROR_CODE ||
+      error.code >= AUTHENTICATION_ERROR_CODE_MIN
+    ) {
       return null;
     }
     if (error.code === NUT29_BATCH_SIZE_ERROR_CODE) {
