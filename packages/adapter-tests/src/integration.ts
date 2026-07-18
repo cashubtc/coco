@@ -2158,6 +2158,103 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
     });
 
     describe('Watchers and Processors', () => {
+      it('should redeem one processor-selected NUT-29 Mint Batch without duplicate issuance', async () => {
+        const { repositories, dispose } = await createRepositories();
+        try {
+          mgr = await initializeCoco({
+            repo: repositories,
+            seedGetter,
+            logger,
+            processors: {
+              mintOperationProcessor: {
+                disabled: true,
+              },
+            },
+          });
+
+          await mgr.mint.addMint(mintUrl, { trusted: true });
+          const mintInfo = await mgr.mint.getMintInfo(mintUrl);
+          const nut29 = (mintInfo as { nuts?: Record<string, unknown> }).nuts?.['29'];
+          expect(nut29).toBeDefined();
+
+          const operations = await Promise.all([
+            prepareMintOperation(mgr, mintUrl, 21, testUnit),
+            prepareMintOperation(mgr, mintUrl, 34, testUnit),
+          ]);
+          await Promise.all(
+            operations.map((operation) => awaitMintQuoteReadyFromEvents(mgr!, operation)),
+          );
+
+          const operationIds = new Set(operations.map((operation) => operation.id));
+          const finalizedIds = new Set<string>();
+          const allFinalized = new Promise<void>((resolve) => {
+            const off = mgr!.on('mint-op:finalized', ({ operationId }) => {
+              if (!operationIds.has(operationId)) return;
+              finalizedIds.add(operationId);
+              if (finalizedIds.size !== operationIds.size) return;
+              off();
+              resolve();
+            });
+          });
+
+          await mgr.enableMintOperationProcessor({
+            initialEnqueueDelayMs: 0,
+            processIntervalMs: 60_000,
+          });
+          const { requeued } = await mgr.requeuePaidMintQuotes(mintUrl);
+          expect(requeued.slice().sort().join(',')).toBe(
+            operations
+              .map((operation) => operation.quoteId)
+              .sort()
+              .join(','),
+          );
+          await mgr.waitForMintOperationProcessor();
+          await allFinalized;
+
+          const finalized = await Promise.all(
+            operations.map((operation) => mgr!.ops.mint.get(operation.id)),
+          );
+          expect(finalized.map((operation) => operation?.state).join(',')).toBe(
+            'finalized,finalized',
+          );
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(55);
+
+          const attempts = await repositories.mintIssuanceAttemptRepository.listByMintUrl(mintUrl);
+          const matchesTestOperations = (attempt: (typeof attempts)[number]) =>
+            attempt.memberOperationIds.some((operationId) => operationIds.has(operationId));
+          const matchingAttempts = attempts.filter(matchesTestOperations);
+          expect(matchingAttempts).toHaveLength(1);
+          expect(matchingAttempts[0]!.request.kind).toBe('batch');
+          expect(matchingAttempts[0]!.memberOperationIds.slice().sort().join(',')).toBe(
+            operations
+              .map((operation) => operation.id)
+              .sort()
+              .join(','),
+          );
+          expect(new Set(matchingAttempts[0]!.quoteIds).size).toBe(2);
+
+          const quoteStates = await Promise.all(
+            operations.map((operation) =>
+              mgr!.quotes.mint.get({ mintUrl, quoteId: operation.quoteId }),
+            ),
+          );
+          expect(quoteStates.map((quote) => quote?.state).join(',')).toBe('ISSUED,ISSUED');
+
+          await Promise.all(operations.map((operation) => mgr!.ops.mint.execute(operation.id)));
+          expect(await getMintTotalBalance(mgr, mintUrl, testUnit)).toBe(55);
+          const attemptsAfterReplay =
+            await repositories.mintIssuanceAttemptRepository.listByMintUrl(mintUrl);
+          expect(attemptsAfterReplay.filter(matchesTestOperations)).toHaveLength(1);
+        } finally {
+          if (mgr) {
+            await mgr.pauseSubscriptions();
+            await mgr.dispose();
+            mgr = undefined;
+          }
+          await dispose();
+        }
+      }, 20000);
+
       it('should automatically process paid mint quotes with watcher enabled', async () => {
         const { repositories, dispose } = await createRepositories();
         try {

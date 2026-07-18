@@ -5,6 +5,7 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import { mintQuoteGroupKey } from '../../infra/MintQuotePollingKey.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
+import type { Logger } from '../../logging/Logger.ts';
 import {
   HttpResponseError,
   MintFetchError,
@@ -20,9 +21,11 @@ import {
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 import { MintIssuanceCoordinator } from '../../operations/mint/MintIssuanceCoordinator.ts';
 import type { MintIssuanceAttempt } from '../../operations/mint/MintIssuanceAttempt.ts';
-import type {
-  ExecutingMintOperationRecord,
-  PendingMintOperationRecord,
+import {
+  toMintOperation,
+  type ExecutingMintOperationRecord,
+  type MintOperation,
+  type PendingMintOperationRecord,
 } from '../../operations/mint/MintOperation.ts';
 import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { MintMethodHandler } from '../../operations/mint/MintMethodHandler.ts';
@@ -220,7 +223,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     return scripted;
   }
 
-  function createService(): MintOperationService {
+  function createService(logger?: Logger): MintOperationService {
     const handler = {
       checkPending: mock(async () => ({
         observedRemoteState: 'PAID' as const,
@@ -251,6 +254,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       walletService,
       mintAdapter,
       eventBus,
+      logger,
       mintScopedLock,
       nut29BatchLimitCache,
       mintQuotePollingChecker: quoteLifecycle,
@@ -311,7 +315,7 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     return { operation, attempt };
   }
 
-  beforeEach(async () => {
+  async function resetHarness(): Promise<void> {
     repositories = new MemoryRepositories();
     nut29BatchLimitCache = new Nut29BatchLimitCache();
     eventBus = new EventBus<CoreEvents>();
@@ -387,6 +391,10 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     );
     await repositories.mintOperationRepository.create(pendingOperation());
     service = createService();
+  }
+
+  beforeEach(async () => {
+    await resetHarness();
   });
 
   it('finalizes through one durable attempt with exact proof provenance', async () => {
@@ -587,6 +595,21 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       secret: batchSecret,
       C: 'C_batch-output-secret',
     };
+    const publicEvents: unknown[] = [];
+    eventBus.on('mint-op:executing', (payload) => {
+      publicEvents.push(payload);
+    });
+    eventBus.on('mint-op:finalized', (payload) => {
+      publicEvents.push(payload);
+    });
+    const logEntries: unknown[] = [];
+    const logger: Logger = {
+      error: (message, ...meta) => logEntries.push({ message, meta }),
+      warn: (message, ...meta) => logEntries.push({ message, meta }),
+      info: (message, ...meta) => logEntries.push({ message, meta }),
+      debug: (message, ...meta) => logEntries.push({ message, meta }),
+    };
+    service = createService(logger);
     await seedPeerOperation(peerQuoteId, peerOperationId, 'lnbc1peer');
     createMintOutputsAtCounter.mockResolvedValueOnce({
       keysetId,
@@ -623,6 +646,10 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
         quote_amounts: [Amount.from(10), Amount.from(10)],
       },
     });
+    const publicSurface = JSON.stringify({ publicEvents, logEntries });
+    expect(publicSurface).not.toContain(batchSecret);
+    expect(publicSurface).not.toContain('outputData');
+    expect(publicSurface).not.toContain('recoveryMaterial');
   });
 
   it('resumes a prepared Mint Batch after a crash before its first submission', async () => {
@@ -2063,6 +2090,201 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
       Amount.from(20),
     );
     expect(walletMint).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves public semantics across batching and force-single redemption', async () => {
+    const peers = [
+      {
+        operationId: 'operation-peer-a',
+        quoteId: 'quote-peer-a',
+        request: 'lnbc1peera',
+        createdAtOffset: 1,
+      },
+      {
+        operationId: 'operation-peer-b',
+        quoteId: 'quote-peer-b',
+        request: 'lnbc1peerb',
+        createdAtOffset: 2,
+      },
+    ] as const;
+    const peerOperationIds = peers.map((peer) => peer.operationId);
+    const peerQuoteIds = peers.map((peer) => peer.quoteId);
+
+    const outputFor = (secret: string, amount: number, blindingFactor: bigint) =>
+      serializeOutputData({
+        keep: [
+          new OutputData(
+            { amount: Amount.from(amount), id: keysetId, B_: `B_${secret}` },
+            blindingFactor,
+            new TextEncoder().encode(secret),
+          ),
+        ],
+        send: [],
+      });
+    const proofFor = (secret: string, amount: number): Proof => ({
+      id: keysetId,
+      amount: Amount.from(amount),
+      secret,
+      C: `C_${secret}`,
+    });
+    const normalizePublicOperation = (operation: MintOperation) => ({
+      id: operation.id,
+      state: operation.state,
+      mintUrl: operation.mintUrl,
+      method: operation.method,
+      amount: operation.amount.toNumber(),
+      unit: operation.unit,
+      quoteId: operation.quoteId,
+      error: operation.error,
+      terminalFailure: operation.terminalFailure
+        ? {
+            reason: operation.terminalFailure.reason,
+            code: operation.terminalFailure.code,
+            retryable: operation.terminalFailure.retryable,
+          }
+        : undefined,
+    });
+
+    async function runScenario(forceSingleRedemption: boolean) {
+      await resetHarness();
+      for (const peer of peers) {
+        await seedPeerOperation(peer.quoteId, peer.operationId, peer.request, peer.createdAtOffset);
+      }
+      const readPeerOperations = () =>
+        Promise.all(peerOperationIds.map((id) => repositories.mintOperationRepository.getById(id)));
+
+      const explicit = await service.execute(operationId);
+      const recordsAfterExplicitExecution = await Promise.all(
+        [operationId, ...peerOperationIds].map((id) =>
+          repositories.mintOperationRepository.getById(id),
+        ),
+      );
+      expect(explicit.state).toBe('finalized');
+      expect(recordsAfterExplicitExecution.map((operation) => operation?.state)).toEqual([
+        'finalized',
+        'pending',
+        'pending',
+      ]);
+
+      coordinator.configureProcessorRedemption({ forceSingleRedemption });
+      if (forceSingleRedemption) {
+        for (const [index, secret] of ['single-peer-a', 'single-peer-b'].entries()) {
+          const outputData = outputFor(secret, 10, BigInt(index + 10));
+          createMintOutputsAtCounter.mockImplementationOnce(
+            async (_mint, _intent, counterStart) => ({
+              keysetId,
+              outputData,
+              counterStart,
+              counterEnd: counterStart + 1,
+            }),
+          );
+        }
+        walletMint
+          .mockRejectedValueOnce(new NetworkError('simulated force-single interruption'))
+          .mockResolvedValueOnce([proofFor('single-peer-a', 10)])
+          .mockResolvedValueOnce([proofFor('single-peer-b', 10)]);
+      } else {
+        const batchOutputData = outputFor('paired-batch', 20, 20n);
+        createMintOutputsAtCounter.mockImplementationOnce(async (_mint, _intent, counterStart) => ({
+          keysetId,
+          outputData: batchOutputData,
+          counterStart,
+          counterEnd: counterStart + 1,
+        }));
+        walletBatchMint
+          .mockRejectedValueOnce(new NetworkError('simulated batch interruption'))
+          .mockResolvedValueOnce([proofFor('paired-batch', 20)]);
+      }
+
+      for (const id of peerOperationIds) coordinator.schedule(id);
+      await expect(coordinator.coordinate()).rejects.toThrow('simulated');
+
+      const recordsAtRestart = await readPeerOperations();
+      expect(recordsAtRestart.some((operation) => operation?.state === 'executing')).toBe(true);
+
+      service = createService();
+      service.configureProcessorRedemption({ forceSingleRedemption });
+      await service.finalize(peerOperationIds[0]!);
+      const pendingAfterRecovery = (await readPeerOperations()).filter(
+        (operation) => operation?.state === 'pending',
+      );
+      for (const operation of pendingAfterRecovery) coordinator.schedule(operation!.id);
+      if (pendingAfterRecovery.length > 0) await coordinator.coordinate();
+
+      const operationIds = [operationId, ...peerOperationIds];
+      const records = await Promise.all(
+        operationIds.map((id) => repositories.mintOperationRepository.getById(id)),
+      );
+      const publicOperations = records
+        .map((record) => normalizePublicOperation(toMintOperation(record!)))
+        .sort((left, right) => left.id.localeCompare(right.id));
+      const quoteStates = await Promise.all(
+        [quoteId, ...peerQuoteIds].map(async (id) =>
+          getMintQuoteRemoteState(
+            (await repositories.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', id))!,
+          ),
+        ),
+      );
+      const history: Array<{
+        operationId: string;
+        state: string;
+        quoteId: string;
+        amount: number;
+        unit: string;
+        remoteState?: string;
+      }> = [];
+      for (const entry of await repositories.historyRepository.getPaginatedHistoryEntries(10, 0)) {
+        if (
+          entry.type !== 'mint' ||
+          entry.source !== 'operation' ||
+          !entry.operationId ||
+          !operationIds.includes(entry.operationId)
+        ) {
+          continue;
+        }
+        history.push({
+          operationId: entry.operationId,
+          state: entry.state,
+          quoteId: entry.quoteId,
+          amount: entry.amount.toNumber(),
+          unit: entry.unit,
+          remoteState: entry.remoteState,
+        });
+      }
+      history.sort((left, right) => left.operationId.localeCompare(right.operationId));
+      const attempts = await repositories.mintIssuanceAttemptRepository.listByMintUrl(mintUrl);
+      const issuedQuoteIds = attempts.flatMap((attempt) => attempt.quoteIds);
+      expect(new Set(issuedQuoteIds).size).toBe(3);
+      expect(issuedQuoteIds).toHaveLength(3);
+      const savedProofs = (
+        await Promise.all(
+          attempts.map((attempt) =>
+            repositories.proofRepository.getProofsByAttemptId(mintUrl, attempt.id),
+          ),
+        )
+      ).flat();
+      const walletValue = savedProofs
+        .reduce((total, saved) => total.add(saved.amount), Amount.zero())
+        .toNumber();
+
+      const publicSnapshot = { publicOperations, quoteStates, history, walletValue };
+
+      return {
+        publicSnapshot,
+        statesAfterExplicitExecution: recordsAfterExplicitExecution.map(
+          (operation) => operation?.state,
+        ),
+        requestKinds: attempts.map((attempt) => attempt.request.kind).sort(),
+      };
+    }
+
+    const batched = await runScenario(false);
+    const forcedSingle = await runScenario(true);
+
+    expect(batched.publicSnapshot).toEqual(forcedSingle.publicSnapshot);
+    expect(batched.statesAfterExplicitExecution).toEqual(forcedSingle.statesAfterExplicitExecution);
+    expect(batched.requestKinds).toEqual(['batch', 'single']);
+    expect(forcedSingle.requestKinds).toEqual(['single', 'single', 'single']);
   });
 
   it('normalizes the mint denylist before selecting a processor cohort', async () => {
