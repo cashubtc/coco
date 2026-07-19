@@ -114,6 +114,7 @@ export class MemoryRepositories implements Repositories {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  private transactionTail: Promise<void> = Promise.resolve();
 
   constructor() {
     this.mintRepository = new MemoryMintRepository();
@@ -156,14 +157,25 @@ export class MemoryRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    const snapshots = snapshotMutableContainers(
-      Object.values(this).filter((value): value is object => typeof value === 'object'),
-    );
+    const previousTransaction = this.transactionTail;
+    let releaseTransaction!: () => void;
+    this.transactionTail = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+
+    await previousTransaction;
     try {
-      return await fn(this);
-    } catch (error) {
-      restoreMutableContainers(snapshots);
-      throw error;
+      const snapshots = snapshotMutableContainers(
+        Object.values(this).filter((value): value is object => typeof value === 'object'),
+      );
+      try {
+        return await fn(this);
+      } catch (error) {
+        restoreMutableContainers(snapshots);
+        throw error;
+      }
+    } finally {
+      releaseTransaction();
     }
   }
 }

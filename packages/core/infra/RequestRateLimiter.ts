@@ -109,11 +109,10 @@ export class RequestRateLimiter {
       body = stringifyJson(requestBody);
     }
 
-    // Log request payload
+    // Mint payloads can contain exact outputs and other recovery material. Log metadata only.
     this.logger?.debug('Mint request', {
       method: init.method || 'GET',
       endpoint,
-      requestBody: requestBody ? stringifyJson(requestBody, 2) : undefined,
     });
 
     let response: Response;
@@ -142,11 +141,10 @@ export class RequestRateLimiter {
         // leave default errorData
       }
 
-      // Log error response
+      // Response bodies can contain recovery material. Log metadata only.
       this.logger?.debug('Mint response error', {
         endpoint,
         status: response.status,
-        errorData: stringifyJson(errorData, 2),
       });
 
       const hasProtocolError =
@@ -175,11 +173,10 @@ export class RequestRateLimiter {
 
     try {
       const responseData = await parseJsonResponse<T>(response);
-      // Log successful response
+      // Response bodies can contain blind signatures and other recovery material.
       this.logger?.debug('Mint response success', {
         endpoint,
         status: response.status,
-        responseData: stringifyJson(responseData, 2),
       });
       return responseData;
     } catch (err) {
