@@ -85,6 +85,7 @@ async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
     `SELECT id, mintUrl, quoteId, method, unit, amount, state, outputDataJson, attemptId,
             createdAt, updatedAt, error, terminalFailureJson
      FROM coco_cashu_mint_operations
+     WHERE state NOT IN ('init', 'pending')
      ORDER BY createdAt ASC, id ASC`,
   );
   const operations = rows.map((row) =>

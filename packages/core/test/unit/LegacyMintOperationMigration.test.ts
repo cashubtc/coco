@@ -44,7 +44,6 @@ function operation(
 describe('planLegacyMintOperationMigration', () => {
   it('maps legacy lifecycle states into single-member attempts without changing counters', () => {
     const plan = planLegacyMintOperationMigration([
-      operation('pending', 'pending', { createdAt: 1_000 }),
       operation('executing', 'executing', { createdAt: 2_000 }),
       operation('finalized', 'finalized', { createdAt: 3_000 }),
       operation('failed', 'failed', {
@@ -59,14 +58,8 @@ describe('planLegacyMintOperationMigration', () => {
       }),
     ]);
 
-    expect(plan.map(({ attempt }) => attempt.state)).toEqual([
-      'prepared',
-      'recovering',
-      'succeeded',
-      'failed',
-    ]);
+    expect(plan.map(({ attempt }) => attempt.state)).toEqual(['recovering', 'succeeded', 'failed']);
     expect(plan.map(({ operationState }) => operationState)).toEqual([
-      'executing',
       'executing',
       'finalized',
       'failed',
@@ -74,26 +67,27 @@ describe('planLegacyMintOperationMigration', () => {
     expect(plan.every(({ attempt }) => attempt.counterStart === undefined)).toBe(true);
     expect(plan.every(({ attempt }) => attempt.counterEnd === undefined)).toBe(true);
     expect(plan[0]!.attempt).toMatchObject({
-      id: `${LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX}pending`,
+      id: `${LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX}executing`,
       mintUrl: 'https://mint.test',
       unit: 'sat',
       keysetId: 'keyset-1',
-      memberOperationIds: ['pending'],
-      quoteIds: ['quote-pending'],
-      request: { kind: 'single', quoteId: 'quote-pending' },
+      memberOperationIds: ['executing'],
+      quoteIds: ['quote-executing'],
+      request: { kind: 'single', quoteId: 'quote-executing' },
     });
     expect(plan[0]!.attempt.quoteAmounts.map(String)).toEqual(['1']);
-    expect(plan[0]!.attempt.outputData).toEqual(outputData('keyset-1', 'pending'));
-    expect(plan[3]!.attempt.terminalError).toEqual({
+    expect(plan[0]!.attempt.outputData).toEqual(outputData('keyset-1', 'executing'));
+    expect(plan[2]!.attempt.terminalError).toEqual({
       message: 'quote expired',
       code: 'QUOTE_EXPIRED',
       details: { retryable: false, observedAt: 1_900 },
     });
   });
 
-  it('leaves init, output-less, and already attached operations unchanged', () => {
+  it('leaves init, pending, output-less, and already attached operations unchanged', () => {
     const plan = planLegacyMintOperationMigration([
       operation('init', 'init', { outputData: undefined }),
+      operation('pending', 'pending'),
       operation('pending-empty', 'pending', { outputData: { keep: [], send: [] } }),
       operation('attached', 'executing', { attemptId: 'existing-attempt' }),
     ]);
@@ -142,7 +136,7 @@ describe('planLegacyMintOperationMigration', () => {
   it('rejects missing attempt data and corrupt persisted JSON', () => {
     expect(() =>
       planLegacyMintOperationMigration([
-        operation('missing-quote', 'pending', { quoteId: undefined }),
+        operation('missing-quote', 'executing', { quoteId: undefined }),
       ]),
     ).toThrow('missing required attempt data');
 

@@ -1147,23 +1147,25 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
           if (row.counterRangeKnown === undefined) row.counterRangeKnown = true;
         });
       const rows = (await tx.table('coco_cashu_mint_operations').toArray()) as MintOperationRow[];
-      const operations = rows.map((row) =>
-        decodeLegacyMintOperationMigrationRecord({
-          id: row.id,
-          mintUrl: row.mintUrl,
-          quoteId: row.quoteId,
-          method: row.method,
-          unit: row.unit,
-          amount: row.amount,
-          state: row.state,
-          outputDataJson: row.outputDataJson,
-          attemptId: row.attemptId,
-          createdAt: row.createdAt * 1_000,
-          updatedAt: row.updatedAt * 1_000,
-          error: row.error,
-          terminalFailureJson: row.terminalFailureJson,
-        }),
-      );
+      const operations = rows
+        .filter((row) => row.state !== 'init' && row.state !== 'pending')
+        .map((row) =>
+          decodeLegacyMintOperationMigrationRecord({
+            id: row.id,
+            mintUrl: row.mintUrl,
+            quoteId: row.quoteId,
+            method: row.method,
+            unit: row.unit,
+            amount: row.amount,
+            state: row.state,
+            outputDataJson: row.outputDataJson,
+            attemptId: row.attemptId,
+            createdAt: row.createdAt * 1_000,
+            updatedAt: row.updatedAt * 1_000,
+            error: row.error,
+            terminalFailureJson: row.terminalFailureJson,
+          }),
+        );
       const plan = planLegacyMintOperationMigration(operations);
       const rowsById = new Map(rows.map((row) => [row.id, row]));
 

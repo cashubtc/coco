@@ -41,7 +41,7 @@ const legacyMintOutput = (suffix: string, keysetId = 'legacy-keyset') => ({
   send: [],
 });
 
-async function seedVersion32(name: string, corruptPendingOutput = false): Promise<void> {
+async function seedVersion32(name: string, corruptExecutingOutput = false): Promise<void> {
   const db = new IdbDb({ name });
   db.version(32).stores(VERSION_32_STORES);
   await db.open();
@@ -68,13 +68,13 @@ async function seedVersion32(name: string, corruptPendingOutput = false): Promis
       id: 'pending-op',
       state: 'pending',
       createdAt: 2,
-      outputDataJson: corruptPendingOutput ? '{' : JSON.stringify(legacyMintOutput('pending')),
+      outputDataJson: JSON.stringify(legacyMintOutput('pending')),
     },
     {
       id: 'executing-op',
       state: 'executing',
       createdAt: 3,
-      outputDataJson: JSON.stringify(legacyMintOutput('executing')),
+      outputDataJson: corruptExecutingOutput ? '{' : JSON.stringify(legacyMintOutput('executing')),
     },
     {
       id: 'finalized-op',
@@ -135,7 +135,6 @@ describe('legacy Mint Operation IndexedDB migration', () => {
         .orderBy('createdAt')
         .toArray();
       expect(attempts.map((attempt) => attempt.state)).toEqual([
-        'prepared',
         'recovering',
         'succeeded',
         'failed',
@@ -146,25 +145,24 @@ describe('legacy Mint Operation IndexedDB migration', () => {
         [null, null],
         [null, null],
         [null, null],
-        [null, null],
       ]);
       expect(attempts.every((attempt) => attempt.counterRangeKnown === false)).toBe(true);
       const hydrated = await repositories.mintIssuanceAttemptRepository.getById(
-        'legacy-mint-operation:pending-op',
+        'legacy-mint-operation:executing-op',
       );
       expect(hydrated?.counterStart).toBeUndefined();
       expect(hydrated?.counterEnd).toBeUndefined();
       expect(attempts[0]).toMatchObject({
-        id: 'legacy-mint-operation:pending-op',
-        memberOperationIds: ['pending-op'],
-        quoteIdsJson: '["quote-pending-op"]',
-        outputDataJson: JSON.stringify(legacyMintOutput('pending')),
+        id: 'legacy-mint-operation:executing-op',
+        memberOperationIds: ['executing-op'],
+        quoteIdsJson: '["quote-executing-op"]',
+        outputDataJson: JSON.stringify(legacyMintOutput('executing')),
       });
 
       const pending = await repositories.db.table('coco_cashu_mint_operations').get('pending-op');
       expect(pending).toMatchObject({
-        state: 'executing',
-        attemptId: 'legacy-mint-operation:pending-op',
+        state: 'pending',
+        attemptId: null,
       });
       expect(
         await repositories.counterRepository.getCounter('https://mint.test', 'legacy-keyset'),
@@ -179,7 +177,7 @@ describe('legacy Mint Operation IndexedDB migration', () => {
       repositories.db.close();
       const restarted = new IndexedDbRepositories({ name });
       await restarted.init();
-      expect(await restarted.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(5);
+      expect(await restarted.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(4);
       restarted.db.close();
     } finally {
       repositories.db.close();
@@ -199,18 +197,18 @@ describe('legacy Mint Operation IndexedDB migration', () => {
       repair.version(32).stores(VERSION_32_STORES);
       await repair.open();
       expect(await repair.table('coco_cashu_mint_issuance_attempts').count()).toBe(0);
-      expect(await repair.table('coco_cashu_mint_operations').get('pending-op')).toMatchObject({
-        state: 'pending',
+      expect(await repair.table('coco_cashu_mint_operations').get('executing-op')).toMatchObject({
+        state: 'executing',
         attemptId: null,
       });
-      await repair.table('coco_cashu_mint_operations').update('pending-op', {
-        outputDataJson: JSON.stringify(legacyMintOutput('pending')),
+      await repair.table('coco_cashu_mint_operations').update('executing-op', {
+        outputDataJson: JSON.stringify(legacyMintOutput('executing')),
       });
       repair.close();
 
       const resumed = new IndexedDbRepositories({ name });
       await resumed.init();
-      expect(await resumed.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(5);
+      expect(await resumed.db.table('coco_cashu_mint_issuance_attempts').count()).toBe(4);
       resumed.db.close();
     } finally {
       failing.db.close();

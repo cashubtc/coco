@@ -262,7 +262,16 @@ export function planLegacyMintOperationMigration(
   const plan: LegacyMintOperationMigrationPlanEntry[] = [];
 
   for (const operation of operations) {
-    if (operation.state === 'init' || operation.attemptId || !operation.outputData) continue;
+    // Pending rows were never submitted. Keeping them pending preserves reusable quote watching and
+    // lets normal execution allocate or reuse outputs only after the quote becomes claimable.
+    if (
+      operation.state === 'init' ||
+      operation.state === 'pending' ||
+      operation.attemptId ||
+      !operation.outputData
+    ) {
+      continue;
+    }
     const outputs = [...operation.outputData.keep, ...operation.outputData.send];
     if (outputs.length === 0) continue;
     const keysetIds = new Set(outputs.map((output) => output.blindedMessage.id));
@@ -275,7 +284,6 @@ export function planLegacyMintOperationMigration(
     }
     const { quoteId, method, unit, amount } = requireAttemptFields(operation);
     const state = attemptState(operation.state);
-    const wasSubmitted = operation.state !== 'pending';
     const attempt: MintIssuanceAttempt = {
       id: `${LEGACY_MINT_ISSUANCE_ATTEMPT_PREFIX}${operation.id}`,
       mintUrl: normalizeMintUrl(operation.mintUrl),
@@ -291,14 +299,14 @@ export function planLegacyMintOperationMigration(
       request: { kind: 'single', quoteId },
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
-      ...(wasSubmitted ? { submittedAt: operation.updatedAt } : {}),
+      submittedAt: operation.updatedAt,
       ...(state === 'recovering' ? { recoveryStartedAt: operation.updatedAt } : {}),
       ...(state === 'succeeded' ? { recoveredAt: operation.updatedAt } : {}),
       ...(state === 'failed' ? { terminalError: terminalError(operation) } : {}),
     };
     plan.push({
       operationId: operation.id,
-      operationState: operation.state === 'pending' ? 'executing' : operation.state,
+      operationState: operation.state,
       attempt,
     });
   }
