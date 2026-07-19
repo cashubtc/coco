@@ -18,17 +18,11 @@ export interface MintIssuanceSigningRequirement {
   pubkey: string;
 }
 
-/** Transport metadata needed to rebuild the exact single or batch request. */
-export type MintIssuanceRequestMetadata =
-  | {
-      kind: 'single';
-      quoteId: string;
-    }
-  | {
-      kind: 'batch';
-      quoteIds: string[];
-      quoteAmounts: Amount[];
-    };
+/** Transport metadata needed to rebuild the exact single-member request. */
+export interface MintIssuanceRequestMetadata {
+  kind: 'single';
+  quoteId: string;
+}
 
 /** Structured terminal failure retained with a rejected or locally failed attempt. */
 export interface MintIssuanceAttemptError {
@@ -88,12 +82,7 @@ function cloneOutputData(outputData: SerializedOutputData): SerializedOutputData
 }
 
 function cloneRequest(request: MintIssuanceRequestMetadata): MintIssuanceRequestMetadata {
-  if (request.kind === 'single') return { ...request };
-  return {
-    kind: 'batch',
-    quoteIds: [...request.quoteIds],
-    quoteAmounts: request.quoteAmounts.map((amount) => Amount.from(amount)),
-  };
+  return { ...request };
 }
 
 function assertNonEmptyUnique(values: string[], field: string): void {
@@ -137,21 +126,8 @@ export function normalizeMintIssuanceAttempt(attempt: MintIssuanceAttempt): Mint
       throw new Error('Mint issuance attempt counter range must exactly cover persisted outputs');
     }
   }
-  if (attempt.request.kind === 'single') {
-    if (memberCount !== 1 || attempt.request.quoteId !== attempt.quoteIds[0]) {
-      throw new Error('Single request metadata must identify the attempt quote');
-    }
-  } else {
-    if (
-      attempt.request.quoteIds.length !== attempt.quoteIds.length ||
-      attempt.request.quoteAmounts.length !== attempt.quoteAmounts.length ||
-      attempt.request.quoteIds.some((quoteId, index) => quoteId !== attempt.quoteIds[index]) ||
-      attempt.request.quoteAmounts.some(
-        (amount, index) => !amount.equals(attempt.quoteAmounts[index]!),
-      )
-    ) {
-      throw new Error('Batch request metadata must preserve the attempt quote order and amounts');
-    }
+  if (memberCount !== 1 || attempt.request.quoteId !== attempt.quoteIds[0]) {
+    throw new Error('Single request metadata must identify the attempt quote');
   }
 
   return {
@@ -190,13 +166,7 @@ function recoveryMaterial(attempt: MintIssuanceAttempt): Record<string, unknown>
     outputData: normalized.outputData,
     counterStart: normalized.counterStart,
     counterEnd: normalized.counterEnd,
-    request:
-      normalized.request.kind === 'single'
-        ? normalized.request
-        : {
-            ...normalized.request,
-            quoteAmounts: normalized.request.quoteAmounts.map((amount) => amount.toString()),
-          },
+    request: normalized.request,
     createdAt: normalized.createdAt,
   };
 }

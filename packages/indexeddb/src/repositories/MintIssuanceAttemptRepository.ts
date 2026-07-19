@@ -11,22 +11,11 @@ import {
 import type { IdbDb, MintIssuanceAttemptRow } from '../lib/db.ts';
 
 function serializeRequest(request: MintIssuanceRequestMetadata): string {
-  if (request.kind === 'single') return JSON.stringify(request);
-  return JSON.stringify({
-    ...request,
-    quoteAmounts: request.quoteAmounts.map(serializeAmount),
-  });
+  return JSON.stringify(request);
 }
 
 function deserializeRequest(value: string): MintIssuanceRequestMetadata {
-  const request = JSON.parse(value) as
-    | Extract<MintIssuanceRequestMetadata, { kind: 'single' }>
-    | { kind: 'batch'; quoteIds: string[]; quoteAmounts: Array<string | number> };
-  if (request.kind === 'single') return request;
-  return {
-    ...request,
-    quoteAmounts: request.quoteAmounts.map((amount) => Amount.from(amount)),
-  };
+  return JSON.parse(value) as MintIssuanceRequestMetadata;
 }
 
 function attemptToRow(attempt: MintIssuanceAttempt): MintIssuanceAttemptRow {

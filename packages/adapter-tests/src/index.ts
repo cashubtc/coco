@@ -370,17 +370,12 @@ export function createDummyMintIssuanceAttempt(
     unit: 'sat',
     keysetId: 'keyset-id',
     state: 'prepared',
-    memberOperationIds: ['mint-op-2', 'mint-op-1'],
-    quoteIds: ['quote-2', 'quote-1'],
-    quoteAmounts: [Amount.from(2), Amount.from(1)],
-    signingRequirements: [null, { kind: 'nut20', pubkey: '02abcdef' }],
+    memberOperationIds: ['mint-op-1'],
+    quoteIds: ['quote-1'],
+    quoteAmounts: [Amount.from(1)],
+    signingRequirements: [{ kind: 'nut20', pubkey: '02abcdef' }],
     outputData: {
       keep: [
-        {
-          blindedMessage: { amount: '2', id: 'keyset-id', B_: 'B_2' },
-          blindingFactor: '02',
-          secret: '02',
-        },
         {
           blindedMessage: { amount: '1', id: 'keyset-id', B_: 'B_1' },
           blindingFactor: '01',
@@ -390,11 +385,10 @@ export function createDummyMintIssuanceAttempt(
       send: [],
     },
     counterStart: 10,
-    counterEnd: 12,
+    counterEnd: 11,
     request: {
-      kind: 'batch',
-      quoteIds: ['quote-2', 'quote-1'],
-      quoteAmounts: [Amount.from(2), Amount.from(1)],
+      kind: 'single',
+      quoteId: 'quote-1',
     },
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -419,9 +413,9 @@ export async function runMintIssuanceAttemptRepositoryContract(
         const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
 
         expect(stored).toBeDefined();
-        expect(stored!.memberOperationIds.join(',')).toBe('mint-op-2,mint-op-1');
-        expect(stored!.quoteIds.join(',')).toBe('quote-2,quote-1');
-        expect(stored!.quoteAmounts.map(String).join(',')).toBe('2,1');
+        expect(stored!.memberOperationIds.join(',')).toBe('mint-op-1');
+        expect(stored!.quoteIds.join(',')).toBe('quote-1');
+        expect(stored!.quoteAmounts.map(String).join(',')).toBe('1');
         expect(JSON.stringify(stored!.signingRequirements)).toBe(
           JSON.stringify(attempt.signingRequirements),
         );
@@ -636,7 +630,7 @@ export async function runMintIssuanceAttemptRepositoryContract(
           attempt.keysetId,
         );
         const storedAttempt = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
-        expect(storedCounter?.counter).toBe(12);
+        expect(storedCounter?.counter).toBe(attempt.counterEnd);
         expect(storedAttempt?.state).toBe('prepared');
       } finally {
         await dispose();
