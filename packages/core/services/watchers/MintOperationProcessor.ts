@@ -1,7 +1,8 @@
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
-import { MintOperationError, NetworkError } from '../../models/Error';
+import { MintOperationError } from '../../models/Error';
+import { isRetryableMintIssuanceError } from '../../models/MintIssuanceRetryError.ts';
 import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
@@ -457,7 +458,10 @@ export class MintOperationProcessor {
       return;
     }
 
-    if (err instanceof NetworkError || (err instanceof Error && err.message.includes('network'))) {
+    if (
+      isRetryableMintIssuanceError(err) ||
+      (err instanceof Error && err.message.includes('network'))
+    ) {
       item.retryCount++;
       if (item.retryCount <= this.maxRetries) {
         const delay = this.baseRetryDelayMs * Math.pow(2, item.retryCount - 1);

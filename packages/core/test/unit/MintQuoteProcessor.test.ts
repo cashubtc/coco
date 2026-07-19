@@ -4,6 +4,7 @@ import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { MintOperationService } from '../../operations/mint/MintOperationService';
 import { MintOperationError, NetworkError } from '../../models/Error';
+import { MintIssuanceRetryError } from '../../models/MintIssuanceRetryError.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -517,6 +518,46 @@ describe('MintOperationProcessor', () => {
       expect(secondRetryDelay).toBeGreaterThan(TEST_RETRY_DELAY * 2 - 20);
       expect(secondRetryDelay).toBeLessThan(TEST_RETRY_DELAY * 2 + 100);
     }
+  });
+
+  it('retries durable issuance recovery errors with backoff', async () => {
+    let attemptCount = 0;
+    mockMintOperationService = {
+      async finalize(operationId: string) {
+        attemptCount++;
+        if (attemptCount === 1) {
+          throw new MintIssuanceRetryError('exact-proof recovery is temporarily indeterminate');
+        }
+        finalizeCalls.push(operationId);
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetries: 2,
+        initialEnqueueDelayMs: 0,
+      },
+    );
+    await processor.start();
+
+    await bus.emit('mint-op:requeue', {
+      mintUrl: 'https://mint.test',
+      operationId: 'mint-op-recovery',
+      operation: {
+        id: 'mint-op-recovery',
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+      } as any,
+    });
+    await processor.waitForCompletion();
+
+    expect(attemptCount).toBe(2);
+    expect(finalizeCalls).toEqual(['mint-op-recovery']);
   });
 
   it('does not retry mint operation errors', async () => {

@@ -377,7 +377,10 @@ export class MintOperationService {
           await this.claimReusableQuoteOperation(operation as PendingMintOperation),
         );
       }
-      if (this.issuanceCoordinator && operation.method === 'bolt11' && !quote?.reusable) {
+      if (operation.method === 'bolt11' && !quote?.reusable) {
+        if (!this.issuanceCoordinator) {
+          throw new Error('Durable BOLT11 issuance requires a MintIssuanceCoordinator');
+        }
         return this.issuanceCoordinator.coordinate(operationId);
       }
     }

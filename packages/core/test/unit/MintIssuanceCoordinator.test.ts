@@ -5,6 +5,7 @@ import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
 import { MintOperationError } from '../../models/Error.ts';
+import { MintIssuanceRetryError } from '../../models/MintIssuanceRetryError.ts';
 import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
 import { MintScopedLock } from '../../operations/MintScopedLock.ts';
 import { MintIssuanceCoordinator } from '../../operations/mint/MintIssuanceCoordinator.ts';
@@ -16,6 +17,7 @@ import type {
 import { MintOperationService } from '../../operations/mint/MintOperationService.ts';
 import type { MintMethodHandler } from '../../operations/mint/MintMethodHandler.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
+import { MemoryMintIssuanceAttemptRepository } from '../../repositories/memory/MemoryMintIssuanceAttemptRepository.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -247,6 +249,137 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(walletMint.mock.calls[0]?.[2]).toEqual({ keysetId });
   });
 
+  it('fails a coordinated single attempt when the mint quote expires during submission', async () => {
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
+    });
+    walletMint.mockRejectedValueOnce(new MintOperationError(20007, 'Quote expired'));
+
+    const result = await service.execute(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation?.state).toBe('failed');
+    expect(operation?.terminalFailure?.reason).toBe('Quote expired');
+    expect(attempt?.state).toBe('failed');
+    expect(attempt?.terminalError?.message).toBe('Quote expired');
+    expect(failedEvents).toHaveLength(1);
+  });
+
+  it('fails an unattached operation whose canonical quote was already issued', async () => {
+    await repositories.mintQuoteRepository.setMintQuoteState(
+      mintUrl,
+      'bolt11',
+      quoteId,
+      'ISSUED',
+      Date.now(),
+    );
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation).toMatchObject({
+      state: 'failed',
+      terminalFailure: { code: 'quote_already_issued', retryable: false },
+    });
+    expect(operation).not.toHaveProperty('attemptId');
+    await expect(
+      repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId),
+    ).resolves.toBeNull();
+    expect(walletMint).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rejected dispatch recoverable when canonical state remains paid', async () => {
+    walletMint.mockRejectedValueOnce(new MintOperationError(20001, 'Quote is not paid'));
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID' as const,
+    });
+
+    await expect(service.execute(operationId)).rejects.toBeInstanceOf(MintIssuanceRetryError);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    const canonicalQuote = await repositories.mintQuoteRepository.getMintQuote(
+      mintUrl,
+      'bolt11',
+      quoteId,
+    );
+    expect(operation).toMatchObject({ state: 'executing', attemptId: attempt?.id });
+    expect(attempt?.state).toBe('recovering');
+    expect(canonicalQuote?.state).toBe('PAID');
+  });
+
+  it('requeues a recovering single attempt from an unexpired unpaid quote', async () => {
+    walletMint.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.execute(operationId)).rejects.toBeInstanceOf(MintIssuanceRetryError);
+    await repositories.mintQuoteRepository.setMintQuoteState(
+      mintUrl,
+      'bolt11',
+      quoteId,
+      'UNPAID',
+      Date.now(),
+    );
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID' as const,
+    });
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('pending');
+    expect(operation).toMatchObject({ state: 'pending', attemptId: undefined });
+    expect(attempt?.state).toBe('rejected');
+    expect(attempt?.terminalError?.code).toBe('QUOTE_UNPAID');
+  });
+
+  it('fails a recovering single attempt from an expired unpaid quote', async () => {
+    walletMint.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.execute(operationId)).rejects.toBeInstanceOf(MintIssuanceRetryError);
+    await repositories.mintQuoteRepository.setMintQuoteState(
+      mintUrl,
+      'bolt11',
+      quoteId,
+      'UNPAID',
+      Date.now(),
+    );
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) - 60,
+      state: 'UNPAID' as const,
+    });
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation?.terminalFailure?.reason).toBe(
+      `Mint quote ${quoteId} expired before issuance`,
+    );
+    expect(attempt?.state).toBe('failed');
+  });
+
   it('rejects returned proofs from a different keyset than the persisted outputs', async () => {
     walletMint.mockResolvedValueOnce([{ ...proof, id: 'rotated-keyset' }]);
 
@@ -274,11 +407,12 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
   });
 
   it('rolls back the operation, attempt, and counter when attempt creation fails', async () => {
-    const create = repositories.mintIssuanceAttemptRepository.create.bind(
-      repositories.mintIssuanceAttemptRepository,
-    );
+    const create = MemoryMintIssuanceAttemptRepository.prototype.create;
     repositories.mintIssuanceAttemptRepository.create = mock(async (attempt) => {
-      await create(attempt);
+      await create.call(
+        repositories.mintIssuanceAttemptRepository as MemoryMintIssuanceAttemptRepository,
+        attempt,
+      );
       throw new Error('attempt transaction failed');
     });
 
@@ -451,6 +585,27 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(operation?.state).toBe('failed');
     expect(attempt?.state).toBe('failed');
     expect(attempt?.terminalError?.code).toBe('EXACT_PROOFS_UNRECOVERABLE');
+  });
+
+  it('keeps single restore failures retryable', async () => {
+    walletMint.mockRejectedValueOnce(new MintOperationError(20002, 'Quote already issued'));
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      quote: quoteId,
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'ISSUED' as const,
+    });
+    (proofService.recoverProofsFromOutputData as Mock<any>).mockRejectedValueOnce(
+      new Error('proof state temporarily indeterminate'),
+    );
+
+    await expect(service.execute(operationId)).rejects.toBeInstanceOf(MintIssuanceRetryError);
+
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(attempt?.state).toBe('recovering');
   });
 
   it('dispatches a migrated prepared BOLT12 attempt through its method handler', async () => {
