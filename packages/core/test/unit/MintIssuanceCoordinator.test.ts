@@ -452,6 +452,106 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(failedEvents[0]?.operation.state).toBe('failed');
   });
 
+  it('keeps a rejected single dispatch recoverable when canonical state remains paid', async () => {
+    const existingQuote = await repositories.mintQuoteRepository.getMintQuote(
+      mintUrl,
+      'bolt11',
+      quoteId,
+    );
+    if (!existingQuote || existingQuote.method !== 'bolt11') {
+      throw new Error('Expected seeded BOLT11 quote');
+    }
+    checkMintQuoteBatch.mockResolvedValueOnce([
+      mintQuoteToMethodSnapshot(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: quoteId,
+          request: existingQuote.request,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: existingQuote.expiry,
+          state: 'UNPAID',
+        }),
+      ),
+    ]);
+    walletMint.mockRejectedValueOnce(new MintOperationError(20001, 'Quote is not paid'));
+
+    await expect(service.execute(operationId)).rejects.toThrow('remains claimable');
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    const canonicalQuote = await repositories.mintQuoteRepository.getMintQuote(
+      mintUrl,
+      'bolt11',
+      quoteId,
+    );
+    expect(operation).toMatchObject({ state: 'executing', attemptId: attempt?.id });
+    expect(attempt?.state).toBe('recovering');
+    expect(getMintQuoteRemoteState(canonicalQuote!)).toBe('PAID');
+    await expect(service.canRetryIssuance(operationId)).resolves.toBe(true);
+  });
+
+  it('requeues a recovering single attempt from a canonical unexpired unpaid quote', async () => {
+    const requeueEvents: Array<CoreEvents['mint-op:requeue']> = [];
+    eventBus.on('mint-op:requeue', (event) => {
+      requeueEvents.push(event);
+    });
+    walletMint.mockRejectedValueOnce(new NetworkError('connection lost'));
+    await expect(service.execute(operationId)).rejects.toThrow('connection lost');
+
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'UNPAID',
+      }),
+    );
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('pending');
+    expect(operation).toMatchObject({ state: 'pending', attemptId: undefined });
+    expect(attempt?.state).toBe('rejected');
+    expect(attempt?.terminalError?.code).toBe('QUOTE_UNPAID');
+    expect(service.isIssuanceScheduled(operationId)).toBe(true);
+    expect(requeueEvents).toHaveLength(1);
+  });
+
+  it('fails a recovering single attempt from a canonical expired unpaid quote', async () => {
+    walletMint.mockRejectedValueOnce(new NetworkError('connection lost'));
+    await expect(service.execute(operationId)).rejects.toThrow('connection lost');
+
+    const expiry = Math.floor(Date.now() / 1000) - 60;
+    await repositories.mintQuoteRepository.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'UNPAID',
+      }),
+    );
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation?.terminalFailure?.reason).toBe(
+      `Mint quote ${quoteId} expired before issuance`,
+    );
+    expect(attempt?.state).toBe('failed');
+  });
+
   it('rejects returned proofs from a different keyset than the persisted outputs', async () => {
     walletMint.mockResolvedValueOnce([{ ...proof, id: 'rotated-keyset' }]);
 
@@ -2612,14 +2712,26 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
   it('fails an issued quote when its exact proofs cannot be recovered', async () => {
     walletMint.mockRejectedValueOnce(new MintOperationError(20002, 'Quote already issued'));
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
-      quote: quoteId,
-      request: 'lnbc1test',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      state: 'ISSUED' as const,
-    });
+    const existingQuote = await repositories.mintQuoteRepository.getMintQuote(
+      mintUrl,
+      'bolt11',
+      quoteId,
+    );
+    if (!existingQuote || existingQuote.method !== 'bolt11') {
+      throw new Error('Expected seeded BOLT11 quote');
+    }
+    checkMintQuoteBatch.mockResolvedValueOnce([
+      mintQuoteToMethodSnapshot(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: quoteId,
+          request: existingQuote.request,
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: existingQuote.expiry,
+          state: 'ISSUED',
+        }),
+      ),
+    ]);
 
     const result = await service.execute(operationId);
     const operation = await repositories.mintOperationRepository.getById(operationId);

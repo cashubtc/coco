@@ -1613,66 +1613,33 @@ describe('MintOperationService', () => {
     expect(handler.prepare).not.toHaveBeenCalled();
   });
 
-  it('prepare + finalize runs pending -> execute for an existing canonical quote', async () => {
-    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
-    const executingEvents: Array<CoreEvents['mint-op:executing']> = [];
-    const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
-    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
-    eventBus.on('mint-quote:updated', (event) => {
-      quoteUpdatedEvents.push(event);
-    });
-    eventBus.on('mint-op:finalized', (event) => {
-      finalizedEvents.push(event);
-    });
-    eventBus.on('mint-op:executing', (event) => {
-      executingEvents.push(event);
-    });
-    eventBus.on('mint-op:failed', (event) => {
-      failedEvents.push(event);
-    });
-
+  it('refuses fixed BOLT11 execution without a durable issuance coordinator', async () => {
     await persistQuote();
 
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
-    const finalized = await service.finalize(pending.id);
-
-    expect(finalized?.state).toBe('finalized');
+    await expect(service.finalize(pending.id)).rejects.toThrow(
+      'Durable BOLT11 issuance requires a MintIssuanceCoordinator',
+    );
 
     const stored = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(stored.length).toBe(1);
-    expect(stored[0]?.state).toBe('finalized');
-
-    const saved = await proofRepo.getProofBySecret(mintUrl, 'out-1');
-    expect(saved).not.toBeNull();
-    expect(saved?.createdByOperationId).toBe(finalized?.id);
-
-    expect(quoteUpdatedEvents.length).toBe(1);
-    expect(quoteUpdatedEvents[0]?.quoteId).toBe(quoteId);
-    expect(quoteUpdatedEvents[0]?.method).toBe('bolt11');
-    expect(quoteUpdatedEvents[0]?.quote.state).toBe('ISSUED');
-    expect(executingEvents).toHaveLength(1);
-    expect(executingEvents[0]?.operation).not.toHaveProperty('outputData');
-    expect(executingEvents[0]?.operation).not.toHaveProperty('attemptId');
-    expect(finalizedEvents.length).toBe(1);
-    expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
-    expect(finalizedEvents[0]?.operation.state).toBe('finalized');
-    expect(finalizedEvents[0]?.operation).not.toHaveProperty('outputData');
-    expect(finalizedEvents[0]?.operation).not.toHaveProperty('attemptId');
-    expect(failedEvents).toHaveLength(0);
+    expect(stored[0]?.state).toBe('pending');
+    expect(handler.execute).not.toHaveBeenCalled();
   });
 
   it('finalize is idempotent after finalize', async () => {
-    await persistQuote();
+    const finalized: FinalizedMintOperation<'bolt11'> = {
+      ...makeExecutingOp('already-finalized'),
+      method: 'bolt11',
+      state: 'finalized',
+    };
+    await operationRepo.create(finalized);
 
-    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
-    const first = await service.finalize(pending.id);
+    const first = await service.finalize(finalized.id);
     const second = await service.finalize(first.id);
 
     expect(first?.state).toBe('finalized');
-    expect(second?.id).toBe(first?.id);
-
-    const ops = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
-    expect(ops.length).toBe(1);
+    expect(second).toEqual(first);
   });
 
   it('finalize leaves underfunded reusable onchain operations pending', async () => {
@@ -2253,7 +2220,14 @@ describe('MintOperationService', () => {
   });
 
   it('execute fails terminally when already issued proofs cannot be restored', async () => {
-    const pendingOp = makePendingOp('pending-2');
+    const onchainQuoteId = 'onchain-already-issued';
+    await persistOnchainQuote(onchainQuoteId, { paid: Amount.from(10) });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('pending-2'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      pubkey: '02'.padEnd(66, '1'),
+    };
     await operationRepo.create(pendingOp);
 
     (handler.execute as Mock<any>).mockResolvedValueOnce({ status: 'ALREADY_ISSUED' });
@@ -2265,15 +2239,15 @@ describe('MintOperationService', () => {
 
     expect(failed.state).toBe('failed');
     expect(failed.error).toBe(
-      `Recovered issued quote ${pendingOp.quoteId} but no proofs could be restored`,
+      `Recovered issued quote ${onchainQuoteId} but no proofs could be restored`,
     );
     expect(stored?.state).toBe('failed');
     expect(stored?.error).toBe(
-      `Recovered issued quote ${pendingOp.quoteId} but no proofs could be restored`,
+      `Recovered issued quote ${onchainQuoteId} but no proofs could be restored`,
     );
   });
 
-  it('recoverPendingOperations cleans init operations and reconciles stale pending ones', async () => {
+  it('recoverPendingOperations refuses ready BOLT11 work without a coordinator', async () => {
     const initOp = makeInitOp('init-1');
     const pendingOp = makePendingOp('pending-1');
 
@@ -2292,7 +2266,8 @@ describe('MintOperationService', () => {
     const pendingStored = await operationRepo.getById(pendingOp.id);
 
     expect(initStored).toBeNull();
-    expect(pendingStored?.state).toBe('finalized');
+    expect(pendingStored?.state).toBe('pending');
+    expect(handler.execute).not.toHaveBeenCalled();
   });
 
   it('checkPendingOperation leaves unpaid operations pending', async () => {

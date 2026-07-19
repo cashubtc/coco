@@ -959,10 +959,13 @@ export class MintIssuanceCoordinator {
       if (isTerminalAttempt(recovering)) {
         return this.requireTerminalOperation(operation.id, recovering.id);
       }
-      if (error instanceof MintOperationError && error.code === 20002) {
-        return this.reconcileSingleAttempt(recovering, executing);
+      if (error instanceof MintOperationError && MINT_QUOTE_STATE_ERROR_CODES.has(error.code)) {
+        return this.reconcileSingleAttempt(recovering, executing, false);
       }
-      throw error;
+      throw this.toRetryableRecoveryError(
+        error,
+        `Mint issuance attempt ${recovering.id} dispatch became ambiguous`,
+      );
     }
   }
 
@@ -1270,6 +1273,7 @@ export class MintIssuanceCoordinator {
   private async reconcileSingleAttempt(
     attempt: MintIssuanceAttempt,
     operation: MintOperationRecord,
+    resubmitPaid = true,
   ): Promise<MintOperation> {
     if (operation.method !== 'bolt11') {
       return this.reconcileLegacyMethodAttempt(attempt, operation);
@@ -1286,33 +1290,67 @@ export class MintIssuanceCoordinator {
     if (isTerminalAttempt(recovering)) {
       return this.requireTerminalOperation(operation.id, recovering.id);
     }
-    let remoteQuote;
+    let remoteQuote: MintQuote<'bolt11'>;
     try {
-      remoteQuote = await this.mintAdapter.checkMintQuote(
+      const checker = this.mintQuotePollingChecker;
+      if (!checker) throw new Error('Mint quote polling checker is unavailable');
+      const result = await checker.checkMintQuotesForPolling(recovering.mintUrl, 'bolt11', [
+        executing.quoteId,
+      ]);
+      if (result.partialFailure) throw result.partialFailure.error;
+      const isolatedError = result.errorsByQuoteId?.get(executing.quoteId);
+      if (isolatedError) throw isolatedError;
+      if (!result.observations.some((observation) => observation.quote === executing.quoteId)) {
+        throw new Error(
+          `Mint quote recovery did not return an attributable observation for ${executing.quoteId}`,
+        );
+      }
+      const persisted = await this.repositories.mintQuoteRepository.getMintQuote(
         recovering.mintUrl,
         'bolt11',
         executing.quoteId,
       );
-    } catch (error) {
-      const latest = await this.markRecovering(recovering, error);
-      if (isTerminalAttempt(latest)) {
-        return this.requireTerminalOperation(operation.id, latest.id);
+      if (!persisted || persisted.method !== 'bolt11') {
+        throw new Error(`Mint quote ${executing.quoteId} disappeared after recovery observation`);
       }
-      throw error;
+      remoteQuote = persisted;
+    } catch (error) {
+      return this.throwRecoverableAttemptError(
+        recovering,
+        this.toRetryableRecoveryError(
+          error,
+          `Mint issuance attempt ${recovering.id} quote recovery failed`,
+        ),
+      );
     }
-    if (remoteQuote.state === 'PAID') {
+    const remoteState = getMintQuoteRemoteState(remoteQuote);
+    if (remoteState === 'PAID') {
+      if (!resubmitPaid) {
+        return this.throwRecoverableAttemptError(
+          recovering,
+          new MintIssuanceRetryError(
+            `Mint issuance attempt ${recovering.id} remains claimable after a rejected dispatch`,
+          ),
+        );
+      }
       return this.dispatchSingleAttempt(recovering, executing);
     }
-    if (remoteQuote.state !== 'ISSUED') {
-      const latest = await this.markRecovering(
-        recovering,
-        new Error(`Mint quote ${executing.quoteId} remains ${remoteQuote.state}`),
-      );
-      if (isTerminalAttempt(latest)) {
-        return this.requireTerminalOperation(operation.id, latest.id);
+    if (remoteState === 'UNPAID') {
+      if (isMintQuoteExpired(remoteQuote)) {
+        return this.failAttempt(
+          recovering,
+          executing,
+          `Mint quote ${executing.quoteId} expired before issuance`,
+        );
       }
-      throw new Error(
-        `Cannot reconcile issuance attempt ${attempt.id}: quote is ${remoteQuote.state}`,
+      return this.requeueUnpaidSingleAttempt(recovering, executing);
+    }
+    if (remoteState !== 'ISSUED') {
+      return this.throwRecoverableAttemptError(
+        recovering,
+        new MintIssuanceRetryError(
+          `Cannot reconcile issuance attempt ${attempt.id}: quote is ${remoteState}`,
+        ),
       );
     }
 
@@ -1331,6 +1369,45 @@ export class MintIssuanceCoordinator {
       return this.failAttemptAsExternallyRedeemed(recovering, executing);
     }
     return this.completeAttempt(recovering, executing, recovered, true);
+  }
+
+  private async requeueUnpaidSingleAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord<'bolt11'>,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const reason = `Mint quote ${operation.quoteId} is unpaid after ambiguous issuance`;
+    const pending = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!currentAttempt) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      const executing = await this.requireOwnedBolt11Member(tx, attempt.id, operation.id);
+      const updated: PendingMintOperationRecord<'bolt11'> = {
+        ...executing,
+        state: 'pending',
+        attemptId: undefined,
+        outputData: serializeOutputData({ keep: [], send: [] }),
+        error: undefined,
+        terminalFailure: undefined,
+        updatedAt: now,
+      };
+      await tx.mintOperationRepository.update(updated);
+      await tx.mintIssuanceAttemptRepository.update({
+        ...currentAttempt,
+        state: 'rejected',
+        updatedAt: now,
+        recoveredAt: now,
+        terminalError: { message: reason, code: 'QUOTE_UNPAID' },
+      });
+      return updated;
+    });
+
+    this.schedule(pending.id);
+    await this.eventBus.emit('mint-op:requeue', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: toMintOperation(pending),
+    });
+    return toMintOperation(pending);
   }
 
   private async reconcileBatchAttempt(
@@ -1370,7 +1447,7 @@ export class MintIssuanceCoordinator {
     try {
       observedQuoteIds = await this.collectBatchRecoveryObservations(recovering);
     } catch (error) {
-      await this.throwRecoverableBatchError(
+      await this.throwRecoverableAttemptError(
         recovering,
         this.toRetryableRecoveryError(error, `Mint Batch ${recovering.id} quote check failed`),
       );
@@ -1381,7 +1458,7 @@ export class MintIssuanceCoordinator {
       const error = new MintIssuanceRetryError(
         `Mint Batch ${recovering.id} is missing attributable quote observations for ${missingQuoteIds.join(', ')}`,
       );
-      await this.throwRecoverableBatchError(recovering, error);
+      await this.throwRecoverableAttemptError(recovering, error);
     }
 
     const quotes = await Promise.all(
@@ -1396,7 +1473,7 @@ export class MintIssuanceCoordinator {
       const error = new MintIssuanceRetryError(
         `Mint Batch ${recovering.id} is missing canonical quote state after recovery checks`,
       );
-      await this.throwRecoverableBatchError(recovering, error);
+      await this.throwRecoverableAttemptError(recovering, error);
     }
     const states = bolt11Quotes.map((quote) => getMintQuoteRemoteState(quote));
 
@@ -1458,7 +1535,7 @@ export class MintIssuanceCoordinator {
         },
       );
     } catch (error) {
-      return this.throwRecoverableBatchError(
+      return this.throwRecoverableAttemptError(
         attempt,
         this.toRetryableRecoveryError(
           error,
@@ -1487,7 +1564,7 @@ export class MintIssuanceCoordinator {
       const error = new MintIssuanceRetryError(
         `Mint Batch ${attempt.id} returned unusable recovered proofs`,
       );
-      await this.throwRecoverableBatchError(attempt, error);
+      await this.throwRecoverableAttemptError(attempt, error);
     }
     await this.failBatchRecovery(
       context,
@@ -1505,7 +1582,7 @@ export class MintIssuanceCoordinator {
     return new MintIssuanceRetryError(`${context}: ${detail}`, error);
   }
 
-  private async throwRecoverableBatchError(
+  private async throwRecoverableAttemptError(
     attempt: MintIssuanceAttempt,
     error: Error,
   ): Promise<never> {
