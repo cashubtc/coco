@@ -154,6 +154,41 @@ describe('MemoryMintIssuanceAttemptRepository', () => {
     ).toBe(7);
   });
 
+  it('does not erase a direct repository write when a transaction rolls back', async () => {
+    const repositories = new MemoryRepositories();
+    let enterTransaction!: () => void;
+    let releaseTransaction!: () => void;
+    const transactionEntered = new Promise<void>((resolve) => {
+      enterTransaction = resolve;
+    });
+    const transactionRelease = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+
+    const transaction = repositories
+      .withTransaction(async (tx) => {
+        await tx.counterRepository.setCounter('https://mint.test', 'keyset-1', 1);
+        enterTransaction();
+        await transactionRelease;
+        throw new Error('roll back transaction');
+      })
+      .catch((error: unknown) => error);
+
+    await transactionEntered;
+    const directWrite = repositories.counterRepository.setCounter(
+      'https://mint.test',
+      'keyset-1',
+      7,
+    );
+    releaseTransaction();
+
+    await expect(transaction).resolves.toBeInstanceOf(Error);
+    await directWrite;
+    expect(
+      (await repositories.counterRepository.getCounter('https://mint.test', 'keyset-1'))?.counter,
+    ).toBe(7);
+  });
+
   it('rejects updates that change exact recovery material', async () => {
     const repositories = new MemoryRepositories();
     const attempt = createAttempt();

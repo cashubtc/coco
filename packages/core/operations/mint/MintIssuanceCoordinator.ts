@@ -534,6 +534,18 @@ export class MintIssuanceCoordinator {
       if (operation.state !== 'pending') {
         throw new Error(`Executing mint operation ${operation.id} is missing its issuance attempt`);
       }
+      if (operation.method === 'bolt11') {
+        const quote = await this.repositories.mintQuoteRepository.getMintQuote(
+          operation.mintUrl,
+          'bolt11',
+          operation.quoteId,
+        );
+        if (quote && getMintQuoteRemoteState(quote) === 'ISSUED') {
+          return this.failUnattachedIssuedOperation(
+            operation as PendingMintOperationRecord<'bolt11'>,
+          );
+        }
+      }
       const created = await this.createSingleBolt11Attempt(operation);
       attempt = created.attempt;
       if (created.newlyCreated) {
@@ -607,6 +619,56 @@ export class MintIssuanceCoordinator {
     }
 
     return this.createBolt11Attempt([candidate as PendingMintOperationRecord<'bolt11'>], false);
+  }
+
+  private async failUnattachedIssuedOperation(
+    operation: PendingMintOperationRecord<'bolt11'>,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const error = `Mint quote ${operation.quoteId} was issued before Coco created recoverable outputs`;
+    const failed = await this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintOperationRepository.getById(operation.id);
+      if (
+        !current ||
+        current.state !== 'pending' ||
+        current.method !== 'bolt11' ||
+        current.attemptId
+      ) {
+        throw new Error(
+          `Mint operation ${operation.id} changed before issued-quote reconciliation`,
+        );
+      }
+      const quote = await tx.mintQuoteRepository.getMintQuote(
+        current.mintUrl,
+        'bolt11',
+        current.quoteId,
+      );
+      if (!quote || getMintQuoteRemoteState(quote) !== 'ISSUED') {
+        throw new Error(`Mint quote ${current.quoteId} changed before issued-quote reconciliation`);
+      }
+      const updated: FailedMintOperationRecord<'bolt11'> = {
+        ...current,
+        method: 'bolt11',
+        state: 'failed',
+        error,
+        terminalFailure: {
+          reason: error,
+          code: 'quote_already_issued',
+          retryable: false,
+          observedAt: now,
+        },
+        updatedAt: now,
+      };
+      await tx.mintOperationRepository.update(updated);
+      return updated;
+    });
+
+    await this.eventBus.emit('mint-op:failed', {
+      mintUrl: failed.mintUrl,
+      operationId: failed.id,
+      operation: toMintOperation(failed),
+    });
+    return toMintOperation(failed);
   }
 
   private async createBolt11Attempt(
@@ -731,7 +793,9 @@ export class MintIssuanceCoordinator {
             advertisedLimit,
           );
           if (currentCandidates.length > currentLimit) {
-            throw new Error('Mint NUT-29 capability changed before attempt creation committed');
+            throw new MintIssuanceRetryError(
+              'Mint NUT-29 capability changed before attempt creation committed',
+            );
           }
         }
 
@@ -1065,7 +1129,9 @@ export class MintIssuanceCoordinator {
       for (const quoteId of unreconciledQuoteIds) newlyObservedQuoteIds.add(quoteId);
     }
     if (newlyObservedQuoteIds.size === 0) {
-      return toMintOperation(await this.requireOperation(targetOperationId));
+      throw new MintIssuanceRetryError(
+        `Mint Batch ${attempt.id} recovery produced no attributable quote observations`,
+      );
     }
 
     const quotesById = new Map<string, MintQuote<'bolt11'>>();

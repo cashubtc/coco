@@ -13,6 +13,7 @@ import {
   NetworkError,
   ProofValidationError,
 } from '../../models/Error.ts';
+import { MintIssuanceRetryError } from '../../models/MintIssuanceRetryError.ts';
 import {
   getMintQuoteRemoteState,
   mintQuoteFromBolt11Response,
@@ -31,6 +32,7 @@ import { MintOperationService } from '../../operations/mint/MintOperationService
 import type { MintMethodHandler } from '../../operations/mint/MintMethodHandler.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { Nut29BatchLimitCache } from '../../quotes/MintQuoteBatchTransport.ts';
+import { MemoryMintIssuanceAttemptRepository } from '../../repositories/memory/MemoryMintIssuanceAttemptRepository.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import type { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -452,6 +454,35 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(failedEvents[0]?.operation.state).toBe('failed');
   });
 
+  it('fails an unattached operation whose canonical quote was already issued', async () => {
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
+    });
+    await repositories.mintQuoteRepository.setMintQuoteState(
+      mintUrl,
+      'bolt11',
+      quoteId,
+      'ISSUED',
+      Date.now(),
+    );
+
+    const result = await service.finalize(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation).toMatchObject({
+      state: 'failed',
+      terminalFailure: { code: 'quote_already_issued', retryable: false },
+    });
+    expect(operation).not.toHaveProperty('attemptId');
+    await expect(
+      repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId),
+    ).resolves.toBeNull();
+    expect(walletMint).not.toHaveBeenCalled();
+    expect(failedEvents).toHaveLength(1);
+  });
+
   it('keeps a rejected single dispatch recoverable when canonical state remains paid', async () => {
     const existingQuote = await repositories.mintQuoteRepository.getMintQuote(
       mintUrl,
@@ -579,11 +610,12 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
   });
 
   it('rolls back the operation, attempt, and counter when attempt creation fails', async () => {
-    const create = repositories.mintIssuanceAttemptRepository.create.bind(
-      repositories.mintIssuanceAttemptRepository,
-    );
+    const create = MemoryMintIssuanceAttemptRepository.prototype.create;
     repositories.mintIssuanceAttemptRepository.create = mock(async (attempt) => {
-      await create(attempt);
+      await create.call(
+        repositories.mintIssuanceAttemptRepository as MemoryMintIssuanceAttemptRepository,
+        attempt,
+      );
       throw new Error('attempt transaction failed');
     });
 
@@ -981,7 +1013,9 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
 
     checkMintQuoteBatch.mockResolvedValue([]);
 
-    await coordinator.coordinate(peerOperationId);
+    await expect(coordinator.coordinate(peerOperationId)).rejects.toBeInstanceOf(
+      MintIssuanceRetryError,
+    );
 
     expect((await repositories.mintOperationRepository.getById(peerOperationId))?.state).toBe(
       'executing',
@@ -2547,7 +2581,9 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     coordinator.schedule(operationId);
     coordinator.schedule(peerOperationId);
 
-    await expect(coordinator.coordinate()).rejects.toThrow(
+    const capabilityError = await coordinator.coordinate().catch((error: unknown) => error);
+    expect(capabilityError).toBeInstanceOf(MintIssuanceRetryError);
+    expect((capabilityError as Error).message).toBe(
       'Mint NUT-29 capability changed before attempt creation committed',
     );
     expect(
