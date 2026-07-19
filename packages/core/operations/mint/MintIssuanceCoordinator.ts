@@ -89,6 +89,7 @@ const CONFIRMED_BATCH_REJECTION_CODE = 'CONFIRMED_BATCH_REJECTION';
 const AUTHENTICATION_ERROR_CODE_MIN = 30_000;
 const OUTPUTS_ALREADY_SIGNED_ERROR_CODE = 11_003;
 const NUT29_BATCH_SIZE_ERROR_CODE = 11_017;
+const MINT_QUOTE_EXPIRED_ERROR_CODE = 20_007;
 const MINT_QUOTE_STATE_ERROR_CODES = new Set([20_001, 20_002]);
 const INCOMPATIBLE_ENDPOINT_STATUSES = new Set([404, 405, 501]);
 const CONFIRMED_BATCH_REJECTION_KINDS: ConfirmedBatchRejectionKind[] = [
@@ -951,6 +952,9 @@ export class MintIssuanceCoordinator {
       this.assertExactProofSet(attempt, proofs);
       return await this.completeAttempt(attempt, executing, proofs, false);
     } catch (error) {
+      if (error instanceof MintOperationError && error.code === MINT_QUOTE_EXPIRED_ERROR_CODE) {
+        return this.failAttempt(submitting, executing, error.message);
+      }
       const recovering = await this.markRecovering(submitting, error);
       if (isTerminalAttempt(recovering)) {
         return this.requireTerminalOperation(operation.id, recovering.id);
@@ -1761,11 +1765,7 @@ export class MintIssuanceCoordinator {
         case 'ALREADY_ISSUED':
           return this.reconcileLegacyMethodAttempt(submitting, operation);
         case 'FAILED':
-          return this.failLegacyMethodAttempt(
-            submitting,
-            operation,
-            result.error ?? 'Mint execution failed',
-          );
+          return this.failAttempt(submitting, operation, result.error ?? 'Mint execution failed');
       }
     } catch (error) {
       const recovering = await this.markRecovering(submitting, error);
@@ -1804,7 +1804,7 @@ export class MintIssuanceCoordinator {
         return this.completeLegacyMethodAttempt(recovering, operation, proofs, true);
       }
       case 'TERMINAL':
-        return this.failLegacyMethodAttempt(recovering, operation, result.error);
+        return this.failAttempt(recovering, operation, result.error);
       case 'PENDING':
         throw new Error(
           result.error ?? `Legacy mint issuance attempt ${attempt.id} still requires recovery`,
@@ -1888,7 +1888,7 @@ export class MintIssuanceCoordinator {
     return toMintOperation(completed.operation);
   }
 
-  private async failLegacyMethodAttempt(
+  private async failAttempt(
     attempt: MintIssuanceAttempt,
     operation: ExecutingMintOperationRecord,
     error: string,

@@ -430,6 +430,28 @@ describe('MintOperationService durable single BOLT11 issuance', () => {
     expect(walletMint.mock.calls[0]?.[2]).toEqual({ keysetId });
   });
 
+  it('fails a coordinated single attempt when the mint quote expires during submission', async () => {
+    const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+    eventBus.on('mint-op:failed', (event) => {
+      failedEvents.push(event);
+    });
+    walletMint.mockRejectedValueOnce(new MintOperationError(20007, 'Quote expired'));
+
+    const result = await service.execute(operationId);
+
+    const operation = await repositories.mintOperationRepository.getById(operationId);
+    const attempt =
+      await repositories.mintIssuanceAttemptRepository.getByMemberOperationId(operationId);
+    expect(result.state).toBe('failed');
+    expect(operation?.state).toBe('failed');
+    expect(operation?.terminalFailure?.reason).toBe('Quote expired');
+    expect(attempt?.state).toBe('failed');
+    expect(attempt?.terminalError?.message).toBe('Quote expired');
+    await expect(service.canRetryIssuance(operationId)).resolves.toBe(false);
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]?.operation.state).toBe('failed');
+  });
+
   it('rejects returned proofs from a different keyset than the persisted outputs', async () => {
     walletMint.mockResolvedValueOnce([{ ...proof, id: 'rotated-keyset' }]);
 
