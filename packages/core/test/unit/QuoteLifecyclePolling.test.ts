@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { MintAdapter } from '../../infra/MintAdapter.ts';
+import { PollingTransport } from '../../infra/PollingTransport.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
+import { NullLogger } from '../../logging/NullLogger.ts';
 import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error.ts';
 import {
   mintQuoteFromBolt11Response,
@@ -20,6 +22,7 @@ import { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 import { MintService } from '../../services/MintService.ts';
 import type { ProofService } from '../../services/ProofService.ts';
 import type { WalletService } from '../../services/WalletService.ts';
+import { waitFor } from '../waitFor.ts';
 
 const mintUrl = 'https://mint.test';
 const expiry = Math.floor(Date.now() / 1000) + 3600;
@@ -582,6 +585,138 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(result.outcomes[0]?.status).toBe('updated');
     expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledWith(mintUrl, 'bolt11', ['quote-a']);
     expect(mintAdapter.checkMintQuote).not.toHaveBeenCalled();
+  });
+
+  it('batches Background Watcher requests through the quote lifecycle seam', async () => {
+    await persistBolt11Quote('quote-a');
+    await persistBolt11Quote('quote-b');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        quote: 'quote-b',
+        request: 'lnbc1quote-b',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'PAID',
+      },
+      {
+        quote: 'quote-a',
+        request: 'lnbc1quote-a',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'PAID',
+      },
+    ]);
+    const notifications: Array<{ params?: { payload?: { quote?: string } } }> = [];
+    const transport = new PollingTransport(
+      mintAdapter,
+      { intervalMs: 5_000 },
+      new NullLogger(),
+      quoteLifecycle,
+    );
+    transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
+    transport.pause();
+
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        kind: 'bolt11_mint_quote',
+        subId: 'background-watcher',
+        filters: ['quote-a', 'quote-b'],
+      },
+      id: 1,
+    });
+    transport.resume();
+    await waitFor(() => notifications.some(({ params }) => params?.payload?.quote === 'quote-b'));
+
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+    expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledWith(mintUrl, 'bolt11', [
+      'quote-a',
+      'quote-b',
+    ]);
+    expect(
+      notifications
+        .filter(({ params }) => params?.payload?.quote)
+        .map(({ params }) => params!.payload!.quote),
+    ).toEqual(['quote-a', 'quote-b']);
+    transport.closeAll();
+  });
+
+  it('keeps an Explicit Quote Check isolated from an in-flight watcher batch', async () => {
+    await persistBolt11Quote('watcher-a');
+    await persistBolt11Quote('watcher-b');
+    await persistBolt11Quote('explicit');
+    let resolveBatch!: () => void;
+    const batchGate = new Promise<void>((resolve) => {
+      resolveBatch = resolve;
+    });
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockImplementationOnce(
+      async () => {
+        await batchGate;
+        return [
+          {
+            quote: 'watcher-a',
+            request: 'lnbc1watcher-a',
+            amount: Amount.from(10),
+            unit: 'sat',
+            expiry,
+            state: 'PAID',
+          },
+          {
+            quote: 'watcher-b',
+            request: 'lnbc1watcher-b',
+            amount: Amount.from(10),
+            unit: 'sat',
+            expiry,
+            state: 'PAID',
+          },
+        ];
+      },
+    );
+    const notifications: Array<{ params?: { payload?: { quote?: string } } }> = [];
+    const transport = new PollingTransport(
+      mintAdapter,
+      { intervalMs: 5_000 },
+      new NullLogger(),
+      quoteLifecycle,
+    );
+    transport.on(mintUrl, 'message', (event) => notifications.push(JSON.parse(event.data)));
+    transport.pause();
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        kind: 'bolt11_mint_quote',
+        subId: 'background-watcher',
+        filters: ['watcher-a', 'watcher-b'],
+      },
+      id: 1,
+    });
+    transport.resume();
+    await waitFor(
+      () => (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mock.calls.length === 1,
+    );
+
+    let explicitQuote: MintQuote | undefined;
+    let explicitError: unknown;
+    void quoteLifecycle
+      .refreshMintQuoteById({ mintUrl, quoteId: 'explicit' })
+      .then((quote) => {
+        explicitQuote = quote;
+      })
+      .catch((error: unknown) => {
+        explicitError = error;
+      });
+    await waitFor(() => explicitQuote !== undefined || explicitError !== undefined);
+
+    expect(explicitError).toBeUndefined();
+    expect(explicitQuote?.quoteId).toBe('explicit');
+    expect(fetchRemoteMintQuote).toHaveBeenCalledTimes(1);
+    resolveBatch();
+    await waitFor(() => notifications.some(({ params }) => params?.payload?.quote === 'watcher-b'));
+    transport.closeAll();
   });
 
   it('keeps explicit quote refresh on the existing single-quote handler path', async () => {

@@ -508,6 +508,11 @@ export class QuoteLifecycle {
     return this.mintQuoteRepository.getPendingMintQuotes(method);
   }
 
+  /** Returns the advertised and safety-capped size for one Background Watcher opportunity. */
+  async getMintQuotePollingLimit(mintUrl: string, method: MintMethod): Promise<number> {
+    return this.mintService.getNut29MintQuoteCheckLimit(mintUrl, method);
+  }
+
   /**
    * Checks selected mint quotes through the lifecycle polling seam.
    *

@@ -416,6 +416,43 @@ describe('MintService', () => {
 
       await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(false);
     });
+
+    it('bounds the advertised NUT-29 mint quote check limit at 100', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'], max_batch_size: 250 },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(100);
+    });
+
+    it('uses 100 when NUT-29 omits its mint quote check limit', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'] },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(100);
+    });
+
+    it('uses one quote when NUT-29 is unsupported or advertises an invalid limit', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'], max_batch_size: 0 },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(1);
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt12')).resolves.toBe(1);
+    });
   });
 
   describe('method-unit capabilities', () => {

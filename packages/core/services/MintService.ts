@@ -18,6 +18,31 @@ import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } fro
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
+function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
+  const nuts = mintInfo.nuts as unknown;
+  if (!nuts || typeof nuts !== 'object') return false;
+
+  const nut29 = (nuts as Record<string, unknown>)['29'];
+  if (!nut29 || typeof nut29 !== 'object') return false;
+  const methods = (nut29 as { methods?: unknown }).methods;
+  if (methods !== undefined) return Array.isArray(methods) && methods.includes(method);
+
+  const nut4 = (nuts as Record<string, unknown>)['4'];
+  if (!nut4 || typeof nut4 !== 'object' || (nut4 as { disabled?: unknown }).disabled === true) {
+    return false;
+  }
+  const mintMethods = (nut4 as { methods?: unknown }).methods;
+  return (
+    Array.isArray(mintMethods) &&
+    mintMethods.some(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        (entry as { method?: unknown }).method === method,
+    )
+  );
+}
+
 export interface MethodUnitCapability {
   supported: boolean;
   disabled: boolean;
@@ -250,28 +275,24 @@ export class MintService {
    */
   async supportsNut29MintQuoteCheck(mintUrl: string, method: string): Promise<boolean> {
     const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
-    const nuts = mintInfo.nuts as unknown;
-    if (!nuts || typeof nuts !== 'object') return false;
+    return supportsNut29MintQuoteCheckFromInfo(mintInfo, method);
+  }
 
-    const nut29 = (nuts as Record<string, unknown>)['29'];
-    if (!nut29 || typeof nut29 !== 'object') return false;
-    const methods = (nut29 as { methods?: unknown }).methods;
-    if (methods !== undefined) return Array.isArray(methods) && methods.includes(method);
+  /**
+   * Returns the bounded NUT-29 mint quote check limit for one polling group.
+   *
+   * Unsupported methods and malformed advertised limits use one quote per polling
+   * opportunity. An omitted limit uses Coco's protocol safety cap of 100.
+   */
+  async getNut29MintQuoteCheckLimit(mintUrl: string, method: string): Promise<number> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 1;
 
-    const nut4 = (nuts as Record<string, unknown>)['4'];
-    if (!nut4 || typeof nut4 !== 'object' || (nut4 as { disabled?: unknown }).disabled === true) {
-      return false;
-    }
-    const mintMethods = (nut4 as { methods?: unknown }).methods;
-    return (
-      Array.isArray(mintMethods) &&
-      mintMethods.some(
-        (entry) =>
-          entry !== null &&
-          typeof entry === 'object' &&
-          (entry as { method?: unknown }).method === method,
-      )
-    );
+    const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
+    const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
+    if (maxBatchSize === undefined) return 100;
+    if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
+    return Math.min(Number(maxBatchSize), 100);
   }
 
   /**

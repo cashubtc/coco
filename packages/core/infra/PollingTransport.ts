@@ -8,6 +8,10 @@ import type {
 } from './SubscriptionProtocol.ts';
 import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
+import { mintQuoteToMethodSnapshot } from '../models/MintQuote.ts';
+import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
+import type { MintQuotePollingOperation } from '../quotes/MintQuotePolling.ts';
+import { normalizeMintUrl } from '../utils.ts';
 
 type Task = {
   subId?: string; // undefined for proof batch sentinel
@@ -33,6 +37,12 @@ const SUPPORTED_POLLING_KINDS = new Set<SubscriptionKind>([
   'proof_state',
 ]);
 
+const MINT_QUOTE_METHOD_BY_KIND: Partial<Record<SubscriptionKind, MintMethod>> = {
+  bolt11_mint_quote: 'bolt11',
+  bolt12_mint_quote: 'bolt12',
+  onchain_mint_quote: 'onchain',
+};
+
 export interface PollingOptions {
   intervalMs?: number; // minimum interval between requests per mint
 }
@@ -40,6 +50,7 @@ export interface PollingOptions {
 export class PollingTransport implements RealTimeTransport {
   private readonly logger?: Logger;
   private readonly mintAdapter: MintAdapter;
+  private readonly mintQuotePolling?: MintQuotePollingOperation;
   private readonly options: Required<PollingOptions>;
   private readonly listenersByMint = new Map<
     string,
@@ -55,9 +66,15 @@ export class PollingTransport implements RealTimeTransport {
   private readonly unsubscribedByMint = new Map<string, Set<string>>();
   private paused = false;
 
-  constructor(mintAdapter: MintAdapter, options?: PollingOptions, logger?: Logger) {
+  constructor(
+    mintAdapter: MintAdapter,
+    options?: PollingOptions,
+    logger?: Logger,
+    mintQuotePolling?: MintQuotePollingOperation,
+  ) {
     this.logger = logger;
     this.mintAdapter = mintAdapter;
+    this.mintQuotePolling = mintQuotePolling;
     this.options = {
       intervalMs: options?.intervalMs ?? 5000,
     };
@@ -68,6 +85,7 @@ export class PollingTransport implements RealTimeTransport {
     event: 'open' | 'message' | 'error' | 'close',
     handler: (evt: any) => void,
   ): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     let map = this.listenersByMint.get(mintUrl);
     if (!map) {
       map = new Map();
@@ -97,6 +115,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   send(mintUrl: string, req: WsRequest): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     if (req.method === 'subscribe') {
       const params = req.params as SubscribeParams;
       const subId = params.subId;
@@ -254,6 +273,7 @@ export class PollingTransport implements RealTimeTransport {
   }
 
   closeMint(mintUrl: string): void {
+    mintUrl = normalizeMintUrl(mintUrl);
     this.schedByMint.delete(mintUrl);
     this.listenersByMint.delete(mintUrl);
     this.proofQueueByMint.delete(mintUrl);
@@ -281,7 +301,7 @@ export class PollingTransport implements RealTimeTransport {
    * If not set, the default interval from constructor options is used.
    */
   setIntervalForMint(mintUrl: string, intervalMs: number): void {
-    this.intervalByMint.set(mintUrl, intervalMs);
+    this.intervalByMint.set(normalizeMintUrl(mintUrl), intervalMs);
   }
 
   /**
@@ -319,22 +339,17 @@ export class PollingTransport implements RealTimeTransport {
 
     s.running = true;
     const task = s.queue.shift()!;
+    let opportunity = [task];
 
     try {
-      await this.performTask(mintUrl, task);
-
-      // Re-enqueue for fairness, but only if not unsubscribed during processing
-      const unsubscribed = this.unsubscribedByMint.get(mintUrl);
-      const wasUnsubscribed = task.subId && unsubscribed?.has(task.subId);
-
-      if (wasUnsubscribed) {
-        // Task was unsubscribed during processing, don't re-enqueue
-        unsubscribed!.delete(task.subId!);
-      } else {
-        s.queue.push(task);
-      }
+      opportunity = await this.selectOpportunity(mintUrl, task, s);
+      await this.performOpportunity(mintUrl, opportunity);
+      this.requeueOpportunity(mintUrl, s, opportunity);
     } catch (err) {
       this.logger?.error('Polling task error', { mintUrl, err });
+      if (this.getMintQuoteMethod(task.kind) && this.mintQuotePolling) {
+        this.requeueOpportunity(mintUrl, s, opportunity);
+      }
     } finally {
       s.nextAllowedAt = Date.now() + this.getIntervalForMint(mintUrl);
       s.running = false;
@@ -343,6 +358,87 @@ export class PollingTransport implements RealTimeTransport {
       setTimeout(() => {
         void this.maybeRun(mintUrl);
       }, delay);
+    }
+  }
+
+  private async selectOpportunity(
+    mintUrl: string,
+    first: Task,
+    scheduler: MintScheduler,
+  ): Promise<Task[]> {
+    const method = this.getMintQuoteMethod(first.kind);
+    if (!method || !this.mintQuotePolling || !first.filter) return [first];
+
+    const advertisedLimit = await this.mintQuotePolling.getMintQuotePollingLimit(mintUrl, method);
+    const limit = Math.max(1, Math.min(100, Math.floor(advertisedLimit)));
+    if (limit === 1) return [first];
+
+    const selected = [first];
+    const selectedQuoteIds = new Set([first.filter]);
+    const remaining: Task[] = [];
+    for (const candidate of scheduler.queue) {
+      const isCompatible = candidate.kind === first.kind && candidate.filter !== undefined;
+      const isSelectedDuplicate = isCompatible && selectedQuoteIds.has(candidate.filter as string);
+      if (isSelectedDuplicate || (isCompatible && selectedQuoteIds.size < limit)) {
+        selected.push(candidate);
+        selectedQuoteIds.add(candidate.filter!);
+      } else {
+        remaining.push(candidate);
+      }
+    }
+    scheduler.queue = remaining;
+    return selected;
+  }
+
+  private requeueOpportunity(mintUrl: string, scheduler: MintScheduler, opportunity: Task[]): void {
+    const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+    const removedSubIds = new Set<string>();
+    for (const task of opportunity) {
+      if (task.subId && unsubscribed?.has(task.subId)) {
+        removedSubIds.add(task.subId);
+      } else {
+        scheduler.queue.push(task);
+      }
+    }
+    for (const subId of removedSubIds) unsubscribed?.delete(subId);
+  }
+
+  private getMintQuoteMethod(kind: Task['kind']): MintMethod | undefined {
+    return MINT_QUOTE_METHOD_BY_KIND[kind];
+  }
+
+  private async performOpportunity(mintUrl: string, opportunity: Task[]): Promise<void> {
+    const first = opportunity[0]!;
+    const method = this.getMintQuoteMethod(first.kind);
+    if (!method || !this.mintQuotePolling) {
+      await this.performTask(mintUrl, first);
+      return;
+    }
+
+    const quoteIds = Array.from(
+      new Set(opportunity.map(({ filter }) => filter).filter((filter) => filter !== undefined)),
+    );
+    const result = await this.mintQuotePolling.checkMintQuotesForPolling(
+      method,
+      quoteIds.map((quoteId) => ({ mintUrl, quoteId })),
+    );
+    const outcomesByQuoteId = new Map(
+      result.outcomes.map((outcome) => [outcome.identity.quoteId, outcome]),
+    );
+    const unsubscribed = this.unsubscribedByMint.get(mintUrl);
+    for (const task of opportunity) {
+      if (!task.subId || !task.filter || unsubscribed?.has(task.subId)) continue;
+      const outcome = outcomesByQuoteId.get(task.filter);
+      if (outcome?.status !== 'updated' || outcome.quote.method !== method) continue;
+      const notification: WsNotification<unknown> = {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: task.subId,
+          payload: mintQuoteToMethodSnapshot(outcome.quote),
+        },
+      };
+      this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
     }
   }
 
