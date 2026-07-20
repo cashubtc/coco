@@ -5,6 +5,7 @@ By default, when using `initializeCoco()`, all watchers and processors are autom
 ```ts
 await coco.enableMintOperationProcessor();
 await coco.enableMeltSettlementProcessor();
+await coco.enableMintSwapOperationProcessor();
 await coco.enableProofStateWatcher();
 await coco.enableMintOperationWatcher();
 await coco.enableMeltQuoteWatcher();
@@ -12,6 +13,7 @@ await coco.enableMeltQuoteWatcher();
 
 `initializeCoco()` also recovers pending `coco.ops.send`, `coco.ops.receive`, and `coco.ops.melt`
 operations during startup, so most apps do not need to trigger recovery manually.
+Mint-swap recovery runs after its owned children and before live watchers start.
 
 To disable them during initialization with `initializeCoco()`:
 
@@ -27,6 +29,7 @@ const coco = await initializeCoco({
   processors: {
     mintOperationProcessor: { disabled: true },
     meltSettlementProcessor: { disabled: true },
+    mintSwapOperationProcessor: { disabled: true },
   },
 });
 ```
@@ -61,6 +64,13 @@ quote notifications or manual refresh after transient failures.
 
 This module will check the state of proofs known to coco and update their state automatically.
 
+## MintSwapOperationProcessor
+
+This processor reconciles durable parent mint-swap states. Child and quote events wake exact
+parents quickly, while periodic due-state sweeps close event-loss and restart windows. Retry timing
+and event publication failures are persisted; retry counts never turn remote ambiguity into a
+terminal result. It also publishes committed parent outbox events.
+
 ## Pausing and Resuming Subscriptions
 
 For energy efficiency and battery savings (especially on mobile devices), you can pause and resume all subscriptions, watchers, and processors. This is particularly useful when your app is backgrounded or minimized:
@@ -80,7 +90,7 @@ When `pauseSubscriptions()` is called:
 - All WebSocket connections are closed immediately
 - Reconnection attempts are disabled to save battery
 - All watchers (`MintOperationWatcher`, `MeltQuoteWatcher`, `ProofStateWatcher`) are stopped
-- The `MintOperationProcessor` and `MeltSettlementProcessor` are stopped
+- The `MintOperationProcessor`, `MeltSettlementProcessor`, and `MintSwapOperationProcessor` are stopped
 
 ### What happens during resume?
 
