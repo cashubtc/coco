@@ -15,7 +15,12 @@ export type {
 } from './types.ts';
 export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
-export { type Logger, ConsoleLogger } from './logging/index.ts';
+export {
+  type Logger,
+  ConsoleLogger,
+  redactSensitiveValue,
+  sensitiveValueFingerprint,
+} from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
 export type {
   P2pkSendMethodData,
@@ -60,6 +65,38 @@ export type {
   MintOperationState,
   TerminalMintOperation,
 } from './operations/mint/MintOperation.ts';
+export {
+  assertMintSwapTransition,
+  assertPreparedMintSwapImmutable,
+  canTransitionMintSwap,
+  createMintSwapPreparedPlanFingerprint,
+  isAutomaticMintSwapState,
+  isTerminalMintSwapState,
+  validateMintSwapAccounting,
+  validateMintSwapOperation,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  MintSwapOperationService,
+  MintSwapPreparationError,
+} from './operations/mintSwap/MintSwapOperationService.ts';
+export type {
+  ListMintSwapInput,
+  PrepareMintSwapInput,
+} from './operations/mintSwap/MintSwapOperationService.ts';
+export type {
+  MintSwapAttentionReason,
+  MintSwapAttentionRecord,
+  MintSwapEventType,
+  MintSwapNut20KeyRef,
+  MintSwapOperation,
+  MintSwapOperationState,
+  MintSwapPreparedPlan,
+  MintSwapPreparedPlanFingerprintInput,
+  MintSwapQuoteRef,
+  MintSwapRetry,
+  MintSwapSettlement,
+  MintSwapTerminalFailure,
+} from './operations/mintSwap/MintSwapOperation.ts';
 export type {
   MeltMethod,
   MeltMethodData,
