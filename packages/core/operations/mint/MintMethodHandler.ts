@@ -1,6 +1,5 @@
 import type {
   Amount,
-  MintQuoteBolt11Response,
   MintQuoteOnchainResponse,
   MintQuoteBolt12Response,
   Proof,
@@ -21,7 +20,7 @@ import type {
 } from './MintOperation';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
-import type { MintQuote } from '../../models/MintQuote';
+import type { AccountingMintQuoteBolt11Response, MintQuote } from '../../models/MintQuote';
 
 /**
  * Registry of supported mint methods and payload shapes.
@@ -30,12 +29,15 @@ import type { MintQuote } from '../../models/MintQuote';
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
-    createQuoteData: { amount: UnitAmount };
+    createQuoteData: { amount: UnitAmount; pubkey?: string };
     quoteData: {
       amount: Amount;
+      amountPaid?: Amount;
+      amountIssued?: Amount;
+      remoteUpdatedAt?: number;
     };
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
-    quote: MintQuoteBolt11Response;
+    quote: AccountingMintQuoteBolt11Response;
   };
   onchain: {
     methodData: Record<string, never>;

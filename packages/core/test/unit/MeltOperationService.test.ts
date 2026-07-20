@@ -1878,5 +1878,33 @@ describe('MeltOperationService', () => {
         meltOperationRepository.create(makePreparedOp('op-quote-2', { quoteId: 'quote-dupe' })),
       ).rejects.toThrow('MeltOperation already exists');
     });
+
+    it('rejects direct execution of a parent-owned source child', async () => {
+      const operation = makePreparedOp('owned-melt', {
+        parentSwapOperationId: 'swap-parent',
+      });
+      await meltOperationRepository.create(operation);
+
+      await expect(service.execute(operation.id)).rejects.toThrow('owned by mint swap swap-parent');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('commits owned source authorization before remote execution', async () => {
+      const operation = makePreparedOp('owned-melt-barrier', {
+        parentSwapOperationId: 'swap-parent',
+      });
+      await meltOperationRepository.create(operation);
+
+      const executing = await service.authorizeOwnedExecutionInTransaction(
+        operation.id,
+        'swap-parent',
+        { meltOperationRepository } as any,
+      );
+
+      expect((await meltOperationRepository.getById(operation.id))?.state).toBe('executing');
+      expect(handler.execute).not.toHaveBeenCalled();
+      await service.executeOwnedRemote(executing, 'swap-parent');
+      expect(handler.execute).toHaveBeenCalledTimes(1);
+    });
   });
 });
