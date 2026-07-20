@@ -427,7 +427,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
-  it('derives a BOLT11 polling state from quote accounting when state is omitted', async () => {
+  it('rejects accounting-only BOLT11 polling snapshots without changing canonical state', async () => {
     await persistBolt11Quote('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -447,10 +447,12 @@ describe('QuoteLifecycle mint quote polling', () => {
     ]);
 
     expect(result.outcomes[0]).toMatchObject({
-      status: 'updated',
-      quote: { method: 'bolt11', state: 'PAID' },
+      status: 'failed',
+      failure: { category: 'validation' },
     });
-    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+    const canonical = await mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a');
+    expect(canonical?.state).toBe('UNPAID');
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
   it('records attributable BOLT12 and on-chain observations', async () => {

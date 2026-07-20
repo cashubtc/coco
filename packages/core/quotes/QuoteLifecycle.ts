@@ -90,34 +90,6 @@ function hasReusableSettlementAmounts(snapshot: {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
 }
 
-function normalizeBolt11MintQuotePollingState(
-  snapshot: MintMethodQuoteSnapshot<'bolt11'>,
-): MintMethodRemoteState<'bolt11'> {
-  const accounting = snapshot as MintMethodQuoteSnapshot<'bolt11'> & {
-    amount_paid?: unknown;
-    amount_issued?: unknown;
-  };
-  const hasAmountPaid = accounting.amount_paid !== undefined;
-  const hasAmountIssued = accounting.amount_issued !== undefined;
-  if (hasAmountPaid !== hasAmountIssued) {
-    throw new ProofValidationError(
-      'BOLT11 mint quote batch observation has incomplete accounting fields',
-    );
-  }
-  if (hasAmountPaid) {
-    const amountPaid = Amount.from(accounting.amount_paid as AmountLike);
-    const amountIssued = Amount.from(accounting.amount_issued as AmountLike);
-    if (amountPaid.lessThan(amountIssued)) {
-      throw new ProofValidationError(
-        'BOLT11 mint quote batch observation has amount_issued greater than amount_paid',
-      );
-    }
-    if (amountPaid.isZero()) return 'UNPAID';
-    return amountPaid.greaterThan(amountIssued) ? 'PAID' : 'ISSUED';
-  }
-  return snapshot.state;
-}
-
 function assertMintQuotePollingSnapshotStructureUnchecked(
   method: MintMethod,
   snapshot: MintMethodQuoteSnapshot,
@@ -140,11 +112,13 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
   if (method === 'bolt11') {
     const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
     const amount = Amount.from(bolt11.amount as AmountLike);
-    const state = normalizeBolt11MintQuotePollingState(bolt11);
-    if (amount.isZero() || (state !== 'UNPAID' && state !== 'PAID' && state !== 'ISSUED')) {
+    if (
+      amount.isZero() ||
+      (bolt11.state !== 'UNPAID' && bolt11.state !== 'PAID' && bolt11.state !== 'ISSUED')
+    ) {
       throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
     }
-    return { ...bolt11, state };
+    return bolt11;
   }
 
   const reusable = snapshot as
