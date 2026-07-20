@@ -295,6 +295,7 @@ export interface MeltOperationRow {
   changeAmount?: string | number | null;
   effectiveFee?: string | number | null;
   finalizedDataJson?: string | null;
+  parentSwapOperationId?: string | null;
 }
 
 export interface AuthSessionRow {
@@ -325,4 +326,41 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+  parentSwapOperationId?: string | null;
+}
+
+export interface MintSwapOperationRow {
+  id: string;
+  state:
+    | 'preparing'
+    | 'prepared'
+    | 'source_inflight'
+    | 'destination_funded'
+    | 'issuing'
+    | 'completed'
+    | 'cancelled'
+    | 'failed'
+    | 'needs_attention';
+  revision: number;
+  sourceMintUrl: string;
+  destinationMintUrl: string;
+  destinationMintOperationId?: string;
+  sourceMeltOperationId?: string;
+  nextAttemptAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  recordJson: string;
+}
+
+export interface OperationEventOutboxRow {
+  id: string;
+  operationId: string;
+  revision: number;
+  eventType: string;
+  payloadJson: string;
+  createdAt: number;
+  publishedAt?: number;
+  publishAttempts: number;
+  nextAttemptAt?: number;
+  lastError?: string;
 }

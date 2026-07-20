@@ -1,5 +1,21 @@
 # Migrating from v1
 
+## Mint-swap storage and background recovery
+
+Current storage adapters automatically add durable mint-swap parent, outbox, and child-ownership
+records during `init()`. Applications with custom adapters must implement the new
+`mintSwapOperationRepository` and `operationEventOutboxRepository` contracts and include them in
+the same transaction scope as proofs, mint operations, and melt operations.
+
+`initializeCoco()` enables `MintSwapOperationProcessor` by default. It recovers owned children
+before parent reconciliation, publishes durable lifecycle events, and runs periodic due-state
+sweeps. If an application previously assumed it controlled every background task, explicitly set
+`processors.mintSwapOperationProcessor.disabled` and drive `ops.mintSwap.refresh()` itself.
+
+Grouped history now includes `type: 'mint-swap'`. Parent-owned mint and melt children are hidden
+from the default history list, so consumers with exhaustive history-type switches must add the new
+parent type.
+
 This release is a v2 compatibility cut. It changes several user-facing
 boundaries that v1 applications, React apps, plugins, and custom storage
 adapters may depend on:

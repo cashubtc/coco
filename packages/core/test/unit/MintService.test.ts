@@ -299,6 +299,26 @@ describe('MintService', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('checks recovery and security NUT capabilities through the same typed API', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '7': { supported: true },
+          '8': { supported: false },
+          '9': { supported: true },
+          '17': { supported: [{ method: 'bolt11', unit: 'sat', commands: ['subscribe'] }] },
+          '20': { supported: true },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 7)).resolves.toBe(true);
+      await expect(service.supportsNut(testMintUrl, 8)).resolves.toBe(false);
+      await expect(service.assertNutSupported(testMintUrl, 9)).resolves.toBeUndefined();
+      await expect(service.assertNutSupported(testMintUrl, 17)).resolves.toBeUndefined();
+      await expect(service.assertNutSupported(testMintUrl, 20)).resolves.toBeUndefined();
+    });
+
     it('returns false and rejects when NUT-11 metadata is missing', async () => {
       useMintInfo({
         ...mockMintInfo,

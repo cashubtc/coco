@@ -163,7 +163,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     const quoteKeys = new Set<string>();
 
     for (const entry of operationEntries) {
-      if (entry.source !== 'operation') continue;
+      if (entry.source !== 'operation' || entry.type === 'mint-swap') continue;
       operationKeys.add(this.operationKey(entry.type, entry.operationId));
       if ((entry.type === 'mint' || entry.type === 'melt') && entry.quoteId) {
         quoteKeys.add(this.quoteKey(entry.type, entry.mintUrl, entry.quoteId));

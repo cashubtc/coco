@@ -46,6 +46,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId ?? undefined,
   };
 
   if (!isPreparedState(row.state)) {
@@ -124,6 +125,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       changeOutputDataJson: null,
       swapOutputDataJson: null,
       finalizedDataJson: null,
+      parentSwapOperationId: operation.parentSwapOperationId ?? null,
     };
   }
 
@@ -160,6 +162,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       operation.state === 'finalized' && settlement.finalizedData !== undefined
         ? JSON.stringify(settlement.finalizedData)
         : null,
+    parentSwapOperationId: operation.parentSwapOperationId ?? null,
   };
 };
 
@@ -201,6 +204,9 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
       const existing = await table.get(operation.id);
       if (!existing) {
         throw new Error(`MeltOperation with id ${operation.id} not found`);
+      }
+      if ((existing.parentSwapOperationId ?? undefined) !== operation.parentSwapOperationId) {
+        throw new Error(`Cannot change parent ownership of MeltOperation ${operation.id}`);
       }
 
       const quoteId = getOperationQuoteId(operation);

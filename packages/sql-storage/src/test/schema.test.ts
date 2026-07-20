@@ -43,6 +43,8 @@ const EXPECTED_MIGRATION_IDS = [
   '034_clean_unquoted_mint_operations',
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
+  '037_mint_swap_operations_and_outbox',
+  '038_mint_swap_child_ownership',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -179,6 +181,40 @@ describe('shared SQL schema migrations', () => {
     const ids = await getMigrationIds(db);
     expect(ids).toEqual(
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
+    );
+  });
+
+  itWithDatabase('adds mint-swap parent and outbox constraints on upgrade', async (db) => {
+    await ensureSchemaUpTo(db, '037_mint_swap_operations_and_outbox');
+    expect(await getColumnNames(db, 'coco_cashu_mint_swap_operations')).toEqual([]);
+
+    await ensureSchemaUpTo(db);
+
+    expect(await getColumnTypes(db, 'coco_cashu_mint_swap_operations')).toMatchObject({
+      id: 'TEXT',
+      revision: 'INTEGER',
+      recordJson: 'TEXT',
+    });
+    expect(await getIndexNames(db, 'coco_cashu_mint_swap_operations')).toEqual(
+      expect.arrayContaining([
+        'idx_coco_cashu_mint_swap_operations_state',
+        'idx_coco_cashu_mint_swap_operations_due',
+      ]),
+    );
+    expect(await getIndexNames(db, 'coco_cashu_operation_event_outbox')).toEqual(
+      expect.arrayContaining(['idx_coco_cashu_operation_event_outbox_unpublished']),
+    );
+    expect(await getColumnNames(db, 'coco_cashu_mint_operations')).toContain(
+      'parentSwapOperationId',
+    );
+    expect(await getColumnNames(db, 'coco_cashu_melt_operations')).toContain(
+      'parentSwapOperationId',
+    );
+    expect(await getIndexNames(db, 'coco_cashu_mint_operations')).toContain(
+      'idx_coco_cashu_mint_operations_parent_swap',
+    );
+    expect(await getIndexNames(db, 'coco_cashu_melt_operations')).toContain(
+      'idx_coco_cashu_melt_operations_parent_swap',
     );
   });
 

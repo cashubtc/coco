@@ -15,9 +15,19 @@ import type { Keyset } from '../models/Keyset';
 import type { Mint } from '../models/Mint';
 import type { ReceiveOperation } from '../operations/receive/ReceiveOperation';
 import type { SendOperation } from '../operations/send/SendOperation';
+import type { MintSwapEventPayload } from '../models/OperationEventOutbox.ts';
 import type { CoreProof, ProofState } from '../types';
 
 export interface CoreEvents {
+  'mint-swap-op:prepared': MintSwapEventPayload;
+  'mint-swap-op:source-inflight': MintSwapEventPayload;
+  'mint-swap-op:destination-funded': MintSwapEventPayload;
+  'mint-swap-op:issuing': MintSwapEventPayload;
+  'mint-swap-op:completed': MintSwapEventPayload;
+  'mint-swap-op:cancelled': MintSwapEventPayload;
+  'mint-swap-op:failed': MintSwapEventPayload;
+  'mint-swap-op:needs-attention': MintSwapEventPayload;
+  'mint-swap-op:delayed': MintSwapEventPayload;
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
   'mint:trusted': { mintUrl: string };

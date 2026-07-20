@@ -16,8 +16,12 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   }
 
   async update(operation: MeltOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const existing = this.operations.get(operation.id);
+    if (!existing) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
+    }
+    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
+      throw new Error(`Cannot change parent ownership of MeltOperation ${operation.id}`);
     }
     this.assertNoDuplicateQuoteOperation(operation);
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });

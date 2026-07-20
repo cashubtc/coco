@@ -1,10 +1,16 @@
-import type { HistoryProjectionRepository } from '../repositories';
+import type { HistoryProjectionRepository, MintSwapOperationRepository } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
-import type { HistoryEntry, OperationHistoryEntry } from '@core/models/History';
+import type {
+  HistoryFilter,
+  HistoryEntry,
+  MintSwapHistoryEntry,
+  OperationHistoryEntry,
+} from '@core/models/History';
 import {
   projectMeltOperation,
   projectMintOperation,
+  projectMintSwapOperation,
   projectReceiveOperation,
   projectSendOperation,
 } from '@core/models/History';
@@ -24,6 +30,7 @@ export class HistoryService {
     historyRepository: HistoryProjectionRepository,
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
+    private readonly mintSwapRepository?: MintSwapOperationRepository,
   ) {
     this.historyRepository = historyRepository;
     this.logger = logger;
@@ -74,14 +81,92 @@ export class HistoryService {
     this.eventBus.on('receive-op:rolled-back', ({ mintUrl, operation }) => {
       return this.emitProjectedReceive(mintUrl, operation);
     });
+
+    const emitMintSwap = async ({ operationId }: { operationId: string }) => {
+      const operation = await this.mintSwapRepository?.getById(operationId);
+      if (!operation) return;
+      await this.eventBus.emit('history:updated', {
+        mintUrl: operation.sourceMintUrl,
+        entry: projectMintSwapOperation(operation),
+      });
+    };
+    this.eventBus.on('mint-swap-op:prepared', emitMintSwap);
+    this.eventBus.on('mint-swap-op:source-inflight', emitMintSwap);
+    this.eventBus.on('mint-swap-op:destination-funded', emitMintSwap);
+    this.eventBus.on('mint-swap-op:issuing', emitMintSwap);
+    this.eventBus.on('mint-swap-op:completed', emitMintSwap);
+    this.eventBus.on('mint-swap-op:cancelled', emitMintSwap);
+    this.eventBus.on('mint-swap-op:failed', emitMintSwap);
+    this.eventBus.on('mint-swap-op:needs-attention', emitMintSwap);
   }
 
-  async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
-    return this.historyRepository.getPaginatedHistoryEntries(limit, offset);
+  async getPaginatedHistory(
+    offset = 0,
+    limit = 25,
+    filter: HistoryFilter = {},
+  ): Promise<HistoryEntry[]> {
+    if (!this.mintSwapRepository) {
+      if (!filter.mintUrl && !filter.types) {
+        return this.historyRepository.getPaginatedHistoryEntries(limit, offset);
+      }
+      const entries = await this.historyRepository.getPaginatedHistoryEntries(10_000, 0);
+      return entries
+        .filter((entry) => matchesHistoryFilter(entry, filter))
+        .slice(offset, offset + limit);
+    }
+    const [children, parents] = await Promise.all([
+      this.historyRepository.getPaginatedHistoryEntries(10_000, 0),
+      this.getMintSwapHistory(),
+    ]);
+    const visibleChildren: HistoryEntry[] = [];
+    for (const entry of children) {
+      if (
+        entry.source === 'operation' &&
+        entry.type === 'mint' &&
+        (await this.mintSwapRepository.getByDestinationMintOperationId(entry.operationId))
+      ) {
+        continue;
+      }
+      if (
+        entry.source === 'operation' &&
+        entry.type === 'melt' &&
+        (await this.mintSwapRepository.getBySourceMeltOperationId(entry.operationId))
+      ) {
+        continue;
+      }
+      visibleChildren.push(entry);
+    }
+    return [...visibleChildren, ...parents]
+      .filter((entry) => matchesHistoryFilter(entry, filter))
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
+      .slice(offset, offset + limit);
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {
+    if (id.startsWith('mint-swap:') && this.mintSwapRepository) {
+      const operation = await this.mintSwapRepository.getById(id.slice('mint-swap:'.length));
+      return operation ? projectMintSwapOperation(operation) : null;
+    }
     return this.historyRepository.getHistoryEntryById(id);
+  }
+
+  private async getMintSwapHistory(): Promise<MintSwapHistoryEntry[]> {
+    if (!this.mintSwapRepository) return [];
+    const states = [
+      'preparing',
+      'prepared',
+      'source_inflight',
+      'destination_funded',
+      'issuing',
+      'completed',
+      'cancelled',
+      'failed',
+      'needs_attention',
+    ] as const;
+    const operations = (
+      await Promise.all(states.map((state) => this.mintSwapRepository!.getByState(state)))
+    ).flat();
+    return operations.map(projectMintSwapOperation);
   }
 
   /**
@@ -153,4 +238,13 @@ export class HistoryService {
     }
     return operation;
   }
+}
+
+function matchesHistoryFilter(entry: HistoryEntry, filter: HistoryFilter): boolean {
+  if (filter.types && !filter.types.includes(entry.type)) return false;
+  if (!filter.mintUrl) return true;
+  if (entry.type === 'mint-swap') {
+    return entry.sourceMintUrl === filter.mintUrl || entry.destinationMintUrl === filter.mintUrl;
+  }
+  return entry.mintUrl === filter.mintUrl;
 }

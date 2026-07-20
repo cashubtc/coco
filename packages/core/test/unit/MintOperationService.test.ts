@@ -896,6 +896,35 @@ describe('MintOperationService', () => {
     expect(storedQuote?.state).toBe('PAID');
   });
 
+  it('keeps BOLT11 accounting monotonic and ignores lower remote updated_at values', async () => {
+    const accountingQuote = {
+      quote: 'quote-accounting-monotonic',
+      request: 'lnbc1accounting',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(4),
+      updated_at: 20,
+    } as unknown as MintQuoteBolt11Response;
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', accountingQuote);
+
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      ...accountingQuote,
+      amount_paid: Amount.from(0),
+      amount_issued: Amount.from(0),
+      updated_at: 19,
+    } as unknown as MintQuoteBolt11Response);
+
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', accountingQuote.quote);
+    expect(stored?.state).toBe('PAID');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.quoteData.amountPaid?.equals(Amount.from(12))).toBe(true);
+    expect(stored.quoteData.amountIssued?.equals(Amount.from(4))).toBe(true);
+    expect(stored.quoteData.remoteUpdatedAt).toBe(20);
+  });
+
   it('quote import delegates unsupported quote units to capability validation', async () => {
     const importedQuote: MintQuoteBolt11Response = {
       quote: 'quote-usd',
@@ -1793,5 +1822,51 @@ describe('MintOperationService', () => {
     }
     expect(pendingEvents).toHaveLength(0);
     expect(handler.checkPending).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct execution of a parent-owned destination child', async () => {
+    const operation: PendingMintOperation = {
+      ...makePendingOp('owned-mint'),
+      parentSwapOperationId: 'swap-parent',
+    };
+    await operationRepo.create(operation);
+
+    await expect(service.execute(operation.id)).rejects.toThrow('owned by mint swap swap-parent');
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('commits owned destination authorization before remote execution', async () => {
+    const operation: PendingMintOperation = {
+      ...makePendingOp('owned-mint-barrier'),
+      parentSwapOperationId: 'swap-parent',
+    };
+    await operationRepo.create(operation);
+
+    const executing = await service.authorizeOwnedExecutionInTransaction(
+      operation.id,
+      'swap-parent',
+      { mintOperationRepository: operationRepo } as any,
+    );
+
+    expect((await operationRepo.getById(operation.id))?.state).toBe('executing');
+    expect(handler.execute).not.toHaveBeenCalled();
+    await service.executeOwnedRemote(executing, 'swap-parent');
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects issued proofs that do not match the prepared destination outputs', async () => {
+    const operation: ExecutingMintOperation = {
+      ...makeExecutingOp('owned-mint-output-check'),
+      parentSwapOperationId: 'swap-parent',
+    };
+
+    await expect(
+      service.applyOwnedExecutionInTransaction(
+        operation,
+        'swap-parent',
+        { status: 'ISSUED', proofs: [makeProof('different-secret')] },
+        {} as any,
+      ),
+    ).rejects.toThrow('does not match deterministic outputs');
   });
 });
