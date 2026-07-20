@@ -1390,6 +1390,7 @@ describe('initializeCoco', () => {
       expect(manager.mint).toBeDefined();
       expect(manager.wallet).toBeDefined();
       expect(manager.history).toBeDefined();
+      expect(manager.ops.mintSwap).toBeDefined();
       expect(manager.subscriptions).toBeDefined();
     });
 
