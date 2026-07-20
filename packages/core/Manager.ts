@@ -17,6 +17,7 @@ import {
   MintOperationProcessor,
   MeltQuoteWatcherService,
   MeltSettlementProcessor,
+  MintSwapOperationProcessor,
   ProofService,
   WalletService,
   SeedService,
@@ -33,6 +34,7 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
+import { MintSwapOperationService } from './operations/mintSwap/MintSwapOperationService.ts';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import {
@@ -67,6 +69,7 @@ import {
   ReceiveOpsApi,
   MeltOpsApi,
   MintOpsApi,
+  MintSwapOpsApi,
   QuoteApi,
   PaymentRequestsApi,
 } from './api';
@@ -151,6 +154,14 @@ export interface CocoConfig {
       disabled?: boolean;
       initializeExistingPendingOperationsOnStart?: boolean;
     };
+    /** Durable mint-swap reconciliation and outbox processor (enabled by default). */
+    mintSwapOperationProcessor?: {
+      disabled?: boolean;
+      sweepIntervalMs?: number;
+      dueBatchSize?: number;
+      baseRetryDelayMs?: number;
+      maxRetryDelayMs?: number;
+    };
   };
   /**
    * Subscription transport configuration
@@ -198,6 +209,29 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   // processor, or mint recovery path starts.
   await coco.reconcileLegacyMintQuotes();
 
+  // Recover child sagas before any parent reconciliation or live watcher wake-up.
+  await coco.ops.send.recovery.run();
+  await coco.ops.melt.recovery.run();
+  await coco.recoverPendingPaymentRequestReceiveAttempts();
+  await coco.recoverPendingMintOperations();
+  await coco.ops.mintSwap.recovery.run();
+
+  // Start processors before watchers so durable sweeps cover any event-loss window.
+  const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
+  if (!mintOperationProcessorConfig?.disabled) {
+    await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
+  }
+
+  const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
+  if (!meltSettlementProcessorConfig?.disabled) {
+    await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
+  }
+
+  const mintSwapOperationProcessorConfig = config.processors?.mintSwapOperationProcessor;
+  if (!mintSwapOperationProcessorConfig?.disabled) {
+    await coco.enableMintSwapOperationProcessor(mintSwapOperationProcessorConfig);
+  }
+
   // Enable watchers (default: all enabled unless explicitly disabled)
   const mintOperationWatcherConfig = config.watchers?.mintOperationWatcher;
   if (!mintOperationWatcherConfig?.disabled) {
@@ -213,29 +247,6 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
   if (!meltQuoteWatcherConfig?.disabled) {
     await coco.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
   }
-
-  // Enable processors (default: all enabled unless explicitly disabled)
-  const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
-  if (!mintOperationProcessorConfig?.disabled) {
-    await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
-  }
-
-  const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
-  if (!meltSettlementProcessorConfig?.disabled) {
-    await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
-  }
-
-  // Recover any pending send operations from previous session
-  await coco.ops.send.recovery.run();
-
-  // Recover any pending melt operations from previous session
-  await coco.ops.melt.recovery.run();
-
-  // Recover any pending receive operations and payment-request receive attempts from previous session
-  await coco.recoverPendingPaymentRequestReceiveAttempts();
-
-  // Recover any pending mint operations from previous session
-  await coco.recoverPendingMintOperations();
 
   return coco;
 }
@@ -262,6 +273,7 @@ export class Manager {
   private mintOperationProcessor?: MintOperationProcessor;
   private meltQuoteWatcher?: MeltQuoteWatcherService;
   private meltSettlementProcessor?: MeltSettlementProcessor;
+  private mintSwapOperationProcessor?: MintSwapOperationProcessor;
   private legacyMintQuoteRepository: LegacyMintQuoteRepository;
   private quoteLifecycle: QuoteLifecycle;
   private proofStateWatcher?: ProofStateWatcherService;
@@ -278,6 +290,7 @@ export class Manager {
   private meltOperationService: MeltOperationService;
   private meltOperationRepository: MeltOperationRepository;
   private mintOperationService: MintOperationService;
+  private mintSwapOperationService: MintSwapOperationService;
   private mintOperationRepository: MintOperationRepository;
   private receiveOperationService: ReceiveOperationService;
   private receiveOperationRepository: ReceiveOperationRepository;
@@ -293,6 +306,7 @@ export class Manager {
   private disposed = false;
   private disposePromise?: Promise<void>;
   private readonly outputDataCreator?: OutputDataCreator;
+  private readonly repositories: Repositories;
   constructor(
     repositories: Repositories,
     seedGetter: () => Promise<Uint8Array>,
@@ -304,6 +318,7 @@ export class Manager {
     subscriptions?: CocoConfig['subscriptions'],
     outputDataCreator?: OutputDataCreator,
   ) {
+    this.repositories = repositories;
     this.logger = logger ?? new NullLogger();
     this.eventBus = this.createEventBus();
     this.outputDataCreator = outputDataCreator;
@@ -348,6 +363,7 @@ export class Manager {
     this.authSessionService = core.authSessionService;
     this.authService = core.authService;
     this.mintOperationService = core.mintOperationService;
+    this.mintSwapOperationService = core.mintSwapOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
     const apis = this.buildApis();
@@ -441,6 +457,7 @@ export class Manager {
     this.disposed = true;
     this.subscriptionsPaused = true;
 
+    await this.disableMintSwapOperationProcessor();
     await this.disableMintOperationWatcher();
     await this.disableProofStateWatcher();
     await this.disableMeltSettlementProcessor();
@@ -576,6 +593,31 @@ export class Manager {
     this.meltSettlementProcessor = undefined;
   }
 
+  async enableMintSwapOperationProcessor(options?: {
+    sweepIntervalMs?: number;
+    dueBatchSize?: number;
+    baseRetryDelayMs?: number;
+    maxRetryDelayMs?: number;
+  }): Promise<boolean> {
+    if (this.disposed) return false;
+    if (this.mintSwapOperationProcessor?.isRunning()) return false;
+    this.mintSwapOperationProcessor = new MintSwapOperationProcessor(
+      this.mintSwapOperationService,
+      this.repositories,
+      this.eventBus,
+      this.getChildLogger('MintSwapOperationProcessor'),
+      options,
+    );
+    await this.mintSwapOperationProcessor.start();
+    return true;
+  }
+
+  async disableMintSwapOperationProcessor(): Promise<void> {
+    if (!this.mintSwapOperationProcessor) return;
+    await this.mintSwapOperationProcessor.stop();
+    this.mintSwapOperationProcessor = undefined;
+  }
+
   async waitForMintOperationProcessor(): Promise<void> {
     if (!this.mintOperationProcessor) return;
     await this.mintOperationProcessor.waitForCompletion();
@@ -697,7 +739,8 @@ export class Manager {
     // Pause transport layer
     this.subscriptions.pause();
 
-    // Disable watchers
+    // Quiesce parent dispatch before child processors and watchers.
+    await this.disableMintSwapOperationProcessor();
     await this.disableMintOperationWatcher();
     await this.disableProofStateWatcher();
     await this.disableMeltSettlementProcessor();
@@ -722,7 +765,30 @@ export class Manager {
     // Resume transport layer
     this.subscriptions.resume();
 
-    // Re-enable watchers based on original configuration (idempotent)
+    // Recover children and parents before live wake-ups resume.
+    await this.ops.send.recovery.run();
+    await this.ops.melt.recovery.run();
+    await this.recoverPendingPaymentRequestReceiveAttempts();
+    await this.recoverPendingMintOperations();
+    await this.ops.mintSwap.recovery.run();
+
+    // Re-enable processors before watchers so sweeps close the event-loss window.
+    const mintOperationProcessorConfig = this.originalProcessorConfig?.mintOperationProcessor;
+    if (!mintOperationProcessorConfig?.disabled) {
+      await this.enableMintOperationProcessor(mintOperationProcessorConfig);
+    }
+
+    const meltSettlementProcessorConfig = this.originalProcessorConfig?.meltSettlementProcessor;
+    if (!meltSettlementProcessorConfig?.disabled) {
+      await this.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
+    }
+
+    const mintSwapOperationProcessorConfig =
+      this.originalProcessorConfig?.mintSwapOperationProcessor;
+    if (!mintSwapOperationProcessorConfig?.disabled) {
+      await this.enableMintSwapOperationProcessor(mintSwapOperationProcessorConfig);
+    }
+
     const mintOperationWatcherConfig = this.originalWatcherConfig?.mintOperationWatcher;
     if (!mintOperationWatcherConfig?.disabled) {
       await this.enableMintOperationWatcher(mintOperationWatcherConfig);
@@ -737,19 +803,6 @@ export class Manager {
     if (!meltQuoteWatcherConfig?.disabled) {
       await this.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
     }
-
-    // Re-enable processor based on original configuration (idempotent)
-    const mintOperationProcessorConfig = this.originalProcessorConfig?.mintOperationProcessor;
-    if (!mintOperationProcessorConfig?.disabled) {
-      await this.enableMintOperationProcessor(mintOperationProcessorConfig);
-    }
-
-    const meltSettlementProcessorConfig = this.originalProcessorConfig?.meltSettlementProcessor;
-    if (!meltSettlementProcessorConfig?.disabled) {
-      await this.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
-    }
-
-    await this.recoverPendingMintOperations();
 
     this.logger.info('Subscriptions resumed');
   }
@@ -855,6 +908,7 @@ export class Manager {
     authService: AuthService;
     mintOperationService: MintOperationService;
     mintOperationRepository: MintOperationRepository;
+    mintSwapOperationService: MintSwapOperationService;
   } {
     const mintLogger = this.getChildLogger('MintService');
     const walletLogger = this.getChildLogger('WalletService');
@@ -962,7 +1016,7 @@ export class Manager {
       onchain: new MeltOnchainHandler(),
     });
     const mintHandlerProvider = new MintHandlerProvider({
-      bolt11: new MintBolt11Handler(),
+      bolt11: new MintBolt11Handler(keyRingService),
       onchain: new MintOnchainHandler(keyRingService),
       bolt12: new MintBolt12Handler(keyRingService),
     });
@@ -1010,10 +1064,23 @@ export class Manager {
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 
+    const mintSwapOperationService = new MintSwapOperationService(
+      repositories,
+      quoteLifecycle,
+      mintOperationService,
+      meltOperationService,
+      mintService,
+      walletService,
+      keyRingService,
+      mintScopedLock,
+      this.getChildLogger('MintSwapOperationService'),
+    );
+
     const historyService = new HistoryService(
       repositories.historyRepository,
       this.eventBus,
       historyLogger,
+      repositories.mintSwapOperationRepository,
     );
 
     const legacyMintQuoteRepository = repositories.legacyMintQuoteRepository;
@@ -1074,6 +1141,7 @@ export class Manager {
       authService,
       mintOperationService,
       mintOperationRepository,
+      mintSwapOperationService,
     };
   }
 
@@ -1104,7 +1172,8 @@ export class Manager {
     const receive = new ReceiveOpsApi(this.receiveOperationService);
     const mintOps = new MintOpsApi(this.mintOperationService);
     const melt = new MeltOpsApi(this.meltOperationService);
-    const ops = new OpsApi(send, receive, mintOps, melt);
+    const mintSwap = new MintSwapOpsApi(this.mintSwapOperationService, this.eventBus);
+    const ops = new OpsApi(send, receive, mintOps, melt, mintSwap);
     const quotes = new QuoteApi(this.quoteLifecycle);
     const auth = new AuthApi(this.authService);
     const paymentRequests = new PaymentRequestsApi(
