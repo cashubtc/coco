@@ -18,6 +18,31 @@ import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } fro
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
+function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
+  const nuts = mintInfo.nuts as unknown;
+  if (!nuts || typeof nuts !== 'object') return false;
+
+  const nut29 = (nuts as Record<string, unknown>)['29'];
+  if (!nut29 || typeof nut29 !== 'object') return false;
+  const methods = (nut29 as { methods?: unknown }).methods;
+  if (methods !== undefined) return Array.isArray(methods) && methods.includes(method);
+
+  const nut4 = (nuts as Record<string, unknown>)['4'];
+  if (!nut4 || typeof nut4 !== 'object' || (nut4 as { disabled?: unknown }).disabled === true) {
+    return false;
+  }
+  const mintMethods = (nut4 as { methods?: unknown }).methods;
+  return (
+    Array.isArray(mintMethods) &&
+    mintMethods.some(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        (entry as { method?: unknown }).method === method,
+    )
+  );
+}
+
 export interface MethodUnitCapability {
   supported: boolean;
   disabled: boolean;
@@ -239,6 +264,35 @@ export class MintService {
     const mintInfo = await this.getMintInfo(normalizedMintUrl);
     const settings = this.getNutSupportSettings(mintInfo, nut);
     return settings?.supported === true;
+  }
+
+  /**
+   * Returns whether a mint advertises NUT-29 mint quote checks for a payment method.
+   *
+   * When NUT-29 omits its optional method list, enabled NUT-04 method metadata is
+   * used as the source of supported mint methods. Missing or malformed metadata
+   * returns `false`; mint-info refresh failures propagate unchanged.
+   */
+  async supportsNut29MintQuoteCheck(mintUrl: string, method: string): Promise<boolean> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    return supportsNut29MintQuoteCheckFromInfo(mintInfo, method);
+  }
+
+  /**
+   * Returns the bounded NUT-29 mint quote check limit for one polling group.
+   *
+   * Unsupported methods and malformed advertised limits use one quote per polling
+   * opportunity. An omitted limit uses Coco's protocol safety cap of 100.
+   */
+  async getNut29MintQuoteCheckLimit(mintUrl: string, method: string): Promise<number> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 1;
+
+    const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
+    const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
+    if (maxBatchSize === undefined) return 100;
+    if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
+    return Math.min(Number(maxBatchSize), 100);
   }
 
   /**
@@ -559,6 +613,7 @@ export class MintService {
     mint.mintInfo = mintInfo;
     mint.updatedAt = Math.floor(Date.now() / 1000);
     await this.mintRepo.addOrUpdateMint(mint);
+    await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
 
     const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
     this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });

@@ -59,6 +59,7 @@ const onchainMeltQuote = {
 
 type FakeCashuMint = {
   getInfo: ReturnType<typeof mock>;
+  getLazyMintInfo: ReturnType<typeof mock>;
   getKeySets: ReturnType<typeof mock>;
   getKeys: ReturnType<typeof mock>;
   checkMintQuote: ReturnType<typeof mock>;
@@ -88,6 +89,10 @@ describe('MintAdapter', () => {
     adapter = new MintAdapter(requestProvider);
     fakeMint = {
       getInfo: mock(async () => mintInfo),
+      getLazyMintInfo: mock(async () => ({
+        requiresBlindAuthToken: mock(() => false),
+        requiresClearAuthToken: mock(() => false),
+      })),
       getKeySets: mock(async () => keysets),
       getKeys: mock(async () => ({ keysets: [{ keys: { '1': 'pubkey' } }] })),
       checkMintQuote: mock(async () => onchainMintQuote),
@@ -134,6 +139,38 @@ describe('MintAdapter', () => {
 
     expect(fakeMint.getKeys).toHaveBeenCalledWith('keyset-1');
     expect(fakeMint.checkMintQuote).toHaveBeenCalledWith('onchain', 'mint-quote');
+  });
+
+  it('sends NUT-29 quote checks through the shared authenticated request path', async () => {
+    const request = mock(async () => [{ quote: 'quote-1' }, { quote: 'quote-2' }]);
+    requestProvider.getRequestFn = mock(
+      () => request as unknown as ReturnType<MintRequestProvider['getRequestFn']>,
+    );
+    const authProvider = {
+      getBlindAuthToken: mock(async () => 'blind-token'),
+      getCAT: mock(() => 'clear-token'),
+      setCAT: mock(() => undefined),
+    };
+    adapter.setAuthProvider(mintUrl, authProvider);
+    fakeMint.getLazyMintInfo = mock(async () => ({
+      requiresBlindAuthToken: mock(() => true),
+      requiresClearAuthToken: mock(() => true),
+    }));
+    installFakeMint(adapter, fakeMint);
+
+    await expect(
+      adapter.checkMintQuoteBatch(mintUrl, 'bolt11', ['quote-1', 'quote-2']),
+    ).resolves.toEqual([{ quote: 'quote-1' }, { quote: 'quote-2' }]);
+
+    expect(request).toHaveBeenCalledWith({
+      endpoint: `${mintUrl}/v1/mint/quote/bolt11/check`,
+      method: 'POST',
+      requestBody: { quotes: ['quote-1', 'quote-2'] },
+      headers: {
+        'Blind-auth': 'blind-token',
+        'Clear-auth': 'clear-token',
+      },
+    });
   });
 
   it('rejects key lookups that return anything other than one keyset', async () => {

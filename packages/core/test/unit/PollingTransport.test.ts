@@ -1,7 +1,42 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { PollingTransport } from '../../infra/PollingTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { NullLogger } from '../../logging';
+import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
+import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
+import type { MintMethod } from '../../operations/mint/MintMethodHandler.ts';
+import type {
+  MintQuotePollingOperation,
+  MintQuotePollingResult,
+} from '../../quotes/MintQuotePolling.ts';
+import { waitFor } from '../waitFor.ts';
+
+function failedPollingResult(mintUrl: string, quoteIds: readonly string[]): MintQuotePollingResult {
+  return {
+    outcomes: quoteIds.map((quoteId) => ({
+      status: 'failed',
+      identity: { mintUrl, quoteId },
+      failure: { category: 'network', error: new Error('offline') },
+    })),
+    responseFailures: [],
+  };
+}
+
+function subscribeToQuotes(
+  transport: PollingTransport,
+  mintUrl: string,
+  method: MintMethod,
+  subId: string,
+  quoteIds: string[],
+): void {
+  transport.send(mintUrl, {
+    jsonrpc: '2.0',
+    method: 'subscribe',
+    params: { kind: `${method}_mint_quote`, subId, filters: quoteIds },
+    id: 1,
+  });
+}
 
 // Mock MintAdapter for testing
 const createMockMintAdapter = (): MintAdapter =>
@@ -253,6 +288,378 @@ describe('PollingTransport subscription kinds', () => {
     expect(scheduler?.queue ?? []).toHaveLength(0);
     expect((adapter.checkMintQuote as any).mock.calls.length).toBe(0);
 
+    transport.closeAll();
+  });
+});
+
+describe('PollingTransport mint quote batching', () => {
+  const mintUrl = 'https://mint.example.com';
+  const mintUrlVariant = 'https://MINT.example.com/';
+
+  it('groups normalized compatible interests deterministically up to the advertised limit', async () => {
+    const calls: Array<{ mintUrl: string; method: MintMethod; quoteIds: string[] }> = [];
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 2),
+      checkMintQuotesForPolling: mock(
+        async (method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push({
+            mintUrl: identities[0]!.mintUrl,
+            method,
+            quoteIds: identities.map(({ quoteId }) => quoteId),
+          });
+          transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    const adapter = createMockMintAdapter();
+    transport = new PollingTransport(adapter, { intervalMs: 1 }, new NullLogger(), polling);
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrlVariant, 'bolt11', 'bolt11-sub', [
+      'quote-b',
+      'quote-a',
+      'quote-a',
+      'quote-c',
+    ]);
+    subscribeToQuotes(transport, mintUrl, 'bolt12', 'bolt12-sub', ['quote-z']);
+    transport.resume();
+    await waitFor(() => calls.length === 1);
+
+    expect(calls).toEqual([{ mintUrl, method: 'bolt11', quoteIds: ['quote-b', 'quote-a'] }]);
+    expect(adapter.checkMintQuote).not.toHaveBeenCalled();
+    transport.closeAll();
+  });
+
+  for (const method of ['bolt11', 'bolt12', 'onchain'] as const) {
+    it(`batches advertised ${method} interests`, async () => {
+      const calls: string[][] = [];
+      let transport: PollingTransport;
+      const polling: MintQuotePollingOperation = {
+        getMintQuotePollingLimit: mock(async () => 100),
+        checkMintQuotesForPolling: mock(
+          async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+            calls.push(identities.map(({ quoteId }) => quoteId));
+            transport.pause();
+            return failedPollingResult(
+              mintUrl,
+              identities.map(({ quoteId }) => quoteId),
+            );
+          },
+        ),
+      };
+      transport = new PollingTransport(
+        createMockMintAdapter(),
+        { intervalMs: 1 },
+        new NullLogger(),
+        polling,
+      );
+
+      transport.on(mintUrl, 'message', () => {});
+      transport.pause();
+      subscribeToQuotes(transport, mintUrl, method, `${method}-sub`, ['quote-a', 'quote-b']);
+      transport.resume();
+      await waitFor(() => calls.length === 1);
+
+      expect(calls).toEqual([['quote-a', 'quote-b']]);
+      transport.closeAll();
+    });
+  }
+
+  it('caps observable mint quote polling requests at 100 identities', async () => {
+    const calls: string[][] = [];
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 100),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+    const quoteIds = Array.from({ length: 101 }, (_, index) => `quote-${index}`);
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'capped-sub', quoteIds);
+    transport.resume();
+    await waitFor(() => calls.length === 1);
+
+    expect(calls[0]).toEqual(quoteIds.slice(0, 100));
+    transport.closeAll();
+  });
+
+  it('ends and requeues the turn when polling-limit resolution fails', async () => {
+    const calls: string[][] = [];
+    const getMintQuotePollingLimit = mock(async () => {
+      if (getMintQuotePollingLimit.mock.calls.length === 1) throw new Error('metadata offline');
+      return 2;
+    });
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit,
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'retry-sub', ['quote-a', 'quote-b']);
+    transport.resume();
+    await waitFor(() => calls.length === 1);
+
+    expect(getMintQuotePollingLimit).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([['quote-b', 'quote-a']]);
+    transport.closeAll();
+  });
+
+  it('polls unsupported methods one quote per turn', async () => {
+    const calls: string[][] = [];
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 1),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          if (calls.length === 2) transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'single-sub', ['quote-a', 'quote-b']);
+    transport.resume();
+    await waitFor(() => calls.length === 2);
+
+    expect(calls).toEqual([['quote-a'], ['quote-b']]);
+    transport.closeAll();
+  });
+
+  it('rotates requeued interests so every quote retains fair access', async () => {
+    const calls: string[][] = [];
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 2),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          if (calls.length === 3) transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'fair-sub', ['quote-a', 'quote-b', 'quote-c']);
+    transport.resume();
+    await waitFor(() => calls.length === 3);
+
+    expect(calls).toEqual([
+      ['quote-a', 'quote-b'],
+      ['quote-c', 'quote-a'],
+      ['quote-b', 'quote-c'],
+    ]);
+    transport.closeAll();
+  });
+
+  it('gives late interests fair access on the next polling turn', async () => {
+    const calls: string[][] = [];
+    let resolveFirst!: () => void;
+    const firstCheck = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 2),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          if (calls.length === 1) await firstCheck;
+          if (calls.length === 2) transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', () => {});
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'existing-sub', ['quote-a', 'quote-b']);
+    transport.resume();
+    await waitFor(() => calls.length === 1);
+
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'late-sub', ['quote-c']);
+    resolveFirst();
+    await waitFor(() => calls.length === 2);
+
+    expect(calls).toEqual([
+      ['quote-a', 'quote-b'],
+      ['quote-c', 'quote-a'],
+    ]);
+    transport.closeAll();
+  });
+
+  it('keeps the configured interval between requeued polling turns', async () => {
+    const startedAt: number[] = [];
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 1),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          startedAt.push(Date.now());
+          if (startedAt.length === 2) transport.pause();
+          return failedPollingResult(
+            mintUrl,
+            identities.map(({ quoteId }) => quoteId),
+          );
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 20 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', () => {});
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'cadence-sub', ['quote-a']);
+    await waitFor(() => startedAt.length === 2);
+
+    expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(18);
+    transport.closeAll();
+  });
+
+  it('removes an in-flight interest without repolling it or corrupting siblings', async () => {
+    const calls: string[][] = [];
+    const messages: Array<{ params?: { subId?: string; payload?: { quote?: string } } }> = [];
+    let resolveFirst!: () => void;
+    const firstCheck = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let transport: PollingTransport;
+    const polling: MintQuotePollingOperation = {
+      getMintQuotePollingLimit: mock(async () => 2),
+      checkMintQuotesForPolling: mock(
+        async (_method: MintMethod, identities: readonly QuoteIdentity[]) => {
+          calls.push(identities.map(({ quoteId }) => quoteId));
+          if (calls.length === 1) await firstCheck;
+          if (calls.length === 2) transport.pause();
+          return {
+            outcomes: identities.map(({ mintUrl: identityMintUrl, quoteId }) => ({
+              status: 'updated' as const,
+              identity: { mintUrl: identityMintUrl, quoteId },
+              quote: mintQuoteFromBolt11Response(identityMintUrl, {
+                quote: quoteId,
+                request: `lnbc1${quoteId}`,
+                amount: Amount.from(10),
+                unit: 'sat',
+                expiry: null,
+                state: 'PAID',
+              }),
+            })),
+            responseFailures: [],
+          };
+        },
+      ),
+    };
+    transport = new PollingTransport(
+      createMockMintAdapter(),
+      { intervalMs: 1 },
+      new NullLogger(),
+      polling,
+    );
+
+    transport.on(mintUrl, 'message', (event) => messages.push(JSON.parse(event.data)));
+    transport.pause();
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'removed-sub', ['quote-a']);
+    subscribeToQuotes(transport, mintUrl, 'bolt11', 'sibling-sub', ['quote-b']);
+    transport.resume();
+    await waitFor(() => calls.length === 1);
+
+    transport.send(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'unsubscribe',
+      params: { subId: 'removed-sub' },
+      id: 2,
+    });
+    resolveFirst();
+    await waitFor(() => calls.length === 2);
+
+    expect(calls).toEqual([['quote-a', 'quote-b'], ['quote-b']]);
+    const notifications = messages.filter(({ params }) => params?.payload?.quote);
+    expect(notifications).toContainEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          subId: 'sibling-sub',
+          payload: expect.objectContaining({ quote: 'quote-b' }),
+        }),
+      }),
+    );
+    expect(
+      notifications.some(
+        ({ params }) => params?.subId === 'removed-sub' || params?.payload?.quote === 'quote-a',
+      ),
+    ).toBe(false);
     transport.closeAll();
   });
 });

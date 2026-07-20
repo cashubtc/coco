@@ -20,6 +20,7 @@ import type { CoreProof, ProofState } from '../types';
 export interface CoreEvents {
   'mint:added': { mint: Mint; keysets: Keyset[] };
   'mint:updated': { mint: Mint; keysets: Keyset[] };
+  'mint:metadata-refreshed': { mintUrl: string };
   'mint:trusted': { mintUrl: string };
   'mint:untrusted': { mintUrl: string };
   'counter:updated': Counter;

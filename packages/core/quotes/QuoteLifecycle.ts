@@ -25,6 +25,9 @@ import {
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
 import { isMintQuoteExpired } from '../models/MintQuoteExpiry';
 import {
+  HttpResponseError,
+  MintOperationError,
+  NetworkError,
   ProofValidationError,
   QuoteIdentityConflictError,
   UnknownMintError,
@@ -49,12 +52,25 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 import type { MeltQuoteRef, MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity';
+import type {
+  MintQuotePollingFailure,
+  MintQuotePollingOutcome,
+  MintQuotePollingResult,
+} from './MintQuotePolling.ts';
 
 const MINT_QUOTE_STATE_RANK: Record<string, number> = {
   UNPAID: 0,
   PAID: 1,
   ISSUED: 2,
 };
+
+const BUILT_IN_MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
+const DEFINITIVE_BATCH_FAILURE_CATEGORIES = new Set<MintQuotePollingFailure['category']>([
+  'incompatibility',
+  'batch-size',
+  'malformed-response',
+  'validation',
+]);
 
 function isMintQuoteStateDowngrade(
   existing: MintMethodRemoteState,
@@ -72,6 +88,174 @@ function hasReusableSettlementAmounts(snapshot: {
   amount_issued?: unknown;
 }): boolean {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
+}
+
+function assertMintQuotePollingSnapshotStructureUnchecked(
+  method: MintMethod,
+  snapshot: MintMethodQuoteSnapshot,
+): MintMethodQuoteSnapshot {
+  if (
+    typeof snapshot.quote !== 'string' ||
+    snapshot.quote.length === 0 ||
+    typeof snapshot.request !== 'string' ||
+    snapshot.request.length === 0 ||
+    typeof snapshot.unit !== 'string' ||
+    snapshot.unit.trim().length === 0 ||
+    (snapshot.expiry !== null &&
+      snapshot.expiry !== undefined &&
+      !Number.isSafeInteger(snapshot.expiry)) ||
+    (snapshot.pubkey !== undefined && typeof snapshot.pubkey !== 'string')
+  ) {
+    throw new ProofValidationError('Mint quote batch observation has invalid base fields');
+  }
+
+  if (method === 'bolt11') {
+    const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
+    const amount = Amount.from(bolt11.amount as AmountLike);
+    if (
+      amount.isZero() ||
+      (bolt11.state !== 'UNPAID' && bolt11.state !== 'PAID' && bolt11.state !== 'ISSUED')
+    ) {
+      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+    }
+    return bolt11;
+  }
+
+  const reusable = snapshot as
+    | MintMethodQuoteSnapshot<'bolt12'>
+    | MintMethodQuoteSnapshot<'onchain'>;
+  if (!hasReusableSettlementAmounts(reusable)) {
+    throw new ProofValidationError(`${method} mint quote batch observation lacks settlement data`);
+  }
+  const amountPaid = Amount.from(reusable.amount_paid);
+  const amountIssued = Amount.from(reusable.amount_issued);
+  if (amountPaid.lessThan(amountIssued)) {
+    throw new ProofValidationError(
+      `${method} mint quote batch observation has amount_issued greater than amount_paid`,
+    );
+  }
+  if (method === 'bolt12') {
+    const amount = (snapshot as MintMethodQuoteSnapshot<'bolt12'>).amount;
+    if (amount !== undefined && amount !== null) Amount.from(amount as AmountLike);
+  }
+  return snapshot;
+}
+
+function assertMintQuotePollingSnapshotStructure(
+  method: MintMethod,
+  snapshot: MintMethodQuoteSnapshot,
+): MintMethodQuoteSnapshot {
+  try {
+    return assertMintQuotePollingSnapshotStructureUnchecked(method, snapshot);
+  } catch (error) {
+    if (error instanceof ProofValidationError) throw error;
+    const validationError = new ProofValidationError(
+      `${method} mint quote batch observation has invalid amount fields`,
+    );
+    (validationError as Error & { cause?: unknown }).cause = error;
+    throw validationError;
+  }
+}
+
+function isDefinitiveMintQuotePollingValidation(error: Error): boolean {
+  return error instanceof ProofValidationError || error instanceof QuoteIdentityConflictError;
+}
+
+function equalOptionalAmount(
+  left: AmountLike | null | undefined,
+  right: AmountLike | null | undefined,
+) {
+  if (left == null || right == null) return left == null && right == null;
+  return Amount.from(left).equals(Amount.from(right));
+}
+
+function areMintQuotePollingSnapshotsEqual(
+  method: MintMethod,
+  left: MintMethodQuoteSnapshot,
+  right: MintMethodQuoteSnapshot,
+): boolean {
+  if (
+    left.quote !== right.quote ||
+    left.request !== right.request ||
+    normalizeUnit(left.unit) !== normalizeUnit(right.unit) ||
+    left.expiry !== right.expiry ||
+    left.pubkey !== right.pubkey
+  ) {
+    return false;
+  }
+  if (method === 'bolt11') {
+    const leftBolt11 = left as MintMethodQuoteSnapshot<'bolt11'>;
+    const rightBolt11 = right as MintMethodQuoteSnapshot<'bolt11'>;
+    return (
+      Amount.from(leftBolt11.amount).equals(Amount.from(rightBolt11.amount)) &&
+      leftBolt11.state === rightBolt11.state
+    );
+  }
+
+  const leftReusable = left as
+    | MintMethodQuoteSnapshot<'bolt12'>
+    | MintMethodQuoteSnapshot<'onchain'>;
+  const rightReusable = right as
+    | MintMethodQuoteSnapshot<'bolt12'>
+    | MintMethodQuoteSnapshot<'onchain'>;
+  if (
+    !Amount.from(leftReusable.amount_paid).equals(Amount.from(rightReusable.amount_paid)) ||
+    !Amount.from(leftReusable.amount_issued).equals(Amount.from(rightReusable.amount_issued))
+  ) {
+    return false;
+  }
+  return (
+    method !== 'bolt12' ||
+    equalOptionalAmount(
+      (left as MintMethodQuoteSnapshot<'bolt12'>).amount,
+      (right as MintMethodQuoteSnapshot<'bolt12'>).amount,
+    )
+  );
+}
+
+function normalizePollingError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function classifyMintQuotePollingFailure(error: unknown): MintQuotePollingFailure['category'] {
+  if (error instanceof NetworkError) return 'network';
+  if (error instanceof MintOperationError) {
+    if (error.code === 11_017) return 'batch-size';
+    if (error.code === 31_004) return 'rate-limit';
+    if (error.code >= 30_000) return 'authentication';
+    return 'validation';
+  }
+  if (error instanceof HttpResponseError) {
+    if (error.status >= 200 && error.status < 300) return 'malformed-response';
+    if (error.status === 401 || error.status === 403) return 'authentication';
+    if (error.status === 429) return 'rate-limit';
+    if (error.status === 404 || error.status === 405 || error.status === 501) {
+      return 'incompatibility';
+    }
+    if (error.status >= 500) return 'server';
+  }
+  if (error && typeof error === 'object' && 'cause' in error) {
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause !== undefined && cause !== error) return classifyMintQuotePollingFailure(cause);
+  }
+  if (error instanceof Error && /auth/i.test(error.name)) return 'authentication';
+  return 'validation';
+}
+
+function failedMintQuotePollingResult(
+  identities: readonly QuoteIdentity[],
+  category: MintQuotePollingFailure['category'],
+  error: unknown,
+): MintQuotePollingResult {
+  const normalizedError = normalizePollingError(error);
+  return {
+    outcomes: identities.map((identity) => ({
+      status: 'failed',
+      identity,
+      failure: { category, error: normalizedError },
+    })),
+    responseFailures: [],
+  };
 }
 
 function getRemoteStateChange(
@@ -220,6 +404,7 @@ export class QuoteLifecycle {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
     this.mintHandlerProvider = deps.mintHandlerProvider;
@@ -233,6 +418,42 @@ export class QuoteLifecycle {
     this.mintAdapter = deps.mintAdapter;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger;
+    this.eventBus.on('mint:metadata-refreshed', ({ mintUrl }) => {
+      this.clearBatchUnavailablePollingGroups(mintUrl);
+    });
+  }
+
+  private isBatchUnavailableForPolling(mintUrl: string, method: MintMethod): boolean {
+    return (
+      this.batchUnavailablePollingMethodsByMint.get(normalizeMintUrl(mintUrl))?.has(method) === true
+    );
+  }
+
+  private markBatchUnavailableForPolling(mintUrl: string, method: MintMethod): void {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const unavailableMethods =
+      this.batchUnavailablePollingMethodsByMint.get(normalizedMintUrl) ?? new Set<MintMethod>();
+    if (unavailableMethods.has(method)) return;
+    unavailableMethods.add(method);
+    this.batchUnavailablePollingMethodsByMint.set(normalizedMintUrl, unavailableMethods);
+    this.logger?.warn('Disabling batch mint quote polling for the Coco Session', {
+      mintUrl: normalizedMintUrl,
+      method,
+    });
+  }
+
+  private clearBatchUnavailablePollingGroups(mintUrl: string): void {
+    this.batchUnavailablePollingMethodsByMint.delete(normalizeMintUrl(mintUrl));
+  }
+
+  private recordDefinitiveBatchPollingFailure(
+    mintUrl: string,
+    method: MintMethod,
+    category: MintQuotePollingFailure['category'],
+  ): void {
+    if (DEFINITIVE_BATCH_FAILURE_CATEGORIES.has(category)) {
+      this.markBatchUnavailableForPolling(mintUrl, method);
+    }
   }
 
   private buildDeps() {
@@ -350,6 +571,358 @@ export class QuoteLifecycle {
 
   getPendingMintQuotes(method?: MintMethod): Promise<MintQuote[]> {
     return this.mintQuoteRepository.getPendingMintQuotes(method);
+  }
+
+  /** Returns the advertised and safety-capped size for one Background Watcher opportunity. */
+  async getMintQuotePollingLimit(mintUrl: string, method: MintMethod): Promise<number> {
+    if (this.isBatchUnavailableForPolling(mintUrl, method)) return 1;
+    return this.mintService.getNut29MintQuoteCheckLimit(mintUrl, method);
+  }
+
+  /**
+   * Checks selected mint quotes through the lifecycle polling seam.
+   *
+   * NUT-29 is used when advertised, with identity-based response attribution and
+   * one explicit outcome for every selected quote. Attributable observations are
+   * persisted before any update events are emitted, even when other response
+   * elements are missing, duplicated, extra, malformed, or conflict with canonical
+   * quote data. A single selection falls back to the existing single-quote endpoint
+   * when NUT-29 is unavailable; multiple selections never fan out implicitly.
+   */
+  async checkMintQuotesForPolling(
+    method: MintMethod,
+    identities: readonly QuoteIdentity[],
+  ): Promise<MintQuotePollingResult> {
+    if (identities.length === 0) {
+      return { outcomes: [], responseFailures: [] };
+    }
+
+    const normalizedIdentities = identities.map((identity) => ({
+      mintUrl: normalizeMintUrl(identity.mintUrl),
+      quoteId: identity.quoteId,
+    }));
+    const mintUrl = normalizedIdentities[0]!.mintUrl;
+    const uniqueMintUrls = new Set(normalizedIdentities.map((identity) => identity.mintUrl));
+    const uniqueQuoteIds = new Set(normalizedIdentities.map((identity) => identity.quoteId));
+    if (
+      uniqueMintUrls.size !== 1 ||
+      uniqueQuoteIds.size !== normalizedIdentities.length ||
+      normalizedIdentities.some((identity) => identity.quoteId.length === 0)
+    ) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'validation',
+        new ProofValidationError(
+          'Mint quote polling selections require one mint and unique non-empty quote identities',
+        ),
+      );
+    }
+    if (!BUILT_IN_MINT_METHODS.has(method)) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'validation',
+        new ProofValidationError(`Unsupported built-in mint quote polling method ${method}`),
+      );
+    }
+    if (!(await this.mintService.isTrustedMint(mintUrl))) {
+      throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+    }
+
+    let useBatch: boolean;
+    try {
+      useBatch =
+        !this.isBatchUnavailableForPolling(mintUrl, method) &&
+        (await this.mintService.supportsNut29MintQuoteCheck(mintUrl, method));
+    } catch (error) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        classifyMintQuotePollingFailure(error),
+        error,
+      );
+    }
+    if (!useBatch && normalizedIdentities.length > 1) {
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'incompatibility',
+        new ProofValidationError(
+          `Mint ${mintUrl} does not advertise NUT-29 quote checks for ${method}`,
+        ),
+      );
+    }
+
+    let response: unknown;
+    try {
+      response = useBatch
+        ? await this.mintAdapter.checkMintQuoteBatch(
+            mintUrl,
+            method,
+            normalizedIdentities.map((identity) => identity.quoteId),
+          )
+        : [
+            await this.mintAdapter.checkMintQuote(
+              mintUrl,
+              method,
+              normalizedIdentities[0]!.quoteId,
+            ),
+          ];
+    } catch (error) {
+      const category = classifyMintQuotePollingFailure(error);
+      if (useBatch) this.recordDefinitiveBatchPollingFailure(mintUrl, method, category);
+      return failedMintQuotePollingResult(normalizedIdentities, category, error);
+    }
+    if (!Array.isArray(response)) {
+      if (useBatch) {
+        this.recordDefinitiveBatchPollingFailure(mintUrl, method, 'malformed-response');
+      }
+      return failedMintQuotePollingResult(
+        normalizedIdentities,
+        'malformed-response',
+        new ProofValidationError('Mint quote batch check returned a non-array response'),
+      );
+    }
+    const snapshots = response;
+    const selectedQuoteIds = new Set(normalizedIdentities.map((identity) => identity.quoteId));
+    const snapshotsByQuoteId = new Map<
+      string,
+      Array<{ snapshot: MintMethodQuoteSnapshot; responseIndex: number }>
+    >();
+    const responseFailures: MintQuotePollingFailure[] = [];
+    for (const [responseIndex, snapshot] of snapshots.entries()) {
+      if (!snapshot || typeof snapshot !== 'object') {
+        responseFailures.push({
+          category: 'malformed-response',
+          error: new ProofValidationError(
+            `Mint quote batch response element ${responseIndex} has no identity`,
+          ),
+          responseIndex,
+        });
+        continue;
+      }
+      const responseQuoteId = (snapshot as { quote?: unknown }).quote;
+      if (typeof responseQuoteId !== 'string' || responseQuoteId.length === 0) {
+        responseFailures.push({
+          category: 'malformed-response',
+          error: new ProofValidationError(
+            `Mint quote batch response element ${responseIndex} has no identity`,
+          ),
+          responseIndex,
+        });
+        continue;
+      }
+      if (!selectedQuoteIds.has(responseQuoteId)) {
+        responseFailures.push({
+          category: 'malformed-response',
+          error: new ProofValidationError(
+            `Mint quote batch response contains unselected quote ${responseQuoteId}`,
+          ),
+          responseIndex,
+          responseQuoteId,
+        });
+        continue;
+      }
+      const candidates = snapshotsByQuoteId.get(responseQuoteId) ?? [];
+      candidates.push({
+        snapshot: {
+          ...snapshot,
+          pubkey: (snapshot as { pubkey?: unknown }).pubkey ?? undefined,
+        } as MintMethodQuoteSnapshot,
+        responseIndex,
+      });
+      snapshotsByQuoteId.set(responseQuoteId, candidates);
+    }
+    let hasDefinitiveBatchFailure = responseFailures.length > 0;
+    const persisted: Array<{
+      identity: QuoteIdentity;
+      quote: MintQuote;
+      remoteStateChanged: boolean;
+    }> = [];
+    const failedByQuoteId = new Map<string, MintQuotePollingFailure>();
+
+    for (const identity of normalizedIdentities) {
+      const candidates = snapshotsByQuoteId.get(identity.quoteId) ?? [];
+      if (candidates.length === 0) {
+        hasDefinitiveBatchFailure = true;
+        failedByQuoteId.set(identity.quoteId, {
+          category: 'malformed-response',
+          error: new ProofValidationError(
+            `Mint quote batch response is missing quote ${identity.quoteId}`,
+          ),
+          responseQuoteId: identity.quoteId,
+        });
+        continue;
+      }
+
+      const validCandidates: typeof candidates = [];
+      const invalidCandidates: Array<{
+        error: Error;
+        responseIndex: number;
+        definitive: boolean;
+      }> = [];
+      for (const candidate of candidates) {
+        try {
+          const snapshot = await this.assertAttributableMintQuotePollingSnapshot(
+            mintUrl,
+            method,
+            identity.quoteId,
+            candidate.snapshot,
+          );
+          validCandidates.push({ ...candidate, snapshot });
+        } catch (error) {
+          const normalizedError = normalizePollingError(error);
+          invalidCandidates.push({
+            error: normalizedError,
+            responseIndex: candidate.responseIndex,
+            definitive: isDefinitiveMintQuotePollingValidation(normalizedError),
+          });
+        }
+      }
+
+      if (validCandidates.length === 0) {
+        if (invalidCandidates.some(({ definitive }) => definitive)) {
+          hasDefinitiveBatchFailure = true;
+        }
+        const [firstFailure, ...additionalFailures] = invalidCandidates;
+        failedByQuoteId.set(identity.quoteId, {
+          category: 'validation',
+          error: firstFailure!.error,
+          responseQuoteId: identity.quoteId,
+        });
+        responseFailures.push(
+          ...additionalFailures.map(({ error, responseIndex }) => ({
+            category: 'validation' as const,
+            error,
+            responseIndex,
+            responseQuoteId: identity.quoteId,
+          })),
+        );
+        continue;
+      }
+
+      const firstValid = validCandidates[0]!;
+      if (
+        validCandidates.some(
+          ({ snapshot }) =>
+            !areMintQuotePollingSnapshotsEqual(method, firstValid.snapshot, snapshot),
+        )
+      ) {
+        hasDefinitiveBatchFailure = true;
+        failedByQuoteId.set(identity.quoteId, {
+          category: 'malformed-response',
+          error: new ProofValidationError(
+            `Mint quote batch response contains conflicting duplicates for quote ${identity.quoteId}`,
+          ),
+          responseQuoteId: identity.quoteId,
+        });
+        continue;
+      }
+
+      if (validCandidates.length > 1 || invalidCandidates.some(({ definitive }) => definitive)) {
+        hasDefinitiveBatchFailure = true;
+      }
+      responseFailures.push(
+        ...validCandidates.slice(1).map(({ responseIndex }) => ({
+          category: 'malformed-response' as const,
+          error: new ProofValidationError(
+            `Mint quote batch response contains duplicate quote ${identity.quoteId}`,
+          ),
+          responseIndex,
+          responseQuoteId: identity.quoteId,
+        })),
+        ...invalidCandidates.map(({ error, responseIndex }) => ({
+          category: 'validation' as const,
+          error,
+          responseIndex,
+          responseQuoteId: identity.quoteId,
+        })),
+      );
+      try {
+        const result = await this.resolveAndPersistMintQuoteSnapshot(
+          mintUrl,
+          method,
+          firstValid.snapshot,
+        );
+        persisted.push({ identity, ...result });
+      } catch (error) {
+        failedByQuoteId.set(identity.quoteId, {
+          category: 'validation',
+          error: normalizePollingError(error),
+          responseQuoteId: identity.quoteId,
+        });
+      }
+    }
+    for (const result of persisted) {
+      await this.emitMintQuoteUpdatedIfNeeded(result.quote, result.remoteStateChanged);
+    }
+
+    const persistedByQuoteId = new Map(
+      persisted.map(({ identity, quote }) => [identity.quoteId, quote]),
+    );
+    const outcomes: MintQuotePollingOutcome[] = normalizedIdentities.map((identity) => {
+      const quote = persistedByQuoteId.get(identity.quoteId);
+      if (quote) return { status: 'updated', identity, quote };
+      return { status: 'failed', identity, failure: failedByQuoteId.get(identity.quoteId)! };
+    });
+    const result = { outcomes, responseFailures };
+    if (useBatch && hasDefinitiveBatchFailure) {
+      this.markBatchUnavailableForPolling(mintUrl, method);
+    }
+    return result;
+  }
+
+  private async assertAttributableMintQuotePollingSnapshot(
+    mintUrl: string,
+    method: MintMethod,
+    quoteId: string,
+    snapshot: MintMethodQuoteSnapshot,
+  ): Promise<MintMethodQuoteSnapshot> {
+    snapshot = assertMintQuotePollingSnapshotStructure(method, snapshot);
+    const existing = await this.mintQuoteRepository.getMintQuoteById({ mintUrl, quoteId });
+    if (!existing) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} batch observation has no canonical quote`,
+      );
+    }
+    if (existing.method !== method) {
+      throw new QuoteIdentityConflictError('mint', mintUrl, quoteId, [method, existing.method]);
+    }
+    if (
+      snapshot.quote !== quoteId ||
+      snapshot.request !== existing.request ||
+      normalizeUnit(snapshot.unit) !== existing.unit ||
+      (snapshot.pubkey ?? undefined) !== (existing.pubkey ?? undefined)
+    ) {
+      throw new ProofValidationError(
+        `Mint quote ${quoteId} batch observation conflicts with canonical identity fields`,
+      );
+    }
+
+    if (existing.method === 'bolt11') {
+      const amount = Amount.from(
+        (snapshot as MintMethodQuoteSnapshot<'bolt11'>).amount as AmountLike,
+      );
+      if (!amount.equals(existing.amount)) {
+        throw new ProofValidationError(
+          `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
+        );
+      }
+      return snapshot;
+    }
+
+    if (existing.method === 'bolt12') {
+      const incomingAmount = (snapshot as MintMethodQuoteSnapshot<'bolt12'>).amount;
+      const existingAmount = existing.quoteData.amount;
+      if (
+        (incomingAmount == null) !== (existingAmount === undefined) ||
+        (incomingAmount != null &&
+          existingAmount !== undefined &&
+          !Amount.from(incomingAmount as AmountLike).equals(existingAmount))
+      ) {
+        throw new ProofValidationError(
+          `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
+        );
+      }
+    }
+    return snapshot;
   }
 
   async refreshMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote> {

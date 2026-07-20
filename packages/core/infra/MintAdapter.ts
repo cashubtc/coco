@@ -84,6 +84,38 @@ export class MintAdapter {
     return (await cashuMint.checkMintQuote(method, quoteId)) as MintMethodQuoteSnapshot<M>;
   }
 
+  /** Send one NUT-29 mint-quote batch check through the shared auth and rate-limit boundary. */
+  async checkMintQuoteBatch(
+    mintUrl: string,
+    method: MintMethod,
+    quoteIds: string[],
+  ): Promise<unknown> {
+    const path = `/v1/mint/quote/${method}/check`;
+    const headers: Record<string, string> = {};
+    const authProvider = this.authProviders.get(mintUrl);
+
+    if (authProvider) {
+      const mintInfo = await this.getCashuMint(mintUrl).getLazyMintInfo();
+      if (mintInfo.requiresBlindAuthToken('POST', path)) {
+        headers['Blind-auth'] = await authProvider.getBlindAuthToken({ method: 'POST', path });
+      }
+      if (mintInfo.requiresClearAuthToken('POST', path)) {
+        const clearAuth = authProvider.ensureCAT
+          ? await authProvider.ensureCAT()
+          : authProvider.getCAT();
+        if (clearAuth) headers['Clear-auth'] = clearAuth;
+      }
+    }
+
+    const request = this.requestProvider.getRequestFn(mintUrl);
+    return request({
+      endpoint: `${mintUrl.replace(/\/$/, '')}${path}`,
+      method: 'POST',
+      requestBody: { quotes: quoteIds },
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    });
+  }
+
   // Check current state of a bolt11 melt quote (returns full response including change)
   async checkMeltQuote(mintUrl: string, quoteId: string): Promise<MeltQuoteBolt11Response> {
     const cashuMint = this.getCashuMint(mintUrl);

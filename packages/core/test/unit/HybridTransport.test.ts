@@ -367,9 +367,8 @@ describe('HybridTransport', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const originalNow = Date.now;
-      const nowSeconds = Math.floor(originalNow() / 1000);
-      const expiry = nowSeconds + 60;
+      const expiryMs = Date.now() + 100;
+      const expiry = expiryMs / 1000;
       const notification = JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
@@ -379,17 +378,12 @@ describe('HybridTransport', () => {
         },
       });
 
-      try {
-        Date.now = () => nowSeconds * 1000;
-        mockSocket.triggerMessage(notification);
-        const countAfterFirst = messageHandler.mock.calls.length;
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
 
-        Date.now = () => (expiry + 1) * 1000;
-        mockSocket.triggerMessage(notification);
-        expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
-      } finally {
-        Date.now = originalNow;
-      }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiryMs - Date.now() + 1)));
+      mockSocket.triggerMessage(notification);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
     });
 
     it('should bypass dedupe when no state or complete amount counters are present', async () => {
