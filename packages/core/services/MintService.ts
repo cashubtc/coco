@@ -613,6 +613,7 @@ export class MintService {
     mint.mintInfo = mintInfo;
     mint.updatedAt = Math.floor(Date.now() / 1000);
     await this.mintRepo.addOrUpdateMint(mint);
+    await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
 
     const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
     this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });

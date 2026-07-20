@@ -65,6 +65,12 @@ const MINT_QUOTE_STATE_RANK: Record<string, number> = {
 };
 
 const BUILT_IN_MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
+const DEFINITIVE_BATCH_FAILURE_CATEGORIES = new Set<MintQuotePollingFailure['category']>([
+  'incompatibility',
+  'batch-size',
+  'malformed-response',
+  'validation',
+]);
 
 function isMintQuoteStateDowngrade(
   existing: MintMethodRemoteState,
@@ -84,7 +90,7 @@ function hasReusableSettlementAmounts(snapshot: {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
 }
 
-function assertMintQuotePollingSnapshotStructure(
+function assertMintQuotePollingSnapshotStructureUnchecked(
   method: MintMethod,
   snapshot: MintMethodQuoteSnapshot,
 ): void {
@@ -131,6 +137,26 @@ function assertMintQuotePollingSnapshotStructure(
     const amount = (snapshot as MintMethodQuoteSnapshot<'bolt12'>).amount;
     if (amount !== undefined && amount !== null) Amount.from(amount as AmountLike);
   }
+}
+
+function assertMintQuotePollingSnapshotStructure(
+  method: MintMethod,
+  snapshot: MintMethodQuoteSnapshot,
+): void {
+  try {
+    assertMintQuotePollingSnapshotStructureUnchecked(method, snapshot);
+  } catch (error) {
+    if (error instanceof ProofValidationError) throw error;
+    const validationError = new ProofValidationError(
+      `${method} mint quote batch observation has invalid amount fields`,
+    );
+    (validationError as Error & { cause?: unknown }).cause = error;
+    throw validationError;
+  }
+}
+
+function isDefinitiveMintQuotePollingValidation(error: Error): boolean {
+  return error instanceof ProofValidationError || error instanceof QuoteIdentityConflictError;
 }
 
 function equalOptionalAmount(
@@ -376,6 +402,7 @@ export class QuoteLifecycle {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly batchUnavailablePollingMethodsByMint = new Map<string, Set<MintMethod>>();
 
   constructor(deps: QuoteLifecycleDeps) {
     this.mintHandlerProvider = deps.mintHandlerProvider;
@@ -389,6 +416,42 @@ export class QuoteLifecycle {
     this.mintAdapter = deps.mintAdapter;
     this.eventBus = deps.eventBus;
     this.logger = deps.logger;
+    this.eventBus.on('mint:metadata-refreshed', ({ mintUrl }) => {
+      this.clearBatchUnavailablePollingGroups(mintUrl);
+    });
+  }
+
+  private isBatchUnavailableForPolling(mintUrl: string, method: MintMethod): boolean {
+    return (
+      this.batchUnavailablePollingMethodsByMint.get(normalizeMintUrl(mintUrl))?.has(method) === true
+    );
+  }
+
+  private markBatchUnavailableForPolling(mintUrl: string, method: MintMethod): void {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const unavailableMethods =
+      this.batchUnavailablePollingMethodsByMint.get(normalizedMintUrl) ?? new Set<MintMethod>();
+    if (unavailableMethods.has(method)) return;
+    unavailableMethods.add(method);
+    this.batchUnavailablePollingMethodsByMint.set(normalizedMintUrl, unavailableMethods);
+    this.logger?.warn('Disabling batch mint quote polling for the Coco Session', {
+      mintUrl: normalizedMintUrl,
+      method,
+    });
+  }
+
+  private clearBatchUnavailablePollingGroups(mintUrl: string): void {
+    this.batchUnavailablePollingMethodsByMint.delete(normalizeMintUrl(mintUrl));
+  }
+
+  private recordDefinitiveBatchPollingFailure(
+    mintUrl: string,
+    method: MintMethod,
+    category: MintQuotePollingFailure['category'],
+  ): void {
+    if (DEFINITIVE_BATCH_FAILURE_CATEGORIES.has(category)) {
+      this.markBatchUnavailableForPolling(mintUrl, method);
+    }
   }
 
   private buildDeps() {
@@ -510,6 +573,7 @@ export class QuoteLifecycle {
 
   /** Returns the advertised and safety-capped size for one Background Watcher opportunity. */
   async getMintQuotePollingLimit(mintUrl: string, method: MintMethod): Promise<number> {
+    if (this.isBatchUnavailableForPolling(mintUrl, method)) return 1;
     return this.mintService.getNut29MintQuoteCheckLimit(mintUrl, method);
   }
 
@@ -564,7 +628,9 @@ export class QuoteLifecycle {
 
     let useBatch: boolean;
     try {
-      useBatch = await this.mintService.supportsNut29MintQuoteCheck(mintUrl, method);
+      useBatch =
+        !this.isBatchUnavailableForPolling(mintUrl, method) &&
+        (await this.mintService.supportsNut29MintQuoteCheck(mintUrl, method));
     } catch (error) {
       return failedMintQuotePollingResult(
         normalizedIdentities,
@@ -598,13 +664,14 @@ export class QuoteLifecycle {
             ),
           ];
     } catch (error) {
-      return failedMintQuotePollingResult(
-        normalizedIdentities,
-        classifyMintQuotePollingFailure(error),
-        error,
-      );
+      const category = classifyMintQuotePollingFailure(error);
+      if (useBatch) this.recordDefinitiveBatchPollingFailure(mintUrl, method, category);
+      return failedMintQuotePollingResult(normalizedIdentities, category, error);
     }
     if (!Array.isArray(response)) {
+      if (useBatch) {
+        this.recordDefinitiveBatchPollingFailure(mintUrl, method, 'malformed-response');
+      }
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'malformed-response',
@@ -655,6 +722,7 @@ export class QuoteLifecycle {
       candidates.push({ snapshot: snapshot as MintMethodQuoteSnapshot, responseIndex });
       snapshotsByQuoteId.set(responseQuoteId, candidates);
     }
+    let hasDefinitiveBatchFailure = responseFailures.length > 0;
     const persisted: Array<{
       identity: QuoteIdentity;
       quote: MintQuote;
@@ -665,6 +733,7 @@ export class QuoteLifecycle {
     for (const identity of normalizedIdentities) {
       const candidates = snapshotsByQuoteId.get(identity.quoteId) ?? [];
       if (candidates.length === 0) {
+        hasDefinitiveBatchFailure = true;
         failedByQuoteId.set(identity.quoteId, {
           category: 'malformed-response',
           error: new ProofValidationError(
@@ -679,6 +748,7 @@ export class QuoteLifecycle {
       const invalidCandidates: Array<{
         error: Error;
         responseIndex: number;
+        definitive: boolean;
       }> = [];
       for (const candidate of candidates) {
         try {
@@ -690,14 +760,19 @@ export class QuoteLifecycle {
           );
           validCandidates.push(candidate);
         } catch (error) {
+          const normalizedError = normalizePollingError(error);
           invalidCandidates.push({
-            error: normalizePollingError(error),
+            error: normalizedError,
             responseIndex: candidate.responseIndex,
+            definitive: isDefinitiveMintQuotePollingValidation(normalizedError),
           });
         }
       }
 
       if (validCandidates.length === 0) {
+        if (invalidCandidates.some(({ definitive }) => definitive)) {
+          hasDefinitiveBatchFailure = true;
+        }
         const [firstFailure, ...additionalFailures] = invalidCandidates;
         failedByQuoteId.set(identity.quoteId, {
           category: 'validation',
@@ -722,6 +797,7 @@ export class QuoteLifecycle {
             !areMintQuotePollingSnapshotsEqual(method, firstValid.snapshot, snapshot),
         )
       ) {
+        hasDefinitiveBatchFailure = true;
         failedByQuoteId.set(identity.quoteId, {
           category: 'malformed-response',
           error: new ProofValidationError(
@@ -732,6 +808,9 @@ export class QuoteLifecycle {
         continue;
       }
 
+      if (validCandidates.length > 1 || invalidCandidates.some(({ definitive }) => definitive)) {
+        hasDefinitiveBatchFailure = true;
+      }
       responseFailures.push(
         ...validCandidates.slice(1).map(({ responseIndex }) => ({
           category: 'malformed-response' as const,
@@ -775,7 +854,11 @@ export class QuoteLifecycle {
       if (quote) return { status: 'updated', identity, quote };
       return { status: 'failed', identity, failure: failedByQuoteId.get(identity.quoteId)! };
     });
-    return { outcomes, responseFailures };
+    const result = { outcomes, responseFailures };
+    if (useBatch && hasDefinitiveBatchFailure) {
+      this.markBatchUnavailableForPolling(mintUrl, method);
+    }
+    return result;
   }
 
   private async assertAttributableMintQuotePollingSnapshot(

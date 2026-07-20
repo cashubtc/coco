@@ -32,6 +32,7 @@ describe('QuoteLifecycle mint quote polling', () => {
   let mintAdapter: MintAdapter;
   let mintQuoteRepository: MemoryMintQuoteRepository;
   let mintRepository: MemoryMintRepository;
+  let mintService: MintService;
   let quoteLifecycle: QuoteLifecycle;
   let fetchRemoteMintQuote: ReturnType<typeof mock>;
 
@@ -71,7 +72,13 @@ describe('QuoteLifecycle mint quote polling', () => {
         },
       } as never,
     });
-    const mintService = new MintService(mintRepository, new MemoryKeysetRepository(), mintAdapter);
+    mintService = new MintService(
+      mintRepository,
+      new MemoryKeysetRepository(),
+      mintAdapter,
+      undefined,
+      eventBus,
+    );
     fetchRemoteMintQuote = mock(async ({ quote }: { quote: MintQuote<'bolt11'> }) =>
       mintQuoteFromBolt11Response(quote.mintUrl, {
         quote: quote.quoteId,
@@ -283,6 +290,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     await expect(
       mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-c'),
     ).resolves.toMatchObject({ state: 'UNPAID' });
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
   it('retains one attributable observation from identical and partly malformed duplicates', async () => {
@@ -330,6 +338,7 @@ describe('QuoteLifecycle mint quote polling', () => {
       'malformed-response',
       'validation',
     ]);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
   it('normalizes units when identifying equivalent duplicate observations', async () => {
@@ -463,6 +472,8 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(storedOverIssued?.reusable && storedOverIssued.quoteData.amountIssued.toString()).toBe(
       '0',
     );
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt12')).toBe(1);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'onchain')).toBe(1);
   });
 
   it('classifies request-wide polling failures without losing the original error', async () => {
@@ -497,7 +508,196 @@ describe('QuoteLifecycle mint quote polling', () => {
         expect(outcome.failure.error).toBe(error);
       }
       expect(result.responseFailures).toEqual([]);
+      await eventBus.emit('mint:metadata-refreshed', { mintUrl });
     }
+  });
+
+  for (const [category, error] of [
+    ['incompatibility', new HttpResponseError('not implemented', 405)],
+    ['batch-size', new MintOperationError(11_017, 'batch too large')],
+    ['malformed-response', new HttpResponseError('bad response', 200)],
+    ['validation', new MintOperationError(20_002, 'quote state conflict')],
+  ] as const) {
+    it(`downgrades ${category} failures to one single quote on a later polling turn`, async () => {
+      await persistBolt11Quote('quote-a');
+      await persistBolt11Quote('quote-b');
+      (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+
+      const failed = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl: `${mintUrl}/`, quoteId: 'quote-a' },
+        { mintUrl, quoteId: 'quote-b' },
+      ]);
+
+      expect(
+        failed.outcomes.every(
+          (outcome) => outcome.status === 'failed' && outcome.failure.category === category,
+        ),
+      ).toBe(true);
+      expect(await quoteLifecycle.getMintQuotePollingLimit(`${mintUrl}/`, 'bolt11')).toBe(1);
+      expect(mintAdapter.checkMintQuote).not.toHaveBeenCalled();
+
+      const nextTurn = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl, quoteId: 'quote-a' },
+      ]);
+
+      expect(nextTurn.outcomes[0]?.status).toBe('updated');
+      expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(1);
+      expect(mintAdapter.checkMintQuote).toHaveBeenCalledTimes(1);
+      expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', 'quote-a');
+    });
+  }
+
+  for (const [category, error] of [
+    ['network', new NetworkError('offline')],
+    ['authentication', new HttpResponseError('authentication required', 401)],
+    ['rate-limit', new HttpResponseError('slow down', 429)],
+    ['server', new HttpResponseError('unavailable', 503)],
+  ] as const) {
+    it(`keeps ${category} failures eligible for batching on the next polling turn`, async () => {
+      await persistBolt11Quote('quote-a');
+      await persistBolt11Quote('quote-b');
+      (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>)
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce([
+          {
+            quote: 'quote-a',
+            request: 'lnbc1quote-a',
+            amount: Amount.from(10),
+            unit: 'sat',
+            expiry,
+            state: 'PAID',
+          },
+          {
+            quote: 'quote-b',
+            request: 'lnbc1quote-b',
+            amount: Amount.from(10),
+            unit: 'sat',
+            expiry,
+            state: 'PAID',
+          },
+        ]);
+
+      const failed = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl, quoteId: 'quote-a' },
+        { mintUrl, quoteId: 'quote-b' },
+      ]);
+
+      expect(
+        failed.outcomes.every(
+          (outcome) => outcome.status === 'failed' && outcome.failure.category === category,
+        ),
+      ).toBe(true);
+      expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+
+      const nextTurn = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl, quoteId: 'quote-a' },
+        { mintUrl, quoteId: 'quote-b' },
+      ]);
+
+      expect(nextTurn.outcomes.map(({ status }) => status)).toEqual(['updated', 'updated']);
+      expect(mintAdapter.checkMintQuoteBatch).toHaveBeenCalledTimes(2);
+      expect(mintAdapter.checkMintQuote).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const failureStage of ['canonical read', 'canonical persistence'] as const) {
+    it(`does not downgrade NUT-29 for a local ${failureStage} failure`, async () => {
+      await persistBolt11Quote('quote-a');
+      await persistBolt11Quote('quote-b');
+      (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          quote: 'quote-a',
+          request: 'lnbc1quote-a',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry,
+          state: 'PAID',
+        },
+        {
+          quote: 'quote-b',
+          request: 'lnbc1quote-b',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry,
+          state: 'PAID',
+        },
+      ]);
+      const storageError = new Error('storage unavailable');
+      if (failureStage === 'canonical read') {
+        mintQuoteRepository.getMintQuoteById = mock(async () => {
+          throw storageError;
+        });
+      } else {
+        mintQuoteRepository.upsertMintQuote = mock(async () => {
+          throw storageError;
+        });
+      }
+
+      const failed = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+        { mintUrl, quoteId: 'quote-a' },
+        { mintUrl, quoteId: 'quote-b' },
+      ]);
+
+      expect(failed.outcomes.every(({ status }) => status === 'failed')).toBe(true);
+      expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+    });
+  }
+
+  it('isolates downgrade state by payment method and clears it after mint metadata updates', async () => {
+    await persistBolt11Quote('quote-a');
+    await persistBolt11Quote('quote-b');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new HttpResponseError('not implemented', 405),
+    );
+
+    await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+      { mintUrl, quoteId: 'quote-b' },
+    ]);
+
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt12')).toBe(100);
+    const mint = await mintRepository.getMintByUrl(mintUrl);
+    if (!mint) throw new Error('Expected test mint');
+    const otherMintUrl = 'https://other-mint.test';
+    await mintRepository.addOrUpdateMint({ ...mint, mintUrl: otherMintUrl });
+    expect(await quoteLifecycle.getMintQuotePollingLimit(otherMintUrl, 'bolt11')).toBe(100);
+
+    mintAdapter.fetchMintInfo = mock(async () => mint.mintInfo);
+    mintAdapter.fetchKeysets = mock(async () => ({ keysets: [] }));
+    await mintService.updateMintData(mintUrl);
+
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+  });
+
+  it('does not carry downgrade state into a new Coco Session', async () => {
+    await persistBolt11Quote('quote-a');
+    await persistBolt11Quote('quote-b');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new HttpResponseError('not implemented', 405),
+    );
+    await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+      { mintUrl, quoteId: 'quote-b' },
+    ]);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+
+    const nextSession = new QuoteLifecycle({
+      mintHandlerProvider: {
+        get: mock(() => ({ fetchRemoteQuote: fetchRemoteMintQuote })),
+      } as unknown as MintHandlerProvider,
+      meltHandlerProvider: {} as MeltHandlerProvider,
+      mintQuoteRepository,
+      meltQuoteRepository: {} as never,
+      proofRepository: {} as ProofRepository,
+      proofService: {} as ProofService,
+      mintService,
+      walletService: {} as WalletService,
+      mintAdapter,
+      eventBus: new EventBus<CoreEvents>(),
+    });
+
+    expect(await nextSession.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
   });
 
   it('classifies wrapped mint-info refresh failures by their transport cause', async () => {
