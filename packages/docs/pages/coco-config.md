@@ -42,6 +42,13 @@ export interface CocoConfig {
       disabled?: boolean;
       initializeExistingPendingOperationsOnStart?: boolean;
     };
+    mintSwapOperationProcessor?: {
+      disabled?: boolean;
+      sweepIntervalMs?: number;
+      dueBatchSize?: number;
+      baseRetryDelayMs?: number;
+      maxRetryDelayMs?: number;
+    };
   };
 }
 ```

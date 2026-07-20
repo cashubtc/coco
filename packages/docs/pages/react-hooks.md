@@ -33,6 +33,7 @@ separate React-only workflow model. One hook instance owns one active operation.
 For state-machine details, see [Send Operations](./send-operations.md),
 [Receive Operations](./receive-operations.md), [Mint Operations](./mint-operations.md),
 and [Melt Operations](./melt-operations.md).
+Mint swaps are documented in [Mint Swaps](./mint-swaps.md).
 
 ## useSendOperation
 
@@ -155,6 +156,23 @@ if (preparedMelt.state === 'prepared') {
   await execute();
 }
 ```
+
+## useMintSwapOperation
+
+Use this for an exact-receive transfer between two trusted mints. Review the prepared debit bounds
+before execution; the hook then follows durable recovery events for its bound parent.
+
+```tsx
+import { useMintSwapOperation } from '@cashu/coco-react';
+
+const { prepare, execute, retry, cancel, currentOperation } = useMintSwapOperation();
+
+await prepare({ sourceMintUrl, destinationMintUrl, amount: 10_000 });
+await execute();
+```
+
+`needs_attention` is an operation state with sanitized evidence, distinct from the hook's local
+`error` field. Event revisions older than `currentOperation.revision` are ignored.
 
 ## Derived-data Hooks
 
