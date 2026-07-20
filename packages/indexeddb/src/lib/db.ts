@@ -145,6 +145,7 @@ export interface ProofRow {
   createdAt: number;
   usedByOperationId?: string | null;
   createdByOperationId?: string | null;
+  createdByMintIssuanceAttemptId?: string | null;
 }
 
 export interface MintQuoteRow {
@@ -325,4 +326,19 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+  mintIssuanceAttemptId?: string | null;
+}
+
+export interface MintIssuanceAttemptRow {
+  id: string;
+  mintUrl: string;
+  unit: string;
+  state: 'prepared' | 'submitted' | 'succeeded' | 'failed';
+  membersJson: string;
+  /** Indexed adapter projection; the domain record remains the ordered members array. */
+  memberOperationIds: string[];
+  outputDataJson: string;
+  createdAt: number;
+  submittedAt?: number | null;
+  terminalFailureJson?: string | null;
 }

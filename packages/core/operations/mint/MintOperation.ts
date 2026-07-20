@@ -26,6 +26,8 @@ interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMetho
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
+  /** Durable attempt currently or historically responsible for this operation's issuance. */
+  mintIssuanceAttemptId?: string;
 }
 
 export interface MintOperationFailure {

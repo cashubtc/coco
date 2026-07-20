@@ -36,6 +36,7 @@ export {
   SqliteMeltOperationRepository,
   SqliteAuthSessionRepository,
   SqliteMintOperationRepository,
+  SqliteMintIssuanceAttemptRepository,
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,

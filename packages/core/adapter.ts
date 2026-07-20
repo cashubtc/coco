@@ -9,6 +9,7 @@ export type {
   MeltOperationRepository,
   MeltQuoteRepository,
   MintOperationRepository,
+  MintIssuanceAttemptRepository,
   MintQuoteRepository,
   MintRepository,
   PaymentRequestReceiveAttemptRepository,
@@ -59,6 +60,15 @@ export type {
   MintMethodRemoteState,
   MintOperation,
   MintOperationState,
+  MintIssuanceAttempt,
+  MintIssuanceAttemptFailure,
+  MintIssuanceAttemptMember,
+  MintIssuanceAttemptState,
+  MintIssuanceAttemptTransition,
+  PreparedMintIssuanceAttempt,
+  SubmittedMintIssuanceAttempt,
+  SucceededMintIssuanceAttempt,
+  FailedMintIssuanceAttempt,
   PaymentRequestReceiveAttempt,
   PaymentRequestReceiveAttemptState,
   PaymentRequestReceiveOperation,
@@ -70,6 +80,14 @@ export type {
   SendMethodData,
   SendOperation,
   SendOperationState,
+} from './operations/index.ts';
+export {
+  applyMintIssuanceAttemptTransition,
+  INCOMPLETE_MINT_ISSUANCE_ATTEMPT_STATES,
+  normalizeMintIssuanceAttempt,
+  parseMintIssuanceAttemptFailure,
+  parseMintIssuanceAttemptMembers,
+  parseMintIssuanceAttemptOutputData,
 } from './operations/index.ts';
 export type { MeltMethodRemoteState } from './operations/melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './operations/index.ts';

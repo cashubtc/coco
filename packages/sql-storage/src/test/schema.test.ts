@@ -43,6 +43,7 @@ const EXPECTED_MIGRATION_IDS = [
   '034_clean_unquoted_mint_operations',
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
+  '037_mint_issuance_attempts',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -181,6 +182,66 @@ describe('shared SQL schema migrations', () => {
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
   });
+
+  itWithDatabase(
+    'adds attempt persistence without rewriting legacy operations or proofs',
+    async (db) => {
+      await ensureSchemaUpTo(db, '037_mint_issuance_attempts');
+      await db.run(
+        `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'legacy-mint-op',
+          'https://mint.test',
+          'legacy-quote',
+          'init',
+          1,
+          2,
+          'bolt11',
+          '{}',
+          '1',
+          'sat',
+        ],
+      );
+      await db.run(
+        `INSERT INTO coco_cashu_proofs
+        (mintUrl, id, unit, amount, secret, C, state, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['https://mint.test', 'keyset-id', 'sat', '1', 'legacy-secret', 'C', 'ready', 1],
+      );
+
+      await ensureSchemaUpTo(db);
+
+      const operation = await db.get<{ id: string; mintIssuanceAttemptId: string | null }>(
+        'SELECT id, mintIssuanceAttemptId FROM coco_cashu_mint_operations WHERE id = ?',
+        ['legacy-mint-op'],
+      );
+      const proof = await db.get<{
+        secret: string;
+        createdByMintIssuanceAttemptId: string | null;
+      }>(
+        `SELECT secret, createdByMintIssuanceAttemptId
+       FROM coco_cashu_proofs WHERE mintUrl = ? AND secret = ?`,
+        ['https://mint.test', 'legacy-secret'],
+      );
+      const attemptTables = await db.all<{ name: string }>(
+        `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'coco_cashu_mint_issuance_attempt%'
+       ORDER BY name`,
+      );
+
+      expect(operation).toEqual({ id: 'legacy-mint-op', mintIssuanceAttemptId: null });
+      expect(proof).toEqual({
+        secret: 'legacy-secret',
+        createdByMintIssuanceAttemptId: null,
+      });
+      expect(attemptTables.map((row) => row.name)).toEqual([
+        'coco_cashu_mint_issuance_attempt_members',
+        'coco_cashu_mint_issuance_attempts',
+      ]);
+    },
+  );
 
   itWithDatabase('upgrades mint operations to allow failed state persistence', async (db) => {
     await ensureSchemaUpTo(db, '020_mint_operations_failed_state');

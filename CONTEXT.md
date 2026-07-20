@@ -94,6 +94,14 @@ waiting on a specific result. Disabling a Background Watcher does not disable ex
 operations for the same domain work.
 _Avoid_: Subscriptions, processors
 
+**Mint Operation**:
+A durable, individually observable intent to claim value from one mint quote.
+_Avoid_: Mint job, quote state
+
+**Mint Issuance Attempt**:
+One atomic mint request that claims one or more Mint Operations and has one aggregate outcome.
+_Avoid_: Mint Operation, request retry
+
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.
 _Avoid_: Recovery, import, restored mint, restored wallet

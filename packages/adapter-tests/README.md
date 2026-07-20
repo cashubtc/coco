@@ -58,3 +58,7 @@ instance for every test and for cleaning up via `dispose()`.
   repository set.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
+- `runMintIssuanceAttemptRepositoryContract()` verifies immutable attempt recovery material,
+  ordered membership, legal lifecycle transitions, lookup indexes, and atomic rollback.
+- `runMintIssuanceProvenanceRepositoryContract()` verifies optional attempt links on Mint
+  Operations and proofs while keeping legacy records readable.

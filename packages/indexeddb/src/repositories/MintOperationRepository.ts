@@ -41,6 +41,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
+    ...(row.mintIssuanceAttemptId ? { mintIssuanceAttemptId: row.mintIssuanceAttemptId } : {}),
   };
 
   const intent = {
@@ -91,6 +92,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      mintIssuanceAttemptId: operation.mintIssuanceAttemptId ?? null,
     };
   }
 
@@ -115,6 +117,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       ? JSON.stringify(operation.terminalFailure)
       : null,
     outputDataJson: JSON.stringify(operation.outputData),
+    mintIssuanceAttemptId: operation.mintIssuanceAttemptId ?? null,
   };
 };
 

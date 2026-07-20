@@ -28,6 +28,7 @@ interface MintOperationRow {
   lastObservedRemoteStateAt: number | null;
   terminalFailureJson: string | null;
   outputDataJson: string | null;
+  mintIssuanceAttemptId: string | null;
 }
 
 const persistedStates = ['pending', 'executing', 'finalized', 'failed'] as const;
@@ -63,6 +64,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
+    ...(row.mintIssuanceAttemptId ? { mintIssuanceAttemptId: row.mintIssuanceAttemptId } : {}),
   };
 
   const intent = {
@@ -116,6 +118,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
       null,
       operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
       null,
+      operation.mintIssuanceAttemptId ?? null,
     ];
   }
 
@@ -138,6 +141,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
     null,
     operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
     JSON.stringify(operation.outputData),
+    operation.mintIssuanceAttemptId ?? null,
   ];
 };
 
@@ -160,8 +164,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson, mintIssuanceAttemptId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -180,7 +184,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_mint_operations
-         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
+         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?, mintIssuanceAttemptId = ?
          WHERE id = ?`,
         [
           operation.quoteId,
@@ -192,6 +196,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
+          operation.mintIssuanceAttemptId ?? null,
           operation.id,
         ],
       );
@@ -200,7 +205,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_mint_operations
-       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?
+       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?, mintIssuanceAttemptId = ?
        WHERE id = ?`,
       [
         operation.quoteId,
@@ -218,6 +223,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
+        operation.mintIssuanceAttemptId ?? null,
         operation.id,
       ],
     );

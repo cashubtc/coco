@@ -11,6 +11,7 @@ import {
   type MintQuoteRef,
   type MeltQuoteRef,
   type MintOperation,
+  type PreparedMintIssuanceAttempt,
   type PaymentRequestReceiveAttempt,
   type PaymentRequestReceiveOperation,
   type ReceiveOperation,
@@ -356,6 +357,345 @@ export function createDummyMintOperation(
     outputData: { keep: [], send: [] },
     ...overrides,
   } satisfies PendingMintOperation;
+}
+
+/** Creates stable recovery material for adapter contract fixtures. */
+export function createDummyMintIssuanceAttempt(
+  overrides?: Partial<PreparedMintIssuanceAttempt>,
+): PreparedMintIssuanceAttempt {
+  return {
+    id: 'mint-attempt-1',
+    mintUrl: 'https://mint.test/',
+    unit: 'SAT',
+    state: 'prepared',
+    members: [
+      {
+        operationId: 'mint-op-1',
+        quoteId: 'quote-1',
+        amount: Amount.from(1),
+      },
+      {
+        operationId: 'mint-op-2',
+        quoteId: 'quote-2',
+        amount: Amount.from(2),
+      },
+    ],
+    outputData: {
+      keep: [
+        {
+          blindedMessage: { amount: '3', id: 'keyset-id', B_: 'B_' },
+          blindingFactor: '01',
+          secret: '02',
+        },
+      ],
+      send: [],
+    },
+    createdAt: 1_000,
+    ...overrides,
+  } satisfies PreparedMintIssuanceAttempt;
+}
+
+/** Registers the shared Mint Issuance Attempt persistence contract with a test runner. */
+export async function runMintIssuanceAttemptRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintIssuanceAttemptRepository contract', () => {
+    it('preserves ordered members and aggregate output data while normalizing identity', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+
+        await repositories.mintIssuanceAttemptRepository.create(attempt);
+
+        const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        expect(stored).toBeDefined();
+        expect(stored!.mintUrl).toBe('https://mint.test');
+        expect(stored!.unit).toBe('sat');
+        expect(stored!.members.map((member) => member.operationId).join(',')).toBe(
+          'mint-op-1,mint-op-2',
+        );
+        expect(stored!.members.map((member) => member.quoteId).join(',')).toBe('quote-1,quote-2');
+        expect(stored!.members.map((member) => member.amount.toString()).join(',')).toBe('1,2');
+        expect(JSON.stringify(stored!.outputData)).toBe(JSON.stringify(attempt.outputData));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('returns the newest retained attempt containing a member operation', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintIssuanceAttemptRepository.create(
+          createDummyMintIssuanceAttempt({ id: 'older', createdAt: 1_000 }),
+        );
+        await repositories.mintIssuanceAttemptRepository.create(
+          createDummyMintIssuanceAttempt({
+            id: 'newer',
+            createdAt: 2_000,
+            members: [
+              { operationId: 'mint-op-1', quoteId: 'quote-newer-1', amount: Amount.from(1) },
+              { operationId: 'mint-op-2', quoteId: 'quote-newer-2', amount: Amount.from(2) },
+            ],
+          }),
+        );
+
+        const stored =
+          await repositories.mintIssuanceAttemptRepository.getNewestByMemberOperationId(
+            'mint-op-1',
+          );
+        const missing =
+          await repositories.mintIssuanceAttemptRepository.getNewestByMemberOperationId('missing');
+
+        expect(stored?.id).toBe('newer');
+        expect(missing).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('lists only incomplete attempts in deterministic order and optionally by mint', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempts = [
+          createDummyMintIssuanceAttempt({ id: 'prepared', createdAt: 3_000 }),
+          createDummyMintIssuanceAttempt({ id: 'submitted', createdAt: 1_000 }),
+          createDummyMintIssuanceAttempt({ id: 'succeeded', createdAt: 2_000 }),
+          createDummyMintIssuanceAttempt({
+            id: 'other-mint',
+            mintUrl: 'https://other-mint.test/',
+            createdAt: 4_000,
+            members: [
+              { operationId: 'other-op-1', quoteId: 'other-quote-1', amount: Amount.from(1) },
+            ],
+          }),
+        ];
+        for (const attempt of attempts) {
+          await repositories.mintIssuanceAttemptRepository.create(attempt);
+        }
+        await repositories.mintIssuanceAttemptRepository.compareAndTransition('submitted', {
+          from: 'prepared',
+          to: 'submitted',
+          submittedAt: 1_100,
+        });
+        await repositories.mintIssuanceAttemptRepository.compareAndTransition('succeeded', {
+          from: 'prepared',
+          to: 'submitted',
+          submittedAt: 2_100,
+        });
+        await repositories.mintIssuanceAttemptRepository.compareAndTransition('succeeded', {
+          from: 'submitted',
+          to: 'succeeded',
+        });
+
+        const all = await repositories.mintIssuanceAttemptRepository.listIncomplete();
+        const mintOnly =
+          await repositories.mintIssuanceAttemptRepository.listIncomplete('https://mint.test/');
+
+        expect(all.map((attempt) => attempt.id).join(',')).toBe('submitted,prepared,other-mint');
+        expect(mintOnly.map((attempt) => attempt.id).join(',')).toBe('submitted,prepared');
+        expect(all[2]?.mintUrl).toBe('https://other-mint.test');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('compares state while applying only legal lifecycle transitions', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+        await repositories.mintIssuanceAttemptRepository.create(attempt);
+
+        const submitted = await repositories.mintIssuanceAttemptRepository.compareAndTransition(
+          attempt.id,
+          { from: 'prepared', to: 'submitted', submittedAt: 1_500 },
+        );
+        const stale = await repositories.mintIssuanceAttemptRepository.compareAndTransition(
+          attempt.id,
+          { from: 'prepared', to: 'submitted', submittedAt: 1_600 },
+        );
+        const failed = await repositories.mintIssuanceAttemptRepository.compareAndTransition(
+          attempt.id,
+          {
+            from: 'submitted',
+            to: 'failed',
+            terminalFailure: {
+              code: 'DEFINITIVE_REJECTION',
+              message: 'Mint rejected before signing',
+              details: { status: 400 },
+            },
+          },
+        );
+
+        const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        expect(submitted).toBe(true);
+        expect(stale).toBe(false);
+        expect(failed).toBe(true);
+        expect(stored?.state).toBe('failed');
+        expect(stored?.submittedAt).toBe(1_500);
+        expect(stored?.terminalFailure?.code).toBe('DEFINITIVE_REJECTION');
+        expect(JSON.stringify(stored?.terminalFailure?.details)).toBe(
+          JSON.stringify({ status: 400 }),
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('retains immutable recovery material without exposing mutable storage references', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+        await repositories.mintIssuanceAttemptRepository.create(attempt);
+
+        attempt.members[0]!.operationId = 'mutated-input';
+        attempt.outputData.keep[0]!.secret = 'mutated-input';
+        const firstRead = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        firstRead!.members[0]!.operationId = 'mutated-read';
+        firstRead!.outputData.keep[0]!.secret = 'mutated-read';
+
+        const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        expect(stored!.members[0]!.operationId).toBe('mint-op-1');
+        expect(stored!.outputData.keep[0]!.secret).toBe('02');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects lifecycle transitions outside prepared-submitted-terminal', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+        await repositories.mintIssuanceAttemptRepository.create(attempt);
+
+        await expectThrows(
+          () =>
+            repositories.mintIssuanceAttemptRepository.compareAndTransition(attempt.id, {
+              from: 'prepared',
+              to: 'succeeded',
+            } as never),
+          expect,
+        );
+
+        const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        expect(stored?.state).toBe('prepared');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back attempts with counters, member operations, and proofs atomically', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+        const member = createDummyMintOperation({ id: 'mint-op-1', quoteId: 'quote-1' });
+        await repositories.counterRepository.setCounter(attempt.mintUrl, 'keyset-id', 10);
+        await repositories.mintOperationRepository.create(member);
+
+        await expectThrows(async () => {
+          await repositories.withTransaction(async (tx) => {
+            await tx.mintIssuanceAttemptRepository.create(attempt);
+            await tx.mintOperationRepository.update({
+              ...member,
+              state: 'executing',
+              mintIssuanceAttemptId: attempt.id,
+            });
+            await tx.counterRepository.setCounter(attempt.mintUrl, 'keyset-id', 12);
+            await tx.proofRepository.saveProofs(attempt.mintUrl, [
+              createDummyProof({
+                secret: 'rolled-back-proof',
+                createdByMintIssuanceAttemptId: attempt.id,
+              }),
+            ]);
+            throw new Error('rollback issuance preparation');
+          });
+        }, expect);
+
+        const storedAttempt = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        const storedMember = await repositories.mintOperationRepository.getById(member.id);
+        const storedCounter = await repositories.counterRepository.getCounter(
+          attempt.mintUrl,
+          'keyset-id',
+        );
+        const storedProof = await repositories.proofRepository.getProofBySecret(
+          attempt.mintUrl,
+          'rolled-back-proof',
+        );
+        expect(storedAttempt).toBe(null);
+        expect(storedMember?.state).toBe('pending');
+        expect(storedMember?.mintIssuanceAttemptId).toBe(undefined);
+        expect(storedCounter?.counter).toBe(10);
+        expect(storedProof).toBe(null);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+/** Registers persistence compatibility for attempt-backed operations and proofs. */
+export async function runMintIssuanceProvenanceRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('Mint Issuance provenance repository contract', () => {
+    it('round-trips optional Mint Issuance Attempt identity without changing legacy operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintOperationRepository.create(
+          createDummyMintOperation({
+            id: 'attempt-backed-operation',
+            quoteId: 'attempt-backed-quote',
+            mintIssuanceAttemptId: 'mint-attempt-1',
+          }),
+        );
+        await repositories.mintOperationRepository.create(
+          createDummyMintOperation({ id: 'legacy-operation', quoteId: 'legacy-quote' }),
+        );
+
+        const attemptBacked = await repositories.mintOperationRepository.getById(
+          'attempt-backed-operation',
+        );
+        const legacy = await repositories.mintOperationRepository.getById('legacy-operation');
+
+        expect(attemptBacked?.mintIssuanceAttemptId).toBe('mint-attempt-1');
+        expect(legacy?.mintIssuanceAttemptId).toBe(undefined);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips optional attempt-level proof provenance without changing legacy proofs', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.proofRepository.saveProofs('https://mint.test', [
+          createDummyProof({
+            secret: 'attempt-proof',
+            createdByMintIssuanceAttemptId: 'mint-attempt-1',
+          }),
+          createDummyProof({ secret: 'legacy-proof' }),
+        ]);
+
+        const attemptProof = await repositories.proofRepository.getProofBySecret(
+          'https://mint.test',
+          'attempt-proof',
+        );
+        const legacyProof = await repositories.proofRepository.getProofBySecret(
+          'https://mint.test',
+          'legacy-proof',
+        );
+
+        expect(attemptProof?.createdByMintIssuanceAttemptId).toBe('mint-attempt-1');
+        expect(legacyProof?.createdByMintIssuanceAttemptId).toBe(undefined);
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }
 
 type InitMintOperation = Extract<MintOperation, { state: 'init' }>;

@@ -7,6 +7,11 @@ import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
 import type {
+  MintIssuanceAttempt,
+  MintIssuanceAttemptTransition,
+  PreparedMintIssuanceAttempt,
+} from '@core/operations/mint/MintIssuanceAttempt';
+import type {
   ReceiveOperation,
   ReceiveOperationState,
 } from '../operations/receive/ReceiveOperation';
@@ -298,6 +303,15 @@ export interface MintOperationRepository {
   delete(id: string): Promise<void>;
 }
 
+/** Persists immutable recovery material for atomic mint issuance requests. */
+export interface MintIssuanceAttemptRepository {
+  create(attempt: PreparedMintIssuanceAttempt): Promise<void>;
+  getById(id: string): Promise<MintIssuanceAttempt | null>;
+  getNewestByMemberOperationId(operationId: string): Promise<MintIssuanceAttempt | null>;
+  listIncomplete(mintUrl?: string): Promise<MintIssuanceAttempt[]>;
+  compareAndTransition(id: string, transition: MintIssuanceAttemptTransition): Promise<boolean>;
+}
+
 export interface ReceiveOperationRepository {
   /** Create a new receive operation */
   create(operation: ReceiveOperation): Promise<void>;
@@ -366,6 +380,7 @@ interface RepositoriesBase {
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
+  mintIssuanceAttemptRepository: MintIssuanceAttemptRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;

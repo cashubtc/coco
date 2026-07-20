@@ -57,4 +57,7 @@ export interface CoreProof extends Proof {
    * Used for auditing and rollback purposes.
    */
   createdByOperationId?: string;
+
+  /** Mint Issuance Attempt that produced this proof as part of an aggregate output set. */
+  createdByMintIssuanceAttemptId?: string;
 }

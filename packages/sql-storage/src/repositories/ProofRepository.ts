@@ -23,12 +23,13 @@ interface ProofRow {
   state: ProofState;
   usedByOperationId: string | null;
   createdByOperationId: string | null;
+  createdByMintIssuanceAttemptId: string | null;
 }
 
 const MAX_PROOF_SECRET_LOOKUP_BATCH_SIZE = 900;
 
 const PROOF_COLUMNS =
-  'mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId';
+  'mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, usedByOperationId, createdByOperationId, createdByMintIssuanceAttemptId';
 
 function normalizeProofUnit(proof: CoreProof): string {
   return normalizeUnit((proof as { unit?: string }).unit);
@@ -68,6 +69,9 @@ function rowToProof(r: ProofRow): CoreProof {
     state: r.state,
     ...(r.usedByOperationId ? { usedByOperationId: r.usedByOperationId } : {}),
     ...(r.createdByOperationId ? { createdByOperationId: r.createdByOperationId } : {}),
+    ...(r.createdByMintIssuanceAttemptId
+      ? { createdByMintIssuanceAttemptId: r.createdByMintIssuanceAttemptId }
+      : {}),
   };
 }
 
@@ -95,7 +99,7 @@ export class SqliteProofRepository implements ProofRepository {
         }
       }
       const insertSql =
-        'INSERT INTO coco_cashu_proofs (mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        'INSERT INTO coco_cashu_proofs (mintUrl, id, unit, amount, secret, C, dleqJson, witnessJson, state, createdAt, usedByOperationId, createdByOperationId, createdByMintIssuanceAttemptId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
       for (const p of normalizedProofs) {
         const dleqJson = p.dleq ? JSON.stringify(p.dleq) : null;
         const witnessJson = p.witness ? JSON.stringify(p.witness) : null;
@@ -112,6 +116,7 @@ export class SqliteProofRepository implements ProofRepository {
           now,
           p.usedByOperationId ?? null,
           p.createdByOperationId ?? null,
+          p.createdByMintIssuanceAttemptId ?? null,
         ]);
       }
     });
