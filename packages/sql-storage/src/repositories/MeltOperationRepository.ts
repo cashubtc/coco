@@ -44,6 +44,7 @@ interface MeltOperationRow {
   changeAmount: string | number | null;
   effectiveFee: string | number | null;
   finalizedDataJson: string | null;
+  parentSwapOperationId: string | null;
 }
 
 const preparedStates: MeltOperationState[] = [
@@ -70,6 +71,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId ?? undefined,
   };
 
   if (!isPreparedState(row.state)) {
@@ -140,6 +142,7 @@ const operationToParams = (operation: MeltOperation): SqlValue[] => {
       null,
       null,
       null,
+      operation.parentSwapOperationId ?? null,
     ];
   }
 
@@ -179,6 +182,7 @@ const operationToParams = (operation: MeltOperation): SqlValue[] => {
     changeAmount,
     effectiveFee,
     finalizedDataJson,
+    operation.parentSwapOperationId ?? null,
   ];
 };
 
@@ -194,8 +198,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
       throw new Error('Cannot persist failed melt operation');
     }
 
-    const exists = await this.db.get<{ id: string }>(
-      'SELECT id FROM coco_cashu_melt_operations WHERE id = ? LIMIT 1',
+    const exists = await this.db.get<{ id: string; parentSwapOperationId: string | null }>(
+      'SELECT id, parentSwapOperationId FROM coco_cashu_melt_operations WHERE id = ? LIMIT 1',
       [operation.id],
     );
     if (exists) {
@@ -207,8 +211,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, unit, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, unit, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson, parentSwapOperationId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -218,12 +222,15 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
       throw new Error('Cannot persist failed melt operation');
     }
 
-    const exists = await this.db.get<{ id: string }>(
-      'SELECT id FROM coco_cashu_melt_operations WHERE id = ? LIMIT 1',
+    const exists = await this.db.get<{ id: string; parentSwapOperationId: string | null }>(
+      'SELECT id, parentSwapOperationId FROM coco_cashu_melt_operations WHERE id = ? LIMIT 1',
       [operation.id],
     );
     if (!exists) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
+    }
+    if ((exists.parentSwapOperationId ?? undefined) !== operation.parentSwapOperationId) {
+      throw new Error(`Cannot change parent ownership of MeltOperation ${operation.id}`);
     }
 
     await this.assertNoDuplicateQuoteOperation(operation);
@@ -233,7 +240,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_melt_operations
-         SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?
+         SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?, parentSwapOperationId = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -243,6 +250,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
           stringifyJson(operation.methodData),
           operation.quoteId ?? null,
           operation.unit,
+          operation.parentSwapOperationId ?? null,
           operation.id,
         ],
       );
@@ -253,7 +261,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_melt_operations
-        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?, finalizedDataJson = ?
+        SET state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, quoteId = ?, unit = ?, amount = ?, fee_reserve = ?, swap_fee = ?, needsSwap = ?, inputAmount = ?, inputProofSecretsJson = ?, changeOutputDataJson = ?, swapOutputDataJson = ?, changeAmount = ?, effectiveFee = ?, finalizedDataJson = ?, parentSwapOperationId = ?
         WHERE id = ?`,
       [
         operation.state,
@@ -280,6 +288,7 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
         operation.state === 'finalized' && settlement.finalizedData !== undefined
           ? JSON.stringify(settlement.finalizedData)
           : null,
+        operation.parentSwapOperationId ?? null,
         operation.id,
       ],
     );
