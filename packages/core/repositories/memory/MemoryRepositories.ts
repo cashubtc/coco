@@ -17,6 +17,8 @@ import type {
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
+  MintSwapOperationRepository,
+  OperationEventOutboxRepository,
 } from '..';
 import { MemoryAuthSessionRepository } from './MemoryAuthSessionRepository';
 import { MemoryCounterRepository } from './MemoryCounterRepository';
@@ -36,6 +38,9 @@ import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
 } from './MemoryPaymentRequestReceiveRepository';
+import { MemoryMintSwapOperationRepository } from './MemoryMintSwapOperationRepository';
+import { MemoryOperationEventOutboxRepository } from './MemoryOperationEventOutboxRepository';
+import { copyMemoryRepositoryState } from './clone';
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
@@ -54,6 +59,10 @@ export class MemoryRepositories implements Repositories {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  mintSwapOperationRepository: MintSwapOperationRepository;
+  operationEventOutboxRepository: OperationEventOutboxRepository;
+
+  private transactionTail: Promise<void> = Promise.resolve();
 
   constructor() {
     this.mintRepository = new MemoryMintRepository();
@@ -85,6 +94,8 @@ export class MemoryRepositories implements Repositories {
       new MemoryPaymentRequestReceiveOperationRepository();
     this.paymentRequestReceiveAttemptRepository =
       new MemoryPaymentRequestReceiveAttemptRepository();
+    this.mintSwapOperationRepository = new MemoryMintSwapOperationRepository();
+    this.operationEventOutboxRepository = new MemoryOperationEventOutboxRepository();
   }
 
   async init(): Promise<void> {
@@ -92,6 +103,51 @@ export class MemoryRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return fn(this);
+    let release!: () => void;
+    const previous = this.transactionTail;
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+
+    try {
+      const staged = new MemoryRepositories();
+      this.copyRepositoryStates(this, staged);
+      const result = await fn(staged);
+      this.copyRepositoryStates(staged, this);
+      return result;
+    } finally {
+      release();
+    }
+  }
+
+  private copyRepositoryStates(source: MemoryRepositories, target: MemoryRepositories): void {
+    const repositoryKeys: Array<keyof RepositoryTransactionScope> = [
+      'mintRepository',
+      'keyRingRepository',
+      'counterRepository',
+      'keysetRepository',
+      'proofRepository',
+      'mintQuoteRepository',
+      'legacyMintQuoteRepository',
+      'meltQuoteRepository',
+      'historyRepository',
+      'sendOperationRepository',
+      'meltOperationRepository',
+      'authSessionRepository',
+      'mintOperationRepository',
+      'receiveOperationRepository',
+      'paymentRequestReceiveOperationRepository',
+      'paymentRequestReceiveAttemptRepository',
+      'mintSwapOperationRepository',
+      'operationEventOutboxRepository',
+    ];
+    for (const key of repositoryKeys) {
+      copyMemoryRepositoryState(
+        source[key],
+        target[key],
+        key === 'historyRepository' ? ['operationRepositories'] : [],
+      );
+    }
   }
 }
