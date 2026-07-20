@@ -7,6 +7,7 @@ import type { MintAdapter } from '../infra';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
+import { redactSensitiveValue } from '../logging/redaction';
 import {
   getMintQuoteAmount,
   mintQuoteFromBolt11Response,
@@ -520,7 +521,7 @@ export class QuoteLifecycle {
       (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
-      quoteId: persistedQuote.quoteId,
+      quoteRef: redactSensitiveValue(persistedQuote.quoteId),
       method,
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
