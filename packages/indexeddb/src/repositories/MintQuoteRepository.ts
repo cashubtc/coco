@@ -20,6 +20,7 @@ type SerializedQuoteData = {
   pubkey?: string;
   amountPaid?: string | number;
   amountIssued?: string | number;
+  remoteUpdatedAt?: number;
 };
 
 function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
@@ -76,7 +77,18 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
     lastObservedRemoteState: (row.lastObservedRemoteState ?? state) as MintMethodRemoteState,
     lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     reusable: false,
-    quoteData: { amount },
+    quoteData: {
+      amount,
+      ...(quoteData.amountPaid !== undefined
+        ? { amountPaid: deserializeAmount(quoteData.amountPaid) }
+        : {}),
+      ...(quoteData.amountIssued !== undefined
+        ? { amountIssued: deserializeAmount(quoteData.amountIssued) }
+        : {}),
+      ...(quoteData.remoteUpdatedAt !== undefined
+        ? { remoteUpdatedAt: quoteData.remoteUpdatedAt }
+        : {}),
+    },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -84,7 +96,18 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
 
 function serializeQuoteData(quote: MintQuote): string {
   if (isStatefulMintQuote(quote)) {
-    return stringifyJson({ amount: serializeAmount(quote.quoteData.amount) });
+    return stringifyJson({
+      amount: serializeAmount(quote.quoteData.amount),
+      ...(quote.quoteData.amountPaid !== undefined
+        ? { amountPaid: serializeAmount(quote.quoteData.amountPaid) }
+        : {}),
+      ...(quote.quoteData.amountIssued !== undefined
+        ? { amountIssued: serializeAmount(quote.quoteData.amountIssued) }
+        : {}),
+      ...(quote.quoteData.remoteUpdatedAt !== undefined
+        ? { remoteUpdatedAt: quote.quoteData.remoteUpdatedAt }
+        : {}),
+    });
   }
 
   if (quote.method === 'bolt12') {

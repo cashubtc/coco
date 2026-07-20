@@ -1446,6 +1446,60 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
   },
+  {
+    id: '037_mint_swap_operations_and_outbox',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_mint_swap_operations (
+        id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN (
+          'preparing', 'prepared', 'source_inflight', 'destination_funded', 'issuing',
+          'completed', 'cancelled', 'failed', 'needs_attention'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        sourceMintUrl TEXT NOT NULL,
+        destinationMintUrl TEXT NOT NULL,
+        destinationMintOperationId TEXT UNIQUE,
+        sourceMeltOperationId TEXT UNIQUE,
+        nextAttemptAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        recordJson TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_swap_operations_state
+        ON coco_cashu_mint_swap_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_swap_operations_due
+        ON coco_cashu_mint_swap_operations(state, nextAttemptAt, createdAt);
+
+      CREATE TABLE IF NOT EXISTS coco_cashu_operation_event_outbox (
+        id TEXT PRIMARY KEY,
+        operationId TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        eventType TEXT NOT NULL,
+        payloadJson TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        publishedAt INTEGER,
+        publishAttempts INTEGER NOT NULL DEFAULT 0 CHECK (publishAttempts >= 0),
+        nextAttemptAt INTEGER,
+        lastError TEXT,
+        UNIQUE (operationId, revision, eventType)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_operation_event_outbox_unpublished
+        ON coco_cashu_operation_event_outbox(publishedAt, nextAttemptAt, createdAt);
+    `,
+  },
+  {
+    id: '038_mint_swap_child_ownership',
+    sql: `
+      ALTER TABLE coco_cashu_mint_operations ADD COLUMN parentSwapOperationId TEXT;
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN parentSwapOperationId TEXT;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_parent_swap
+        ON coco_cashu_mint_operations(parentSwapOperationId);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_parent_swap
+        ON coco_cashu_melt_operations(parentSwapOperationId);
+    `,
+  },
 ];
 
 // Export for testing
