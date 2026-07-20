@@ -90,16 +90,45 @@ function hasReusableSettlementAmounts(snapshot: {
   return snapshot.amount_paid !== undefined && snapshot.amount_issued !== undefined;
 }
 
+function normalizeBolt11MintQuotePollingState(
+  snapshot: MintMethodQuoteSnapshot<'bolt11'>,
+): MintMethodRemoteState<'bolt11'> {
+  const accounting = snapshot as MintMethodQuoteSnapshot<'bolt11'> & {
+    amount_paid?: unknown;
+    amount_issued?: unknown;
+  };
+  const hasAmountPaid = accounting.amount_paid !== undefined;
+  const hasAmountIssued = accounting.amount_issued !== undefined;
+  if (hasAmountPaid !== hasAmountIssued) {
+    throw new ProofValidationError(
+      'BOLT11 mint quote batch observation has incomplete accounting fields',
+    );
+  }
+  if (hasAmountPaid) {
+    const amountPaid = Amount.from(accounting.amount_paid as AmountLike);
+    const amountIssued = Amount.from(accounting.amount_issued as AmountLike);
+    if (amountPaid.lessThan(amountIssued)) {
+      throw new ProofValidationError(
+        'BOLT11 mint quote batch observation has amount_issued greater than amount_paid',
+      );
+    }
+    if (amountPaid.isZero()) return 'UNPAID';
+    return amountPaid.greaterThan(amountIssued) ? 'PAID' : 'ISSUED';
+  }
+  return snapshot.state;
+}
+
 function assertMintQuotePollingSnapshotStructureUnchecked(
   method: MintMethod,
   snapshot: MintMethodQuoteSnapshot,
-): void {
+): MintMethodQuoteSnapshot {
   if (
     typeof snapshot.quote !== 'string' ||
     snapshot.quote.length === 0 ||
     typeof snapshot.request !== 'string' ||
     snapshot.request.length === 0 ||
     typeof snapshot.unit !== 'string' ||
+    snapshot.unit.trim().length === 0 ||
     (snapshot.expiry !== null &&
       snapshot.expiry !== undefined &&
       !Number.isSafeInteger(snapshot.expiry)) ||
@@ -111,13 +140,11 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
   if (method === 'bolt11') {
     const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
     const amount = Amount.from(bolt11.amount as AmountLike);
-    if (
-      amount.isZero() ||
-      (bolt11.state !== 'UNPAID' && bolt11.state !== 'PAID' && bolt11.state !== 'ISSUED')
-    ) {
+    const state = normalizeBolt11MintQuotePollingState(bolt11);
+    if (amount.isZero() || (state !== 'UNPAID' && state !== 'PAID' && state !== 'ISSUED')) {
       throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
     }
-    return;
+    return { ...bolt11, state };
   }
 
   const reusable = snapshot as
@@ -137,14 +164,15 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
     const amount = (snapshot as MintMethodQuoteSnapshot<'bolt12'>).amount;
     if (amount !== undefined && amount !== null) Amount.from(amount as AmountLike);
   }
+  return snapshot;
 }
 
 function assertMintQuotePollingSnapshotStructure(
   method: MintMethod,
   snapshot: MintMethodQuoteSnapshot,
-): void {
+): MintMethodQuoteSnapshot {
   try {
-    assertMintQuotePollingSnapshotStructureUnchecked(method, snapshot);
+    return assertMintQuotePollingSnapshotStructureUnchecked(method, snapshot);
   } catch (error) {
     if (error instanceof ProofValidationError) throw error;
     const validationError = new ProofValidationError(
@@ -719,7 +747,13 @@ export class QuoteLifecycle {
         continue;
       }
       const candidates = snapshotsByQuoteId.get(responseQuoteId) ?? [];
-      candidates.push({ snapshot: snapshot as MintMethodQuoteSnapshot, responseIndex });
+      candidates.push({
+        snapshot: {
+          ...snapshot,
+          pubkey: (snapshot as { pubkey?: unknown }).pubkey ?? undefined,
+        } as MintMethodQuoteSnapshot,
+        responseIndex,
+      });
       snapshotsByQuoteId.set(responseQuoteId, candidates);
     }
     let hasDefinitiveBatchFailure = responseFailures.length > 0;
@@ -752,13 +786,13 @@ export class QuoteLifecycle {
       }> = [];
       for (const candidate of candidates) {
         try {
-          await this.assertAttributableMintQuotePollingSnapshot(
+          const snapshot = await this.assertAttributableMintQuotePollingSnapshot(
             mintUrl,
             method,
             identity.quoteId,
             candidate.snapshot,
           );
-          validCandidates.push(candidate);
+          validCandidates.push({ ...candidate, snapshot });
         } catch (error) {
           const normalizedError = normalizePollingError(error);
           invalidCandidates.push({
@@ -866,8 +900,8 @@ export class QuoteLifecycle {
     method: MintMethod,
     quoteId: string,
     snapshot: MintMethodQuoteSnapshot,
-  ): Promise<void> {
-    assertMintQuotePollingSnapshotStructure(method, snapshot);
+  ): Promise<MintMethodQuoteSnapshot> {
+    snapshot = assertMintQuotePollingSnapshotStructure(method, snapshot);
     const existing = await this.mintQuoteRepository.getMintQuoteById({ mintUrl, quoteId });
     if (!existing) {
       throw new ProofValidationError(
@@ -897,7 +931,7 @@ export class QuoteLifecycle {
           `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
         );
       }
-      return;
+      return snapshot;
     }
 
     if (existing.method === 'bolt12') {
@@ -914,6 +948,7 @@ export class QuoteLifecycle {
         );
       }
     }
+    return snapshot;
   }
 
   async refreshMintQuote(mintUrl: string, method: MintMethod, quoteId: string): Promise<MintQuote> {

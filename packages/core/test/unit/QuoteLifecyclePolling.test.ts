@@ -368,6 +368,91 @@ describe('QuoteLifecycle mint quote polling', () => {
     });
   });
 
+  it('accepts a null pubkey for an unlocked polling observation', async () => {
+    await persistBolt11Quote('quote-a');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        quote: 'quote-a',
+        request: 'lnbc1quote-a',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        pubkey: null,
+        state: 'PAID',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({ status: 'updated' });
+    const outcome = result.outcomes[0]!;
+    if (outcome.status !== 'updated') throw new Error('Expected an updated polling outcome');
+    expect(outcome.quote.pubkey).toBeUndefined();
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+  });
+
+  it('downgrades batching after a polling observation contains a blank unit', async () => {
+    await persistBolt11Quote('quote-a');
+    await persistBolt11Quote('quote-b');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        quote: 'quote-a',
+        request: 'lnbc1quote-a',
+        amount: Amount.from(10),
+        unit: '   ',
+        expiry,
+        state: 'PAID',
+      },
+      {
+        quote: 'quote-b',
+        request: 'lnbc1quote-b',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry,
+        state: 'PAID',
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+      { mintUrl, quoteId: 'quote-b' },
+    ]);
+
+    expect(result.outcomes).toMatchObject([
+      { status: 'failed', failure: { category: 'validation' } },
+      { status: 'updated' },
+    ]);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+  });
+
+  it('derives a BOLT11 polling state from quote accounting when state is omitted', async () => {
+    await persistBolt11Quote('quote-a');
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        quote: 'quote-a',
+        request: 'lnbc1quote-a',
+        amount: Amount.from(10),
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: 1_721_234_567,
+        unit: 'sat',
+        expiry,
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({
+      status: 'updated',
+      quote: { method: 'bolt11', state: 'PAID' },
+    });
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
+  });
+
   it('records attributable BOLT12 and on-chain observations', async () => {
     await persistBolt12Quote('bolt12-quote');
     await persistOnchainQuote('onchain-quote');
