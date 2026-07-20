@@ -2,6 +2,7 @@ import type { MintOpsApi } from './MintOpsApi';
 import type { MeltOpsApi } from './MeltOpsApi';
 import type { ReceiveOpsApi } from './ReceiveOpsApi';
 import type { SendOpsApi } from './SendOpsApi';
+import type { MintSwapOpsApi } from './MintSwapOpsApi';
 
 /**
  * Unified entry point for operation-based wallet workflows.
@@ -32,5 +33,7 @@ export class OpsApi {
      * recovering outbound payment flows such as bolt11 melts.
      */
     readonly melt: MeltOpsApi,
+    /** Exact-receive cross-mint swap operations. */
+    readonly mintSwap: MintSwapOpsApi,
   ) {}
 }
