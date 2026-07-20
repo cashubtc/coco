@@ -376,6 +376,46 @@ describe('MintService', () => {
       expect(mintCapability.supported).toBe(true);
       expect(meltCapability.supported).toBe(true);
     });
+
+    it('reports NUT-29 mint quote checks for explicitly advertised methods', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11', 'onchain'] },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(true);
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt12')).resolves.toBe(false);
+    });
+
+    it('uses enabled NUT-04 methods when NUT-29 omits its method list', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt12', unit: 'sat' }], disabled: false },
+          '5': { methods: [], disabled: false },
+          '29': {},
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt12')).resolves.toBe(true);
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(false);
+    });
+
+    it('rejects malformed NUT-29 metadata and disabled NUT-04 fallback', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: true },
+          '5': { methods: [], disabled: false },
+          '29': true,
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(false);
+    });
   });
 
   describe('method-unit capabilities', () => {

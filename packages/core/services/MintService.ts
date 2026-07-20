@@ -242,6 +242,39 @@ export class MintService {
   }
 
   /**
+   * Returns whether a mint advertises NUT-29 mint quote checks for a payment method.
+   *
+   * When NUT-29 omits its optional method list, enabled NUT-04 method metadata is
+   * used as the source of supported mint methods. Missing or malformed metadata
+   * returns `false`; mint-info refresh failures propagate unchanged.
+   */
+  async supportsNut29MintQuoteCheck(mintUrl: string, method: string): Promise<boolean> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    const nuts = mintInfo.nuts as unknown;
+    if (!nuts || typeof nuts !== 'object') return false;
+
+    const nut29 = (nuts as Record<string, unknown>)['29'];
+    if (!nut29 || typeof nut29 !== 'object') return false;
+    const methods = (nut29 as { methods?: unknown }).methods;
+    if (methods !== undefined) return Array.isArray(methods) && methods.includes(method);
+
+    const nut4 = (nuts as Record<string, unknown>)['4'];
+    if (!nut4 || typeof nut4 !== 'object' || (nut4 as { disabled?: unknown }).disabled === true) {
+      return false;
+    }
+    const mintMethods = (nut4 as { methods?: unknown }).methods;
+    return (
+      Array.isArray(mintMethods) &&
+      mintMethods.some(
+        (entry) =>
+          entry !== null &&
+          typeof entry === 'object' &&
+          (entry as { method?: unknown }).method === method,
+      )
+    );
+  }
+
+  /**
    * Requires a mint to advertise a top-level NUT capability.
    *
    * This currently supports NUT-11 checks only. Returns when support is
