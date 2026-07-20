@@ -12,8 +12,12 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   }
 
   async update(operation: MintOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const existing = this.operations.get(operation.id);
+    if (!existing) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
+    }
+    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
+      throw new Error(`Cannot change parent ownership of MintOperation ${operation.id}`);
     }
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
   }

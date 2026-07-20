@@ -60,7 +60,7 @@ export type CompatibleMintQuoteBolt12Response = Omit<
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
-    createQuoteData: { amount: UnitAmount };
+    createQuoteData: { amount: UnitAmount; pubkey?: string };
     quoteData: {
       amount: Amount;
     };

@@ -26,6 +26,8 @@ interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMetho
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
+  /** Owning parent swap. Parent-owned children may only be advanced by that parent. */
+  parentSwapOperationId?: string;
 }
 
 export interface MintOperationFailure {
@@ -118,7 +120,7 @@ export function createMintOperation<M extends MintMethod>(
   mintUrl: string,
   meta: MintMethodMeta<M>,
   intent: UnitAmount,
-  options: { quoteId: string },
+  options: { quoteId: string; parentSwapOperationId?: string },
 ): InitMintOperation<M> {
   const now = Date.now();
   return {
@@ -127,6 +129,7 @@ export function createMintOperation<M extends MintMethod>(
     amount: intent.amount,
     unit: normalizeUnit(intent.unit),
     quoteId: options.quoteId,
+    parentSwapOperationId: options.parentSwapOperationId,
     id,
     state: 'init',
     mintUrl,
