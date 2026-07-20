@@ -12,9 +12,11 @@ import type { MintAdapter } from '../infra';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
+import { redactSensitiveValue } from '../logging/redaction';
 import {
   getMintQuoteAmount,
   getMintQuoteRemoteState,
+  hasMintQuoteAccounting,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -88,6 +90,12 @@ function getRemoteStateChange(
   }
 
   if (existing.method === 'bolt11' && incoming.method === 'bolt11') {
+    if (hasMintQuoteAccounting(existing) && hasMintQuoteAccounting(incoming)) {
+      return (
+        !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
+        !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
+      );
+    }
     return existing.state !== incoming.state;
   }
 
@@ -254,8 +262,11 @@ export class QuoteLifecycle {
       quote: existingQuote,
     });
 
-    const remoteStateChanged = getRemoteStateChange(existingQuote, refreshed);
-    const quote = await this.persistCanonicalMintQuote(refreshed);
+    const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteSnapshot(
+      existingQuote.mintUrl,
+      existingQuote.method,
+      mintQuoteToMethodSnapshot(refreshed),
+    );
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
     return quote;
   }
@@ -326,7 +337,7 @@ export class QuoteLifecycle {
       (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
-      quoteId: persistedQuote.quoteId,
+      quoteRef: redactSensitiveValue(persistedQuote.quoteId),
       method,
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
@@ -516,6 +527,7 @@ export class QuoteLifecycle {
       existing &&
       isStatefulMintQuote(existing) &&
       isStatefulMintQuote(canonicalQuote) &&
+      !hasMintQuoteAccounting(canonicalQuote) &&
       isMintQuoteStateDowngrade(existing.state, canonicalQuote.state)
     ) {
       await beforePersist?.(existing);
@@ -523,6 +535,9 @@ export class QuoteLifecycle {
         quote: existing,
         remoteStateChanged: false,
       };
+    }
+    if (existing && existing.method === 'bolt11' && canonicalQuote.method === 'bolt11') {
+      canonicalQuote = mergeBolt11MintQuote(existing, canonicalQuote);
     }
     if (existing?.reusable && canonicalQuote.reusable) {
       canonicalQuote = {
@@ -895,4 +910,48 @@ export class QuoteLifecycle {
       updatedAt: operation.updatedAt,
     });
   }
+}
+
+function mergeBolt11MintQuote(
+  existing: MintQuote<'bolt11'>,
+  incoming: MintQuote<'bolt11'>,
+): MintQuote<'bolt11'> {
+  if (!hasMintQuoteAccounting(incoming)) {
+    return hasMintQuoteAccounting(existing) ? existing : incoming;
+  }
+  if (!hasMintQuoteAccounting(existing)) {
+    return incoming;
+  }
+
+  const existingRemoteUpdatedAt = existing.quoteData.remoteUpdatedAt;
+  const incomingRemoteUpdatedAt = incoming.quoteData.remoteUpdatedAt;
+  if (
+    existingRemoteUpdatedAt !== undefined &&
+    incomingRemoteUpdatedAt !== undefined &&
+    incomingRemoteUpdatedAt < existingRemoteUpdatedAt
+  ) {
+    return existing;
+  }
+
+  const amountPaid = maxAmount(existing.quoteData.amountPaid, incoming.quoteData.amountPaid);
+  const amountIssued = maxAmount(existing.quoteData.amountIssued, incoming.quoteData.amountIssued);
+  const state = maxMintQuoteState(existing.state, incoming.state);
+  return {
+    ...incoming,
+    state,
+    lastObservedRemoteState: state,
+    quoteData: {
+      ...incoming.quoteData,
+      amountPaid,
+      amountIssued,
+      remoteUpdatedAt: incomingRemoteUpdatedAt ?? existingRemoteUpdatedAt,
+    },
+  };
+}
+
+function maxMintQuoteState(
+  left: MintMethodRemoteState<'bolt11'>,
+  right: MintMethodRemoteState<'bolt11'>,
+): MintMethodRemoteState<'bolt11'> {
+  return (MINT_QUOTE_STATE_RANK[left] ?? 0) >= (MINT_QUOTE_STATE_RANK[right] ?? 0) ? left : right;
 }

@@ -11,6 +11,17 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 
+/**
+ * Current NUT-04 accounting fields are not present in cashu-ts 4.6.1's
+ * BOLT11 response declaration, although the generic response normalizer keeps
+ * them at runtime. Coco normalizes them here until the dependency type catches up.
+ */
+export type AccountingMintQuoteBolt11Response = MintQuoteBolt11Response & {
+  amount_paid?: AmountLike;
+  amount_issued?: AmountLike;
+  updated_at?: number | bigint;
+};
+
 export type MintQuoteOnchainResponse = MintMethodQuoteSnapshot<'onchain'>;
 
 interface MintQuoteBase<M extends MintMethod> {
@@ -68,6 +79,15 @@ export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt1
   return quote.method === 'bolt11';
 }
 
+export function hasMintQuoteAccounting(quote: MintQuote<'bolt11'>): quote is MintQuote<'bolt11'> & {
+  quoteData: MintQuote<'bolt11'>['quoteData'] & {
+    amountPaid: Amount;
+    amountIssued: Amount;
+  };
+} {
+  return quote.quoteData.amountPaid !== undefined && quote.quoteData.amountIssued !== undefined;
+}
+
 export function getMintQuoteRemoteState(
   quote: MintQuote,
 ): MintMethodRemoteState<'bolt11'> | undefined {
@@ -89,6 +109,10 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
 }
 
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
+  if (quote.method === 'bolt11' && hasMintQuoteAccounting(quote)) {
+    return quote.quoteData.amountPaid.subtract(quote.quoteData.amountIssued);
+  }
+
   if (quote.reusable) {
     return quote.quoteData.amountPaid.subtract(quote.quoteData.amountIssued);
   }
@@ -98,6 +122,9 @@ export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
 
 export function isMintQuotePending(quote: MintQuote): boolean {
   if (isStatefulMintQuote(quote)) {
+    if (hasMintQuoteAccounting(quote)) {
+      return quote.quoteData.amountIssued.lessThan(quote.amount);
+    }
     return quote.state !== 'ISSUED';
   }
 
@@ -106,11 +133,25 @@ export function isMintQuotePending(quote: MintQuote): boolean {
 
 export function mintQuoteFromBolt11Response(
   mintUrl: string,
-  quote: MintQuoteBolt11Response,
+  quote: AccountingMintQuoteBolt11Response,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
   const now = options?.now ?? Date.now();
   const amount = Amount.from(quote.amount as unknown as AmountLike);
+  const hasAmountPaid = quote.amount_paid !== undefined;
+  const hasAmountIssued = quote.amount_issued !== undefined;
+  if (hasAmountPaid !== hasAmountIssued) {
+    throw new Error('BOLT11 mint quote accounting must include amount_paid and amount_issued');
+  }
+
+  const amountPaid = hasAmountPaid ? Amount.from(quote.amount_paid!) : undefined;
+  const amountIssued = hasAmountIssued ? Amount.from(quote.amount_issued!) : undefined;
+  if (amountPaid && amountIssued && amountIssued.greaterThan(amountPaid)) {
+    throw new Error('BOLT11 mint quote amount_issued cannot exceed amount_paid');
+  }
+
+  const remoteUpdatedAt = normalizeRemoteUpdatedAt(quote.updated_at);
+  const state = deriveBolt11MintQuoteState(amount, amountPaid, amountIssued, quote.state);
   return {
     mintUrl,
     method: 'bolt11',
@@ -121,12 +162,15 @@ export function mintQuoteFromBolt11Response(
     amount,
     expiry: quote.expiry,
     pubkey: quote.pubkey,
-    state: quote.state,
-    lastObservedRemoteState: quote.state,
+    state,
+    lastObservedRemoteState: state,
     lastObservedRemoteStateAt: now,
     reusable: false,
     quoteData: {
       amount,
+      ...(amountPaid !== undefined ? { amountPaid } : {}),
+      ...(amountIssued !== undefined ? { amountIssued } : {}),
+      ...(remoteUpdatedAt !== undefined ? { remoteUpdatedAt } : {}),
     },
     createdAt: now,
     updatedAt: now,
@@ -202,6 +246,15 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
       expiry: quote.expiry,
       pubkey: quote.pubkey,
       state: quote.state,
+      ...(quote.quoteData.amountPaid !== undefined
+        ? { amount_paid: quote.quoteData.amountPaid }
+        : {}),
+      ...(quote.quoteData.amountIssued !== undefined
+        ? { amount_issued: quote.quoteData.amountIssued }
+        : {}),
+      ...(quote.quoteData.remoteUpdatedAt !== undefined
+        ? { updated_at: quote.quoteData.remoteUpdatedAt }
+        : {}),
     } as MintMethodQuoteSnapshot<M>;
   }
 
@@ -227,4 +280,31 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
     amount_paid: quote.quoteData.amountPaid,
     amount_issued: quote.quoteData.amountIssued,
   } as MintMethodQuoteSnapshot<M>;
+}
+
+function deriveBolt11MintQuoteState(
+  amount: Amount,
+  amountPaid: Amount | undefined,
+  amountIssued: Amount | undefined,
+  legacyState: MintMethodRemoteState<'bolt11'>,
+): MintMethodRemoteState<'bolt11'> {
+  if (amountPaid === undefined || amountIssued === undefined) {
+    return legacyState;
+  }
+  if (amountIssued.greaterThanOrEqual(amount)) {
+    return 'ISSUED';
+  }
+  if (amountPaid.greaterThanOrEqual(amount)) {
+    return 'PAID';
+  }
+  return 'UNPAID';
+}
+
+function normalizeRemoteUpdatedAt(value: number | bigint | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+    throw new Error('BOLT11 mint quote updated_at must be a non-negative safe integer');
+  }
+  return normalized;
 }
