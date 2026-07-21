@@ -4,6 +4,8 @@ import {
   type Keys,
   type OutputDataLike,
   type Proof,
+  type SerializedBlindedMessage,
+  type SerializedBlindedSignature,
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
   type MeltQuoteOnchainResponse,
@@ -114,6 +116,16 @@ export class MintAdapter {
       requestBody: { quotes: quoteIds },
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });
+  }
+
+  /** Submit one ordinary BOLT11 mint request and return its blinded signatures. */
+  async mintBolt11(
+    mintUrl: string,
+    quoteId: string,
+    outputs: SerializedBlindedMessage[],
+  ): Promise<SerializedBlindedSignature[]> {
+    const response = await this.getCashuMint(mintUrl).mintBolt11({ quote: quoteId, outputs });
+    return response.signatures;
   }
 
   // Check current state of a bolt11 melt quote (returns full response including change)

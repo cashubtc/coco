@@ -38,7 +38,12 @@ import {
   normalizeUnitAmount,
   type UnitAmount,
 } from '../amounts.ts';
-import { deserializeOutputData, mapProofToCoreProof, type SerializedOutputData } from '../utils';
+import {
+  deserializeOutputData,
+  mapProofToCoreProof,
+  serializeOutputData,
+  type SerializedOutputData,
+} from '../utils';
 import type { Keyset } from '@core/models/Keyset.ts';
 
 function countBlankOutputsForAmount(amount: Amount): number {
@@ -263,6 +268,111 @@ export class ProofService {
       outputs: data.keep.length + data.send.length,
     });
     return { keep: data.keep, send: data.send, sendAmount, keepAmount };
+  }
+
+  /**
+   * Builds deterministic mint outputs without reserving their counters.
+   * The issuance engine persists the outputs and advances the counter atomically.
+   */
+  async createMintOutputsAtCounter(
+    mintUrl: string,
+    intent: UnitAmount,
+    counterStart: number,
+  ): Promise<{
+    keysetId: string;
+    outputData: SerializedOutputData;
+    counterStart: number;
+    counterEnd: number;
+  }> {
+    if (!Number.isSafeInteger(counterStart) || counterStart < 0) {
+      throw new ProofValidationError('counterStart must be a non-negative safe integer');
+    }
+
+    const { amount, unit } = normalizeUnitAmount(intent);
+    if (amount.isZero()) {
+      throw new ProofValidationError('Mint output amount must be positive');
+    }
+
+    const { keys } = await this.walletService.getWalletWithActiveKeysetId(mintUrl, unit);
+    const seed = await this.seedService.getSeed();
+    const keep = this.outputDataCreator.createDeterministicData(amount, seed, counterStart, keys);
+    if (keep.length === 0) {
+      throw new ProofValidationError('Failed to create deterministic outputs for mint operation');
+    }
+    const aggregateAmount = keep.reduce(
+      (total, output) => total.add(output.blindedMessage.amount),
+      Amount.zero(),
+    );
+    if (!aggregateAmount.equals(amount)) {
+      throw new ProofValidationError(
+        `Mint output aggregate amount ${aggregateAmount} does not match requested amount ${amount}`,
+      );
+    }
+    if (keep.some((output) => output.blindedMessage.id !== keys.id)) {
+      throw new ProofValidationError('Mint output keyset does not match the active keyset');
+    }
+
+    return {
+      keysetId: keys.id,
+      outputData: serializeOutputData({ keep, send: [] }),
+      counterStart,
+      counterEnd: counterStart + keep.length,
+    };
+  }
+
+  /** Converts a complete, positionally matched mint signature vector into proofs. */
+  async createProofsFromMintSignatures(
+    mintUrl: string,
+    outputData: SerializedOutputData,
+    signatures: SerializedBlindedSignature[],
+    unit: string,
+  ): Promise<Proof[]> {
+    const outputs = deserializeOutputData(outputData);
+    const allOutputs = [...outputs.keep, ...outputs.send];
+    if (signatures.length !== allOutputs.length) {
+      throw new ProofValidationError(
+        `Expected ${allOutputs.length} mint signatures, received ${signatures.length}`,
+      );
+    }
+
+    const normalizedUnit = normalizeUnit(unit);
+    const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
+    const keysetMap = new Map(keysets.map((keyset) => [keyset.id, keyset]));
+
+    return allOutputs.map((output, index) => {
+      const signature = signatures[index]!;
+      const expected = output.blindedMessage;
+      if (!Amount.from(signature.amount).equals(expected.amount)) {
+        throw new ProofValidationError(`Mint signature ${index} amount does not match its output`);
+      }
+      if (signature.id !== expected.id) {
+        throw new ProofValidationError(`Mint signature ${index} keyset does not match its output`);
+      }
+      if (!signature.dleq?.e || !signature.dleq.s) {
+        throw new ProofValidationError(`Mint signature ${index} is missing required DLEQ data`);
+      }
+
+      const keyset = keysetMap.get(signature.id);
+      if (!keyset) {
+        throw new ProofValidationError(
+          `Mint signature ${index} uses unknown keyset ${signature.id}`,
+        );
+      }
+      assertSameUnit(
+        normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
+        normalizedUnit,
+        `Mint signature ${index} keyset`,
+      );
+
+      const proof = output.toProof(signature, {
+        id: keyset.id,
+        keys: keyset.keypairs as Keys,
+      });
+      if (!Amount.from(proof.amount).equals(expected.amount) || proof.id !== expected.id) {
+        throw new ProofValidationError(`Mint signature ${index} converted to an invalid proof`);
+      }
+      return proof;
+    });
   }
 
   async saveProofs(mintUrl: string, proofs: CoreProof[]): Promise<void> {

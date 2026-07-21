@@ -151,7 +151,11 @@ export function mapProofToCoreProof(
   mintUrl: string,
   state: ProofState,
   proofs: Proof[],
-  options: { unit: string; createdByOperationId?: string },
+  options: {
+    unit: string;
+    createdByOperationId?: string;
+    createdByMintIssuanceAttemptId?: string;
+  },
 ): CoreProof[] {
   const unit = normalizeUnit(options.unit);
   return proofs.map((p) => ({
@@ -160,6 +164,7 @@ export function mapProofToCoreProof(
     unit,
     state,
     createdByOperationId: options?.createdByOperationId,
+    createdByMintIssuanceAttemptId: options?.createdByMintIssuanceAttemptId,
   }));
 }
 

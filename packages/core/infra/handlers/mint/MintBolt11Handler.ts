@@ -59,17 +59,19 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: quote.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
+    const outputData = quote.pubkey
+      ? await ctx.proofService.createOutputsAndIncrementCounters(
+          ctx.operation.mintUrl,
+          {
+            keep: { amount: quote.amount, unit: ctx.operation.unit },
+            send: { amount: Amount.zero(), unit: ctx.operation.unit },
+          },
+          {},
+        )
+      : { keep: [], send: [] };
 
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for mint operation');
+    if (quote.pubkey && outputData.keep.length === 0) {
+      throw new Error('Failed to create deterministic outputs for locked mint operation');
     }
 
     return {

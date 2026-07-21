@@ -29,7 +29,12 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
+import {
+  generateSubId,
+  mapProofToCoreProof,
+  normalizeMintUrl,
+  serializeOutputData,
+} from '../../utils';
 import {
   OperationInProgressError,
   ProofValidationError,
@@ -48,6 +53,7 @@ import {
 import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
+import type { MintIssuanceEngine } from './MintIssuanceEngine.ts';
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
@@ -67,6 +73,7 @@ export class MintOperationService {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly mintIssuanceEngine?: MintIssuanceEngine;
 
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
@@ -84,6 +91,7 @@ export class MintOperationService {
     eventBus: EventBus<CoreEvents>,
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
+    mintIssuanceEngine?: MintIssuanceEngine,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -96,6 +104,7 @@ export class MintOperationService {
     this.eventBus = eventBus;
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
+    this.mintIssuanceEngine = mintIssuanceEngine;
   }
 
   private buildDeps() {
@@ -354,6 +363,12 @@ export class MintOperationService {
       }
     }
 
+    if (operation?.state === 'pending' && this.mintIssuanceEngine) {
+      const issued = await this.mintIssuanceEngine.issueCandidates([operation]);
+      const result = issued.find((candidate) => candidate.id === operation.id);
+      if (result) return result;
+    }
+
     return this.executeReadyOperation(operationId);
   }
 
@@ -369,7 +384,30 @@ export class MintOperationService {
         );
       }
 
-      const pendingOp = operation as PendingMintOperation;
+      let pendingOp = operation as PendingMintOperation;
+      if (
+        pendingOp.method === 'bolt11' &&
+        pendingOp.outputData.keep.length === 0 &&
+        pendingOp.outputData.send.length === 0
+      ) {
+        const outputData = await this.proofService.createOutputsAndIncrementCounters(
+          pendingOp.mintUrl,
+          {
+            keep: { amount: pendingOp.amount, unit: pendingOp.unit },
+            send: { amount: Amount.zero(), unit: pendingOp.unit },
+          },
+          {},
+        );
+        if (outputData.keep.length === 0) {
+          throw new Error('Failed to create deterministic outputs for legacy mint execution');
+        }
+        pendingOp = {
+          ...pendingOp,
+          outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
+          updatedAt: Date.now(),
+        };
+        await this.mintOperationRepository.update(pendingOp);
+      }
       const executing: ExecutingMintOperation = {
         ...pendingOp,
         state: 'executing',
@@ -453,6 +491,12 @@ export class MintOperationService {
     }
 
     if (operation.state === 'executing') {
+      if (operation.mintIssuanceAttemptId && this.mintIssuanceEngine) {
+        const recovered = await this.mintIssuanceEngine.recoverAttempt(
+          operation.mintIssuanceAttemptId,
+        );
+        return recovered.find((candidate) => candidate.id === operation.id) ?? operation;
+      }
       await this.recoverExecutingOperation(operation as ExecutingMintOperation);
       const updated = await this.mintOperationRepository.getById(operationId);
       if (updated && isTerminalOperation(updated)) {
@@ -581,6 +625,11 @@ export class MintOperationService {
       }
 
       const executing = current as ExecutingMintOperation;
+
+      if (executing.mintIssuanceAttemptId && this.mintIssuanceEngine) {
+        await this.mintIssuanceEngine.recoverAttempt(executing.mintIssuanceAttemptId);
+        return;
+      }
 
       if (await this.hasSavedOutputs(executing)) {
         await this.finalizeIssuedOperation(executing);
