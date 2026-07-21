@@ -140,6 +140,9 @@ export class MintIssuanceEngine {
     }
 
     return this.runWithMintLock(current.mintUrl, async (events) => {
+      if (!(await this.repositories.mintRepository.isTrustedMint(current.mintUrl))) {
+        throw new MintIssuanceError(`Mint ${current.mintUrl} is no longer trusted`);
+      }
       const finalized = await this.dispatchPreparedAttempt(current);
       this.bufferFinalizedEvents(events, finalized);
       return [finalized.operation];

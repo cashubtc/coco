@@ -254,6 +254,44 @@ describe('MintIssuanceEngine', () => {
     });
   });
 
+  it('does not recover a prepared attempt after its mint is untrusted', async () => {
+    const transition = Object.getPrototypeOf(repositories.mintIssuanceAttemptRepository)
+      .compareAndTransition as typeof repositories.mintIssuanceAttemptRepository.compareAndTransition;
+    let interruptSubmission = true;
+    repositories.mintIssuanceAttemptRepository.compareAndTransition = async function (
+      attemptId,
+      next,
+    ) {
+      if (interruptSubmission && next.to === 'submitted') {
+        throw new Error('interrupted after prepare commit');
+      }
+      return transition.call(this, attemptId, next);
+    };
+    await expect(
+      makeEngine(new ScriptedMintIssuanceTransport([])).issueCandidates([pendingOperation()]),
+    ).rejects.toThrow('interrupted after prepare commit');
+    const prepared =
+      await repositories.mintIssuanceAttemptRepository.getNewestByMemberOperationId('mint-op-1');
+    expect(prepared?.state).toBe('prepared');
+    interruptSubmission = false;
+    await repositories.mintRepository.setMintTrusted(mintUrl, false);
+    const recoveryTransport = new ScriptedMintIssuanceTransport([
+      { kind: 'return', signatures: [validSignature()] },
+    ]);
+
+    await expect(makeEngine(recoveryTransport).recoverAttempt(prepared!)).rejects.toThrow(
+      `Mint ${mintUrl} is no longer trusted`,
+    );
+
+    expect(recoveryTransport.requests).toHaveLength(0);
+    expect(
+      await repositories.mintIssuanceAttemptRepository.getNewestByMemberOperationId('mint-op-1'),
+    ).toEqual(prepared);
+    expect((await repositories.mintOperationRepository.getById('mint-op-1'))?.state).toBe(
+      'executing',
+    );
+  });
+
   it.each([
     ['wrong signature count', []],
     ['wrong amount', [{ ...validSignature(), amount: Amount.from(9) }]],
