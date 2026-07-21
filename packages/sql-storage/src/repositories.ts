@@ -68,6 +68,8 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
     paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
       database,
     ),
+    withTransaction: (fn) =>
+      database.transaction((transactionDatabase) => fn(createRepositoryScope(transactionDatabase))),
   };
 }
 

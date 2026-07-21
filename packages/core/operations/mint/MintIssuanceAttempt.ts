@@ -185,19 +185,6 @@ export function parseMintIssuanceAttemptFailure(value: unknown): MintIssuanceAtt
   };
 }
 
-function cloneOutputData(outputData: SerializedOutputData): SerializedOutputData {
-  return {
-    keep: outputData.keep.map((output) => ({
-      ...output,
-      blindedMessage: { ...output.blindedMessage },
-    })),
-    send: outputData.send.map((output) => ({
-      ...output,
-      blindedMessage: { ...output.blindedMessage },
-    })),
-  };
-}
-
 function cloneFailure(failure: MintIssuanceAttemptFailure): MintIssuanceAttemptFailure {
   return {
     ...failure,
@@ -248,7 +235,7 @@ export function normalizeMintIssuanceAttempt(attempt: MintIssuanceAttempt): Mint
     mintUrl: normalizeMintUrl(attempt.mintUrl),
     unit: normalizeUnit(attempt.unit),
     members: normalizeMembers(attempt.members),
-    outputData: cloneOutputData(attempt.outputData),
+    outputData: parseMintIssuanceAttemptOutputData(attempt.outputData),
     createdAt: attempt.createdAt,
   };
 

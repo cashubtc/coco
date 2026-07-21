@@ -77,6 +77,23 @@ export async function runRepositoryTransactionContract(
       }
     });
 
+    it('rolls nested transactions into the parent transaction', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.withTransaction(async (outer) => {
+          await outer.mintRepository.addOrUpdateMint(createDummyMint());
+          await outer.withTransaction(async (inner) => {
+            await inner.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
+          });
+        });
+
+        expect(await repositories.mintRepository.getAllMints()).toHaveLength(1);
+        expect(await repositories.proofRepository.getAllReadyProofs()).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
     if (options.testConcurrentRootOperationIsolation) {
       it('does not include concurrent root repository writes in active transactions', async () => {
         const { repositories, dispose } = await options.createRepositories();

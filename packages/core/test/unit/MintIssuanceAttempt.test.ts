@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import { Amount } from '@cashu/cashu-ts';
 import {
+  normalizeMintIssuanceAttempt,
   parseMintIssuanceAttemptFailure,
   parseMintIssuanceAttemptMembers,
   parseMintIssuanceAttemptOutputData,
@@ -25,5 +27,28 @@ describe('Mint Issuance Attempt persisted recovery material', () => {
     expect(() =>
       parseMintIssuanceAttemptFailure({ message: 'rejected', details: ['not', 'an', 'object'] }),
     ).toThrow('details must be an object');
+  });
+
+  it('rejects invalid output recovery material before persistence', () => {
+    expect(() =>
+      normalizeMintIssuanceAttempt({
+        id: 'attempt-1',
+        mintUrl: 'https://mint.test',
+        unit: 'sat',
+        state: 'prepared',
+        members: [{ operationId: 'operation-1', quoteId: 'quote-1', amount: Amount.from(1) }],
+        outputData: {
+          keep: [
+            {
+              blindedMessage: { amount: '1', id: 'keyset', B_: 'B_' },
+              blindingFactor: '01',
+              secret: 'not-hex',
+            },
+          ],
+          send: [],
+        },
+        createdAt: 1,
+      }),
+    ).toThrow('secret must be hex');
   });
 });

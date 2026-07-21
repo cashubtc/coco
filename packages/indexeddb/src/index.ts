@@ -124,6 +124,8 @@ export class IndexedDbRepositories implements Repositories {
         paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
           scopedDb,
         ),
+        withTransaction: (nestedFn) =>
+          scopedDb.runTransaction('rw', stores, () => nestedFn(scopedRepositories)),
       };
       return fn(scopedRepositories);
     });

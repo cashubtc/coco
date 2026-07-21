@@ -150,7 +150,7 @@ export class MemoryRepositories implements Repositories {
     const paymentRequestReceiveAttemptRepository =
       new MemoryPaymentRequestReceiveAttemptRepository();
 
-    this.transactionScope = {
+    const transactionScope: RepositoryTransactionScope = {
       mintRepository,
       keyRingRepository,
       counterRepository,
@@ -168,7 +168,9 @@ export class MemoryRepositories implements Repositories {
       receiveOperationRepository,
       paymentRequestReceiveOperationRepository,
       paymentRequestReceiveAttemptRepository,
+      withTransaction: (fn) => fn(transactionScope),
     };
+    this.transactionScope = transactionScope;
 
     this.mintRepository = this.serializeRepository(mintRepository);
     this.keyRingRepository = this.serializeRepository(keyRingRepository);
@@ -200,6 +202,7 @@ export class MemoryRepositories implements Repositories {
   /**
    * Serializes memory transactions and restores repository containers when a callback fails.
    * Root repository calls wait for an active transaction so they cannot leak into its snapshot.
+   * Calls through the callback's transaction scope roll into the active transaction.
    */
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
     const previousTransaction = this.transactionTail;

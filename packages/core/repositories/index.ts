@@ -386,11 +386,13 @@ interface RepositoriesBase {
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
 }
 
-export interface Repositories extends RepositoriesBase {
-  init(): Promise<void>;
+/** Repositories bound to one transaction; nested calls roll into that transaction. */
+export interface RepositoryTransactionScope extends RepositoriesBase {
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
-export type RepositoryTransactionScope = RepositoriesBase;
+export interface Repositories extends RepositoryTransactionScope {
+  init(): Promise<void>;
+}
 
 export * from './memory';
