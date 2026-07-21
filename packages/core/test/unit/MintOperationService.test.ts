@@ -25,6 +25,7 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories';
 import {
   getMintQuoteAvailableAmount,
   mintQuoteFromBolt11Response,
@@ -39,6 +40,8 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
 import { QuoteIdentityConflictError } from '../../models/Error';
+import { MintScopedLock } from '../../operations/MintScopedLock.ts';
+import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -956,6 +959,136 @@ describe('MintOperationService', () => {
     expect(finalizedEvents[0]?.operationId).toBe(finalized?.id);
     expect(finalizedEvents[0]?.operation.state).toBe('finalized');
     expect(failedEvents).toHaveLength(0);
+  });
+
+  it('atomically reserves legacy BOLT11 outputs and emits the counter after lock release', async () => {
+    const repositories = new MemoryRepositories();
+    const operation = {
+      ...makePendingOp('legacy-output-success'),
+      outputData: { keep: [], send: [] },
+    } as PendingMintOperation<'bolt11'>;
+    await repositories.mintOperationRepository.create(operation);
+
+    const outputData = makeSerializedOutputData('legacy-output-success');
+    const fallbackProofService = {
+      createMintOutputsAtCounter: mock(async () => ({
+        keysetId,
+        outputData,
+        counterStart: 0,
+        counterEnd: 1,
+      })),
+    } as unknown as ProofService;
+    const fallbackWalletService = {
+      getWalletWithActiveKeysetId: mock(async () => ({ keysetId })),
+    } as unknown as WalletService;
+    const mintScopedLock = new MintScopedLock();
+    let eventObservedAfterUnlock = false;
+    eventBus.on('counter:updated', async () => {
+      const release = await mintScopedLock.acquire(mintUrl);
+      eventObservedAfterUnlock = true;
+      release();
+    });
+    const fallbackService = new MintOperationService(
+      handlerProvider,
+      repositories.mintOperationRepository,
+      quoteLifecycle,
+      repositories.proofRepository,
+      fallbackProofService,
+      mintService,
+      fallbackWalletService,
+      mintAdapter,
+      eventBus,
+      undefined,
+      mintScopedLock,
+      undefined,
+      repositories,
+    );
+
+    const prepared = await fallbackService['prepareLegacyBolt11Outputs'](operation);
+
+    expect(prepared.outputData).toEqual(outputData);
+    const stored = (await repositories.mintOperationRepository.getById(
+      operation.id,
+    )) as PendingMintOperation;
+    expect(stored.outputData).toEqual(outputData);
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toEqual({
+      mintUrl,
+      keysetId,
+      counter: 1,
+    });
+    expect(eventObservedAfterUnlock).toBe(true);
+  });
+
+  it('rolls back legacy BOLT11 output data when counter reservation fails', async () => {
+    const repositories = new MemoryRepositories();
+    const operation = {
+      ...makePendingOp('legacy-output-rollback'),
+      outputData: { keep: [], send: [] },
+    } as PendingMintOperation<'bolt11'>;
+    await repositories.mintOperationRepository.create(operation);
+
+    const failingRepositories = new Proxy(repositories, {
+      get(target, property, receiver) {
+        if (property !== 'withTransaction') {
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return <T>(fn: (tx: RepositoryTransactionScope) => Promise<T>) =>
+          target.withTransaction((tx) =>
+            fn({
+              ...tx,
+              counterRepository: {
+                getCounter: (...args) => tx.counterRepository.getCounter(...args),
+                setCounter: async (...args) => {
+                  await tx.counterRepository.setCounter(...args);
+                  throw new Error('counter persistence failed');
+                },
+              },
+            }),
+          );
+      },
+    }) as Repositories;
+    const fallbackProofService = {
+      createMintOutputsAtCounter: mock(async () => ({
+        keysetId,
+        outputData: makeSerializedOutputData('legacy-output-rollback'),
+        counterStart: 0,
+        counterEnd: 1,
+      })),
+    } as unknown as ProofService;
+    const fallbackWalletService = {
+      getWalletWithActiveKeysetId: mock(async () => ({ keysetId })),
+    } as unknown as WalletService;
+    const counterEvents: Array<CoreEvents['counter:updated']> = [];
+    eventBus.on('counter:updated', (event) => {
+      counterEvents.push(event);
+    });
+    const fallbackService = new MintOperationService(
+      handlerProvider,
+      repositories.mintOperationRepository,
+      quoteLifecycle,
+      repositories.proofRepository,
+      fallbackProofService,
+      mintService,
+      fallbackWalletService,
+      mintAdapter,
+      eventBus,
+      undefined,
+      undefined,
+      undefined,
+      failingRepositories,
+    );
+
+    await expect(fallbackService['prepareLegacyBolt11Outputs'](operation)).rejects.toThrow(
+      'counter persistence failed',
+    );
+
+    const stored = (await repositories.mintOperationRepository.getById(
+      operation.id,
+    )) as PendingMintOperation;
+    expect(stored.outputData).toEqual({ keep: [], send: [] });
+    expect(await repositories.counterRepository.getCounter(mintUrl, keysetId)).toBeNull();
+    expect(counterEvents).toHaveLength(0);
   });
 
   it('finalize is idempotent after finalize', async () => {

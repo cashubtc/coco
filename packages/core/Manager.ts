@@ -1025,6 +1025,7 @@ export class Manager {
       mintOperationLogger,
       mintScopedLock,
       mintIssuanceEngine,
+      repositories,
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 

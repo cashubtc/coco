@@ -138,3 +138,15 @@ export class QuoteIdentityConflictError extends Error {
     this.methods = [...methods];
   }
 }
+
+/**
+ * Indicates that durable mint issuance could not continue because its persisted state violated
+ * an issuance invariant.
+ */
+export class MintIssuanceError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'MintIssuanceError';
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}

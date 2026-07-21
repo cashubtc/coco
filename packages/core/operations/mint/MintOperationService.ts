@@ -1,5 +1,5 @@
 import { Amount, type Proof } from '@cashu/cashu-ts';
-import type { MintOperationRepository, ProofRepository } from '../../repositories';
+import type { MintOperationRepository, ProofRepository, Repositories } from '../../repositories';
 import type {
   ExecutingMintOperation,
   FailedMintOperation,
@@ -36,6 +36,7 @@ import {
   serializeOutputData,
 } from '../../utils';
 import {
+  MintIssuanceError,
   OperationInProgressError,
   ProofValidationError,
   UnknownMintError,
@@ -74,6 +75,7 @@ export class MintOperationService {
   private readonly eventBus: EventBus<CoreEvents>;
   private readonly logger?: Logger;
   private readonly mintIssuanceEngine?: MintIssuanceEngine;
+  private readonly repositories?: Repositories;
 
   private readonly operationIdLock = new OperationIdLock();
   private recoveryLock: Promise<void> | null = null;
@@ -92,6 +94,7 @@ export class MintOperationService {
     logger?: Logger,
     mintScopedLock?: MintScopedLock,
     mintIssuanceEngine?: MintIssuanceEngine,
+    repositories?: Repositories,
   ) {
     this.handlerProvider = handlerProvider;
     this.mintOperationRepository = mintOperationRepository;
@@ -105,6 +108,7 @@ export class MintOperationService {
     this.logger = logger;
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
     this.mintIssuanceEngine = mintIssuanceEngine;
+    this.repositories = repositories;
   }
 
   private buildDeps() {
@@ -390,23 +394,9 @@ export class MintOperationService {
         pendingOp.outputData.keep.length === 0 &&
         pendingOp.outputData.send.length === 0
       ) {
-        const outputData = await this.proofService.createOutputsAndIncrementCounters(
-          pendingOp.mintUrl,
-          {
-            keep: { amount: pendingOp.amount, unit: pendingOp.unit },
-            send: { amount: Amount.zero(), unit: pendingOp.unit },
-          },
-          {},
+        pendingOp = await this.prepareLegacyBolt11Outputs(
+          pendingOp as PendingMintOperation<'bolt11'>,
         );
-        if (outputData.keep.length === 0) {
-          throw new Error('Failed to create deterministic outputs for legacy mint execution');
-        }
-        pendingOp = {
-          ...pendingOp,
-          outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
-          updatedAt: Date.now(),
-        };
-        await this.mintOperationRepository.update(pendingOp);
       }
       const executing: ExecutingMintOperation = {
         ...pendingOp,
@@ -473,6 +463,75 @@ export class MintOperationService {
     } finally {
       releaseLock();
     }
+  }
+
+  private async prepareLegacyBolt11Outputs(
+    operation: PendingMintOperation<'bolt11'>,
+  ): Promise<PendingMintOperation<'bolt11'>> {
+    if (!this.repositories) {
+      throw new Error('Repositories are required to reserve legacy BOLT11 outputs atomically');
+    }
+
+    const mintUrl = normalizeMintUrl(operation.mintUrl);
+    const releaseMintLock = await this.mintScopedLock.acquire(mintUrl);
+    let reservation: {
+      operation: PendingMintOperation<'bolt11'>;
+      counterEnd?: number;
+    };
+    let keysetId: string;
+    try {
+      ({ keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+        mintUrl,
+        operation.unit,
+      ));
+      const storedCounter = await this.repositories.counterRepository.getCounter(mintUrl, keysetId);
+      const counterStart = storedCounter?.counter ?? 0;
+      const outputs = await this.proofService.createMintOutputsAtCounter(
+        mintUrl,
+        { amount: operation.amount, unit: operation.unit },
+        counterStart,
+      );
+      if (outputs.keysetId !== keysetId) {
+        throw new MintIssuanceError(
+          'Active keyset changed during legacy BOLT11 output construction',
+        );
+      }
+
+      reservation = await this.repositories.withTransaction(async (tx) => {
+        const current = await tx.mintOperationRepository.getById(operation.id);
+        if (!current || current.state !== 'pending' || current.method !== 'bolt11') {
+          throw new MintIssuanceError(`Mint Operation ${operation.id} is no longer pending`);
+        }
+        if (current.outputData.keep.length > 0 || current.outputData.send.length > 0) {
+          return { operation: current as PendingMintOperation<'bolt11'> };
+        }
+        const counter = await tx.counterRepository.getCounter(mintUrl, keysetId);
+        if ((counter?.counter ?? 0) !== counterStart) {
+          throw new MintIssuanceError(
+            'Deterministic counter changed before legacy output reservation',
+          );
+        }
+        const updated: PendingMintOperation<'bolt11'> = {
+          ...(current as PendingMintOperation<'bolt11'>),
+          outputData: outputs.outputData,
+          updatedAt: Date.now(),
+        };
+        await tx.mintOperationRepository.update(updated);
+        await tx.counterRepository.setCounter(mintUrl, keysetId, outputs.counterEnd);
+        return { operation: updated, counterEnd: outputs.counterEnd };
+      });
+    } finally {
+      releaseMintLock();
+    }
+
+    if (reservation.counterEnd !== undefined) {
+      await this.eventBus.emit('counter:updated', {
+        mintUrl,
+        keysetId,
+        counter: reservation.counterEnd,
+      });
+    }
+    return reservation.operation;
   }
 
   async finalize(operationId: string): Promise<MintOperation> {

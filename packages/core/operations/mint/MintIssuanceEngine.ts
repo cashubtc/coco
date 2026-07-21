@@ -6,6 +6,7 @@ import {
 import type { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { Logger } from '../../logging/Logger.ts';
+import { MintIssuanceError } from '../../models/Error.ts';
 import { getMintQuoteAmount, type MintQuote } from '../../models/MintQuote.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -28,6 +29,7 @@ import type {
 
 const emptyOutputData = (): SerializedOutputData => ({ keep: [], send: [] });
 
+/** Narrow transport seam for submitting a prepared BOLT11 issuance request. */
 export interface MintIssuanceTransport {
   mintBolt11(
     mintUrl: string,
@@ -82,6 +84,10 @@ export class MintIssuanceEngine {
     this.mintScopedLock = options.mintScopedLock ?? new MintScopedLock();
   }
 
+  /**
+   * Selects and issues at most one eligible operation from the supplied candidates.
+   * Returns an empty list when none are eligible and owns persistence through finalization.
+   */
   async issueCandidates(candidates: MintOperation[]): Promise<MintOperation[]> {
     for (const candidate of candidates) {
       const current = await this.repositories.mintOperationRepository.getById(candidate.id);
@@ -119,12 +125,18 @@ export class MintIssuanceEngine {
     return [];
   }
 
+  /**
+   * Resumes one prepared attempt through submission and finalization.
+   * Submitted-attempt reconciliation is intentionally handled by the follow-up recovery slice.
+   */
   async recoverAttempt(attempt: MintIssuanceAttempt | string): Promise<MintOperation[]> {
     const attemptId = typeof attempt === 'string' ? attempt : attempt.id;
     const current = await this.repositories.mintIssuanceAttemptRepository.getById(attemptId);
-    if (!current) throw new Error(`Mint Issuance Attempt ${attemptId} not found`);
+    if (!current) throw new MintIssuanceError(`Mint Issuance Attempt ${attemptId} not found`);
     if (current.state !== 'prepared') {
-      throw new Error(`Mint Issuance Attempt ${attemptId} requires submitted-attempt recovery`);
+      throw new MintIssuanceError(
+        `Mint Issuance Attempt ${attemptId} requires submitted-attempt recovery`,
+      );
     }
 
     return this.runWithMintLock(current.mintUrl, async (events) => {
@@ -154,7 +166,10 @@ export class MintIssuanceEngine {
       try {
         await emit();
       } catch (error) {
-        this.logger?.warn('Mint issuance event listener failed', { error });
+        this.logger?.warn('Mint issuance event listener failed', {
+          mintUrl: normalizeMintUrl(mintUrl),
+          error,
+        });
       }
     }
 
@@ -205,7 +220,7 @@ export class MintIssuanceEngine {
     const incomplete =
       await this.repositories.mintIssuanceAttemptRepository.listIncomplete(mintUrl);
     if (incomplete.length > 0) {
-      throw new Error(
+      throw new MintIssuanceError(
         `Mint ${mintUrl} already has incomplete Mint Issuance Attempt ${incomplete[0]!.id}`,
       );
     }
@@ -222,32 +237,44 @@ export class MintIssuanceEngine {
       counterStart,
     );
     if (outputs.keysetId !== keysetId) {
-      throw new Error('Active keyset changed during Mint Issuance Attempt construction');
+      throw new MintIssuanceError(
+        'Active keyset changed during Mint Issuance Attempt construction',
+      );
     }
 
     const attemptId = generateSubId();
     return this.repositories.withTransaction(async (tx) => {
       const operation = await tx.mintOperationRepository.getById(candidate.id);
       if (!operation || operation.state !== 'pending' || operation.method !== 'bolt11') {
-        throw new Error(`Mint Operation ${candidate.id} is no longer eligible for issuance`);
+        throw new MintIssuanceError(
+          `Mint Operation ${candidate.id} is no longer eligible for issuance`,
+        );
       }
       if (operation.mintIssuanceAttemptId) {
-        throw new Error(`Mint Operation ${candidate.id} is already attached to an attempt`);
+        throw new MintIssuanceError(
+          `Mint Operation ${candidate.id} is already attached to an attempt`,
+        );
       }
       if (!(await tx.mintRepository.isTrustedMint(mintUrl))) {
-        throw new Error(`Mint ${mintUrl} is no longer trusted`);
+        throw new MintIssuanceError(`Mint ${mintUrl} is no longer trusted`);
       }
       const quote = await tx.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', operation.quoteId);
       if (!this.matchesEligibleQuote(operation as PendingMintOperation<'bolt11'>, quote)) {
-        throw new Error(`Mint Operation ${candidate.id} is no longer eligible for issuance`);
+        throw new MintIssuanceError(
+          `Mint Operation ${candidate.id} is no longer eligible for issuance`,
+        );
       }
       const bolt11Operation = operation as PendingMintOperation<'bolt11'>;
       if ((await tx.mintIssuanceAttemptRepository.listIncomplete(mintUrl)).length > 0) {
-        throw new Error(`Mint ${mintUrl} already has an incomplete Mint Issuance Attempt`);
+        throw new MintIssuanceError(
+          `Mint ${mintUrl} already has an incomplete Mint Issuance Attempt`,
+        );
       }
       const counter = await tx.counterRepository.getCounter(mintUrl, keysetId);
       if ((counter?.counter ?? 0) !== counterStart) {
-        throw new Error('Deterministic counter changed before attempt creation committed');
+        throw new MintIssuanceError(
+          'Deterministic counter changed before attempt creation committed',
+        );
       }
 
       const createdAt = Date.now();
@@ -291,7 +318,9 @@ export class MintIssuanceEngine {
   ): Promise<FinalizedAttemptResult> {
     const member = attempt.members[0];
     if (!member || attempt.members.length !== 1) {
-      throw new Error(`Mint Issuance Attempt ${attempt.id} is not a one-member attempt`);
+      throw new MintIssuanceError(
+        `Mint Issuance Attempt ${attempt.id} is not a one-member attempt`,
+      );
     }
 
     const submittedAt = Date.now();
@@ -299,11 +328,15 @@ export class MintIssuanceEngine {
       attempt.id,
       { from: 'prepared', to: 'submitted', submittedAt },
     );
-    if (!submitted) throw new Error(`Mint Issuance Attempt ${attempt.id} is no longer prepared`);
+    if (!submitted) {
+      throw new MintIssuanceError(`Mint Issuance Attempt ${attempt.id} is no longer prepared`);
+    }
 
     const outputs = deserializeOutputData(attempt.outputData);
     if (outputs.send.length > 0 || outputs.keep.length === 0) {
-      throw new Error(`Mint Issuance Attempt ${attempt.id} has invalid aggregate outputs`);
+      throw new MintIssuanceError(
+        `Mint Issuance Attempt ${attempt.id} has invalid aggregate outputs`,
+      );
     }
     const signatures = await this.transport.mintBolt11(
       attempt.mintUrl,
@@ -336,7 +369,7 @@ export class MintIssuanceEngine {
     const member = attempt.members[0]!;
     const operation = await tx.mintOperationRepository.getById(member.operationId);
     if (currentAttempt?.state !== 'submitted') {
-      throw new Error(`Mint Issuance Attempt ${attempt.id} is no longer submitted`);
+      throw new MintIssuanceError(`Mint Issuance Attempt ${attempt.id} is no longer submitted`);
     }
     if (
       !operation ||
@@ -344,7 +377,7 @@ export class MintIssuanceEngine {
       operation.method !== 'bolt11' ||
       operation.mintIssuanceAttemptId !== attempt.id
     ) {
-      throw new Error(`Mint Issuance Attempt ${attempt.id} no longer owns its member`);
+      throw new MintIssuanceError(`Mint Issuance Attempt ${attempt.id} no longer owns its member`);
     }
     const executing = operation as ExecutingMintOperation<'bolt11'>;
 
@@ -362,7 +395,7 @@ export class MintIssuanceEngine {
       member.quoteId,
     );
     if (!quote || quote.method !== 'bolt11') {
-      throw new Error(`Mint quote ${member.quoteId} disappeared during finalization`);
+      throw new MintIssuanceError(`Mint quote ${member.quoteId} disappeared during finalization`);
     }
 
     const finalized: FinalizedMintOperation<'bolt11'> = {
@@ -377,7 +410,9 @@ export class MintIssuanceEngine {
       from: 'submitted',
       to: 'succeeded',
     });
-    if (!succeeded) throw new Error(`Mint Issuance Attempt ${attempt.id} could not succeed`);
+    if (!succeeded) {
+      throw new MintIssuanceError(`Mint Issuance Attempt ${attempt.id} could not succeed`);
+    }
     return { operation: finalized, quote, proofs: coreProofs };
   }
 
