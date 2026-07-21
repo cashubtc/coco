@@ -178,8 +178,10 @@ export function parseMintIssuanceAttemptFailure(value: unknown): MintIssuanceAtt
   if (value.details !== undefined && !isRecord(value.details)) {
     throw new Error('Mint issuance attempt terminal failure details must be an object');
   }
+  const message = requireString(value.message, 'Mint issuance attempt terminal failure message');
+  requireNonEmpty(message, 'Mint issuance attempt failure message');
   return {
-    message: requireString(value.message, 'Mint issuance attempt terminal failure message'),
+    message,
     ...(value.code === undefined ? {} : { code: value.code }),
     ...(value.details === undefined ? {} : { details: value.details }),
   };
@@ -244,12 +246,12 @@ export function normalizeMintIssuanceAttempt(attempt: MintIssuanceAttempt): Mint
     throw new Error('Submitted Mint issuance attempt submittedAt must be finite');
   }
   if (attempt.state === 'failed') {
-    requireNonEmpty(attempt.terminalFailure.message, 'Mint issuance attempt failure message');
+    const terminalFailure = parseMintIssuanceAttemptFailure(attempt.terminalFailure);
     return {
       ...base,
       state: 'failed',
       submittedAt: attempt.submittedAt,
-      terminalFailure: cloneFailure(attempt.terminalFailure),
+      terminalFailure: cloneFailure(terminalFailure),
     };
   }
   return { ...base, state: attempt.state, submittedAt: attempt.submittedAt };

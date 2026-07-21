@@ -51,4 +51,30 @@ describe('Mint Issuance Attempt persisted recovery material', () => {
       }),
     ).toThrow('secret must be hex');
   });
+
+  it('rejects invalid terminal failure metadata before persistence', () => {
+    const failedAttempt = {
+      id: 'attempt-1',
+      mintUrl: 'https://mint.test',
+      unit: 'sat',
+      state: 'failed',
+      members: [{ operationId: 'operation-1', quoteId: 'quote-1', amount: Amount.from(1) }],
+      outputData: { keep: [], send: [] },
+      createdAt: 1,
+      submittedAt: 2,
+    } as const;
+
+    expect(() =>
+      normalizeMintIssuanceAttempt({
+        ...failedAttempt,
+        terminalFailure: { message: 'rejected', code: 42 },
+      } as never),
+    ).toThrow('code must be a string');
+    expect(() =>
+      normalizeMintIssuanceAttempt({
+        ...failedAttempt,
+        terminalFailure: { message: 'rejected', details: [] },
+      } as never),
+    ).toThrow('details must be an object');
+  });
 });

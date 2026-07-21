@@ -561,6 +561,44 @@ export async function runMintIssuanceAttemptRepositoryContract(
       }
     });
 
+    it('rejects invalid terminal failure metadata before persistence', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const attempt = createDummyMintIssuanceAttempt();
+        await repositories.mintIssuanceAttemptRepository.create(attempt);
+        await repositories.mintIssuanceAttemptRepository.compareAndTransition(attempt.id, {
+          from: 'prepared',
+          to: 'submitted',
+          submittedAt: 1_500,
+        });
+
+        await expectThrows(
+          () =>
+            repositories.mintIssuanceAttemptRepository.compareAndTransition(attempt.id, {
+              from: 'submitted',
+              to: 'failed',
+              terminalFailure: { message: 'rejected', code: 42 },
+            } as never),
+          expect,
+        );
+        await expectThrows(
+          () =>
+            repositories.mintIssuanceAttemptRepository.compareAndTransition(attempt.id, {
+              from: 'submitted',
+              to: 'failed',
+              terminalFailure: { message: 'rejected', details: [] },
+            } as never),
+          expect,
+        );
+
+        const stored = await repositories.mintIssuanceAttemptRepository.getById(attempt.id);
+        expect(stored?.state).toBe('submitted');
+        expect(stored?.terminalFailure).toBe(undefined);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('retains immutable recovery material without exposing mutable storage references', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

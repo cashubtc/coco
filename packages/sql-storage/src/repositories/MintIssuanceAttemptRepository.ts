@@ -170,14 +170,12 @@ export class SqliteMintIssuanceAttemptRepository implements MintIssuanceAttemptR
       return result.changes === 1;
     }
     if (transition.from === 'submitted' && transition.to === 'failed') {
-      if (transition.terminalFailure.message.trim().length === 0) {
-        throw new Error('Mint issuance attempt failure message must not be empty');
-      }
+      const terminalFailure = parseMintIssuanceAttemptFailure(transition.terminalFailure);
       const result = await this.db.run(
         `UPDATE coco_cashu_mint_issuance_attempts
          SET state = 'failed', terminalFailureJson = ?
          WHERE id = ? AND state = 'submitted'`,
-        [JSON.stringify(transition.terminalFailure), id],
+        [JSON.stringify(terminalFailure), id],
       );
       return result.changes === 1;
     }

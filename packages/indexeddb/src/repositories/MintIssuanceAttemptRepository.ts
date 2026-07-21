@@ -136,13 +136,11 @@ export class IdbMintIssuanceAttemptRepository implements MintIssuanceAttemptRepo
         return true;
       }
       if (transition.from === 'submitted' && transition.to === 'failed') {
-        if (transition.terminalFailure.message.trim().length === 0) {
-          throw new Error('Mint issuance attempt failure message must not be empty');
-        }
+        const terminalFailure = parseMintIssuanceAttemptFailure(transition.terminalFailure);
         await table.put({
           ...row,
           state: 'failed',
-          terminalFailureJson: JSON.stringify(transition.terminalFailure),
+          terminalFailureJson: JSON.stringify(terminalFailure),
         });
         return true;
       }
