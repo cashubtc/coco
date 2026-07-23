@@ -39,7 +39,7 @@ export class MemoryReceiveOperationRepository implements ReceiveOperationReposit
   async getPending(): Promise<ReceiveOperation[]> {
     const results: ReceiveOperation[] = [];
     for (const op of this.operations.values()) {
-      if (op.state === 'executing') {
+      if (op.state === 'executing' || op.state === 'deferred') {
         results.push({ ...op });
       }
     }

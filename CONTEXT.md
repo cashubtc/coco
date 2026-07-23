@@ -88,6 +88,18 @@ The time after which a quote can no longer receive a new payment. Expiry does no
 value that was already paid before expiry.
 _Avoid_: Claim deadline, quote invalidity
 
+**Deferred Receive**:
+A persisted receive operation whose redemption is postponed until it can be settled
+fee-efficiently or its prerequisites exist (dust below the swap fee, or an unreachable
+mint).
+_Avoid_: Queued token, pending receive, receive later table
+
+**Batch Redemption**:
+Settling several deferred receives with one mint swap whose single fee is apportioned
+across the members. Each member still finalizes as its own operation with its own history
+entry.
+_Avoid_: Sweep, merge, combined receive
+
 **Background Watcher**:
 A session-scoped automatic observer that keeps wallet state progressing without a direct caller
 waiting on a specific result. Disabling a Background Watcher does not disable explicit caller

@@ -540,6 +540,14 @@ export class PaymentRequestReceiveService {
       await this.resumeInitChildReceive(attempt, receiveOperation, {
         ignoreMissingTransportHandler: true,
       });
+    } else if (receiveOperation.state === 'deferred') {
+      // Deferred children are redeemed by the receive redemption sweep; the
+      // attempt intentionally rests in 'receiving' until then.
+      this.logger?.debug('Payment request attempt waiting on deferred child receive', {
+        attemptId: attempt.id,
+        receiveOperationId: receiveOperation.id,
+        deferredReason: receiveOperation.deferredReason,
+      });
     }
   }
 
@@ -748,6 +756,16 @@ export class PaymentRequestReceiveService {
       });
 
       const preparedReceive = await this.receiveOperationService.prepare(initReceive);
+      if (preparedReceive.state === 'deferred') {
+        // The attempt rests in 'receiving' until a later redemption sweep
+        // finalizes the deferred child receive.
+        this.logger?.info('Payment request child receive deferred', {
+          attemptId: attempt.id,
+          receiveOperationId: preparedReceive.id,
+          deferredReason: preparedReceive.deferredReason,
+        });
+        return { operation, attempt, receiveOperation: preparedReceive };
+      }
       const netAmount = preparedReceive.amount.subtract(preparedReceive.fee);
       attempt = await this.updateAttempt({
         ...attempt,
@@ -1134,6 +1152,14 @@ export class PaymentRequestReceiveService {
   ): Promise<void> {
     try {
       const preparedReceive = await this.receiveOperationService.prepare(receiveOperation);
+      if (preparedReceive.state === 'deferred') {
+        this.logger?.info('Payment request child receive deferred during resume', {
+          attemptId: attempt.id,
+          receiveOperationId: preparedReceive.id,
+          deferredReason: preparedReceive.deferredReason,
+        });
+        return;
+      }
       const netAmount = preparedReceive.amount.subtract(preparedReceive.fee);
       const updatedAttempt = await this.updateAttempt({
         ...attempt,

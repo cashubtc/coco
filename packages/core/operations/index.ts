@@ -12,6 +12,11 @@ export type {
 } from './mint/MintMethodHandler.ts';
 export { MintOperationService } from './mint/MintOperationService.ts';
 export * from './send';
-export type { ReceiveOperation, ReceiveOperationState } from './receive/ReceiveOperation.ts';
+export type {
+  DeferredReceiveOperation,
+  DeferredReceiveReason,
+  ReceiveOperation,
+  ReceiveOperationState,
+} from './receive/ReceiveOperation.ts';
 export { ReceiveOperationService } from './receive/ReceiveOperationService.ts';
 export * from './paymentRequestReceive';

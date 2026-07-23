@@ -1,5 +1,6 @@
 import type { Token } from '@cashu/cashu-ts';
 import type {
+  DeferredReceiveOperation,
   FinalizedReceiveOperation,
   PreparedReceiveOperation,
   ReceiveOperation,
@@ -47,8 +48,14 @@ export class ReceiveOpsApi {
   /**
    * Decodes and validates a token, then prepares a receive operation without
    * executing it.
+   *
+   * Returns a deferred operation instead when the receive cannot be settled
+   * yet (dust below the swap fee, or an unreachable mint); callers must branch
+   * on `state` before executing.
    */
-  async prepare(input: PrepareReceiveInput): Promise<PreparedReceiveOperation> {
+  async prepare(
+    input: PrepareReceiveInput,
+  ): Promise<PreparedReceiveOperation | DeferredReceiveOperation> {
     const initOp = await this.receiveOperationService.init(input.token);
     return this.receiveOperationService.prepare(initOp);
   }
@@ -80,7 +87,21 @@ export class ReceiveOpsApi {
     return this.receiveOperationService.getPreparedOperations();
   }
 
-  /** Lists receive operations that are currently in flight. */
+  /** Lists receive operations queued for later redemption. */
+  async listDeferred(): Promise<DeferredReceiveOperation[]> {
+    return this.receiveOperationService.getDeferredOperations();
+  }
+
+  /**
+   * Attempts to redeem deferred receive operations now, batched per mint and
+   * unit. Groups that are still below the swap fee stay deferred. Useful when
+   * connectivity returns; the recovery sweep also runs this automatically.
+   */
+  async redeemDeferred(filter?: { mintUrl?: string; unit?: string }): Promise<void> {
+    return this.receiveOperationService.redeemDeferred(filter);
+  }
+
+  /** Lists receive operations that are currently in flight (executing or deferred). */
   async listInFlight(): Promise<ReceiveOperation[]> {
     return this.receiveOperationService.getPendingOperations();
   }
@@ -104,13 +125,17 @@ export class ReceiveOpsApi {
   /**
    * Cancels a receive operation that has not completed yet.
    *
-   * Only `init` and `prepared` receive operations can be cancelled.
+   * Only `init`, `prepared`, and `deferred` receive operations can be cancelled.
    */
   async cancel(operationId: string, reason?: string): Promise<void> {
     const operation = await this.requireOperation(operationId);
-    if (operation.state !== 'init' && operation.state !== 'prepared') {
+    if (
+      operation.state !== 'init' &&
+      operation.state !== 'prepared' &&
+      operation.state !== 'deferred'
+    ) {
       throw new Error(
-        `Cannot cancel operation in state '${operation.state}'. Expected 'init' or 'prepared'.`,
+        `Cannot cancel operation in state '${operation.state}'. Expected 'init', 'prepared', or 'deferred'.`,
       );
     }
 

@@ -565,6 +565,34 @@ describe('PaymentRequestReceiveService', () => {
     );
   });
 
+  it('leaves the attempt receiving when the child receive is deferred', async () => {
+    (receiveOperationService.prepare as ReturnType<typeof mock>).mockImplementation(
+      async (operation: InitReceiveOperation) => ({
+        ...operation,
+        state: 'deferred',
+        deferredReason: 'dust',
+      }),
+    );
+
+    const operation = await service.create({
+      amount: Amount.from(100),
+      mints: [mintUrl],
+      requestId: 'request-id',
+    });
+
+    const result = await service.claimPayload(operation.id, createPayload(), {
+      transport: 'inband',
+      transportMessageId: 'message-1',
+    });
+
+    expect(result.operation.state).toBe('active');
+    expect(result.attempt.state).toBe('receiving');
+    expect(result.attempt.fee).toBeUndefined();
+    expect(result.attempt.netAmount).toBeUndefined();
+    expect(result.receiveOperation?.state).toBe('deferred');
+    expect(receiveOperationService.execute).not.toHaveBeenCalled();
+  });
+
   it('claims custom-unit payloads through the child receive operation', async () => {
     const operation = await service.create({
       amount: { amount: Amount.from(100), unit: 'USD' },

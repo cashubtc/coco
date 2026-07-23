@@ -394,6 +394,15 @@ export function createDummyReceiveOperation(): ReceiveOperation {
   } satisfies ReceiveOperation;
 }
 
+export function createDummyDeferredReceiveOperation(): ReceiveOperation {
+  return {
+    ...createDummyReceiveOperation(),
+    id: 'receive-op-deferred',
+    state: 'deferred',
+    deferredReason: 'dust',
+  } as ReceiveOperation;
+}
+
 export function createDummyPaymentRequestReceiveOperation(
   overrides?: Partial<PaymentRequestReceiveOperation>,
 ): PaymentRequestReceiveOperation {
@@ -1119,6 +1128,82 @@ export async function runReceiveOperationRepositoryContract(
           expect(stored!.source.requestOperationId).toBe('request-op');
           expect(stored!.source.attemptId).toBe('attempt-id');
         }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips deferred operations without prepared data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyDeferredReceiveOperation();
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.state).toBe('deferred');
+        if (stored!.state === 'deferred') {
+          expect(stored!.deferredReason).toBe('dust');
+        }
+        expect(stored!.amount.equals(Amount.from(3))).toBe(true);
+        expect(stored!.inputProofs).toHaveLength(2);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips batchId on executing operations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyReceiveOperation(),
+          id: 'receive-op-batch',
+          state: 'executing',
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+          batchId: 'batch-1',
+        } satisfies ReceiveOperation;
+        await repositories.receiveOperationRepository.create(operation);
+
+        const stored = await repositories.receiveOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.batchId).toBe('batch-1');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('returns executing and deferred operations from getPending', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const repo = repositories.receiveOperationRepository;
+        await repo.create({ ...createDummyReceiveOperation(), id: 'receive-op-init' });
+        await repo.create(createDummyDeferredReceiveOperation());
+        await repo.create({
+          ...createDummyReceiveOperation(),
+          id: 'receive-op-executing',
+          state: 'executing',
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation);
+        await repo.create({
+          ...createDummyReceiveOperation(),
+          id: 'receive-op-finalized',
+          state: 'finalized',
+          fee: Amount.from(1),
+          outputData: { keep: [], send: [] },
+        } satisfies ReceiveOperation);
+
+        const pending = await repo.getPending();
+
+        expect(
+          pending
+            .map((op) => op.id)
+            .sort()
+            .join(','),
+        ).toBe('receive-op-deferred,receive-op-executing');
       } finally {
         await dispose();
       }

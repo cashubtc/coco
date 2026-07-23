@@ -1,4 +1,5 @@
 import type {
+  DeferredReceiveReason,
   ReceiveOperationRepository,
   ReceiveOperation,
   ReceiveOperationState,
@@ -24,6 +25,8 @@ interface ReceiveOperationRow {
   inputProofsJson: string | null;
   outputDataJson: string | null;
   sourceJson: string | null;
+  deferredReason: DeferredReceiveReason | null;
+  batchId: string | null;
 }
 
 function parseInputProofs(inputProofsJson: string | null): ReceiveOperation['inputProofs'] {
@@ -47,10 +50,15 @@ function rowToOperation(row: ReceiveOperationRow): ReceiveOperation {
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
     source: row.sourceJson ? JSON.parse(row.sourceJson) : undefined,
+    batchId: row.batchId ?? undefined,
   };
 
   if (row.state === 'init') {
     return { ...base, state: 'init' };
+  }
+
+  if (row.state === 'deferred') {
+    return { ...base, state: 'deferred', deferredReason: row.deferredReason ?? 'dust' };
   }
 
   const preparedData = {
@@ -76,7 +84,7 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
   const createdAtSeconds = Math.floor(op.createdAt / 1000);
   const updatedAtSeconds = Math.floor(op.updatedAt / 1000);
 
-  if (op.state === 'init') {
+  if (op.state === 'init' || op.state === 'deferred') {
     return [
       op.id,
       op.mintUrl,
@@ -90,6 +98,8 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
       JSON.stringify(op.inputProofs),
       null,
       op.source ? JSON.stringify(op.source) : null,
+      op.state === 'deferred' ? op.deferredReason : null,
+      op.batchId ?? null,
     ];
   }
 
@@ -106,6 +116,8 @@ function operationToParams(op: ReceiveOperation): SqlValue[] {
     JSON.stringify(op.inputProofs),
     op.outputData ? JSON.stringify(op.outputData) : null,
     op.source ? JSON.stringify(op.source) : null,
+    null,
+    op.batchId ?? null,
   ];
 }
 
@@ -128,8 +140,8 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_receive_operations
-        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, unit, amount, state, createdAt, updatedAt, error, fee, inputProofsJson, outputDataJson, sourceJson, deferredReason, batchId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -145,10 +157,10 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
 
     const updatedAtSeconds = getUnixTimeSeconds();
 
-    if (operation.state === 'init') {
+    if (operation.state === 'init' || operation.state === 'deferred') {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, inputProofsJson = ?, sourceJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = NULL, inputProofsJson = ?, outputDataJson = NULL, sourceJson = ?, deferredReason = ?, batchId = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -157,13 +169,15 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
           getOperationUnit(operation),
           JSON.stringify(operation.inputProofs),
           operation.source ? JSON.stringify(operation.source) : null,
+          operation.state === 'deferred' ? operation.deferredReason : null,
+          operation.batchId ?? null,
           operation.id,
         ],
       );
     } else {
       await this.db.run(
         `UPDATE coco_cashu_receive_operations
-         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?
+         SET state = ?, updatedAt = ?, error = ?, unit = ?, fee = ?, inputProofsJson = ?, outputDataJson = ?, sourceJson = ?, deferredReason = NULL, batchId = ?
          WHERE id = ?`,
         [
           operation.state,
@@ -174,6 +188,7 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
           JSON.stringify(operation.inputProofs),
           operation.outputData ? JSON.stringify(operation.outputData) : null,
           operation.source ? JSON.stringify(operation.source) : null,
+          operation.batchId ?? null,
           operation.id,
         ],
       );
@@ -198,7 +213,7 @@ export class SqliteReceiveOperationRepository implements ReceiveOperationReposit
 
   async getPending(): Promise<ReceiveOperation[]> {
     const rows = await this.db.all<ReceiveOperationRow>(
-      "SELECT * FROM coco_cashu_receive_operations WHERE state IN ('executing')",
+      "SELECT * FROM coco_cashu_receive_operations WHERE state IN ('executing', 'deferred')",
     );
     return rows.map(rowToOperation);
   }

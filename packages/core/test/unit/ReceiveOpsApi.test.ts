@@ -2,6 +2,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { Token } from '@cashu/cashu-ts';
 import type {
+  DeferredReceiveOperation,
   FinalizedReceiveOperation,
   InitReceiveOperation,
   PreparedReceiveOperation,
@@ -32,6 +33,7 @@ describe('ReceiveOpsApi', () => {
   let initOperation: InitReceiveOperation;
   let preparedOperation: PreparedReceiveOperation;
   let executingOperation: ReceiveOperation;
+  let deferredOperation: DeferredReceiveOperation;
   let finalizedOperation: FinalizedReceiveOperation;
 
   beforeEach(() => {
@@ -50,6 +52,11 @@ describe('ReceiveOpsApi', () => {
       ...preparedOperation,
       state: 'executing',
     };
+    deferredOperation = {
+      ...initOperation,
+      state: 'deferred',
+      deferredReason: 'dust',
+    };
     finalizedOperation = {
       ...preparedOperation,
       state: 'finalized',
@@ -62,7 +69,9 @@ describe('ReceiveOpsApi', () => {
       execute: mock(async () => finalizedOperation),
       getOperation: mock(async () => preparedOperation),
       getPreparedOperations: mock(async () => [preparedOperation]),
+      getDeferredOperations: mock(async () => [deferredOperation]),
       getPendingOperations: mock(async () => [executingOperation]),
+      redeemDeferred: mock(async () => {}),
       finalize: mock(async () => {}),
       recoverPendingOperations: mock(async () => {}),
       recoverExecutingOperation: mock(async () => {}),
@@ -130,7 +139,41 @@ describe('ReceiveOpsApi', () => {
     ).mockResolvedValueOnce(finalizedOperation);
 
     await expect(api.cancel(finalizedOperation.id)).rejects.toThrow(
-      "Expected 'init' or 'prepared'",
+      "Expected 'init', 'prepared', or 'deferred'",
     );
+  });
+
+  it('cancel allows deferred operations', async () => {
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(deferredOperation);
+
+    await api.cancel(deferredOperation.id, 'cancel queued receive');
+
+    expect(receiveOperationService.rollback).toHaveBeenCalledWith('op-1', 'cancel queued receive');
+  });
+
+  it('listDeferred delegates to the service', async () => {
+    const deferred = await api.listDeferred();
+
+    expect(receiveOperationService.getDeferredOperations).toHaveBeenCalledWith();
+    expect(deferred).toEqual([deferredOperation]);
+  });
+
+  it('redeemDeferred passes the filter through', async () => {
+    await api.redeemDeferred({ mintUrl, unit: 'sat' });
+
+    expect(receiveOperationService.redeemDeferred).toHaveBeenCalledWith({ mintUrl, unit: 'sat' });
+  });
+
+  it('refresh returns deferred operations as-is without recovery', async () => {
+    (
+      receiveOperationService.getOperation as unknown as ReturnType<typeof mock>
+    ).mockResolvedValueOnce(deferredOperation);
+
+    const result = await api.refresh(deferredOperation.id);
+
+    expect(receiveOperationService.recoverExecutingOperation).not.toHaveBeenCalled();
+    expect(result).toBe(deferredOperation);
   });
 });

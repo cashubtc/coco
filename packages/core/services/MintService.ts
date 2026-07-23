@@ -205,6 +205,22 @@ export class MintService {
     return await this.mintRepo.isTrustedMint(normalizeMintUrl(mintUrl));
   }
 
+  /**
+   * Get a known mint and its cached keysets without any mint interaction.
+   * Returns null when the mint is not known locally.
+   */
+  async getKnownMintWithKeysets(
+    mintUrl: string,
+  ): Promise<{ mint: Mint; keysets: Keyset[] } | null> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    const mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
+    if (!mint) {
+      return null;
+    }
+    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    return { mint, keysets };
+  }
+
   async ensureUpdatedMint(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {
     mintUrl = normalizeMintUrl(mintUrl);
     let mint = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);

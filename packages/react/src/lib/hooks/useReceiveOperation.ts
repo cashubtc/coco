@@ -18,6 +18,9 @@ type ReceiveOps = Manager['ops']['receive'];
 export type ReceiveOperationPrepareInput = Parameters<ReceiveOps['prepare']>[0];
 export type ReceiveOperationPrepareResult = Awaited<ReturnType<ReceiveOps['prepare']>>;
 export type ReceiveOperationExecuteResult = Awaited<ReturnType<ReceiveOps['execute']>>;
+export type ReceiveOperationListPreparedResult = Awaited<ReturnType<ReceiveOps['listPrepared']>>;
+export type ReceiveOperationListDeferredResult = Awaited<ReturnType<ReceiveOps['listDeferred']>>;
+export type ReceiveOperationRedeemDeferredFilter = Parameters<ReceiveOps['redeemDeferred']>[0];
 
 export interface UseReceiveOperationResult extends OperationHookResult<
   ReceiveOperation,
@@ -26,7 +29,9 @@ export interface UseReceiveOperationResult extends OperationHookResult<
   prepare(input: ReceiveOperationPrepareInput): Promise<ReceiveOperationPrepareResult>;
   execute(): Promise<ReceiveOperationExecuteResult>;
   cancel(): Promise<void>;
-  listPrepared(): Promise<ReceiveOperationPrepareResult[]>;
+  listPrepared(): Promise<ReceiveOperationListPreparedResult>;
+  listDeferred(): Promise<ReceiveOperationListDeferredResult>;
+  redeemDeferred(filter?: ReceiveOperationRedeemDeferredFilter): Promise<void>;
   listInFlight(): Promise<ReceiveOperation[]>;
 }
 
@@ -118,6 +123,9 @@ export function useReceiveOperation(
     const unsubscribePrepared = manager.on('receive-op:prepared', ({ operation }) => {
       handleObservedOperation(operation);
     });
+    const unsubscribeDeferred = manager.on('receive-op:deferred', ({ operation }) => {
+      handleObservedOperation(operation);
+    });
     const unsubscribeFinalized = manager.on('receive-op:finalized', ({ operation }) => {
       handleObservedOperation(operation);
     });
@@ -127,6 +135,7 @@ export function useReceiveOperation(
 
     return () => {
       unsubscribePrepared();
+      unsubscribeDeferred();
       unsubscribeFinalized();
       unsubscribeRolledBack();
     };
@@ -187,7 +196,10 @@ export function useReceiveOperation(
           return;
         }
 
-        if (operationBeforeCancel?.state === 'init') {
+        if (
+          operationBeforeCancel?.state === 'init' ||
+          operationBeforeCancel?.state === 'deferred'
+        ) {
           bindOperation(null, { clearExecuteResult: true });
           return;
         }
@@ -197,9 +209,20 @@ export function useReceiveOperation(
     );
   }, [bindOperation, getCurrentOperation, manager, runStatefulAction]);
 
-  const listPrepared = useCallback(async (): Promise<ReceiveOperationPrepareResult[]> => {
+  const listPrepared = useCallback(async (): Promise<ReceiveOperationListPreparedResult> => {
     return manager.ops.receive.listPrepared();
   }, [manager]);
+
+  const listDeferred = useCallback(async (): Promise<ReceiveOperationListDeferredResult> => {
+    return manager.ops.receive.listDeferred();
+  }, [manager]);
+
+  const redeemDeferred = useCallback(
+    async (filter?: ReceiveOperationRedeemDeferredFilter): Promise<void> => {
+      return manager.ops.receive.redeemDeferred(filter);
+    },
+    [manager],
+  );
 
   const listInFlight = useCallback(async (): Promise<ReceiveOperation[]> => {
     return manager.ops.receive.listInFlight();
@@ -222,6 +245,8 @@ export function useReceiveOperation(
     execute,
     cancel,
     listPrepared,
+    listDeferred,
+    redeemDeferred,
     listInFlight,
     reset: resetBoundOperation,
   };

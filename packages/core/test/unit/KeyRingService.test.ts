@@ -1,6 +1,7 @@
 import { Amount } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { KeyRingService } from '../../services/KeyRingService.ts';
+import { KeyPairNotFoundError } from '../../models/Error.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
@@ -459,6 +460,25 @@ describe('KeyRingService', () => {
       await expect(service.signProof(proof, fakePublicKey)).rejects.toThrow(
         'Key pair not found for public key: abcdef12...',
       );
+    });
+
+    it('throws a typed KeyPairNotFoundError carrying the missing public key', async () => {
+      const proof: Proof = {
+        id: 'keyset123',
+        amount: Amount.from(64),
+        secret: 'my-secret-string',
+        C: '0000000000000000000000000000000000000000000000000000000000000000',
+      };
+
+      const fakePublicKey = '02' + '00'.repeat(32);
+
+      try {
+        await service.signProof(proof, fakePublicKey);
+        throw new Error('Expected signProof to reject');
+      } catch (error) {
+        expect(error).toBeInstanceOf(KeyPairNotFoundError);
+        expect((error as KeyPairNotFoundError).publicKey).toBe(fakePublicKey);
+      }
     });
 
     it('signs different proofs with different signatures', async () => {

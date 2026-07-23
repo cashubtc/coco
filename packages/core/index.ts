@@ -86,6 +86,8 @@ export type {
   InitReceiveOperation,
   PreparedReceiveOperation,
   ExecutingReceiveOperation,
+  DeferredReceiveOperation,
+  DeferredReceiveReason,
   FinalizedReceiveOperation,
   RolledBackReceiveOperation,
   ReceiveOperation,

@@ -36,13 +36,24 @@ export class TokenService {
       const { keysets } = await this.mintService.ensureUpdatedMint(mintUrl);
       mintKeysets = keysets;
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Unable to retrieve mint keysets';
-      this.logger?.warn('Failed to get updated keysets for mint', {
-        token,
-        mintUrl,
-        err: errMsg,
-      });
-      throw new TokenValidationError(errMsg);
+      // A known mint's cached keysets are still good enough to decode a token
+      // offline; only fail when there is no local keyset knowledge at all.
+      const cached = await this.mintService.getKnownMintWithKeysets(mintUrl).catch(() => null);
+      if (cached && cached.keysets.length > 0) {
+        this.logger?.warn('Mint refresh failed, decoding token with cached keysets', {
+          mintUrl,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        mintKeysets = cached.keysets;
+      } else {
+        const errMsg = err instanceof Error ? err.message : 'Unable to retrieve mint keysets';
+        this.logger?.warn('Failed to get updated keysets for mint', {
+          token,
+          mintUrl,
+          err: errMsg,
+        });
+        throw new TokenValidationError(errMsg, err);
+      }
     }
 
     try {

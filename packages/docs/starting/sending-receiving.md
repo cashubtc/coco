@@ -11,7 +11,10 @@ passed as either an encoded string or a parsed `Token` object:
 ```ts
 const prepared = await coco.ops.receive.prepare({ token: 'cashuBpGF0gaJhaUgA...' });
 
-if (userConfirmed) {
+if (prepared.state === 'deferred') {
+  // Queued for later redemption (dust below the swap fee, or unreachable
+  // mint); coco redeems it automatically once it can.
+} else if (userConfirmed) {
   await coco.ops.receive.execute(prepared.id);
 } else {
   await coco.ops.receive.cancel(prepared.id);
@@ -20,7 +23,11 @@ if (userConfirmed) {
 
 > **Note:** The mint must be trusted before receiving tokens. See [Adding a Mint](./adding-mints.md).
 
-For the full receive lifecycle, see [Receive Operations](../pages/receive-operations.md).
+Tokens that cannot be settled yet (for example a token too small to pay its own
+swap fee, or one received while offline) become **deferred receives** that are
+redeemed later, batched with other queued proofs of the same mint and unit. See
+[Receive Operations](../pages/receive-operations.md) for the full lifecycle and
+the deferred redemption rules.
 
 ### Events
 
@@ -29,6 +36,10 @@ You can listen for receive events:
 ```ts
 coco.on('receive-op:finalized', ({ mintUrl, operation }) => {
   console.log(`Received ${operation.amount} ${operation.unit} from ${mintUrl}`);
+});
+
+coco.on('receive-op:deferred', ({ mintUrl, operation }) => {
+  console.log(`Queued ${operation.amount} ${operation.unit} from ${mintUrl}`);
 });
 ```
 
