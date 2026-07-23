@@ -78,6 +78,10 @@ export class KeyRingService {
       throw new Error('Secret key must be exactly 32 bytes');
     }
     const publicKeyHex = this.getPublicKeyHex(secretKey);
+    const existingKeyPair = await this.findP2pkKeyPairByAlias(publicKeyHex);
+    if (existingKeyPair) {
+      return existingKeyPair;
+    }
     await this.keyRingRepository.setPersistedKeyPair({
       publicKeyHex,
       secretKey,
@@ -89,7 +93,11 @@ export class KeyRingService {
 
   async removeKeyPair(publicKey: string): Promise<void> {
     this.logger?.debug('Removing key pair', { publicKey });
-    await this.keyRingRepository.deletePersistedKeyPair(publicKey, 'p2pk');
+    const keyPair = await this.findP2pkKeyPairByAlias(publicKey);
+    if (!keyPair) {
+      return;
+    }
+    await this.keyRingRepository.deletePersistedKeyPair(keyPair.publicKeyHex, 'p2pk');
     this.logger?.debug('Key pair removed', { publicKey });
   }
 
@@ -97,7 +105,7 @@ export class KeyRingService {
     if (!publicKey || typeof publicKey !== 'string') {
       throw new Error('Public key is required and must be a string');
     }
-    return this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+    return this.findP2pkKeyPairByAlias(publicKey);
   }
 
   async getMintQuoteKeyPair(publicKey: string): Promise<Keypair | null> {
@@ -120,7 +128,7 @@ export class KeyRingService {
     if (!proof.secret || typeof proof.secret !== 'string') {
       throw new Error('Proof secret is required and must be a string');
     }
-    const keyPair = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+    const keyPair = await this.findP2pkKeyPairByAlias(publicKey);
     if (!keyPair) {
       const publicKeyPreview = publicKey.substring(0, 8);
       this.logger?.error('Key pair not found', { publicKey });
@@ -138,15 +146,41 @@ export class KeyRingService {
 
   /**
    * Converts a secret key to its corresponding public key in SEC1 compressed format.
-   * Note: schnorr.getPublicKey() returns a 32-byte x-only public key (BIP340).
-   * We prepend '02' to create a 33-byte SEC1 compressed format as expected by Cashu.
    */
   private getPublicKeyHex(secretKey: Uint8Array): string {
-    const publicKey = schnorr.getPublicKey(secretKey);
-    return '02' + bytesToHex(publicKey);
+    const publicKey = secp256k1.getPublicKey(secretKey, true);
+    return bytesToHex(publicKey);
   }
 
   private getCompressedPublicKeyHex(secretKey: Uint8Array): string {
     return bytesToHex(secp256k1.getPublicKey(secretKey, true));
+  }
+
+  private getLegacyPublicKeyHex(secretKey: Uint8Array): string {
+    return '02' + bytesToHex(schnorr.getPublicKey(secretKey));
+  }
+
+  /**
+   * Resolves the canonical SEC1 encoding and coco's legacy even-Y encoding as aliases.
+   * Existing rows keep their stored identity; the fallback scans only P2PK keys so NUT-20 keys
+   * cannot satisfy a P2PK lookup.
+   */
+  private async findP2pkKeyPairByAlias(publicKey: string): Promise<Keypair | null> {
+    const directMatch = await this.keyRingRepository.getPersistedKeyPair(publicKey, 'p2pk');
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const persistedKeyPairs = await this.keyRingRepository.getAllPersistedKeyPairs('p2pk');
+    for (const keyPair of persistedKeyPairs) {
+      if (
+        this.getPublicKeyHex(keyPair.secretKey) === publicKey ||
+        this.getLegacyPublicKeyHex(keyPair.secretKey) === publicKey
+      ) {
+        return keyPair;
+      }
+    }
+
+    return null;
   }
 }
