@@ -340,7 +340,13 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
     }
 
     // Case: Swap required - need to check with mint
-    const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
+    const proofInputs = await proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    if (proofInputs.length !== operation.inputProofSecrets.length) {
+      throw new ProofValidationError('Cannot recover send operation: missing input proof metadata');
+    }
     let inputStates;
     try {
       inputStates = await wallet.checkProofsStates(proofInputs);

@@ -144,15 +144,11 @@ describe('WalletRestoreService', () => {
         );
       });
       const restoreRequest = mock(async () => ({ outputs: [], signatures: [] }));
-      Wallet.prototype.batchRestore = mock(async function (
-        this: Wallet,
-        _gapLimit,
-        _batchSize,
-        counter,
-        restoredKeysetId,
-      ) {
+      Wallet.prototype.batchRestore = mock(async function (this: Wallet, config) {
         this.mint.restore = restoreRequest;
-        const restored = await this.restore(counter, 1, { keysetId: restoredKeysetId });
+        const restored = await this.restore(config?.counter ?? 0, 1, {
+          keysetId: config?.keysetId,
+        });
         return {
           proofs: restored.proofs,
           lastCounterWithSignature: restored.lastCounterWithSignature,
@@ -424,7 +420,13 @@ describe('WalletRestoreService', () => {
     it('should successfully restore a keyset', async () => {
       await service.restoreKeyset(mintUrl, mockWallet, keysetId);
 
-      expect(mockWallet.batchRestore).toHaveBeenCalledWith(300, 100, 0, keysetId);
+      expect(mockWallet.batchRestore).toHaveBeenCalledWith({
+        gapLimit: 300,
+        batchSize: 100,
+        counter: 0,
+        keysetId,
+        filterSpent: false,
+      });
       expect(mockWallet.checkProofsStates).toHaveBeenCalledTimes(1);
       expect(counterService.overwriteCounter).toHaveBeenCalledWith(mintUrl, keysetId, 11);
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
@@ -666,8 +668,20 @@ describe('WalletRestoreService', () => {
       await service.restoreKeyset(mintUrl, mockWallet, keysetId);
 
       // Both should use the same batch size, gap limit, and start counter
-      expect(mockBatchRestore1).toHaveBeenCalledWith(300, 100, 0, keysetId);
-      expect(mockWallet.batchRestore).toHaveBeenCalledWith(300, 100, 0, keysetId);
+      expect(mockBatchRestore1).toHaveBeenCalledWith({
+        gapLimit: 300,
+        batchSize: 100,
+        counter: 0,
+        keysetId,
+        filterSpent: false,
+      });
+      expect(mockWallet.batchRestore).toHaveBeenCalledWith({
+        gapLimit: 300,
+        batchSize: 100,
+        counter: 0,
+        keysetId,
+        filterSpent: false,
+      });
     });
   });
 });

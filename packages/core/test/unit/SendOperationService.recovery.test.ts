@@ -623,6 +623,10 @@ describe('SendOperationService - recoverPendingOperations', () => {
       (proofService.saveProofs as Mock<any>).mockImplementation(
         async (_mintUrl: string, proofs: any[]) => {
           savedProofBatches.push(proofs);
+          await proofRepo.saveProofs(
+            mintUrl,
+            proofs.map((proof) => ({ ...proof, unit: proof.unit ?? 'sat' })),
+          );
         },
       );
 

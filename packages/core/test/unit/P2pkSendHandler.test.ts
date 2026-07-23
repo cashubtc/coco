@@ -180,6 +180,9 @@ describe('P2pkSendHandler', () => {
       getAvailableProofs: mock(() =>
         Promise.resolve([makeCoreProof('input-1', 60), makeCoreProof('input-2', 50)]),
       ),
+      getProofsBySecrets: mock((_mintUrl: string, secrets: string[]) =>
+        Promise.resolve(secrets.map((secret) => makeCoreProof(secret))),
+      ),
       getProofsByOperationId: mock(() => Promise.resolve([])),
     } as unknown as ProofRepository;
 
@@ -342,10 +345,14 @@ describe('P2pkSendHandler', () => {
         }
       })();
 
-      expect(createP2PKData).toHaveBeenCalledWith({ pubkey: testPubkey }, Amount.from(100), {
-        id: keysetId,
-        keys: { 1: 'pubkey' },
-      });
+      expect(createP2PKData).toHaveBeenCalledWith(
+        { kind: 'P2PK', data: testPubkey },
+        Amount.from(100),
+        {
+          id: keysetId,
+          keys: { 1: 'pubkey' },
+        },
+      );
       expect(result.outputData?.send).toEqual([
         {
           blindedMessage: {

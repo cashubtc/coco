@@ -1,5 +1,6 @@
 import type {
   Amount,
+  MintQuoteBaseResponse,
   MintQuoteBolt11Response,
   MintQuoteOnchainResponse,
   MintQuoteBolt12Response,
@@ -23,6 +24,31 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
 import type { MintQuote } from '../../models/MintQuote';
 
+type OptionalV5QuoteBase<T extends MintQuoteBaseResponse> = Omit<
+  T,
+  'method' | 'amount_paid' | 'amount_issued' | 'updated_at'
+> &
+  Partial<Pick<MintQuoteBaseResponse, 'method' | 'amount_paid' | 'amount_issued' | 'updated_at'>>;
+
+/**
+ * Temporary compatibility for caller-provided v4 snapshots at Quote Lifecycle's public import
+ * boundary. MintAdapter responses are normalized by cashu-ts v5. Slice #299 can retire the
+ * optional accounting fields once Coco's canonical mint quote model owns them.
+ */
+export type CompatibleMintQuoteBolt11Response = Omit<
+  OptionalV5QuoteBase<MintQuoteBolt11Response>,
+  'amount'
+> & {
+  amount: Amount;
+};
+export type CompatibleMintQuoteOnchainResponse = OptionalV5QuoteBase<MintQuoteOnchainResponse>;
+export type CompatibleMintQuoteBolt12Response = Omit<
+  OptionalV5QuoteBase<MintQuoteBolt12Response>,
+  'amount'
+> & {
+  amount?: Amount | null;
+};
+
 /**
  * Registry of supported mint methods and payload shapes.
  * Extend via declaration merging to support additional methods.
@@ -35,7 +61,7 @@ export interface MintMethodDefinitions {
       amount: Amount;
     };
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
-    quote: MintQuoteBolt11Response;
+    quote: CompatibleMintQuoteBolt11Response;
   };
   onchain: {
     methodData: Record<string, never>;
@@ -48,7 +74,7 @@ export interface MintMethodDefinitions {
       amountIssued: Amount;
     };
     remoteState: never;
-    quote: MintQuoteOnchainResponse;
+    quote: CompatibleMintQuoteOnchainResponse;
   };
   bolt12: {
     methodData: Record<string, never>;
@@ -64,7 +90,7 @@ export interface MintMethodDefinitions {
       amountIssued: Amount;
     };
     remoteState: never;
-    quote: MintQuoteBolt12Response;
+    quote: CompatibleMintQuoteBolt12Response;
   };
 }
 

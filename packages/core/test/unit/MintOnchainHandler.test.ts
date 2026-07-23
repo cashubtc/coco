@@ -419,7 +419,7 @@ describe('MintOnchainHandler', () => {
     const result = await handler.checkPending(buildPendingContext());
 
     expect(result.category).toBe('waiting');
-    expect(result.quoteSnapshot?.amount_paid.equals(Amount.from(8))).toBe(true);
+    expect(result.quoteSnapshot?.amount_paid?.equals(Amount.from(8))).toBe(true);
   });
 
   it('checks expired pending onchain operations as terminal', async () => {
