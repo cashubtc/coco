@@ -1,4 +1,4 @@
-import { Amount, type AmountLike } from '@cashu/cashu-ts';
+import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
 import {
   KeysetSyncError,
   MintFetchError,
@@ -570,6 +570,8 @@ export class MintService {
     try {
       this.logger?.debug('Fetching keysets', { mintUrl: mint.mintUrl });
       ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
+      // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
+      keysets = keysets.filter((keyset) => !isBlsKeyset(keyset.id));
     } catch (err) {
       this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);

@@ -795,6 +795,45 @@ describe('MintService', () => {
       expect(result.keysets[0]?.id).toBe('keyset-1');
     });
 
+    it('excludes v3 keysets from the supported mint keysets', async () => {
+      mockAdapter.fetchKeysets = mock(() =>
+        Promise.resolve({
+          keysets: [
+            ...mockKeysets,
+            {
+              id: '0200000000000000',
+              unit: 'sat',
+              active: true,
+              input_fee_ppk: 0,
+            },
+          ],
+        }),
+      );
+
+      const result = await service.addMintByUrl(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
+    it('exposes no supported keysets for a v3-only mint', async () => {
+      mockAdapter.fetchKeysets = mock(() =>
+        Promise.resolve({
+          keysets: [
+            {
+              id: '0200000000000000',
+              unit: 'sat',
+              active: true,
+              input_fee_ppk: 0,
+            },
+          ],
+        }),
+      );
+
+      const result = await service.addMintByUrl(testMintUrl);
+
+      expect(result.keysets).toEqual([]);
+    });
+
     it('should preserve large denomination keys as strings', async () => {
       const largeDenominations = [
         '9007199254740992',

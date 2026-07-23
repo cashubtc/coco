@@ -1,4 +1,4 @@
-import { getDecodedToken, getTokenMetadata, type Token } from '@cashu/cashu-ts';
+import { getDecodedToken, getTokenMetadata, isBlsKeyset, type Token } from '@cashu/cashu-ts';
 import type { Keyset } from '../models/Keyset';
 import type { Logger } from '../logging/Logger';
 import type { MintService } from './MintService';
@@ -52,6 +52,9 @@ export class TokenService {
         typeof token === 'string' && !encodedTokenMetadataHasExplicitUnit(token)
           ? { ...decoded, unit: undefined }
           : decoded;
+      if (decoded.proofs.some((proof) => isBlsKeyset(proof.id))) {
+        throw new ProofValidationError('BLS v3 keysets are not supported');
+      }
       const unit = this.resolveTokenUnit(decodedForUnitResolution, mintKeysets, expectedUnit);
       return { ...decoded, unit };
     } catch (err) {
