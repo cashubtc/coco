@@ -10,4 +10,5 @@
 
 Upgrade to cashu-ts 5.0.0-rc.4 and consume normalized v5 mint quote snapshots at Coco's quote
 lifecycle boundary. BLS v3 keysets are temporarily excluded from wallet keysets, and tokens using
-v3 proofs are rejected until Coco supports curve-aware proof-state handling.
+v3 proofs are rejected until Coco supports curve-aware proof-state handling. P2PK sends now enforce
+cashu-ts v5's requirement for valid compressed secp256k1 public keys.

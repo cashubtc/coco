@@ -231,6 +231,41 @@ describe('MintService', () => {
       expect(result.mint.mintUrl).toBe(testMintUrl);
     });
 
+    it('excludes previously persisted v3 keysets from cached mint data', async () => {
+      await service.addMintByUrl(testMintUrl);
+      await keysetRepo.addKeyset({
+        mintUrl: testMintUrl,
+        id: '0200000000000000',
+        unit: 'sat',
+        keypairs: mockKeys,
+        active: true,
+        feePpk: 0,
+      });
+
+      const result = await service.ensureUpdatedMint(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
+    it('excludes previously persisted v3 keysets after refreshing mint data', async () => {
+      await service.addMintByUrl(testMintUrl);
+      await keysetRepo.addKeyset({
+        mintUrl: testMintUrl,
+        id: '0200000000000000',
+        unit: 'sat',
+        keypairs: mockKeys,
+        active: true,
+        feePpk: 0,
+      });
+      const mint = await mintRepo.getMintByUrl(testMintUrl);
+      mint.updatedAt = 0;
+      await mintRepo.updateMint(mint);
+
+      const result = await service.ensureUpdatedMint(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
     it('should preserve trust status when updating', async () => {
       await service.addMintByUrl(testMintUrl);
       await service.trustMint(testMintUrl);

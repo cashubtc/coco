@@ -18,6 +18,11 @@ import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } fro
 
 const MINT_REFRESH_TTL_S = 60 * 5;
 
+function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
+  // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
+  return keysets.filter((keyset) => !isBlsKeyset(keyset.id));
+}
+
 function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
   const nuts = mintInfo.nuts as unknown;
   if (!nuts || typeof nuts !== 'object') return false;
@@ -230,7 +235,7 @@ export class MintService {
       return updated;
     }
 
-    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    const keysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
     return { mint, keysets };
   }
 
@@ -570,8 +575,7 @@ export class MintService {
     try {
       this.logger?.debug('Fetching keysets', { mintUrl: mint.mintUrl });
       ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
-      // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
-      keysets = keysets.filter((keyset) => !isBlsKeyset(keyset.id));
+      keysets = excludeBlsKeysets(keysets);
     } catch (err) {
       this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
@@ -617,7 +621,7 @@ export class MintService {
     await this.mintRepo.addOrUpdateMint(mint);
     await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
 
-    const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    const repoKeysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
     this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });
     return { mint, keysets: repoKeysets };
   }
