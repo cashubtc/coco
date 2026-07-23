@@ -18,6 +18,7 @@ import type {
 import type {
   MintExecutionResult,
   MintMethodHandler,
+  MintMethodQuoteSnapshot,
   PendingMintCheckResult,
   RecoverExecutingResult,
 } from '../../operations/mint/MintMethodHandler';
@@ -741,6 +742,190 @@ describe('MintOperationService', () => {
     expect(refreshed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
     expect(getMintQuoteAvailableAmount(refreshed).equals(Amount.from(13))).toBe(true);
     expect(persistedDuringEvent).toEqual(['21']);
+  });
+
+  it('refreshMintQuote preserves direct BOLT11 replacement semantics', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-direct-refresh',
+        request: 'lnbc1direct',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+    (handler.fetchRemoteQuote as Mock<any>).mockImplementationOnce(async ({ quote }: any) =>
+      mintQuoteFromBolt11Response(quote.mintUrl, {
+        quote: quote.quoteId,
+        request: quote.request,
+        amount: quote.amount,
+        unit: quote.unit,
+        expiry: quote.expiry,
+        state: 'UNPAID',
+      }),
+    );
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const refreshed = await quoteLifecycle.refreshMintQuote(
+      mintUrl,
+      'bolt11',
+      'quote-direct-refresh',
+    );
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-direct-refresh');
+
+    expect(refreshed.state).toBe('UNPAID');
+    expect(stored?.state).toBe('UNPAID');
+    expect(quoteUpdatedEvents).toHaveLength(1);
+    expect(quoteUpdatedEvents[0]?.quote.state).toBe('UNPAID');
+  });
+
+  it('refreshMintQuote preserves direct reusable replacement semantics', async () => {
+    const onchainQuoteId = 'onchain-quote-direct-refresh';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(8),
+    });
+    const onchainHandler = {
+      ...handler,
+      fetchRemoteQuote: mock(async ({ quote }) =>
+        mintQuoteFromOnchainResponse(quote.mintUrl, {
+          quote: quote.quoteId,
+          request: quote.request,
+          unit: quote.unit,
+          expiry: quote.expiry,
+          pubkey: quote.quoteData.pubkey,
+          amount_paid: Amount.from(7),
+          amount_issued: Amount.from(5),
+        }),
+      ),
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementationOnce(() => onchainHandler);
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const refreshed = await quoteLifecycle.refreshMintQuote(mintUrl, 'onchain', onchainQuoteId);
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(refreshed.method).toBe('onchain');
+    if (refreshed.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(stored?.method).toBe('onchain');
+    if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
+    expect(refreshed.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
+    expect(refreshed.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
+    expect(stored.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
+    expect(stored.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(1);
+  });
+
+  it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection without emitting', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: 'quote-snapshot-paid',
+        request: 'lnbc1canonical',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+      }),
+    );
+    const before = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'bolt11', {
+      quote: 'quote-snapshot-paid',
+      request: 'lnbc1stale',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 7200,
+      state: 'UNPAID',
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
+
+    expect(observed.state).toBe('PAID');
+    expect(observed.request).toBe('lnbc1canonical');
+    expect(stored?.state).toBe('PAID');
+    expect(stored?.request).toBe('lnbc1canonical');
+    expect(stored?.updatedAt).toBe(before?.updatedAt);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot preserves reusable accounting without emitting', async () => {
+    const onchainQuoteId = 'onchain-quote-stale-snapshot';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(8),
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(7),
+      amount_issued: Amount.from(5),
+    });
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    if (observed.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(stored?.method).toBe('onchain');
+    if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
+    expect(observed.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(stored.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
+  });
+
+  it('recordMintQuoteSnapshot preserves partial reusable snapshot event semantics', async () => {
+    const onchainQuoteId = 'onchain-quote-partial-snapshot';
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.from(8),
+    });
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+    const partialSnapshot = {
+      quote: onchainQuoteId,
+      request: 'bc1qtest',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(12),
+    } as MintMethodQuoteSnapshot<'onchain'>;
+
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(
+      mintUrl,
+      'onchain',
+      partialSnapshot,
+    );
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(observed.method).toBe('onchain');
+    if (observed.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(stored?.method).toBe('onchain');
+    if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
+    expect(observed.quoteData.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(stored.quoteData.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(0);
   });
 
   it('prepare fails before creating an operation when the quote is missing', async () => {
