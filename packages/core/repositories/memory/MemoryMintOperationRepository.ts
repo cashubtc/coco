@@ -1,30 +1,30 @@
 import type { MintOperationRepository } from '..';
-import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
+import type { MintOperationRecord, MintOperationState } from '../../operations/mint/MintOperation';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
-  private readonly operations = new Map<string, MintOperation>();
+  private readonly operations = new Map<string, MintOperationRecord>();
 
-  async create(operation: MintOperation): Promise<void> {
+  async create(operation: MintOperationRecord): Promise<void> {
     if (this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} already exists`);
     }
     this.operations.set(operation.id, { ...operation });
   }
 
-  async update(operation: MintOperation): Promise<void> {
+  async update(operation: MintOperationRecord): Promise<void> {
     if (!this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
   }
 
-  async getById(id: string): Promise<MintOperation | null> {
+  async getById(id: string): Promise<MintOperationRecord | null> {
     const operation = this.operations.get(id);
     return operation ? { ...operation } : null;
   }
 
-  async getByState(state: MintOperationState): Promise<MintOperation[]> {
-    const results: MintOperation[] = [];
+  async getByState(state: MintOperationState): Promise<MintOperationRecord[]> {
+    const results: MintOperationRecord[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === state) {
         results.push({ ...operation });
@@ -33,8 +33,8 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results;
   }
 
-  async getPending(): Promise<MintOperation[]> {
-    const results: MintOperation[] = [];
+  async getPending(): Promise<MintOperationRecord[]> {
+    const results: MintOperationRecord[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === 'pending' || operation.state === 'executing') {
         results.push({ ...operation });
@@ -43,8 +43,8 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results;
   }
 
-  async getByMintUrl(mintUrl: string): Promise<MintOperation[]> {
-    const results: MintOperation[] = [];
+  async getByMintUrl(mintUrl: string): Promise<MintOperationRecord[]> {
+    const results: MintOperationRecord[] = [];
     for (const operation of this.operations.values()) {
       if (operation.mintUrl === mintUrl) {
         results.push({ ...operation });
@@ -53,8 +53,12 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results;
   }
 
-  async getByQuoteId(mintUrl: string, method: string, quoteId: string): Promise<MintOperation[]> {
-    const results: MintOperation[] = [];
+  async getByQuoteId(
+    mintUrl: string,
+    method: string,
+    quoteId: string,
+  ): Promise<MintOperationRecord[]> {
+    const results: MintOperationRecord[] = [];
     for (const operation of this.operations.values()) {
       if (
         operation.mintUrl === mintUrl &&
@@ -68,7 +72,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     return results.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
-  async getAll(): Promise<MintOperation[]> {
+  async getAll(): Promise<MintOperationRecord[]> {
     return Array.from(this.operations.values(), (operation) => ({ ...operation }));
   }
 

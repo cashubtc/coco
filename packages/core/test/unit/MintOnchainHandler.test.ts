@@ -16,9 +16,9 @@ import type {
 } from '../../operations/mint';
 import { getMintQuoteAvailableAmount, type MintQuoteOnchainResponse } from '../../models/MintQuote';
 import type {
-  ExecutingMintOperation,
-  InitMintOperation,
-  PendingMintOperation,
+  ExecutingMintOperationRecord as ExecutingMintOperation,
+  InitMintOperationRecord as InitMintOperation,
+  PendingMintOperationRecord as PendingMintOperation,
 } from '../../operations/mint/MintOperation';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService, MintService, ProofService, WalletService } from '../../services';

@@ -215,6 +215,13 @@ export class MemoryProofRepository implements ProofRepository {
     return results;
   }
 
+  async getProofsByAttemptId(mintUrl: string, attemptId: string): Promise<CoreProof[]> {
+    const map = this.getMintMap(mintUrl);
+    return Array.from(map.values())
+      .filter((proof) => proof.createdByAttemptId === attemptId)
+      .map((proof) => ({ ...proof }));
+  }
+
   async getAvailableProofs(mintUrl: string, filter?: ProofUnitFilter): Promise<CoreProof[]> {
     const map = this.getMintMap(mintUrl);
     const unitFilter = getUnitFilter(filter);

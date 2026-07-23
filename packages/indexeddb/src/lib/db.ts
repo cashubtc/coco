@@ -145,6 +145,7 @@ export interface ProofRow {
   createdAt: number;
   usedByOperationId?: string | null;
   createdByOperationId?: string | null;
+  createdByAttemptId?: string | null;
 }
 
 export interface MintQuoteRow {
@@ -325,4 +326,29 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+  attemptId?: string | null;
+}
+
+export interface MintIssuanceAttemptRow {
+  id: string;
+  mintUrl: string;
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  unit: string;
+  keysetId: string;
+  state: 'prepared' | 'submitting' | 'recovering' | 'succeeded' | 'rejected' | 'failed';
+  memberOperationIds: string[];
+  quoteIdsJson: string;
+  quoteAmountsJson: string;
+  signingRequirementsJson: string;
+  outputDataJson: string;
+  counterStart: number | null;
+  counterEnd: number | null;
+  counterRangeKnown?: boolean;
+  requestJson: string;
+  createdAt: number;
+  updatedAt: number;
+  submittedAt?: number | null;
+  recoveryStartedAt?: number | null;
+  recoveredAt?: number | null;
+  terminalErrorJson?: string | null;
 }

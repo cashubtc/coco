@@ -33,6 +33,7 @@ import {
 import { SendOperationService } from './operations/send/SendOperationService';
 import { MeltOperationService } from './operations/melt/MeltOperationService';
 import { MintOperationService } from './operations/mint/MintOperationService';
+import { MintIssuanceCoordinator } from './operations/mint/MintIssuanceCoordinator';
 import { ReceiveOperationService } from './operations/receive/ReceiveOperationService';
 import { MintScopedLock } from './operations/MintScopedLock';
 import {
@@ -1002,6 +1003,18 @@ export class Manager {
     const meltOperationRepository = repositories.meltOperationRepository;
 
     const mintOperationLogger = this.getChildLogger('MintOperationService');
+    const mintIssuanceLogger = this.getChildLogger('MintIssuanceCoordinator');
+    const mintIssuanceCoordinator = new MintIssuanceCoordinator({
+      repositories,
+      proofService,
+      mintService,
+      walletService,
+      mintAdapter: this.mintAdapter,
+      mintHandlerProvider,
+      eventBus: this.eventBus,
+      logger: mintIssuanceLogger,
+      mintScopedLock,
+    });
     const mintOperationService = new MintOperationService(
       mintHandlerProvider,
       repositories.mintOperationRepository,
@@ -1014,6 +1027,7 @@ export class Manager {
       this.eventBus,
       mintOperationLogger,
       mintScopedLock,
+      mintIssuanceCoordinator,
     );
     const mintOperationRepository = repositories.mintOperationRepository;
 

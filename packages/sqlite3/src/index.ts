@@ -21,6 +21,7 @@ export class SqliteRepositories implements Repositories {
   readonly meltOperationRepository: Repositories['meltOperationRepository'];
   readonly authSessionRepository: Repositories['authSessionRepository'];
   readonly mintOperationRepository: Repositories['mintOperationRepository'];
+  readonly mintIssuanceAttemptRepository: Repositories['mintIssuanceAttemptRepository'];
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
   readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
@@ -44,6 +45,7 @@ export class SqliteRepositories implements Repositories {
     this.meltOperationRepository = this.repositories.meltOperationRepository;
     this.authSessionRepository = this.repositories.authSessionRepository;
     this.mintOperationRepository = this.repositories.mintOperationRepository;
+    this.mintIssuanceAttemptRepository = this.repositories.mintIssuanceAttemptRepository;
     this.receiveOperationRepository = this.repositories.receiveOperationRepository;
     this.paymentRequestReceiveOperationRepository =
       this.repositories.paymentRequestReceiveOperationRepository;

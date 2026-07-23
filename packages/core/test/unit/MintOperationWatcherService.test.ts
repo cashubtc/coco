@@ -43,7 +43,6 @@ describe('MintOperationWatcherService', () => {
     quoteId,
     request: 'lnbc1test',
     expiry: Math.floor(Date.now() / 1000) + 3600,
-    outputData: '{"keep":[],"send":[]}' as unknown as PendingMintOperation['outputData'],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
@@ -73,7 +72,6 @@ describe('MintOperationWatcherService', () => {
       quoteId,
       request: 'bc1ptest',
       expiry: Math.floor(Date.now() / 1000) + 3600,
-      outputData: '{"keep":[],"send":[]}' as unknown as PendingMintOperation['outputData'],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }) as PendingMintOperation<'onchain'>;

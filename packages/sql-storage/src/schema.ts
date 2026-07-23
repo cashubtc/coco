@@ -1,4 +1,11 @@
-import { normalizeMintUrl } from '@cashu/coco-core/adapter';
+import {
+  decodeLegacyMintOperationMigrationRecord,
+  normalizeMintUrl,
+  planLegacyMintOperationMigration,
+  serializeLegacyMintIssuanceAttempt,
+  type MintMethod,
+  type MintOperationState,
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 
 export interface Migration {
@@ -46,6 +53,107 @@ async function insertMigrationIds(db: SqlDatabase, ids: readonly string[]): Prom
     await db.run('INSERT OR IGNORE INTO coco_cashu_migrations (id, appliedAt) VALUES (?, ?)', [
       id,
       appliedAt,
+    ]);
+  }
+}
+
+interface LegacyMintOperationRow {
+  id: string;
+  mintUrl: string;
+  quoteId: string;
+  method: MintMethod;
+  unit: string;
+  amount: string | number;
+  state: MintOperationState;
+  outputDataJson: string | null;
+  attemptId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  terminalFailureJson: string | null;
+}
+
+async function migrateLegacyMintOperations(db: SqlDatabase): Promise<void> {
+  const attemptColumns = await getTableColumns(db, 'coco_cashu_mint_issuance_attempts');
+  if (!attemptColumns.has('counterRangeKnown')) {
+    await db.run(
+      `ALTER TABLE coco_cashu_mint_issuance_attempts
+       ADD COLUMN counterRangeKnown INTEGER NOT NULL DEFAULT 1`,
+    );
+  }
+  const rows = await db.all<LegacyMintOperationRow>(
+    `SELECT id, mintUrl, quoteId, method, unit, amount, state, outputDataJson, attemptId,
+            createdAt, updatedAt, error, terminalFailureJson
+     FROM coco_cashu_mint_operations
+     WHERE state NOT IN ('init', 'pending')
+     ORDER BY createdAt ASC, id ASC`,
+  );
+  const operations = rows.map((row) =>
+    decodeLegacyMintOperationMigrationRecord({
+      id: row.id,
+      mintUrl: row.mintUrl,
+      quoteId: row.quoteId,
+      method: row.method,
+      unit: row.unit,
+      amount: row.amount,
+      state: row.state,
+      outputDataJson: row.outputDataJson,
+      attemptId: row.attemptId,
+      createdAt: row.createdAt * 1_000,
+      updatedAt: row.updatedAt * 1_000,
+      error: row.error,
+      terminalFailureJson: row.terminalFailureJson,
+    }),
+  );
+  const plan = planLegacyMintOperationMigration(operations);
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+
+  for (const entry of plan) {
+    const { attempt } = entry;
+    const source = rowsById.get(entry.operationId);
+    if (!source?.outputDataJson) {
+      throw new Error(`Legacy Mint Operation ${entry.operationId} lost its serialized outputs`);
+    }
+    const serialized = serializeLegacyMintIssuanceAttempt(attempt, source.outputDataJson);
+    await db.run(
+      `INSERT INTO coco_cashu_mint_issuance_attempts (
+        id, mintUrl, method, unit, keysetId, state, quoteIdsJson, quoteAmountsJson,
+        signingRequirementsJson, outputDataJson, counterStart, counterEnd, counterRangeKnown,
+        requestJson,
+        createdAt, updatedAt, submittedAt, recoveryStartedAt, recoveredAt, terminalErrorJson
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        attempt.id,
+        attempt.mintUrl,
+        attempt.method,
+        attempt.unit,
+        attempt.keysetId,
+        attempt.state,
+        serialized.quoteIdsJson,
+        serialized.quoteAmountsJson,
+        serialized.signingRequirementsJson,
+        serialized.outputDataJson,
+        attempt.counterStart ?? 0,
+        attempt.counterEnd ?? 0,
+        attempt.counterStart === undefined ? 0 : 1,
+        serialized.requestJson,
+        attempt.createdAt,
+        attempt.updatedAt,
+        attempt.submittedAt ?? null,
+        attempt.recoveryStartedAt ?? null,
+        attempt.recoveredAt ?? null,
+        serialized.terminalErrorJson,
+      ],
+    );
+    await db.run(
+      `INSERT INTO coco_cashu_mint_issuance_attempt_members (attemptId, operationId, position)
+       VALUES (?, ?, 0)`,
+      [attempt.id, entry.operationId],
+    );
+    await db.run('UPDATE coco_cashu_mint_operations SET state = ?, attemptId = ? WHERE id = ?', [
+      entry.operationState,
+      attempt.id,
+      entry.operationId,
     ]);
   }
 }
@@ -1445,6 +1553,65 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_quotes_identity
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
+  },
+  {
+    id: '037_mint_operation_attempt_reference',
+    sql: `
+      ALTER TABLE coco_cashu_mint_operations ADD COLUMN attemptId TEXT;
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_operations_attempt
+        ON coco_cashu_mint_operations(attemptId);
+    `,
+  },
+  {
+    id: '038_mint_issuance_attempts',
+    sql: `
+      CREATE TABLE coco_cashu_mint_issuance_attempts (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        method TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        keysetId TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (
+          state IN ('prepared','submitting','recovering','succeeded','rejected','failed')
+        ),
+        quoteIdsJson TEXT NOT NULL,
+        quoteAmountsJson TEXT NOT NULL,
+        signingRequirementsJson TEXT NOT NULL,
+        outputDataJson TEXT NOT NULL,
+        counterStart INTEGER NOT NULL,
+        counterEnd INTEGER NOT NULL,
+        requestJson TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        submittedAt INTEGER,
+        recoveryStartedAt INTEGER,
+        recoveredAt INTEGER,
+        terminalErrorJson TEXT
+      );
+
+      CREATE TABLE coco_cashu_mint_issuance_attempt_members (
+        attemptId TEXT NOT NULL REFERENCES coco_cashu_mint_issuance_attempts(id) ON DELETE CASCADE,
+        operationId TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        PRIMARY KEY (attemptId, position),
+        UNIQUE (attemptId, operationId)
+      );
+
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempts_state
+        ON coco_cashu_mint_issuance_attempts(state);
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempts_mint
+        ON coco_cashu_mint_issuance_attempts(mintUrl);
+      CREATE INDEX idx_coco_cashu_mint_issuance_attempt_members_operation
+        ON coco_cashu_mint_issuance_attempt_members(operationId);
+
+      ALTER TABLE coco_cashu_proofs ADD COLUMN createdByAttemptId TEXT;
+      CREATE INDEX idx_coco_cashu_proofs_created_by_attempt
+        ON coco_cashu_proofs(mintUrl, createdByAttemptId);
+    `,
+  },
+  {
+    id: '039_migrate_legacy_mint_operations',
+    run: migrateLegacyMintOperations,
   },
 ];
 

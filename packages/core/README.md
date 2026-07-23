@@ -224,7 +224,17 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 - `SendOperationRepository`
 - `MeltOperationRepository`
 - `MintOperationRepository`
+- `MintIssuanceAttemptRepository`
 - `ReceiveOperationRepository`
+
+Mint Issuance Attempts are adapter-facing recovery records. They preserve exact ordered members,
+outputs, known counter ranges, and request metadata, while `CoreProof.createdByAttemptId` provides
+queryable proof provenance without removing legacy operation provenance. Migrated attempts retain
+an explicitly unknown historical counter range because legacy output rows do not record it; the
+live counter itself is preserved unchanged.
+
+New fixed-amount BOLT11 redemptions allocate outputs and attach a single-member attempt atomically,
+then persist the exact proofs and terminal operation/attempt outcome before outcome events fire.
 
 The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
 

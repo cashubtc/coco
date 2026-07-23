@@ -14,6 +14,7 @@ import type {
   RepositoryTransactionScope,
   SendOperationRepository,
   MintOperationRepository,
+  MintIssuanceAttemptRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
@@ -31,11 +32,69 @@ import { MemoryMintRepository } from './MemoryMintRepository';
 import { MemoryProofRepository } from './MemoryProofRepository';
 import { MemorySendOperationRepository } from './MemorySendOperationRepository';
 import { MemoryMintOperationRepository } from './MemoryMintOperationRepository';
+import { MemoryMintIssuanceAttemptRepository } from './MemoryMintIssuanceAttemptRepository';
 import { MemoryReceiveOperationRepository } from './MemoryReceiveOperationRepository';
 import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
 } from './MemoryPaymentRequestReceiveRepository';
+
+type MutableContainer = Map<unknown, unknown> | unknown[];
+
+interface MutableContainerSnapshot {
+  repository: object;
+  property: string;
+  value: MutableContainer;
+}
+
+function cloneTransactionValue<T>(value: T, seen = new Map<object, unknown>()): T {
+  if (typeof value !== 'object' || value === null) return value;
+  const known = seen.get(value);
+  if (known) return known as T;
+  if (value instanceof Uint8Array) return value.slice() as T;
+  if (value instanceof Map) {
+    const clone = new Map();
+    seen.set(value, clone);
+    for (const [key, item] of value) {
+      clone.set(cloneTransactionValue(key, seen), cloneTransactionValue(item, seen));
+    }
+    return clone as T;
+  }
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    clone.push(...value.map((item) => cloneTransactionValue(item, seen)));
+    return clone as T;
+  }
+  const clone = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
+  seen.set(value, clone);
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = cloneTransactionValue(item, seen);
+  }
+  return clone as T;
+}
+
+function snapshotMutableContainers(repositories: object[]): MutableContainerSnapshot[] {
+  const snapshots: MutableContainerSnapshot[] = [];
+  for (const repository of new Set(repositories)) {
+    for (const [property, value] of Object.entries(repository)) {
+      if (value instanceof Map || Array.isArray(value)) {
+        snapshots.push({
+          repository,
+          property,
+          value: cloneTransactionValue(value),
+        });
+      }
+    }
+  }
+  return snapshots;
+}
+
+function restoreMutableContainers(snapshots: MutableContainerSnapshot[]): void {
+  for (const snapshot of snapshots) {
+    Reflect.set(snapshot.repository, snapshot.property, cloneTransactionValue(snapshot.value));
+  }
+}
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
@@ -51,40 +110,84 @@ export class MemoryRepositories implements Repositories {
   meltOperationRepository: MeltOperationRepository;
   authSessionRepository: AuthSessionRepository;
   mintOperationRepository: MintOperationRepository;
+  mintIssuanceAttemptRepository: MintIssuanceAttemptRepository;
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  private readonly transactionScope: RepositoryTransactionScope;
+  private transactionTail: Promise<void> = Promise.resolve();
+  private activeOperations = 0;
+  private operationsDrained: Promise<void> = Promise.resolve();
+  private releaseOperationsDrained?: () => void;
 
   constructor() {
-    this.mintRepository = new MemoryMintRepository();
-    this.keyRingRepository = new MemoryKeyRingRepository();
-    this.counterRepository = new MemoryCounterRepository();
-    this.keysetRepository = new MemoryKeysetRepository();
-    this.proofRepository = new MemoryProofRepository();
+    const mintRepository = new MemoryMintRepository();
+    const keyRingRepository = new MemoryKeyRingRepository();
+    const counterRepository = new MemoryCounterRepository();
+    const keysetRepository = new MemoryKeysetRepository();
+    const proofRepository = new MemoryProofRepository();
     const sendOperationRepository = new MemorySendOperationRepository();
     const meltOperationRepository = new MemoryMeltOperationRepository();
     const mintOperationRepository = new MemoryMintOperationRepository();
     const receiveOperationRepository = new MemoryReceiveOperationRepository();
-
-    this.sendOperationRepository = sendOperationRepository;
-    this.meltOperationRepository = meltOperationRepository;
-    this.mintOperationRepository = mintOperationRepository;
-    this.receiveOperationRepository = receiveOperationRepository;
-    this.mintQuoteRepository = new MemoryMintQuoteRepository();
-    this.legacyMintQuoteRepository = new MemoryLegacyMintQuoteRepository();
-    this.meltQuoteRepository = new MemoryMeltQuoteRepository();
-    this.historyRepository = new MemoryHistoryRepository({
+    const mintIssuanceAttemptRepository = new MemoryMintIssuanceAttemptRepository();
+    const mintQuoteRepository = new MemoryMintQuoteRepository();
+    const legacyMintQuoteRepository = new MemoryLegacyMintQuoteRepository();
+    const meltQuoteRepository = new MemoryMeltQuoteRepository();
+    const historyRepository = new MemoryHistoryRepository({
       sendOperationRepository,
       meltOperationRepository,
       mintOperationRepository,
-      mintQuoteRepository: this.mintQuoteRepository,
+      mintQuoteRepository,
       receiveOperationRepository,
     });
-    this.authSessionRepository = new MemoryAuthSessionRepository();
-    this.paymentRequestReceiveOperationRepository =
+    const authSessionRepository = new MemoryAuthSessionRepository();
+    const paymentRequestReceiveOperationRepository =
       new MemoryPaymentRequestReceiveOperationRepository();
-    this.paymentRequestReceiveAttemptRepository =
+    const paymentRequestReceiveAttemptRepository =
       new MemoryPaymentRequestReceiveAttemptRepository();
+
+    this.transactionScope = {
+      mintRepository,
+      keyRingRepository,
+      counterRepository,
+      keysetRepository,
+      proofRepository,
+      mintQuoteRepository,
+      legacyMintQuoteRepository,
+      meltQuoteRepository,
+      historyRepository,
+      sendOperationRepository,
+      meltOperationRepository,
+      authSessionRepository,
+      mintOperationRepository,
+      mintIssuanceAttemptRepository,
+      receiveOperationRepository,
+      paymentRequestReceiveOperationRepository,
+      paymentRequestReceiveAttemptRepository,
+    };
+
+    this.mintRepository = this.serializeRepository(mintRepository);
+    this.keyRingRepository = this.serializeRepository(keyRingRepository);
+    this.counterRepository = this.serializeRepository(counterRepository);
+    this.keysetRepository = this.serializeRepository(keysetRepository);
+    this.proofRepository = this.serializeRepository(proofRepository);
+    this.mintQuoteRepository = this.serializeRepository(mintQuoteRepository);
+    this.legacyMintQuoteRepository = this.serializeRepository(legacyMintQuoteRepository);
+    this.meltQuoteRepository = this.serializeRepository(meltQuoteRepository);
+    this.historyRepository = this.serializeRepository(historyRepository);
+    this.sendOperationRepository = this.serializeRepository(sendOperationRepository);
+    this.meltOperationRepository = this.serializeRepository(meltOperationRepository);
+    this.authSessionRepository = this.serializeRepository(authSessionRepository);
+    this.mintOperationRepository = this.serializeRepository(mintOperationRepository);
+    this.mintIssuanceAttemptRepository = this.serializeRepository(mintIssuanceAttemptRepository);
+    this.receiveOperationRepository = this.serializeRepository(receiveOperationRepository);
+    this.paymentRequestReceiveOperationRepository = this.serializeRepository(
+      paymentRequestReceiveOperationRepository,
+    );
+    this.paymentRequestReceiveAttemptRepository = this.serializeRepository(
+      paymentRequestReceiveAttemptRepository,
+    );
   }
 
   async init(): Promise<void> {
@@ -92,6 +195,64 @@ export class MemoryRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return fn(this);
+    const previousTransaction = this.transactionTail;
+    let releaseTransaction!: () => void;
+    const currentTransaction = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+    this.transactionTail = previousTransaction.then(() => currentTransaction);
+
+    await previousTransaction;
+    await this.operationsDrained;
+    try {
+      const snapshots = snapshotMutableContainers(
+        Object.values(this.transactionScope).filter(
+          (value): value is object => typeof value === 'object',
+        ),
+      );
+      try {
+        return await fn(this.transactionScope);
+      } catch (error) {
+        restoreMutableContainers(snapshots);
+        throw error;
+      }
+    } finally {
+      releaseTransaction();
+    }
+  }
+
+  private serializeRepository<T extends object>(repository: T): T {
+    return new Proxy(repository, {
+      get: (target, property, receiver) => {
+        const value = Reflect.get(target, property, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) =>
+          this.runRepositoryOperation(() => Reflect.apply(value, target, args) as unknown);
+      },
+    });
+  }
+
+  private async runRepositoryOperation<T>(fn: () => T | Promise<T>): Promise<T> {
+    while (true) {
+      const transaction = this.transactionTail;
+      await transaction;
+      if (transaction === this.transactionTail) break;
+    }
+
+    if (this.activeOperations === 0) {
+      this.operationsDrained = new Promise<void>((resolve) => {
+        this.releaseOperationsDrained = resolve;
+      });
+    }
+    this.activeOperations += 1;
+    try {
+      return await fn();
+    } finally {
+      this.activeOperations -= 1;
+      if (this.activeOperations === 0) {
+        this.releaseOperationsDrained?.();
+        this.releaseOperationsDrained = undefined;
+      }
+    }
   }
 }

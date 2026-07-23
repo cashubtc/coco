@@ -1,0 +1,1166 @@
+import type { Proof } from '@cashu/cashu-ts';
+import type { EventBus } from '../../events/EventBus.ts';
+import type { CoreEvents } from '../../events/types.ts';
+import type { MintAdapter } from '../../infra/MintAdapter.ts';
+import type { MintHandlerProvider } from '../../infra/handlers/mint/MintHandlerProvider.ts';
+import type { Logger } from '../../logging/Logger.ts';
+import { MintOperationError, UnknownMintError } from '../../models/Error.ts';
+import { MintIssuanceRetryError } from '../../models/MintIssuanceRetryError.ts';
+import {
+  getMintQuoteAmount,
+  getMintQuoteRemoteState,
+  type MintQuote,
+} from '../../models/MintQuote.ts';
+import { isMintQuoteExpired } from '../../models/MintQuoteExpiry.ts';
+import type { Repositories } from '../../repositories/index.ts';
+import type { MintService } from '../../services/MintService.ts';
+import type { ProofService } from '../../services/ProofService.ts';
+import type { WalletService } from '../../services/WalletService.ts';
+import {
+  deserializeOutputData,
+  generateSubId,
+  mapProofToCoreProof,
+  normalizeMintUrl,
+  serializeOutputData,
+} from '../../utils.ts';
+import { MintScopedLock } from '../MintScopedLock.ts';
+import type { MintIssuanceAttempt } from './MintIssuanceAttempt.ts';
+import type {
+  MintExecutionResult,
+  MintMethod,
+  RecoverExecutingResult,
+} from './MintMethodHandler.ts';
+import type {
+  ExecutingMintOperationRecord,
+  FailedMintOperationRecord,
+  FinalizedMintOperationRecord,
+  MintOperation,
+  MintOperationRecord,
+  PendingMintOperationRecord,
+} from './MintOperation.ts';
+import { isTerminalOperation, toMintOperation } from './MintOperation.ts';
+
+interface MintIssuanceCoordinatorOptions {
+  repositories: Repositories;
+  proofService: ProofService;
+  mintService: MintService;
+  walletService: WalletService;
+  mintAdapter: MintAdapter;
+  mintHandlerProvider?: MintHandlerProvider;
+  eventBus: EventBus<CoreEvents>;
+  logger?: Logger;
+  mintScopedLock?: MintScopedLock;
+}
+
+interface CreatedAttempt {
+  attempt: MintIssuanceAttempt;
+  operation: ExecutingMintOperationRecord<'bolt11'>;
+}
+
+const MINT_QUOTE_STATE_ERROR_CODES = new Set([20_001, 20_002]);
+const MINT_QUOTE_EXPIRED_ERROR_CODE = 20_007;
+const MINT_QUOTE_STATE_RANK = { UNPAID: 0, PAID: 1, ISSUED: 2 } as const;
+
+const activeCoordinations = new WeakMap<Repositories, Map<string, Promise<MintOperation>>>();
+
+function isTerminalAttempt(attempt: MintIssuanceAttempt): boolean {
+  return (
+    attempt.state === 'succeeded' || attempt.state === 'rejected' || attempt.state === 'failed'
+  );
+}
+
+/**
+ * Internal issuance boundary for durable single and future batched mint redemption.
+ *
+ * It intentionally depends only on lower-level services and repositories. Public APIs and the
+ * background processor reach it through MintOperationService.
+ */
+export class MintIssuanceCoordinator {
+  private readonly repositories: Repositories;
+  private readonly proofService: ProofService;
+  private readonly mintService: MintService;
+  private readonly walletService: WalletService;
+  private readonly mintAdapter: MintAdapter;
+  private readonly mintHandlerProvider?: MintHandlerProvider;
+  private readonly eventBus: EventBus<CoreEvents>;
+  private readonly logger?: Logger;
+  private readonly mintScopedLock: MintScopedLock;
+  private readonly scheduledOperationIds = new Set<string>();
+  private readonly activeByOperationId: Map<string, Promise<MintOperation>>;
+
+  constructor(options: MintIssuanceCoordinatorOptions) {
+    this.repositories = options.repositories;
+    const sharedActive = activeCoordinations.get(options.repositories) ?? new Map();
+    activeCoordinations.set(options.repositories, sharedActive);
+    this.activeByOperationId = sharedActive;
+    this.proofService = options.proofService;
+    this.mintService = options.mintService;
+    this.walletService = options.walletService;
+    this.mintAdapter = options.mintAdapter;
+    this.mintHandlerProvider = options.mintHandlerProvider;
+    this.eventBus = options.eventBus;
+    this.logger = options.logger;
+    this.mintScopedLock = options.mintScopedLock ?? new MintScopedLock();
+  }
+
+  schedule(operationId: string): void {
+    this.scheduledOperationIds.add(operationId);
+  }
+
+  coordinate(): Promise<void>;
+  coordinate(operationId: string): Promise<MintOperation>;
+  coordinate(operationId?: string): Promise<void> | Promise<MintOperation> {
+    if (operationId === undefined) {
+      const next = this.scheduledOperationIds.values().next().value as string | undefined;
+      if (!next) return Promise.resolve();
+      this.scheduledOperationIds.delete(next);
+      return (async () => {
+        await this.coordinate(next);
+      })();
+    }
+
+    const active = this.activeByOperationId.get(operationId);
+    if (active) return active;
+
+    const coordination = this.coordinateTarget(operationId).finally(() => {
+      if (this.activeByOperationId.get(operationId) === coordination) {
+        this.activeByOperationId.delete(operationId);
+      }
+    });
+    this.activeByOperationId.set(operationId, coordination);
+    return coordination;
+  }
+
+  isCoordinating(operationId: string): boolean {
+    return this.activeByOperationId.has(operationId);
+  }
+
+  private async coordinateTarget(operationId: string): Promise<MintOperation> {
+    let operation = await this.requireOperation(operationId);
+    if (isTerminalOperation(operation)) return toMintOperation(operation);
+
+    let attempt = operation.attemptId
+      ? await this.repositories.mintIssuanceAttemptRepository.getById(operation.attemptId)
+      : null;
+
+    if (!attempt) {
+      if (operation.state !== 'pending') {
+        throw new Error(`Executing mint operation ${operation.id} is missing its issuance attempt`);
+      }
+      if (operation.method === 'bolt11') {
+        const quote = await this.repositories.mintQuoteRepository.getMintQuote(
+          operation.mintUrl,
+          'bolt11',
+          operation.quoteId,
+        );
+        if (quote && getMintQuoteRemoteState(quote) === 'ISSUED') {
+          return this.failUnattachedIssuedOperation(
+            operation as PendingMintOperationRecord<'bolt11'>,
+          );
+        }
+      }
+      const created = await this.createSingleBolt11Attempt(operation);
+      attempt = created.attempt;
+      operation = created.operation;
+    }
+
+    if (!attempt.memberOperationIds.includes(operationId)) {
+      throw new Error(
+        `Mint issuance attempt ${attempt.id} does not contain operation ${operationId}`,
+      );
+    }
+
+    switch (attempt.state) {
+      case 'prepared':
+        return this.dispatchSingleAttempt(attempt, operation);
+      case 'submitting':
+      case 'recovering':
+        return this.reconcileSingleAttempt(attempt, operation);
+      case 'succeeded': {
+        const completed = await this.requireOperation(operationId);
+        if (!isTerminalOperation(completed)) {
+          throw new Error(
+            `Succeeded attempt ${attempt.id} has non-terminal operation ${operationId}`,
+          );
+        }
+        return toMintOperation(completed);
+      }
+      case 'rejected':
+      case 'failed': {
+        const completed = await this.requireOperation(operationId);
+        if (isTerminalOperation(completed)) return toMintOperation(completed);
+        throw new Error(`Terminal attempt ${attempt.id} has non-terminal operation ${operationId}`);
+      }
+    }
+  }
+
+  private async createSingleBolt11Attempt(
+    candidate: PendingMintOperationRecord,
+  ): Promise<CreatedAttempt> {
+    if (candidate.method !== 'bolt11') {
+      throw new Error(`Single issuance attempts currently support BOLT11, not ${candidate.method}`);
+    }
+
+    const mintUrl = normalizeMintUrl(candidate.mintUrl);
+    const releaseMintLock = await this.mintScopedLock.acquire(mintUrl);
+    try {
+      const current = await this.requireOperation(candidate.id);
+      if (current.attemptId) {
+        const attempt = await this.repositories.mintIssuanceAttemptRepository.getById(
+          current.attemptId,
+        );
+        if (!attempt || current.state !== 'executing' || current.method !== 'bolt11') {
+          throw new Error(`Operation ${current.id} has an invalid issuance attempt attachment`);
+        }
+        return { attempt, operation: current as ExecutingMintOperationRecord<'bolt11'> };
+      }
+      if (current.state !== 'pending' || current.method !== 'bolt11') {
+        throw new Error(
+          `Cannot create BOLT11 issuance attempt for operation ${current.id} in state ${current.state}`,
+        );
+      }
+
+      if (!(await this.mintService.isTrustedMint(mintUrl))) {
+        throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+      }
+      await this.mintService.assertMethodUnitSupported(mintUrl, 4, 'bolt11', {
+        amount: current.amount,
+        unit: current.unit,
+      });
+      const { keysetId } = await this.walletService.getWalletWithActiveKeysetId(
+        mintUrl,
+        current.unit,
+      );
+      const storedCounter = await this.repositories.counterRepository.getCounter(mintUrl, keysetId);
+      const counterStart = storedCounter?.counter ?? 0;
+      const outputs = await this.proofService.createMintOutputsAtCounter(
+        mintUrl,
+        { amount: current.amount, unit: current.unit },
+        counterStart,
+      );
+      if (outputs.keysetId !== keysetId || outputs.counterStart !== counterStart) {
+        throw new Error(
+          'Active keyset or deterministic counter changed during attempt construction',
+        );
+      }
+      const attemptId = generateSubId();
+      const created = await this.repositories.withTransaction(async (tx) => {
+        const operation = await tx.mintOperationRepository.getById(current.id);
+        if (
+          !operation ||
+          operation.state !== 'pending' ||
+          operation.method !== 'bolt11' ||
+          operation.attemptId
+        ) {
+          throw new Error(`Mint operation ${current.id} is no longer eligible for issuance`);
+        }
+        if (!(await tx.mintRepository.isTrustedMint(mintUrl))) {
+          throw new UnknownMintError(`Mint ${mintUrl} is not trusted`);
+        }
+
+        const quote = await tx.mintQuoteRepository.getMintQuote(
+          mintUrl,
+          'bolt11',
+          operation.quoteId,
+        );
+        const bolt11Operation = operation as PendingMintOperationRecord<'bolt11'>;
+        this.assertEligibleSingleQuote(bolt11Operation, quote);
+
+        const transactionCounter = await tx.counterRepository.getCounter(mintUrl, keysetId);
+        if ((transactionCounter?.counter ?? 0) !== counterStart) {
+          throw new Error('Deterministic counter changed before attempt creation committed');
+        }
+
+        const now = Date.now();
+        const amount = getMintQuoteAmount(quote!);
+        if (!amount) throw new Error(`Mint quote ${bolt11Operation.quoteId} has no fixed amount`);
+        const attempt: MintIssuanceAttempt = {
+          id: attemptId,
+          mintUrl,
+          method: 'bolt11',
+          unit: bolt11Operation.unit,
+          keysetId,
+          state: 'prepared',
+          memberOperationIds: [bolt11Operation.id],
+          quoteIds: [bolt11Operation.quoteId],
+          quoteAmounts: [amount],
+          signingRequirements: [null],
+          outputData: outputs.outputData,
+          counterStart,
+          counterEnd: outputs.counterEnd,
+          request: { kind: 'single', quoteId: bolt11Operation.quoteId },
+          createdAt: now,
+          updatedAt: now,
+        };
+        const executing: ExecutingMintOperationRecord<'bolt11'> = {
+          ...bolt11Operation,
+          state: 'executing',
+          attemptId,
+          outputData: outputs.outputData,
+          error: undefined,
+          updatedAt: now,
+        };
+
+        await tx.mintIssuanceAttemptRepository.create(attempt);
+        await tx.mintOperationRepository.update(executing);
+        await tx.counterRepository.setCounter(mintUrl, keysetId, outputs.counterEnd);
+        return { attempt, operation: executing };
+      });
+
+      await this.eventBus.emit('counter:updated', {
+        mintUrl,
+        keysetId,
+        counter: created.attempt.counterEnd!,
+      });
+      await this.eventBus.emit('mint-op:executing', {
+        mintUrl,
+        operationId: created.operation.id,
+        operation: toMintOperation(created.operation),
+      });
+      this.logger?.info('Mint issuance attempt prepared', {
+        attemptId: created.attempt.id,
+        memberOperationIds: created.attempt.memberOperationIds,
+        mintUrl,
+        method: 'bolt11',
+        unit: created.attempt.unit,
+      });
+      return created;
+    } finally {
+      releaseMintLock();
+    }
+  }
+
+  private async failUnattachedIssuedOperation(
+    operation: PendingMintOperationRecord<'bolt11'>,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const error = `Mint quote ${operation.quoteId} was issued before Coco created recoverable outputs`;
+    const failed = await this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintOperationRepository.getById(operation.id);
+      if (
+        !current ||
+        current.state !== 'pending' ||
+        current.method !== 'bolt11' ||
+        current.attemptId
+      ) {
+        throw new Error(
+          `Mint operation ${operation.id} changed before issued-quote reconciliation`,
+        );
+      }
+      const quote = await tx.mintQuoteRepository.getMintQuote(
+        current.mintUrl,
+        'bolt11',
+        current.quoteId,
+      );
+      if (!quote || getMintQuoteRemoteState(quote) !== 'ISSUED') {
+        throw new Error(`Mint quote ${current.quoteId} changed before issued-quote reconciliation`);
+      }
+      const updated: FailedMintOperationRecord<'bolt11'> = {
+        ...current,
+        method: 'bolt11',
+        state: 'failed',
+        error,
+        terminalFailure: {
+          reason: error,
+          code: 'quote_already_issued',
+          retryable: false,
+          observedAt: now,
+        },
+        updatedAt: now,
+      };
+      await tx.mintOperationRepository.update(updated);
+      return updated;
+    });
+
+    await this.eventBus.emit('mint-op:failed', {
+      mintUrl: failed.mintUrl,
+      operationId: failed.id,
+      operation: toMintOperation(failed),
+    });
+    return toMintOperation(failed);
+  }
+
+  private assertEligibleSingleQuote(
+    operation: PendingMintOperationRecord<'bolt11'>,
+    quote: MintQuote | null,
+  ): asserts quote is MintQuote<'bolt11'> {
+    if (!quote || quote.method !== 'bolt11') {
+      throw new Error(`Mint quote ${operation.quoteId} was not found for BOLT11 issuance`);
+    }
+    if (quote.reusable || getMintQuoteRemoteState(quote) !== 'PAID') {
+      throw new Error(`Mint quote ${operation.quoteId} is not eligible for single issuance`);
+    }
+    const quoteAmount = getMintQuoteAmount(quote);
+    if (!quoteAmount?.equals(operation.amount) || quote.unit !== operation.unit) {
+      throw new Error(
+        `Mint quote ${operation.quoteId} no longer matches operation ${operation.id}`,
+      );
+    }
+  }
+
+  private async dispatchSingleAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: MintOperationRecord,
+  ): Promise<MintOperation> {
+    if (operation.method !== 'bolt11') {
+      return this.dispatchLegacyMethodAttempt(attempt, operation);
+    }
+    if (operation.state !== 'executing' || operation.method !== 'bolt11') {
+      throw new Error(`Attempt ${attempt.id} does not have one executing BOLT11 operation`);
+    }
+    const executing = operation as ExecutingMintOperationRecord<'bolt11'>;
+
+    const submitting = await this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!current) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      if (isTerminalAttempt(current)) return current;
+
+      const now = Date.now();
+      const updated: MintIssuanceAttempt = {
+        ...current,
+        state: 'submitting',
+        submittedAt: current.submittedAt ?? now,
+        updatedAt: now,
+      };
+      await tx.mintIssuanceAttemptRepository.update(updated);
+      return updated;
+    });
+    if (isTerminalAttempt(submitting)) {
+      return this.requireTerminalOperation(operation.id, submitting.id);
+    }
+
+    const outputData = deserializeOutputData(attempt.outputData);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      attempt.mintUrl,
+      attempt.unit,
+    );
+    try {
+      const proofs = await wallet.mintProofsBolt11(
+        executing.amount,
+        executing.quoteId,
+        { keysetId: attempt.keysetId },
+        {
+          type: 'custom',
+          data: outputData.keep,
+        },
+      );
+      this.assertExactProofSet(attempt, proofs);
+      return await this.completeAttempt(attempt, executing, proofs, false);
+    } catch (error) {
+      if (error instanceof MintOperationError && error.code === MINT_QUOTE_EXPIRED_ERROR_CODE) {
+        return this.failAttempt(submitting, executing, error.message);
+      }
+      const recovering = await this.markRecovering(submitting, error);
+      if (isTerminalAttempt(recovering)) {
+        return this.requireTerminalOperation(operation.id, recovering.id);
+      }
+      if (error instanceof MintOperationError && MINT_QUOTE_STATE_ERROR_CODES.has(error.code)) {
+        return this.reconcileSingleAttempt(recovering, executing, false);
+      }
+      throw this.toRetryableRecoveryError(
+        error,
+        `Mint issuance attempt ${recovering.id} dispatch became ambiguous`,
+      );
+    }
+  }
+
+  private async reconcileSingleAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: MintOperationRecord,
+    resubmitPaid = true,
+  ): Promise<MintOperation> {
+    if (operation.method !== 'bolt11') {
+      return this.reconcileLegacyMethodAttempt(attempt, operation);
+    }
+    if (operation.state !== 'executing' || operation.method !== 'bolt11') {
+      throw new Error(`Attempt ${attempt.id} does not have one executing BOLT11 operation`);
+    }
+    const executing = operation as ExecutingMintOperationRecord<'bolt11'>;
+
+    const recovering =
+      attempt.state === 'recovering'
+        ? attempt
+        : await this.markRecovering(attempt, new Error('Recovery join started'));
+    if (isTerminalAttempt(recovering)) {
+      return this.requireTerminalOperation(operation.id, recovering.id);
+    }
+    let remoteQuote;
+    let remoteState: keyof typeof MINT_QUOTE_STATE_RANK;
+    try {
+      remoteQuote = await this.mintAdapter.checkMintQuote(
+        recovering.mintUrl,
+        'bolt11',
+        executing.quoteId,
+      );
+      if (remoteQuote.quote !== executing.quoteId) {
+        throw new Error(
+          `Mint quote recovery returned ${remoteQuote.quote}, expected ${executing.quoteId}`,
+        );
+      }
+      if (!remoteQuote.amount.equals(executing.amount) || remoteQuote.unit !== executing.unit) {
+        throw new Error(`Mint quote ${executing.quoteId} recovery response changed amount or unit`);
+      }
+      const canonical = await this.repositories.mintQuoteRepository.getMintQuote(
+        recovering.mintUrl,
+        'bolt11',
+        executing.quoteId,
+      );
+      const canonicalState = canonical ? getMintQuoteRemoteState(canonical) : undefined;
+      remoteState =
+        canonicalState &&
+        MINT_QUOTE_STATE_RANK[canonicalState] > MINT_QUOTE_STATE_RANK[remoteQuote.state]
+          ? canonicalState
+          : remoteQuote.state;
+      if (remoteState === remoteQuote.state) {
+        await this.repositories.mintQuoteRepository.setMintQuoteState(
+          recovering.mintUrl,
+          'bolt11',
+          executing.quoteId,
+          remoteState,
+          Date.now(),
+        );
+      }
+    } catch (error) {
+      return this.throwRecoverableAttemptError(
+        recovering,
+        this.toRetryableRecoveryError(
+          error,
+          `Mint issuance attempt ${recovering.id} quote recovery failed`,
+        ),
+      );
+    }
+    if (remoteState === 'PAID') {
+      if (!resubmitPaid) {
+        return this.throwRecoverableAttemptError(
+          recovering,
+          new MintIssuanceRetryError(
+            `Mint issuance attempt ${recovering.id} remains claimable after a rejected dispatch`,
+          ),
+        );
+      }
+      return this.dispatchSingleAttempt(recovering, executing);
+    }
+    if (remoteState === 'UNPAID') {
+      if (isMintQuoteExpired(remoteQuote)) {
+        return this.failAttempt(
+          recovering,
+          executing,
+          `Mint quote ${executing.quoteId} expired before issuance`,
+        );
+      }
+      return this.requeueUnpaidSingleAttempt(recovering, executing);
+    }
+    if (remoteState !== 'ISSUED') {
+      return this.throwRecoverableAttemptError(
+        recovering,
+        new MintIssuanceRetryError(
+          `Cannot reconcile issuance attempt ${attempt.id}: quote is ${remoteState}`,
+        ),
+      );
+    }
+
+    let recovered: Proof[];
+    try {
+      recovered = await this.proofService.recoverProofsFromOutputData(
+        recovering.mintUrl,
+        recovering.outputData,
+        {
+          unit: recovering.unit,
+          createdByAttemptId: recovering.id,
+          persistRecoveredProofs: false,
+        },
+      );
+    } catch (error) {
+      return this.throwRecoverableAttemptError(
+        recovering,
+        this.toRetryableRecoveryError(
+          error,
+          `Mint issuance attempt ${recovering.id} exact-proof recovery failed`,
+        ),
+      );
+    }
+    try {
+      this.assertExactProofSet(recovering, recovered);
+    } catch {
+      return this.failAttemptAsExternallyRedeemed(recovering, executing);
+    }
+    return this.completeAttempt(recovering, executing, recovered, true);
+  }
+
+  private async requeueUnpaidSingleAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord<'bolt11'>,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const reason = `Mint quote ${operation.quoteId} is unpaid after ambiguous issuance`;
+    const pending = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      const currentOperation = await tx.mintOperationRepository.getById(operation.id);
+      if (
+        !currentAttempt ||
+        !currentOperation ||
+        currentOperation.state !== 'executing' ||
+        currentOperation.method !== 'bolt11' ||
+        currentOperation.attemptId !== attempt.id
+      ) {
+        throw new Error(`Cannot requeue inconsistent mint issuance attempt ${attempt.id}`);
+      }
+      const updated: PendingMintOperationRecord<'bolt11'> = {
+        ...currentOperation,
+        method: 'bolt11',
+        state: 'pending',
+        attemptId: undefined,
+        outputData: serializeOutputData({ keep: [], send: [] }),
+        error: undefined,
+        terminalFailure: undefined,
+        updatedAt: now,
+      };
+      await tx.mintOperationRepository.update(updated);
+      await tx.mintIssuanceAttemptRepository.update({
+        ...currentAttempt,
+        state: 'rejected',
+        updatedAt: now,
+        recoveredAt: now,
+        terminalError: { message: reason, code: 'QUOTE_UNPAID' },
+      });
+      return updated;
+    });
+
+    this.schedule(pending.id);
+    await this.eventBus.emit('mint-op:requeue', {
+      mintUrl: pending.mintUrl,
+      operationId: pending.id,
+      operation: toMintOperation(pending),
+    });
+    return toMintOperation(pending);
+  }
+
+  private handlerDeps() {
+    return {
+      proofRepository: this.repositories.proofRepository,
+      proofService: this.proofService,
+      walletService: this.walletService,
+      mintService: this.mintService,
+      mintAdapter: this.mintAdapter,
+      eventBus: this.eventBus,
+      logger: this.logger,
+    };
+  }
+
+  private async executeWithLegacyHandler<M extends MintMethod>(
+    operation: ExecutingMintOperationRecord<M>,
+  ): Promise<MintExecutionResult> {
+    const handler = this.mintHandlerProvider!.get(operation.method);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
+    return handler.execute({ ...this.handlerDeps(), operation, wallet });
+  }
+
+  private async recoverWithLegacyHandler<M extends MintMethod>(
+    operation: ExecutingMintOperationRecord<M>,
+  ): Promise<RecoverExecutingResult> {
+    const handler = this.mintHandlerProvider!.get(operation.method);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
+    return handler.recoverExecuting({ ...this.handlerDeps(), operation, wallet });
+  }
+
+  private assertLegacyMethodAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: MintOperationRecord,
+  ): asserts operation is ExecutingMintOperationRecord {
+    if (
+      operation.state !== 'executing' ||
+      operation.method === 'bolt11' ||
+      attempt.method !== operation.method ||
+      attempt.memberOperationIds.length !== 1 ||
+      attempt.memberOperationIds[0] !== operation.id
+    ) {
+      throw new Error(`Attempt ${attempt.id} does not have one matching legacy mint operation`);
+    }
+    if (!this.mintHandlerProvider) {
+      throw new Error(`Attempt ${attempt.id} cannot recover without a mint handler provider`);
+    }
+  }
+
+  private async dispatchLegacyMethodAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: MintOperationRecord,
+  ): Promise<MintOperation> {
+    this.assertLegacyMethodAttempt(attempt, operation);
+    const submitting = await this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!current) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      if (isTerminalAttempt(current)) return current;
+      const now = Date.now();
+      const updated: MintIssuanceAttempt = {
+        ...current,
+        state: 'submitting',
+        submittedAt: current.submittedAt ?? now,
+        updatedAt: now,
+      };
+      await tx.mintIssuanceAttemptRepository.update(updated);
+      return updated;
+    });
+    if (isTerminalAttempt(submitting)) {
+      return this.requireTerminalOperation(operation.id, submitting.id);
+    }
+
+    try {
+      const result = await this.executeWithLegacyHandler(operation);
+      switch (result.status) {
+        case 'ISSUED':
+          this.assertExactProofSet(attempt, result.proofs);
+          return this.completeLegacyMethodAttempt(attempt, operation, result.proofs, false);
+        case 'ALREADY_ISSUED':
+          return this.reconcileLegacyMethodAttempt(submitting, operation);
+        case 'FAILED':
+          return this.failAttempt(submitting, operation, result.error ?? 'Mint execution failed');
+      }
+    } catch (error) {
+      const recovering = await this.markRecovering(submitting, error);
+      if (isTerminalAttempt(recovering)) {
+        return this.requireTerminalOperation(operation.id, recovering.id);
+      }
+      throw error;
+    }
+  }
+
+  private async reconcileLegacyMethodAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: MintOperationRecord,
+  ): Promise<MintOperation> {
+    this.assertLegacyMethodAttempt(attempt, operation);
+    const recovering =
+      attempt.state === 'recovering'
+        ? attempt
+        : await this.markRecovering(attempt, new Error('Legacy recovery join started'));
+    if (isTerminalAttempt(recovering)) {
+      return this.requireTerminalOperation(operation.id, recovering.id);
+    }
+
+    const persisted = await this.getPersistedAttemptProofs(recovering);
+    if (persisted) {
+      return this.completeLegacyMethodAttempt(recovering, operation, persisted, true);
+    }
+
+    const result = await this.recoverWithLegacyHandler(operation);
+    switch (result.status) {
+      case 'FINALIZED': {
+        const proofs = await this.getPersistedAttemptProofs(recovering);
+        if (!proofs) {
+          throw new Error(`Attempt ${attempt.id} finalized without its exact persisted proofs`);
+        }
+        return this.completeLegacyMethodAttempt(recovering, operation, proofs, true);
+      }
+      case 'TERMINAL':
+        return this.failAttempt(recovering, operation, result.error);
+      case 'PENDING':
+        throw new Error(
+          result.error ?? `Legacy mint issuance attempt ${attempt.id} still requires recovery`,
+        );
+    }
+  }
+
+  private async getPersistedAttemptProofs(attempt: MintIssuanceAttempt): Promise<Proof[] | null> {
+    const outputs = deserializeOutputData(attempt.outputData);
+    const secrets = [...outputs.keep, ...outputs.send].map((output) =>
+      new TextDecoder().decode(output.secret),
+    );
+    const proofs = await this.repositories.proofRepository.getProofsBySecrets(
+      attempt.mintUrl,
+      secrets,
+    );
+    return this.matchesExactProofSet(attempt, proofs) ? proofs : null;
+  }
+
+  private async completeLegacyMethodAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord,
+    proofs: Proof[],
+    proofsAlreadyPersisted: boolean,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const coreProofs = mapProofToCoreProof(attempt.mintUrl, 'ready', proofs, {
+      unit: attempt.unit,
+      createdByAttemptId: attempt.id,
+    });
+    const completed = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      const currentOperation = await tx.mintOperationRepository.getById(operation.id);
+      if (!currentAttempt || !currentOperation) {
+        throw new Error(`Mint issuance attempt ${attempt.id} disappeared during reconciliation`);
+      }
+      if (currentOperation.state === 'finalized' && currentAttempt.state === 'succeeded') {
+        return { operation: currentOperation, committed: false };
+      }
+      if (currentOperation.state !== 'executing' || currentOperation.attemptId !== attempt.id) {
+        throw new Error(`Operation ${operation.id} no longer belongs to attempt ${attempt.id}`);
+      }
+      if (!proofsAlreadyPersisted) {
+        await tx.proofRepository.saveProofs(attempt.mintUrl, coreProofs);
+      }
+      const finalized: FinalizedMintOperationRecord = {
+        ...currentOperation,
+        state: 'finalized',
+        outputData: attempt.outputData,
+        attemptId: attempt.id,
+        error: undefined,
+        updatedAt: now,
+      } as FinalizedMintOperationRecord;
+      const succeeded: MintIssuanceAttempt = {
+        ...currentAttempt,
+        state: 'succeeded',
+        updatedAt: now,
+        recoveredAt: proofsAlreadyPersisted ? now : currentAttempt.recoveredAt,
+        terminalError: undefined,
+      };
+      await tx.mintOperationRepository.update(finalized);
+      await tx.mintIssuanceAttemptRepository.update(succeeded);
+      return { operation: finalized, committed: true };
+    });
+
+    if (!completed.committed) return toMintOperation(completed.operation);
+    if (!proofsAlreadyPersisted) {
+      for (const keysetId of new Set(coreProofs.map((proof) => proof.id))) {
+        await this.eventBus.emit('proofs:saved', {
+          mintUrl: attempt.mintUrl,
+          keysetId,
+          proofs: coreProofs.filter((proof) => proof.id === keysetId),
+        });
+      }
+    }
+    await this.eventBus.emit('mint-op:finalized', {
+      mintUrl: completed.operation.mintUrl,
+      operationId: completed.operation.id,
+      operation: toMintOperation(completed.operation),
+    });
+    return toMintOperation(completed.operation);
+  }
+
+  private async failAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord,
+    error: string,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const failed = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      const currentOperation = await tx.mintOperationRepository.getById(operation.id);
+      if (!currentAttempt || !currentOperation || currentOperation.state !== 'executing') {
+        throw new Error(`Cannot fail inconsistent mint issuance attempt ${attempt.id}`);
+      }
+      const failedOperation: FailedMintOperationRecord = {
+        ...currentOperation,
+        state: 'failed',
+        attemptId: attempt.id,
+        outputData: attempt.outputData,
+        error,
+        terminalFailure: { reason: error, observedAt: now },
+        updatedAt: now,
+      } as FailedMintOperationRecord;
+      const failedAttempt: MintIssuanceAttempt = {
+        ...currentAttempt,
+        state: 'failed',
+        updatedAt: now,
+        terminalError: { message: error },
+      };
+      await tx.mintOperationRepository.update(failedOperation);
+      await tx.mintIssuanceAttemptRepository.update(failedAttempt);
+      return failedOperation;
+    });
+    await this.eventBus.emit('mint-op:failed', {
+      mintUrl: failed.mintUrl,
+      operationId: failed.id,
+      operation: toMintOperation(failed),
+    });
+    return toMintOperation(failed);
+  }
+
+  private assertExactProofSet(attempt: MintIssuanceAttempt, proofs: Proof[]): void {
+    if (!this.matchesExactProofSet(attempt, proofs)) {
+      throw new Error(`Mint issuance attempt ${attempt.id} did not return its exact proof set`);
+    }
+  }
+
+  private matchesExactProofSet(attempt: MintIssuanceAttempt, proofs: Proof[]): boolean {
+    const outputData = deserializeOutputData(attempt.outputData);
+    const expected = [...outputData.keep, ...outputData.send]
+      .map((output) => ({
+        secret: new TextDecoder().decode(output.secret),
+        id: output.blindedMessage.id,
+        amount: output.blindedMessage.amount,
+      }))
+      .sort((left, right) => left.secret.localeCompare(right.secret));
+    const received = [...proofs].sort((left, right) => left.secret.localeCompare(right.secret));
+    return !(
+      expected.length === 0 ||
+      expected.length !== received.length ||
+      new Set(received.map((proof) => proof.secret)).size !== received.length ||
+      expected.some((output, index) => {
+        const proof = received[index];
+        return (
+          !proof ||
+          output.secret !== proof.secret ||
+          output.id !== proof.id ||
+          !output.amount.equals(proof.amount)
+        );
+      })
+    );
+  }
+
+  private async completeAttempt(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord<'bolt11'>,
+    proofs: Proof[],
+    recovered: boolean,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const coreProofs = mapProofToCoreProof(attempt.mintUrl, 'ready', proofs, {
+      unit: attempt.unit,
+      createdByAttemptId: attempt.id,
+    });
+    const completed = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      const currentOperation = await tx.mintOperationRepository.getById(operation.id);
+      if (!currentAttempt || !currentOperation) {
+        throw new Error(`Mint issuance attempt ${attempt.id} disappeared during reconciliation`);
+      }
+      if (currentOperation.state === 'finalized' && currentAttempt.state === 'succeeded') {
+        return {
+          operation: currentOperation as FinalizedMintOperationRecord<'bolt11'>,
+          quote: await tx.mintQuoteRepository.getMintQuote(
+            attempt.mintUrl,
+            'bolt11',
+            operation.quoteId,
+          ),
+          quoteChanged: false,
+          committed: false,
+        };
+      }
+      if (currentOperation.state !== 'executing' || currentOperation.attemptId !== attempt.id) {
+        throw new Error(`Operation ${operation.id} no longer belongs to attempt ${attempt.id}`);
+      }
+
+      const quoteBefore = await tx.mintQuoteRepository.getMintQuote(
+        attempt.mintUrl,
+        'bolt11',
+        operation.quoteId,
+      );
+      if (!quoteBefore) {
+        throw new Error(`Mint quote ${operation.quoteId} disappeared during reconciliation`);
+      }
+      await tx.proofRepository.saveProofs(attempt.mintUrl, coreProofs);
+      await tx.mintQuoteRepository.setMintQuoteState(
+        attempt.mintUrl,
+        'bolt11',
+        operation.quoteId,
+        'ISSUED',
+        now,
+      );
+      const finalized: FinalizedMintOperationRecord<'bolt11'> = {
+        ...currentOperation,
+        method: 'bolt11',
+        state: 'finalized',
+        outputData: attempt.outputData,
+        attemptId: attempt.id,
+        error: undefined,
+        updatedAt: now,
+      };
+      const succeeded: MintIssuanceAttempt = {
+        ...currentAttempt,
+        state: 'succeeded',
+        updatedAt: now,
+        recoveredAt: recovered ? now : currentAttempt.recoveredAt,
+        terminalError: undefined,
+      };
+      await tx.mintOperationRepository.update(finalized);
+      await tx.mintIssuanceAttemptRepository.update(succeeded);
+      return {
+        operation: finalized,
+        quote: await tx.mintQuoteRepository.getMintQuote(
+          attempt.mintUrl,
+          'bolt11',
+          operation.quoteId,
+        ),
+        quoteChanged: getMintQuoteRemoteState(quoteBefore) !== 'ISSUED',
+        committed: true,
+      };
+    });
+
+    if (!completed.committed) {
+      return toMintOperation(completed.operation);
+    }
+    for (const keysetId of new Set(coreProofs.map((proof) => proof.id))) {
+      await this.eventBus.emit('proofs:saved', {
+        mintUrl: attempt.mintUrl,
+        keysetId,
+        proofs: coreProofs.filter((proof) => proof.id === keysetId),
+      });
+    }
+    if (completed.quote && completed.quoteChanged) {
+      await this.eventBus.emit('mint-quote:updated', {
+        mintUrl: completed.quote.mintUrl,
+        method: completed.quote.method,
+        quoteId: completed.quote.quoteId,
+        quote: completed.quote,
+      });
+    }
+    await this.eventBus.emit('mint-op:finalized', {
+      mintUrl: completed.operation.mintUrl,
+      operationId: completed.operation.id,
+      operation: toMintOperation(completed.operation),
+    });
+    this.logger?.info('Mint issuance attempt succeeded', {
+      attemptId: attempt.id,
+      memberOperationIds: attempt.memberOperationIds,
+      mintUrl: attempt.mintUrl,
+      method: attempt.method,
+      unit: attempt.unit,
+    });
+    return toMintOperation(completed.operation);
+  }
+
+  private async failAttemptAsExternallyRedeemed(
+    attempt: MintIssuanceAttempt,
+    operation: ExecutingMintOperationRecord<'bolt11'>,
+  ): Promise<MintOperation> {
+    const now = Date.now();
+    const error = `Mint quote ${operation.quoteId} was issued but its exact proofs could not be recovered`;
+    const completed = await this.repositories.withTransaction(async (tx) => {
+      const currentAttempt = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      const currentOperation = await tx.mintOperationRepository.getById(operation.id);
+      if (!currentAttempt || !currentOperation || currentOperation.state !== 'executing') {
+        throw new Error(`Cannot fail inconsistent mint issuance attempt ${attempt.id}`);
+      }
+      const quoteBefore = await tx.mintQuoteRepository.getMintQuote(
+        attempt.mintUrl,
+        'bolt11',
+        operation.quoteId,
+      );
+      if (!quoteBefore) {
+        throw new Error(`Mint quote ${operation.quoteId} disappeared during reconciliation`);
+      }
+      await tx.mintQuoteRepository.setMintQuoteState(
+        attempt.mintUrl,
+        'bolt11',
+        operation.quoteId,
+        'ISSUED',
+        now,
+      );
+      const failedOperation: FailedMintOperationRecord<'bolt11'> = {
+        ...currentOperation,
+        method: 'bolt11',
+        state: 'failed',
+        attemptId: attempt.id,
+        outputData: attempt.outputData,
+        error,
+        terminalFailure: { reason: error, observedAt: now },
+        updatedAt: now,
+      };
+      const failedAttempt: MintIssuanceAttempt = {
+        ...currentAttempt,
+        state: 'failed',
+        updatedAt: now,
+        terminalError: { message: error, code: 'EXACT_PROOFS_UNRECOVERABLE' },
+      };
+      await tx.mintOperationRepository.update(failedOperation);
+      await tx.mintIssuanceAttemptRepository.update(failedAttempt);
+      return {
+        operation: failedOperation,
+        quote: await tx.mintQuoteRepository.getMintQuote(
+          attempt.mintUrl,
+          'bolt11',
+          operation.quoteId,
+        ),
+        quoteChanged: getMintQuoteRemoteState(quoteBefore) !== 'ISSUED',
+      };
+    });
+
+    if (completed.quote && completed.quoteChanged) {
+      await this.eventBus.emit('mint-quote:updated', {
+        mintUrl: completed.quote.mintUrl,
+        method: completed.quote.method,
+        quoteId: completed.quote.quoteId,
+        quote: completed.quote,
+      });
+    }
+    await this.eventBus.emit('mint-op:failed', {
+      mintUrl: completed.operation.mintUrl,
+      operationId: completed.operation.id,
+      operation: toMintOperation(completed.operation),
+    });
+    return toMintOperation(completed.operation);
+  }
+
+  private async markRecovering(
+    attempt: MintIssuanceAttempt,
+    error: unknown,
+  ): Promise<MintIssuanceAttempt> {
+    const recovering = await this.repositories.withTransaction(async (tx) => {
+      const current = await tx.mintIssuanceAttemptRepository.getById(attempt.id);
+      if (!current) throw new Error(`Mint issuance attempt ${attempt.id} no longer exists`);
+      if (isTerminalAttempt(current)) return current;
+
+      const now = Date.now();
+      const updated: MintIssuanceAttempt = {
+        ...current,
+        state: 'recovering',
+        recoveryStartedAt: current.recoveryStartedAt ?? now,
+        updatedAt: now,
+        terminalError: undefined,
+      };
+      await tx.mintIssuanceAttemptRepository.update(updated);
+      return updated;
+    });
+    this.logger?.warn('Mint issuance attempt requires recovery', {
+      attemptId: attempt.id,
+      memberOperationIds: attempt.memberOperationIds,
+      mintUrl: attempt.mintUrl,
+      method: attempt.method,
+      unit: attempt.unit,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return recovering;
+  }
+
+  private toRetryableRecoveryError(error: unknown, context: string): MintIssuanceRetryError {
+    if (error instanceof MintIssuanceRetryError) return error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return new MintIssuanceRetryError(`${context}: ${detail}`, error);
+  }
+
+  private async throwRecoverableAttemptError(
+    attempt: MintIssuanceAttempt,
+    error: Error,
+  ): Promise<never> {
+    const latest = await this.markRecovering(attempt, error);
+    if (isTerminalAttempt(latest)) {
+      throw new Error(`Mint issuance attempt ${latest.id} became terminal during recovery`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+
+  private async requireTerminalOperation(
+    operationId: string,
+    attemptId: string,
+  ): Promise<MintOperation> {
+    const operation = await this.requireOperation(operationId);
+    if (!isTerminalOperation(operation)) {
+      throw new Error(`Terminal attempt ${attemptId} has non-terminal operation ${operationId}`);
+    }
+    return toMintOperation(operation);
+  }
+
+  private async requireOperation(operationId: string): Promise<MintOperationRecord> {
+    const operation = await this.repositories.mintOperationRepository.getById(operationId);
+    if (!operation) throw new Error(`Operation ${operationId} not found`);
+    return operation;
+  }
+}

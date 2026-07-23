@@ -2,7 +2,23 @@ export type { MeltOperation, MeltOperationState } from './melt/MeltOperation.ts'
 export type { MeltMethod, MeltMethodData, MeltMethodInputData } from './melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './melt/MeltMethodHandler.ts';
 export { MeltOperationService } from './melt/MeltOperationService.ts';
-export type { MintOperation, MintOperationState } from './mint/MintOperation.ts';
+export type {
+  MintOperation,
+  MintOperationRecord,
+  MintOperationState,
+} from './mint/MintOperation.ts';
+export type {
+  MintIssuanceAttempt,
+  MintIssuanceAttemptError,
+  MintIssuanceAttemptState,
+  MintIssuanceRequestMetadata,
+  MintIssuanceSigningRequirement,
+} from './mint/MintIssuanceAttempt.ts';
+export {
+  assertMintIssuanceAttemptRecoveryMaterialUnchanged,
+  normalizeMintIssuanceAttempt,
+  RECOVERABLE_MINT_ISSUANCE_ATTEMPT_STATES,
+} from './mint/MintIssuanceAttempt.ts';
 export type {
   MintMethod,
   MintMethodData,

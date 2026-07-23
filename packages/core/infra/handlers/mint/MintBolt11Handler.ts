@@ -5,7 +5,7 @@ import type {
   PrepareContext,
   MintMethodHandler,
   MintExecutionResult,
-  PendingMintOperation,
+  PendingMintOperationRecord,
   RecoverExecutingResult,
   RecoverExecutingContext,
   PendingContext,
@@ -15,7 +15,7 @@ import type {
 import { MintOperationError } from '../../../models/Error';
 import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
-import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import type { MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
@@ -35,7 +35,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
   async prepare(
     ctx: PrepareContext<'bolt11'>,
-  ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
+  ): Promise<PendingMintOperationRecord<'bolt11'> & MintMethodMeta<'bolt11'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
       throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
@@ -59,19 +59,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
 
-    const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
-      ctx.operation.mintUrl,
-      {
-        keep: { amount: quote.amount, unit: ctx.operation.unit },
-        send: { amount: Amount.zero(), unit: ctx.operation.unit },
-      },
-      {},
-    );
-
-    if (outputData.keep.length === 0) {
-      throw new Error('Failed to create deterministic outputs for mint operation');
-    }
-
     return {
       ...ctx.operation,
       quoteId: quote.quote,
@@ -80,7 +67,8 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       request: quote.request,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      outputData: serializeOutputData({ keep: outputData.keep, send: [] }),
+      // Exact outputs are allocated only when the durable issuance attempt is attached.
+      outputData: serializeOutputData({ keep: [], send: [] }),
       state: 'pending',
     };
   }

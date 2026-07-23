@@ -6,6 +6,7 @@ import type {
   PendingMintCheckResult,
   PendingMintOperation,
 } from '@core/operations/mint';
+import { toMintOperation } from '@core/operations/mint';
 import type { MintQuoteRef, QuoteIdentity } from '../models/QuoteIdentity.ts';
 
 /** Mint methods supported by the default `Manager` wiring. */
@@ -54,41 +55,42 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * Prepares a mint operation against an existing canonical quote without executing it.
    */
   async prepare(input: PrepareMintInput<TSupported>): Promise<PendingMintOperation> {
-    return this.mintOperationService.prepare(input.quote, Amount.from(input.amount));
+    return toMintOperation(
+      await this.mintOperationService.prepare(input.quote, Amount.from(input.amount)),
+    );
   }
 
-  /**
-   * Executes a pending mint operation and returns the latest operation state.
-   */
+  /** Executes or joins a mint operation and returns its latest state. */
   async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
     const operation = await this.resolveOperation(operationOrId);
-    if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'pending'.`,
-      );
-    }
-
-    return this.mintOperationService.execute(operation.id);
+    return toMintOperation(await this.mintOperationService.execute(operation.id));
   }
 
   /** Returns a mint operation by ID, or `null` when it does not exist. */
   async get(operationId: string): Promise<MintOperation | null> {
-    return this.mintOperationService.getOperation(operationId);
+    const operation = await this.mintOperationService.getOperation(operationId);
+    return operation ? toMintOperation(operation) : null;
   }
 
   /** Lists mint operations for a mint URL and quote ID. */
   async listByQuote(input: QuoteIdentity): Promise<MintOperation[]> {
-    return this.mintOperationService.listOperationsByQuote(input.mintUrl, input.quoteId);
+    const operations = await this.mintOperationService.listOperationsByQuote(
+      input.mintUrl,
+      input.quoteId,
+    );
+    return operations.map((operation) => toMintOperation(operation));
   }
 
   /** Lists mint operations that are pending redemption or remote settlement. */
   async listPending(): Promise<PendingMintOperation[]> {
-    return this.mintOperationService.getPendingOperations();
+    const operations = await this.mintOperationService.getPendingOperations();
+    return operations.map((operation) => toMintOperation(operation));
   }
 
   /** Lists mint operations that are pending or currently executing. */
   async listInFlight(): Promise<MintOperation[]> {
-    return this.mintOperationService.getInFlightOperations();
+    const operations = await this.mintOperationService.getInFlightOperations();
+    return operations.map((operation) => toMintOperation(operation));
   }
 
   /**
@@ -129,7 +131,7 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    * and terminal operations are returned as-is.
    */
   async finalize(operationId: string): Promise<MintOperation> {
-    return this.mintOperationService.finalize(operationId);
+    return toMintOperation(await this.mintOperationService.finalize(operationId));
   }
 
   private async resolveOperation(operationOrId: MintOperation | string): Promise<MintOperation> {

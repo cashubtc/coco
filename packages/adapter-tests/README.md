@@ -19,6 +19,7 @@ import { describe, it, expect } from 'bun:test';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
+  runMintIssuanceAttemptRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { MyAdapterRepositories } from './src';
 
@@ -49,6 +50,20 @@ runAuthSessionRepositoryContract(
   },
   { describe, it, expect },
 );
+
+runMintIssuanceAttemptRepositoryContract(
+  {
+    createRepositories: async () => {
+      const repositories = new MyAdapterRepositories(options);
+      await repositories.init();
+      return {
+        repositories,
+        dispose: async () => repositories.close?.(),
+      };
+    },
+  },
+  { describe, it, expect },
+);
 ```
 
 The factory is responsible for providing a fresh, isolated repositories
@@ -58,3 +73,5 @@ instance for every test and for cleaning up via `dispose()`.
   repository set.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.
+- `runMintIssuanceAttemptRepositoryContract()` verifies exact recovery material, member lookup,
+  proof provenance, and transactional counter behavior.

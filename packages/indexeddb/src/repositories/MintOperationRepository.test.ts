@@ -46,6 +46,7 @@ describe('IdbMintOperationRepository', () => {
           lastObservedRemoteState: 'PAID',
           lastObservedRemoteStateAt: 5,
           outputDataJson: JSON.stringify({ keep: [], send: [] }),
+          attemptId: 'mint-attempt-1',
         },
       ],
       [
@@ -132,6 +133,7 @@ describe('IdbMintOperationRepository', () => {
       expiry: null,
       pubkey: undefined,
       outputData: { keep: [], send: [] },
+      attemptId: 'mint-attempt-1',
     });
 
     await expect(repository.getById('mint-op-finalized')).resolves.toEqual({

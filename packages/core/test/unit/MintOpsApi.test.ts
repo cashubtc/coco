@@ -44,6 +44,13 @@ type _AssertListByQuoteUsesQuoteIdentity = Assert<
 type _AssertDefaultAllowsBolt12Mint = Assert<
   'bolt12' extends PrepareMintInput['quote']['method'] ? true : false
 >;
+type PublicMintOperation = NonNullable<Awaited<ReturnType<MintOpsApi['get']>>>;
+type _AssertPublicMintOperationOmitsOutputData = Assert<
+  'outputData' extends keyof PublicMintOperation ? false : true
+>;
+type _AssertPublicMintOperationOmitsAttemptId = Assert<
+  'attemptId' extends keyof PublicMintOperation ? false : true
+>;
 
 const makePendingOperation = (): PendingMintOperation => ({
   id: 'op-1',
@@ -58,7 +65,6 @@ const makePendingOperation = (): PendingMintOperation => ({
   unit: 'sat',
   request: 'lnbc1test',
   expiry: Math.floor(Date.now() / 1000) + 3600,
-  outputData: { keep: [], send: [] },
 });
 
 describe('MintOpsApi', () => {
@@ -109,7 +115,7 @@ describe('MintOpsApi', () => {
     });
 
     expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
-    expect(result).toBe(pendingOperation);
+    expect(result).toEqual(pendingOperation);
   });
 
   it('prepare accepts a full canonical quote as the quote ref', async () => {
@@ -163,7 +169,7 @@ describe('MintOpsApi', () => {
     expect(mintOperationService.prepare).toHaveBeenCalledWith(quote, Amount.from(10));
   });
 
-  it('execute only allows pending operations', async () => {
+  it('execute delegates pending, executing, and terminal operations to the service', async () => {
     const result = await api.execute(pendingOperation.id);
 
     expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
@@ -177,7 +183,14 @@ describe('MintOpsApi', () => {
       } as MintOperation,
     );
 
-    await expect(api.execute(pendingOperation.id)).rejects.toThrow("Expected 'pending'");
+    await expect(api.execute(pendingOperation.id)).resolves.toEqual(result);
+
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      result,
+    );
+
+    await expect(api.execute(pendingOperation.id)).resolves.toEqual(result);
+    expect(mintOperationService.execute).toHaveBeenCalledTimes(3);
   });
 
   it('get and listByQuote delegate to the service', async () => {
@@ -186,8 +199,41 @@ describe('MintOpsApi', () => {
 
     expect(mintOperationService.getOperation).toHaveBeenCalledWith(pendingOperation.id);
     expect(mintOperationService.listOperationsByQuote).toHaveBeenCalledWith(mintUrl, quoteId);
-    expect(operation).toBe(pendingOperation);
+    expect(operation).toEqual(pendingOperation);
     expect(operations).toEqual([pendingOperation]);
+  });
+
+  it('returns only allowlisted fields when the service supplies a durable record', async () => {
+    const record = {
+      ...pendingOperation,
+      mintUrl: `${pendingOperation.mintUrl}/`,
+      attemptId: 'attempt-1',
+      counterStart: 42,
+      recoveryMaterial: { secret: 'recovery-secret' },
+    };
+    (mintOperationService.getOperation as unknown as ReturnType<typeof mock>).mockResolvedValueOnce(
+      record,
+    );
+
+    const operation = await api.get(record.id);
+
+    expect(operation?.mintUrl).toBe(pendingOperation.mintUrl);
+    expect(Object.keys(operation ?? {}).sort()).toEqual(
+      [
+        'amount',
+        'createdAt',
+        'expiry',
+        'id',
+        'method',
+        'methodData',
+        'mintUrl',
+        'quoteId',
+        'request',
+        'state',
+        'unit',
+        'updatedAt',
+      ].sort(),
+    );
   });
 
   it('listPending and listInFlight delegate to separate service methods', async () => {
