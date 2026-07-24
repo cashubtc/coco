@@ -36,7 +36,7 @@
     "test:browser": "vitest run"
   },
   "peerDependencies": {
-    "@cashu/cashu-ts": "4.6.1",
+    "@cashu/cashu-ts": "5.0.0-rc.4",
     "typescript": "^5",
     "@cashu/coco-core": "1.0.0"
   }

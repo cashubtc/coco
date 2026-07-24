@@ -66,7 +66,11 @@ describe('MintBolt11Handler', () => {
   const quote: MintQuoteBolt11Response = {
     quote: quoteId,
     request: 'lnbc1test',
+    method: 'bolt11',
     amount: Amount.from(10),
+    amount_paid: Amount.from(10),
+    amount_issued: Amount.zero(),
+    updated_at: null,
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     state: 'PAID',

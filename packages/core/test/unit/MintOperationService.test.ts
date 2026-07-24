@@ -154,12 +154,14 @@ describe('MintOperationService', () => {
     const response: MintQuoteBolt12Response = {
       quote,
       request: 'lno1test',
+      method: 'bolt12',
       amount: amounts.amount ?? null,
       unit: 'sat',
       expiry: amounts.expiry ?? Math.floor(Date.now() / 1000) + 3600,
       pubkey: '02'.padEnd(66, '2'),
       amount_paid: amounts.paid ?? Amount.zero(),
       amount_issued: amounts.issued ?? Amount.zero(),
+      updated_at: null,
     };
 
     await quoteRepo.upsertMintQuote(mintQuoteFromBolt12Response(mintUrl, response));
@@ -1008,17 +1010,31 @@ describe('MintOperationService', () => {
       amount: Amount.from(12),
       unit: 'sat',
       expiry: Math.floor(Date.now() / 1000) + 3600,
+      method: 'bolt11',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.zero(),
+      updated_at: 1_721_234_567,
       state: 'PAID',
     };
 
+    let preparedQuote: MintMethodQuoteSnapshot<'bolt11'> | undefined;
     (handler.prepare as Mock<any>).mockImplementationOnce(
-      async ({ operation }: { operation: InitMintOperation }) => ({
-        ...makePendingOp(operation.id),
-        quoteId: importedQuote.quote,
-        amount: importedQuote.amount,
-        request: importedQuote.request,
-        expiry: importedQuote.expiry,
-      }),
+      async ({
+        operation,
+        importedQuote: quoteSnapshot,
+      }: {
+        operation: InitMintOperation;
+        importedQuote: MintMethodQuoteSnapshot<'bolt11'>;
+      }) => {
+        preparedQuote = quoteSnapshot;
+        return {
+          ...makePendingOp(operation.id),
+          quoteId: importedQuote.quote,
+          amount: importedQuote.amount,
+          request: importedQuote.request,
+          expiry: importedQuote.expiry,
+        };
+      },
     );
 
     const imported = await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', importedQuote);
@@ -1031,6 +1047,12 @@ describe('MintOperationService', () => {
     const importedOperation = pendingEvents[0]?.operation as PendingMintOperation | undefined;
     expect(importedOperation?.quoteId).toBe(importedQuote.quote);
     expect(importedOperation?.request).toBe(importedQuote.request);
+    expect(preparedQuote).toMatchObject({
+      method: 'bolt11',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.zero(),
+      updated_at: null,
+    });
   });
 
   it('prepare uses the persisted canonical quote state after stale import attempts', async () => {
@@ -1045,7 +1067,7 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const staleQuote: MintQuoteBolt11Response = {
+    const staleQuote: MintMethodQuoteSnapshot<'bolt11'> = {
       quote: 'quote-canonical-paid',
       request: 'lnbc1canonical',
       amount: Amount.from(12),
@@ -1060,7 +1082,7 @@ describe('MintOperationService', () => {
         importedQuote,
       }: {
         operation: InitMintOperation;
-        importedQuote: MintQuoteBolt11Response;
+        importedQuote: MintMethodQuoteSnapshot<'bolt11'>;
       }) => ({
         ...makePendingOp(operation.id),
         quoteId: importedQuote.quote,
@@ -1082,7 +1104,7 @@ describe('MintOperationService', () => {
   });
 
   it('quote import delegates unsupported quote units to capability validation', async () => {
-    const importedQuote: MintQuoteBolt11Response = {
+    const importedQuote: MintMethodQuoteSnapshot<'bolt11'> = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
       amount: Amount.from(12),

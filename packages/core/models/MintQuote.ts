@@ -1,9 +1,4 @@
-import {
-  Amount,
-  type AmountLike,
-  type MintQuoteBolt11Response,
-  type MintQuoteBolt12Response,
-} from '@cashu/cashu-ts';
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type {
   MintMethod,
   MintMethodQuoteData,
@@ -106,7 +101,7 @@ export function isMintQuotePending(quote: MintQuote): boolean {
 
 export function mintQuoteFromBolt11Response(
   mintUrl: string,
-  quote: MintQuoteBolt11Response,
+  quote: MintMethodQuoteSnapshot<'bolt11'>,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
   const now = options?.now ?? Date.now();
@@ -135,10 +130,12 @@ export function mintQuoteFromBolt11Response(
 
 export function mintQuoteFromOnchainResponse(
   mintUrl: string,
-  quote: MintQuoteOnchainResponse,
+  quote: MintMethodQuoteSnapshot<'onchain'>,
   options?: { now?: number },
 ): MintQuote<'onchain'> {
   const now = options?.now ?? Date.now();
+  const amountPaid = quote.amount_paid ?? Amount.zero();
+  const amountIssued = quote.amount_issued ?? Amount.zero();
   return {
     mintUrl,
     method: 'onchain',
@@ -151,8 +148,8 @@ export function mintQuoteFromOnchainResponse(
     reusable: true,
     quoteData: {
       pubkey: quote.pubkey,
-      amountPaid: Amount.from(quote.amount_paid),
-      amountIssued: Amount.from(quote.amount_issued),
+      amountPaid: Amount.from(amountPaid),
+      amountIssued: Amount.from(amountIssued),
     },
     lastObservedRemoteStateAt: now,
     createdAt: now,
@@ -162,11 +159,13 @@ export function mintQuoteFromOnchainResponse(
 
 export function mintQuoteFromBolt12Response(
   mintUrl: string,
-  quote: MintQuoteBolt12Response,
+  quote: MintMethodQuoteSnapshot<'bolt12'>,
   options?: { now?: number },
 ): MintQuote<'bolt12'> {
   const now = options?.now ?? Date.now();
   const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
+  const amountPaid = quote.amount_paid ?? Amount.zero();
+  const amountIssued = quote.amount_issued ?? Amount.zero();
   return {
     mintUrl,
     method: 'bolt12',
@@ -181,8 +180,8 @@ export function mintQuoteFromBolt12Response(
     quoteData: {
       pubkey: quote.pubkey,
       amount,
-      amountPaid: Amount.from(quote.amount_paid),
-      amountIssued: Amount.from(quote.amount_issued),
+      amountPaid: Amount.from(amountPaid),
+      amountIssued: Amount.from(amountIssued),
     },
     lastObservedRemoteStateAt: now,
     createdAt: now,
@@ -194,14 +193,20 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
   quote: MintQuote<M>,
 ): MintMethodQuoteSnapshot<M> {
   if (quote.method === 'bolt11') {
+    const isIssued = quote.state === 'ISSUED';
+    const isPaid = quote.state === 'PAID' || isIssued;
     return {
       quote: quote.quoteId,
       request: quote.request,
+      method: 'bolt11',
       amount: quote.amount,
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
       state: quote.state,
+      amount_paid: isPaid ? quote.amount : Amount.zero(),
+      amount_issued: isIssued ? quote.amount : Amount.zero(),
+      updated_at: null,
     } as MintMethodQuoteSnapshot<M>;
   }
 
@@ -209,22 +214,26 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
     return {
       quote: quote.quoteId,
       request: quote.request,
+      method: 'onchain',
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.quoteData.pubkey,
       amount_paid: quote.quoteData.amountPaid,
       amount_issued: quote.quoteData.amountIssued,
+      updated_at: null,
     } as MintMethodQuoteSnapshot<M>;
   }
 
   return {
     quote: quote.quoteId,
     request: quote.request,
+    method: 'bolt12',
     amount: quote.amount,
     unit: quote.unit,
     expiry: quote.expiry,
     pubkey: quote.quoteData.pubkey,
     amount_paid: quote.quoteData.amountPaid,
     amount_issued: quote.quoteData.amountIssued,
+    updated_at: null,
   } as MintMethodQuoteSnapshot<M>;
 }

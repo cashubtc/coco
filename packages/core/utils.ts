@@ -43,6 +43,11 @@ export interface SerializedOutputData {
   send: SerializedOutput[];
 }
 
+export interface ProofStateInput {
+  id: string;
+  secret: string;
+}
+
 // ============================================================================
 // OutputData Serialization Functions
 // ============================================================================
@@ -145,6 +150,15 @@ export function getSecretsFromSerializedOutputData(serialized: SerializedOutputD
     keepSecrets: serialized.keep.map((o) => decodeSecretHex(o.secret)),
     sendSecrets: serialized.send.map((o) => decodeSecretHex(o.secret)),
   };
+}
+
+export function getProofStateInputsFromSerializedOutputs(
+  outputs: SerializedOutput[],
+): ProofStateInput[] {
+  return outputs.map((output) => ({
+    id: output.blindedMessage.id,
+    secret: decodeSecretHex(output.secret),
+  }));
 }
 
 export function mapProofToCoreProof(

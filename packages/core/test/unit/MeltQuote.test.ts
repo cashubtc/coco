@@ -14,6 +14,7 @@ function makeOnchainResponse(
   return {
     quote: 'onchain-melt-quote',
     request: 'bc1ptest',
+    method: 'onchain',
     amount: Amount.from(10),
     unit: 'sat',
     fee_options: [{ fee_index: 1, fee_reserve: Amount.from(2), estimated_blocks: 6 }],

@@ -120,6 +120,10 @@ const prepared = await coco.ops.send.prepare({
 });
 ```
 
+All P2PK lock, cosigner, and refund keys must be valid compressed secp256k1 public keys: 66
+hexadecimal characters beginning with `02` or `03`. cashu-ts v5 rejects x-only 64-character keys
+and malformed or off-curve keys.
+
 The selected mint must advertise NUT-11 support. P2PK payment requests use this
 same structured send method internally: `paymentRequests.prepare()` converts a
 valid NUT-18 P2PK requirement into a P2PK send operation before funds move.

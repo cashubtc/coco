@@ -467,10 +467,14 @@ export class PaymentRequestService {
   }
 
   private requireP2pkOnlyOptions(options: P2PKOptions): P2pkSendOptions {
-    if (options.hashlock !== undefined) {
+    if (options.kind !== 'P2PK') {
       throw new PaymentRequestError('P2PK payment requests cannot include hashlock/HTLC options');
     }
-    return options as P2pkSendOptions;
+    const { kind: _kind, data, pubkeys, ...conditions } = options;
+    return {
+      pubkey: pubkeys?.length ? [data, ...pubkeys] : data,
+      ...conditions,
+    };
   }
 
   private throwMalformedSpendingCondition(

@@ -1,9 +1,4 @@
-import {
-  Amount,
-  type AmountLike,
-  type MintQuoteBolt11Response,
-  type MintQuoteBolt12Response,
-} from '@cashu/cashu-ts';
+import { Amount, type AmountLike } from '@cashu/cashu-ts';
 import type { UnitAmount } from '../amounts.ts';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount } from '../amounts.ts';
 import type { EventBus } from '../events/EventBus';
@@ -110,8 +105,8 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
   if (!hasReusableSettlementAmounts(reusable)) {
     throw new ProofValidationError(`${method} mint quote batch observation lacks settlement data`);
   }
-  const amountPaid = Amount.from(reusable.amount_paid);
-  const amountIssued = Amount.from(reusable.amount_issued);
+  const amountPaid = Amount.from(reusable.amount_paid ?? Amount.zero());
+  const amountIssued = Amount.from(reusable.amount_issued ?? Amount.zero());
   if (amountPaid.lessThan(amountIssued)) {
     throw new ProofValidationError(
       `${method} mint quote batch observation has amount_issued greater than amount_paid`,
@@ -182,8 +177,12 @@ function areMintQuotePollingSnapshotsEqual(
     | MintMethodQuoteSnapshot<'bolt12'>
     | MintMethodQuoteSnapshot<'onchain'>;
   if (
-    !Amount.from(leftReusable.amount_paid).equals(Amount.from(rightReusable.amount_paid)) ||
-    !Amount.from(leftReusable.amount_issued).equals(Amount.from(rightReusable.amount_issued))
+    !Amount.from(leftReusable.amount_paid ?? Amount.zero()).equals(
+      Amount.from(rightReusable.amount_paid ?? Amount.zero()),
+    ) ||
+    !Amount.from(leftReusable.amount_issued ?? Amount.zero()).equals(
+      Amount.from(rightReusable.amount_issued ?? Amount.zero()),
+    )
   ) {
     return false;
   }
@@ -1046,25 +1045,17 @@ export class QuoteLifecycle {
       return mintQuoteFromBolt11Response(mintUrl, {
         ...bolt11Quote,
         amount,
-      } as MintQuoteBolt11Response);
+      });
     }
 
     if (method === 'onchain') {
       const onchainQuote = quote as MintMethodQuoteSnapshot<'onchain'>;
-      return mintQuoteFromOnchainResponse(mintUrl, {
-        ...onchainQuote,
-        amount_paid: onchainQuote.amount_paid ?? Amount.zero(),
-        amount_issued: onchainQuote.amount_issued ?? Amount.zero(),
-      });
+      return mintQuoteFromOnchainResponse(mintUrl, onchainQuote);
     }
 
     if (method === 'bolt12') {
       const bolt12Quote = quote as MintMethodQuoteSnapshot<'bolt12'>;
-      return mintQuoteFromBolt12Response(mintUrl, {
-        ...bolt12Quote,
-        amount_paid: bolt12Quote.amount_paid ?? Amount.zero(),
-        amount_issued: bolt12Quote.amount_issued ?? Amount.zero(),
-      } as MintQuoteBolt12Response);
+      return mintQuoteFromBolt12Response(mintUrl, bolt12Quote);
     }
 
     throw new Error(`Unsupported mint quote import method ${String(method)}`);

@@ -1,4 +1,4 @@
-import type { Wallet, Proof, Token, P2PKOptions } from '@cashu/cashu-ts';
+import type { Wallet, Proof, Token, P2PKOptions, P2PKTag, SigFlag } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -21,10 +21,26 @@ import type {
  * `hashlock` is intentionally unavailable because cashu-ts treats hashlocked
  * P2PK options as HTLC/NUT-14 data, which this send method does not support.
  */
-export type P2pkSendOptions = Omit<P2PKOptions, 'hashlock'> & {
+type LegacyP2pkSendOptions = {
+  pubkey: string | string[];
+  locktime?: number;
+  refundKeys?: string[];
+  requiredSignatures?: number;
+  requiredRefundSignatures?: number;
+  additionalTags?: P2PKTag[];
+  blindKeys?: boolean;
+  sigFlag?: SigFlag;
   /** HTLC/NUT-14 hashlocks are out of scope for P2PK sends. */
   hashlock?: never;
 };
+
+/**
+ * P2PK options accepted by Coco. The legacy v4 shape remains supported and is converted to the v5
+ * NUT-10 envelope before cashu-ts receives it.
+ */
+export type P2pkSendOptions =
+  | (Omit<P2PKOptions, 'kind'> & { kind: 'P2PK' })
+  | LegacyP2pkSendOptions;
 
 /**
  * Payload accepted by the P2PK send method.

@@ -1,4 +1,5 @@
 import {
+  isBlsKeyset,
   Mint,
   Wallet,
   type Keys,
@@ -180,6 +181,7 @@ export class WalletService {
 
     const validKeysets = keysets.filter(
       (keyset) =>
+        !isBlsKeyset(keyset.id) &&
         keyset.keypairs &&
         Object.keys(keyset.keypairs).length > 0 &&
         this.normalizeKeysetUnit(keyset.unit) === normalizedUnit,

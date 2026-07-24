@@ -30,6 +30,7 @@ import {
   serializeOutputData,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
+  getProofStateInputsFromSerializedOutputs,
 } from '../../../utils';
 import type { CoreProof } from '../../../types';
 
@@ -95,7 +96,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       proofCount: selected.length,
       keepOutputs: outputResult.keep.length,
       sendOutputs: sendOT.length,
-      p2pkPubkey: p2pkOptions.pubkey,
+      p2pkPubkey: p2pkOptions.data,
     });
 
     // Reserve the selected proofs
@@ -125,7 +126,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       fee,
       inputProofCount: inputSecrets.length,
-      p2pkPubkey: p2pkOptions.pubkey,
+      p2pkPubkey: p2pkOptions.data,
     });
 
     return prepared;
@@ -158,7 +159,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       keepOutputs: outputData.keep.length,
       sendOutputs: outputData.send.length,
-      p2pkPubkey: p2pkOptions.pubkey,
+      p2pkPubkey: p2pkOptions.data,
     });
 
     const outputConfig: OutputConfig = {
@@ -206,7 +207,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       operationId: operation.id,
       sendProofCount: sendProofs.length,
       keepProofCount: keepProofs.length,
-      p2pkPubkey: p2pkOptions.pubkey,
+      p2pkPubkey: p2pkOptions.data,
     });
 
     return { status: 'PENDING', pending, token };
@@ -217,11 +218,31 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       if ((methodData.options as { hashlock?: unknown }).hashlock !== undefined) {
         throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
       }
-      return methodData.options;
+      if ('kind' in methodData.options) {
+        if (methodData.options.kind !== 'P2PK') {
+          throw new ProofValidationError('P2PK send does not support hashlock/HTLC options');
+        }
+        return methodData.options;
+      }
+
+      const pubkeys = Array.isArray(methodData.options.pubkey)
+        ? methodData.options.pubkey
+        : [methodData.options.pubkey];
+      const [data, ...additionalPubkeys] = pubkeys;
+      if (!data) {
+        throw new ProofValidationError('P2PK send requires at least one lock pubkey');
+      }
+      const { pubkey: _pubkey, hashlock: _hashlock, ...conditions } = methodData.options;
+      return {
+        kind: 'P2PK',
+        data,
+        ...conditions,
+        ...(additionalPubkeys.length > 0 ? { pubkeys: additionalPubkeys } : {}),
+      };
     }
 
     if ('pubkey' in methodData && methodData.pubkey) {
-      return { pubkey: methodData.pubkey };
+      return { kind: 'P2PK', data: methodData.pubkey };
     }
 
     throw new ProofValidationError('P2PK send requires P2PK options or a pubkey in methodData');
@@ -273,7 +294,15 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
     const { operation, wallet, proofRepository, proofService, logger } = ctx;
 
     // P2PK always requires swap - check with mint
-    const proofInputs = operation.inputProofSecrets.map((secret: string) => ({ secret }));
+    const proofInputs = await proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    if (proofInputs.length !== operation.inputProofSecrets.length) {
+      throw new ProofValidationError(
+        'Cannot recover P2PK send operation: missing input proof metadata',
+      );
+    }
     let inputStates;
     try {
       inputStates = await wallet.checkProofsStates(proofInputs);
@@ -362,7 +391,7 @@ export class P2pkSendHandler implements SendMethodHandler<'p2pk'> {
       };
     } else if (outputSecrets.sendSecrets.length > 0) {
       const sendStates = await wallet.checkProofsStates(
-        outputSecrets.sendSecrets.map((secret) => ({ secret })),
+        getProofStateInputsFromSerializedOutputs(operation.outputData.send),
       );
       const allSendProofsSpent = sendStates.every((state) => state.state === 'SPENT');
       if (!allSendProofsSpent) {

@@ -1,10 +1,7 @@
 import {
   Amount,
   type AmountLike,
-  type MeltQuoteBolt11Response,
-  type MeltQuoteBolt12Response,
   type MeltQuoteOnchainFeeOption,
-  type MeltQuoteOnchainResponse,
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type {
@@ -52,7 +49,7 @@ export type MeltQuote<M extends MeltMethod = MeltMethod> = M extends 'onchain'
     ? BoltMeltQuote<M>
     : never;
 
-type BoltMeltQuoteResponse = MeltQuoteBolt11Response | MeltQuoteBolt12Response;
+type BoltMeltQuoteResponse = MeltMethodQuoteSnapshot<'bolt11'> | MeltMethodQuoteSnapshot<'bolt12'>;
 
 function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
   mintUrl: string,
@@ -83,7 +80,7 @@ function meltQuoteFromBoltResponse<M extends BoltMeltMethod>(
 
 export function meltQuoteFromBolt11Response(
   mintUrl: string,
-  quote: MeltQuoteBolt11Response,
+  quote: MeltMethodQuoteSnapshot<'bolt11'>,
   options?: { now?: number },
 ): MeltQuote<'bolt11'> {
   return meltQuoteFromBoltResponse(mintUrl, 'bolt11', quote, options);
@@ -91,7 +88,7 @@ export function meltQuoteFromBolt11Response(
 
 export function meltQuoteFromBolt12Response(
   mintUrl: string,
-  quote: MeltQuoteBolt12Response,
+  quote: MeltMethodQuoteSnapshot<'bolt12'>,
   options?: { now?: number },
 ): MeltQuote<'bolt12'> {
   return meltQuoteFromBoltResponse(mintUrl, 'bolt12', quote, options);
@@ -99,7 +96,7 @@ export function meltQuoteFromBolt12Response(
 
 export function meltQuoteFromOnchainResponse(
   mintUrl: string,
-  quote: MeltQuoteOnchainResponse,
+  quote: MeltMethodQuoteSnapshot<'onchain'>,
   options?: { now?: number },
 ): MeltQuote<'onchain'> {
   const now = options?.now ?? Date.now();
@@ -131,6 +128,7 @@ export function meltQuoteToMethodSnapshot<M extends MeltMethod>(
     return {
       quote: quote.quoteId,
       request: quote.request,
+      method: 'onchain',
       amount: quote.amount,
       unit: quote.unit,
       fee_options: quote.fee_options,
@@ -145,6 +143,7 @@ export function meltQuoteToMethodSnapshot<M extends MeltMethod>(
   return {
     quote: quote.quoteId,
     request: quote.request,
+    method: quote.method,
     amount: quote.amount,
     unit: quote.unit,
     fee_reserve: quote.fee_reserve,

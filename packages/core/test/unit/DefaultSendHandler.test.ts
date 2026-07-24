@@ -170,6 +170,9 @@ describe('DefaultSendHandler', () => {
       getAvailableProofs: mock(() =>
         Promise.resolve([makeCoreProof('proof-100', 100), makeCoreProof('proof-5', 5)]),
       ),
+      getProofsBySecrets: mock((_mintUrl: string, secrets: string[]) =>
+        Promise.resolve(secrets.map((secret) => makeCoreProof(secret))),
+      ),
       getProofsByOperationId: mock(() => Promise.resolve([])),
     } as unknown as ProofRepository;
 
