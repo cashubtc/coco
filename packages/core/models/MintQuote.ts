@@ -1,11 +1,15 @@
 import {
   Amount,
-  type AmountLike,
   type MintQuoteBolt11Response,
   type MintQuoteBolt12Response,
   type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
 import { ProofValidationError } from './Error';
+import {
+  mintQuoteObservationFromBolt11Response,
+  mintQuoteObservationFromBolt12Response,
+  mintQuoteObservationFromOnchainResponse,
+} from './MintQuoteObservationFactory';
 import type {
   MintMethod,
   MintMethodQuoteData,
@@ -129,33 +133,13 @@ export function mintQuoteFromBolt11Response(
   quote: MintQuoteBolt11Response,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
-  const now = options?.now ?? Date.now();
-  const amount = Amount.from(quote.amount as unknown as AmountLike);
-  const amountPaid = Amount.from(quote.amount_paid);
-  const amountIssued = Amount.from(quote.amount_issued);
-
-  assertValidMintQuoteAccounting(quote.quote, amountPaid, amountIssued);
-  return {
-    mintUrl,
-    method: 'bolt11',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    amount,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    state: quote.state,
-    reusable: false,
-    amountPaid,
-    amountIssued,
-    remoteUpdatedAt: quote.updated_at ?? null,
-    quoteData: {
-      amount,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
+  const canonicalQuote = mintQuoteObservationFromBolt11Response(mintUrl, quote, options);
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteFromOnchainResponse(
@@ -163,29 +147,13 @@ export function mintQuoteFromOnchainResponse(
   quote: CashuMintQuoteOnchainResponse,
   options?: { now?: number },
 ): MintQuote<'onchain'> {
-  const now = options?.now ?? Date.now();
-  const canonicalAmountPaid = Amount.from(quote.amount_paid);
-  const canonicalAmountIssued = Amount.from(quote.amount_issued);
-  assertValidMintQuoteAccounting(quote.quote, canonicalAmountPaid, canonicalAmountIssued);
-  return {
-    mintUrl,
-    method: 'onchain',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    reusable: true,
-    amountPaid: canonicalAmountPaid,
-    amountIssued: canonicalAmountIssued,
-    remoteUpdatedAt: quote.updated_at ?? null,
-    quoteData: {
-      pubkey: quote.pubkey,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
+  const canonicalQuote = mintQuoteObservationFromOnchainResponse(mintUrl, quote, options);
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteFromBolt12Response(
@@ -193,32 +161,13 @@ export function mintQuoteFromBolt12Response(
   quote: MintQuoteBolt12Response,
   options?: { now?: number },
 ): MintQuote<'bolt12'> {
-  const now = options?.now ?? Date.now();
-  const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
-  const canonicalAmountPaid = Amount.from(quote.amount_paid);
-  const canonicalAmountIssued = Amount.from(quote.amount_issued);
-  assertValidMintQuoteAccounting(quote.quote, canonicalAmountPaid, canonicalAmountIssued);
-  return {
-    mintUrl,
-    method: 'bolt12',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    amount,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    reusable: true,
-    amountPaid: canonicalAmountPaid,
-    amountIssued: canonicalAmountIssued,
-    remoteUpdatedAt: quote.updated_at ?? null,
-    quoteData: {
-      pubkey: quote.pubkey,
-      amount,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
+  const canonicalQuote = mintQuoteObservationFromBolt12Response(mintUrl, quote, options);
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteToMethodSnapshot<M extends MintMethod>(

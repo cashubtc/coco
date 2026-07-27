@@ -17,6 +17,7 @@ import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
+import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
@@ -30,7 +31,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       'bolt11',
       ctx.quote.quoteId,
     );
-    return mintQuoteFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
+    return mintQuoteObservationFromBolt11Response(ctx.quote.mintUrl, remoteQuote);
   }
 
   async prepare(

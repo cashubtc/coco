@@ -5,6 +5,7 @@ import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from 
 import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
+import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
 import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
@@ -59,7 +60,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       ctx.quote.quoteData.amount,
     );
 
-    return mintQuoteFromBolt12Response(ctx.quote.mintUrl, remoteQuote);
+    return mintQuoteObservationFromBolt12Response(ctx.quote.mintUrl, remoteQuote);
   }
 
   async validateQuoteForPrepare(quote: MintQuote<'bolt12'>): Promise<void> {

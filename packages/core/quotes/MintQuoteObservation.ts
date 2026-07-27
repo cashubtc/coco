@@ -1,55 +1,44 @@
-import type { Amount } from '@cashu/cashu-ts';
 import { isStatefulMintQuote, type MintQuote } from '../models/MintQuote';
 
-const MINT_QUOTE_STATE_RANK: Record<string, number> = {
-  UNPAID: 0,
-  PAID: 1,
-  ISSUED: 2,
-};
-
-export type MintQuoteObservationPersistence = 'persist' | 'retain';
-export type MintQuoteObservationMeaningfulChange = 'changed' | 'unchanged';
+export type MintQuoteObservationDisposition =
+  | 'accepted-meaningful-change'
+  | 'accepted-freshness-only'
+  | 'ignored-stale'
+  | 'ignored-conflicting-accounting'
+  | 'ignored-invalid-background'
+  | 'ignored-unchanged';
 
 export interface MintQuoteObservationResolution {
   resolvedQuote: MintQuote;
-  persistence: MintQuoteObservationPersistence;
-  meaningfulChange: MintQuoteObservationMeaningfulChange;
-}
-
-function isMintQuoteStateDowngrade(existing: MintQuote, incoming: MintQuote): boolean {
-  if (!isStatefulMintQuote(existing) || !isStatefulMintQuote(incoming)) return false;
-  return (
-    (MINT_QUOTE_STATE_RANK[incoming.state] ?? 0) < (MINT_QUOTE_STATE_RANK[existing.state] ?? 0)
-  );
-}
-
-function maxAmount(left: Amount, right: Amount): Amount {
-  return left.greaterThan(right) ? left : right;
-}
-
-function mergeReusableSettlement(existing: MintQuote, incoming: MintQuote): MintQuote {
-  if (!existing.reusable || !incoming.reusable) return incoming;
-
-  return {
-    ...incoming,
-    amountPaid: maxAmount(existing.amountPaid, incoming.amountPaid),
-    amountIssued: maxAmount(existing.amountIssued, incoming.amountIssued),
-  } as MintQuote;
+  disposition: MintQuoteObservationDisposition;
 }
 
 function hasMeaningfulChange(existing: MintQuote | null, incoming: MintQuote): boolean {
   if (!existing) return true;
-  if (existing.method !== incoming.method || existing.quoteId !== incoming.quoteId) return true;
-
-  if (isStatefulMintQuote(existing) && isStatefulMintQuote(incoming)) {
-    return existing.state !== incoming.state;
+  if (
+    existing.method !== incoming.method ||
+    existing.quoteId !== incoming.quoteId ||
+    existing.request !== incoming.request ||
+    existing.unit !== incoming.unit ||
+    existing.expiry !== incoming.expiry ||
+    (existing.pubkey ?? null) !== (incoming.pubkey ?? null) ||
+    existing.reusable !== incoming.reusable ||
+    !existing.amountPaid.equals(incoming.amountPaid) ||
+    !existing.amountIssued.equals(incoming.amountIssued)
+  ) {
+    return true;
   }
 
-  if (existing.reusable && incoming.reusable) {
-    return (
-      !existing.amountPaid.equals(incoming.amountPaid) ||
-      !existing.amountIssued.equals(incoming.amountIssued)
-    );
+  if (isStatefulMintQuote(existing) && isStatefulMintQuote(incoming)) {
+    // Until #387, non-terminal BOLT11 state changes still alter canonical claimability.
+    return !existing.amount.equals(incoming.amount) || existing.state !== incoming.state;
+  }
+
+  if (existing.method === 'bolt12' && incoming.method === 'bolt12') {
+    if (existing.amount === undefined || incoming.amount === undefined) {
+      return existing.amount !== incoming.amount;
+    }
+    return !existing.amount.equals(incoming.amount);
   }
 
   return false;
@@ -60,18 +49,63 @@ export function resolveMintQuoteObservation(
   existing: MintQuote | null,
   incoming: MintQuote,
 ): MintQuoteObservationResolution {
-  if (existing && isMintQuoteStateDowngrade(existing, incoming)) {
+  if (incoming.amountIssued.greaterThan(incoming.amountPaid)) {
     return {
-      resolvedQuote: existing,
-      persistence: 'retain',
-      meaningfulChange: 'unchanged',
+      resolvedQuote: existing ?? incoming,
+      disposition: 'ignored-invalid-background',
     };
   }
 
-  const resolvedQuote = existing ? mergeReusableSettlement(existing, incoming) : incoming;
-  return {
-    resolvedQuote,
-    persistence: 'persist',
-    meaningfulChange: hasMeaningfulChange(existing, resolvedQuote) ? 'changed' : 'unchanged',
-  };
+  if (
+    existing &&
+    existing.remoteUpdatedAt !== null &&
+    incoming.remoteUpdatedAt !== null &&
+    incoming.remoteUpdatedAt < existing.remoteUpdatedAt
+  ) {
+    return {
+      resolvedQuote: existing,
+      disposition: 'ignored-stale',
+    };
+  }
+
+  if (
+    existing &&
+    existing.remoteUpdatedAt !== null &&
+    incoming.remoteUpdatedAt !== null &&
+    incoming.remoteUpdatedAt === existing.remoteUpdatedAt &&
+    (!incoming.amountPaid.equals(existing.amountPaid) ||
+      !incoming.amountIssued.equals(existing.amountIssued))
+  ) {
+    return {
+      resolvedQuote: existing,
+      disposition: 'ignored-conflicting-accounting',
+    };
+  }
+
+  if (existing && (existing.remoteUpdatedAt === null || incoming.remoteUpdatedAt === null)) {
+    const hasNewerAccounting = incoming.amountPaid
+      .add(incoming.amountIssued)
+      .greaterThan(existing.amountPaid.add(existing.amountIssued));
+    const hasMonotonicComponents =
+      !incoming.amountPaid.lessThan(existing.amountPaid) &&
+      !incoming.amountIssued.lessThan(existing.amountIssued);
+    if (!hasNewerAccounting || !hasMonotonicComponents) {
+      return {
+        resolvedQuote: existing,
+        disposition: 'ignored-stale',
+      };
+    }
+  }
+
+  const resolvedQuote =
+    existing && existing.remoteUpdatedAt !== null && incoming.remoteUpdatedAt === null
+      ? { ...incoming, remoteUpdatedAt: existing.remoteUpdatedAt }
+      : incoming;
+  if (hasMeaningfulChange(existing, resolvedQuote)) {
+    return { resolvedQuote, disposition: 'accepted-meaningful-change' };
+  }
+  if (existing?.remoteUpdatedAt === resolvedQuote.remoteUpdatedAt) {
+    return { resolvedQuote: existing, disposition: 'ignored-unchanged' };
+  }
+  return { resolvedQuote, disposition: 'accepted-freshness-only' };
 }

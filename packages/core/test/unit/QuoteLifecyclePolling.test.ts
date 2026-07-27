@@ -478,7 +478,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(storedOnchain?.reusable && storedOnchain.amountPaid.toString()).toBe('30');
   });
 
-  it('rejects canonical identity conflicts and over-issued reusable observations', async () => {
+  it('rejects identity conflicts but ignores over-issued accounting without downgrading', async () => {
     await persistBolt12Quote('bolt12-conflict');
     await persistOnchainQuote('onchain-over-issued');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>)
@@ -517,10 +517,7 @@ describe('QuoteLifecycle mint quote polling', () => {
       status: 'failed',
       failure: { category: 'validation' },
     });
-    expect(overIssued.outcomes[0]).toMatchObject({
-      status: 'failed',
-      failure: { category: 'validation' },
-    });
+    expect(overIssued.outcomes[0]).toMatchObject({ status: 'updated' });
     const storedConflict = await mintQuoteRepository.getMintQuote(
       mintUrl,
       'bolt12',
@@ -534,7 +531,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(storedConflict?.request).toBe('lno1bolt12-conflict');
     expect(storedOverIssued?.reusable && storedOverIssued.amountIssued.toString()).toBe('0');
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt12')).toBe(1);
-    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'onchain')).toBe(1);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'onchain')).toBe(100);
   });
 
   it('classifies request-wide polling failures without losing the original error', async () => {

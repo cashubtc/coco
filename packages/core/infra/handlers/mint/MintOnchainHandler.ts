@@ -13,6 +13,7 @@ import {
   type MintQuote,
   type MintQuoteOnchainResponse,
 } from '../../../models/MintQuote';
+import { mintQuoteObservationFromOnchainResponse } from '../../../models/MintQuoteObservationFactory';
 import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
@@ -54,7 +55,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     this.assertQuoteMatchesRequest(remoteQuote, ctx.quote.quoteData.pubkey, ctx.quote.unit);
 
-    return mintQuoteFromOnchainResponse(ctx.quote.mintUrl, remoteQuote);
+    return mintQuoteObservationFromOnchainResponse(ctx.quote.mintUrl, remoteQuote);
   }
 
   async validateQuoteForPrepare(quote: MintQuote<'onchain'>): Promise<void> {
