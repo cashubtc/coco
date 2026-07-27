@@ -90,11 +90,32 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
   if (method === 'bolt11') {
     const bolt11 = snapshot as MintMethodQuoteSnapshot<'bolt11'>;
     const amount = Amount.from(bolt11.amount as AmountLike);
+    const hasState = bolt11.state !== undefined;
+    const hasAmountPaid = bolt11.amount_paid !== undefined;
+    const hasAmountIssued = bolt11.amount_issued !== undefined;
+    const hasCompleteAccounting = hasAmountPaid && hasAmountIssued;
+    if (amount.isZero() || hasAmountPaid !== hasAmountIssued) {
+      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+    }
     if (
-      amount.isZero() ||
-      (bolt11.state !== 'UNPAID' && bolt11.state !== 'PAID' && bolt11.state !== 'ISSUED')
+      hasState &&
+      bolt11.state !== 'UNPAID' &&
+      bolt11.state !== 'PAID' &&
+      bolt11.state !== 'ISSUED'
     ) {
       throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+    }
+    if (!hasState && !hasCompleteAccounting) {
+      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+    }
+    if (hasCompleteAccounting) {
+      const amountPaid = Amount.from(bolt11.amount_paid!);
+      const amountIssued = Amount.from(bolt11.amount_issued!);
+      if (amountPaid.lessThan(amountIssued)) {
+        throw new ProofValidationError(
+          'BOLT11 mint quote batch observation has amount_issued greater than amount_paid',
+        );
+      }
     }
     return bolt11;
   }
@@ -249,8 +270,8 @@ function getDirectRefreshStateChange(existing: MintQuote, incoming: MintQuote): 
 
   if (existing.reusable && incoming.reusable) {
     return (
-      !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
-      !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
+      !existing.amountPaid.equals(incoming.amountPaid) ||
+      !existing.amountIssued.equals(incoming.amountIssued)
     );
   }
 
@@ -1030,6 +1051,13 @@ export class QuoteLifecycle {
     method: MintMethod,
     quote: MintMethodQuoteSnapshot,
   ): MintQuote {
+    const reportedMethod = (quote as { method?: unknown }).method;
+    if (reportedMethod !== undefined && reportedMethod !== method) {
+      throw new ProofValidationError(
+        `Mint quote ${quote.quote} reports method ${String(reportedMethod)} instead of ${method}`,
+      );
+    }
+
     if (method === 'bolt11') {
       const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
       const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
@@ -1437,6 +1465,9 @@ export class QuoteLifecycle {
       pubkey: operation.pubkey,
       state: 'UNPAID',
       reusable: false,
+      amountPaid: Amount.zero(),
+      amountIssued: Amount.zero(),
+      remoteUpdatedAt: null,
       quoteData: {
         amount: operation.amount,
       },

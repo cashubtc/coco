@@ -427,7 +427,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
-  it('rejects accounting-only BOLT11 polling snapshots without changing canonical state', async () => {
+  it('derives compatibility state for accounting-only BOLT11 polling snapshots', async () => {
     await persistBolt11Quote('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -446,13 +446,13 @@ describe('QuoteLifecycle mint quote polling', () => {
       { mintUrl, quoteId: 'quote-a' },
     ]);
 
-    expect(result.outcomes[0]).toMatchObject({
-      status: 'failed',
-      failure: { category: 'validation' },
-    });
+    expect(result.outcomes[0]).toMatchObject({ status: 'updated' });
     const canonical = await mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a');
-    expect(canonical?.state).toBe('UNPAID');
-    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+    expect(canonical?.state).toBe('PAID');
+    expect(canonical?.amountPaid.toString()).toBe('10');
+    expect(canonical?.amountIssued.toString()).toBe('0');
+    expect(canonical?.remoteUpdatedAt).toBe(1_721_234_567);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
   });
 
   it('records attributable BOLT12 and on-chain observations', async () => {
@@ -498,8 +498,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       'onchain',
       'onchain-quote',
     );
-    expect(storedBolt12?.reusable && storedBolt12.quoteData.amountPaid.toString()).toBe('20');
-    expect(storedOnchain?.reusable && storedOnchain.quoteData.amountPaid.toString()).toBe('30');
+    expect(storedBolt12?.reusable && storedBolt12.amountPaid.toString()).toBe('20');
+    expect(storedOnchain?.reusable && storedOnchain.amountPaid.toString()).toBe('30');
   });
 
   it('rejects canonical identity conflicts and over-issued reusable observations', async () => {
@@ -556,9 +556,7 @@ describe('QuoteLifecycle mint quote polling', () => {
       'onchain-over-issued',
     );
     expect(storedConflict?.request).toBe('lno1bolt12-conflict');
-    expect(storedOverIssued?.reusable && storedOverIssued.quoteData.amountIssued.toString()).toBe(
-      '0',
-    );
+    expect(storedOverIssued?.reusable && storedOverIssued.amountIssued.toString()).toBe('0');
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt12')).toBe(1);
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'onchain')).toBe(1);
   });

@@ -1076,4 +1076,64 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
     coco_cashu_payment_request_receive_attempts:
       '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
   });
+
+  // Version 32: Persist canonical Mint Quote Accounting as first-class fields.
+  db.version(32)
+    .stores({
+      coco_cashu_mints: '&mintUrl, name, updatedAt, trusted',
+      coco_cashu_keysets: '&[mintUrl+id], mintUrl, id, updatedAt, unit',
+      coco_cashu_counters: '&[mintUrl+keysetId]',
+      coco_cashu_proofs:
+        '&[mintUrl+secret], [mintUrl+state], [mintUrl+unit+state], [mintUrl+id+state], [mintUrl+id+unit+state], [mintUrl+unit+id+state], [unit+state], state, mintUrl, unit, id, usedByOperationId, createdByOperationId',
+      coco_cashu_mint_quotes: '&[mintUrl+quote], state, mintUrl',
+      coco_cashu_canonical_mint_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_melt_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+      coco_cashu_history:
+        '++id, mintUrl, type, createdAt, [mintUrl+quoteId+type], [mintUrl+operationId]',
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+      coco_cashu_send_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_melt_operations: '&id, state, mintUrl, createdAt, [mintUrl+quoteId]',
+      coco_cashu_receive_operations: '&id, state, mintUrl, createdAt',
+      coco_cashu_auth_sessions: '&mintUrl',
+      coco_cashu_mint_operations:
+        '&id, state, mintUrl, createdAt, [mintUrl+quoteId], [mintUrl+method+quoteId]',
+      coco_cashu_payment_request_receive_operations: '&id, state, requestId',
+      coco_cashu_payment_request_receive_attempts:
+        '&id, requestOperationId, requestId, state, &[requestOperationId+payloadHash], [requestId+payloadHash], &transportMessageId, &receiveOperationId',
+    })
+    .upgrade(async (tx) => {
+      await tx
+        .table('coco_cashu_canonical_mint_quotes')
+        .toCollection()
+        .modify(
+          (row: {
+            state?: string | null;
+            amount?: unknown;
+            reusable?: number;
+            quoteDataJson?: string | null;
+            amountPaid?: string;
+            amountIssued?: string;
+            remoteUpdatedAt?: number | null;
+          }) => {
+            const quoteData = row.quoteDataJson
+              ? (JSON.parse(row.quoteDataJson) as Record<string, unknown>)
+              : {};
+            const amount = normalizeStoredAmount(row.amount) ?? '0';
+
+            if (row.reusable === 1) {
+              row.amountPaid = normalizeStoredAmount(quoteData.amountPaid) ?? '0';
+              row.amountIssued = normalizeStoredAmount(quoteData.amountIssued) ?? '0';
+              delete quoteData.amountPaid;
+              delete quoteData.amountIssued;
+              row.quoteDataJson = stringifyJson(quoteData);
+            } else {
+              row.amountPaid = row.state === 'PAID' || row.state === 'ISSUED' ? amount : '0';
+              row.amountIssued = row.state === 'ISSUED' ? amount : '0';
+            }
+            row.remoteUpdatedAt = null;
+          },
+        );
+    });
 }

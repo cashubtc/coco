@@ -32,11 +32,8 @@ function mergeReusableSettlement(existing: MintQuote, incoming: MintQuote): Mint
 
   return {
     ...incoming,
-    quoteData: {
-      ...incoming.quoteData,
-      amountPaid: maxAmount(existing.quoteData.amountPaid, incoming.quoteData.amountPaid),
-      amountIssued: maxAmount(existing.quoteData.amountIssued, incoming.quoteData.amountIssued),
-    },
+    amountPaid: maxAmount(existing.amountPaid, incoming.amountPaid),
+    amountIssued: maxAmount(existing.amountIssued, incoming.amountIssued),
   } as MintQuote;
 }
 
@@ -50,8 +47,8 @@ function hasMeaningfulChange(existing: MintQuote | null, incoming: MintQuote): b
 
   if (existing.reusable && incoming.reusable) {
     return (
-      !existing.quoteData.amountPaid.equals(incoming.quoteData.amountPaid) ||
-      !existing.quoteData.amountIssued.equals(incoming.quoteData.amountIssued)
+      !existing.amountPaid.equals(incoming.amountPaid) ||
+      !existing.amountIssued.equals(incoming.amountIssued)
     );
   }
 

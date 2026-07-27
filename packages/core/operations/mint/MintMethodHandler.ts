@@ -31,15 +31,16 @@ type OptionalV5QuoteBase<T extends MintQuoteBaseResponse> = Omit<
   Partial<Pick<MintQuoteBaseResponse, 'method' | 'amount_paid' | 'amount_issued' | 'updated_at'>>;
 
 /**
- * Temporary compatibility for caller-provided v4 snapshots at Quote Lifecycle's public import
- * boundary. MintAdapter responses are normalized by cashu-ts v5. Slice #299 can retire the
- * optional accounting fields once Coco's canonical mint quote model owns them.
+ * Compatibility for caller-provided legacy snapshots at Quote Lifecycle's public import boundary.
+ * MintAdapter responses are normalized by cashu-ts v5; Coco derives missing canonical BOLT11
+ * accounting or compatibility state after the snapshot crosses that boundary.
  */
 export type CompatibleMintQuoteBolt11Response = Omit<
   OptionalV5QuoteBase<MintQuoteBolt11Response>,
-  'amount'
+  'amount' | 'state'
 > & {
   amount: Amount;
+  state?: MintQuoteBolt11Response['state'];
 };
 export type CompatibleMintQuoteOnchainResponse = OptionalV5QuoteBase<MintQuoteOnchainResponse>;
 export type CompatibleMintQuoteBolt12Response = Omit<
@@ -70,8 +71,6 @@ export interface MintMethodDefinitions {
     };
     quoteData: {
       pubkey: string;
-      amountPaid: Amount;
-      amountIssued: Amount;
     };
     remoteState: never;
     quote: CompatibleMintQuoteOnchainResponse;
@@ -86,8 +85,6 @@ export interface MintMethodDefinitions {
     quoteData: {
       pubkey: string;
       amount?: Amount;
-      amountPaid: Amount;
-      amountIssued: Amount;
     };
     remoteState: never;
     quote: CompatibleMintQuoteBolt12Response;

@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import {
   deserializeAmount,
   normalizeMintUrl,
@@ -28,28 +29,29 @@ export class SqliteLegacyMintQuoteRepository implements LegacyMintQuoteRepositor
     );
 
     const now = Date.now();
-    return rows.map(
-      (row) =>
-        ({
-          mintUrl: row.mintUrl,
-          method: 'bolt11',
-          quoteId: row.quote,
-          quote: row.quote,
-          state: row.state as MintQuote<'bolt11'>['state'],
-          request: row.request,
-          amount: deserializeAmount(row.amount),
-          unit: row.unit,
-          expiry: row.expiry,
-          pubkey: row.pubkey ?? undefined,
-          lastObservedRemoteState: row.state as MintQuote<'bolt11'>['state'],
-          lastObservedRemoteStateAt: now,
-          reusable: false,
-          quoteData: {
-            amount: deserializeAmount(row.amount),
-          },
-          createdAt: now,
-          updatedAt: now,
-        }) satisfies MintQuote,
-    );
+    return rows.map((row) => {
+      const amount = deserializeAmount(row.amount);
+      return {
+        mintUrl: row.mintUrl,
+        method: 'bolt11',
+        quoteId: row.quote,
+        quote: row.quote,
+        state: row.state as MintQuote<'bolt11'>['state'],
+        request: row.request,
+        amount,
+        unit: row.unit,
+        expiry: row.expiry,
+        pubkey: row.pubkey ?? undefined,
+        reusable: false,
+        amountPaid: row.state === 'PAID' ? amount : Amount.zero(),
+        amountIssued: Amount.zero(),
+        remoteUpdatedAt: null,
+        quoteData: {
+          amount,
+        },
+        createdAt: now,
+        updatedAt: now,
+      } satisfies MintQuote;
+    });
   }
 }

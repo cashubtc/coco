@@ -122,6 +122,9 @@ describe('MintBolt11Handler', () => {
       expiry: quote.expiry,
       state: quote.state,
       reusable: false,
+      amountPaid: quote.state === 'UNPAID' ? Amount.zero() : quote.amount,
+      amountIssued: quote.state === 'ISSUED' ? quote.amount : Amount.zero(),
+      remoteUpdatedAt: quote.updated_at ?? null,
       quoteData: {
         amount: quote.amount,
       },

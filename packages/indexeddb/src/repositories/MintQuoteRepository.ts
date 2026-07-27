@@ -18,8 +18,6 @@ import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 type SerializedQuoteData = {
   amount?: string | number;
   pubkey?: string;
-  amountPaid?: string | number;
-  amountIssued?: string | number;
 };
 
 function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
@@ -48,20 +46,27 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
       expiry: row.expiry,
       pubkey,
       reusable: true,
+      amountPaid: deserializeAmount(row.amountPaid),
+      amountIssued: deserializeAmount(row.amountIssued),
+      remoteUpdatedAt: row.remoteUpdatedAt ?? null,
       quoteData: {
         pubkey,
         ...(amount !== undefined ? { amount } : {}),
-        amountPaid: deserializeAmount(quoteData.amountPaid ?? 0),
-        amountIssued: deserializeAmount(quoteData.amountIssued ?? 0),
       },
-      lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } as MintQuote;
   }
 
   const amount = deserializeAmount(quoteData.amount ?? row.amount ?? 0);
-  const state = (row.state ?? row.lastObservedRemoteState ?? 'UNPAID') as MintMethodRemoteState;
+  const amountPaid = deserializeAmount(row.amountPaid);
+  const amountIssued = deserializeAmount(row.amountIssued);
+  const state = (row.state ??
+    (amountPaid.isZero() && amountIssued.isZero()
+      ? 'UNPAID'
+      : amountPaid.greaterThan(amountIssued)
+        ? 'PAID'
+        : 'ISSUED')) as MintMethodRemoteState;
   return {
     mintUrl: row.mintUrl,
     method: 'bolt11',
@@ -73,9 +78,10 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
     unit: row.unit,
     expiry: row.expiry,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: (row.lastObservedRemoteState ?? state) as MintMethodRemoteState,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     reusable: false,
+    amountPaid,
+    amountIssued,
+    remoteUpdatedAt: row.remoteUpdatedAt ?? null,
     quoteData: { amount },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -92,15 +98,11 @@ function serializeQuoteData(quote: MintQuote): string {
     return stringifyJson({
       pubkey: quote.quoteData.pubkey,
       ...(amount !== undefined ? { amount: serializeAmount(amount) } : {}),
-      amountPaid: serializeAmount(quote.quoteData.amountPaid),
-      amountIssued: serializeAmount(quote.quoteData.amountIssued),
     });
   }
 
   return stringifyJson({
     pubkey: quote.quoteData.pubkey,
-    amountPaid: serializeAmount(quote.quoteData.amountPaid),
-    amountIssued: serializeAmount(quote.quoteData.amountIssued),
   });
 }
 
@@ -165,8 +167,9 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       expiry: quote.expiry,
       pubkey: quote.pubkey ?? null,
       quoteDataJson: serializeQuoteData(quote),
-      lastObservedRemoteState: getMintQuoteRemoteState(quote) ?? null,
-      lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
+      amountPaid: serializeAmount(quote.amountPaid),
+      amountIssued: serializeAmount(quote.amountIssued),
+      remoteUpdatedAt: quote.remoteUpdatedAt,
       reusable: quote.reusable ? 1 : 0,
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt || now,
@@ -188,8 +191,8 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
     await (this.db as any).table('coco_cashu_canonical_mint_quotes').put({
       ...existing,
       state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
+      amountPaid: state === 'UNPAID' ? '0' : existing.amount,
+      amountIssued: state === 'ISSUED' ? existing.amount : '0',
       updatedAt: observedAt,
     } as MintQuoteRow);
   }
