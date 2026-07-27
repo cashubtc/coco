@@ -102,6 +102,23 @@ describe('indexeddb quote storage constraints', () => {
         createdAt: 1,
         updatedAt: 2,
       },
+      {
+        mintUrl: 'https://mint.test',
+        method: 'onchain',
+        quoteId: 'legacy-malformed',
+        state: null,
+        request: 'bc1qmalformed',
+        amount: null,
+        unit: 'sat',
+        expiry: null,
+        pubkey: '02',
+        quoteDataJson: '{not-json',
+        lastObservedRemoteState: null,
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      },
     ]);
     legacy.close();
 
@@ -118,6 +135,11 @@ describe('indexeddb quote storage constraints', () => {
         'onchain',
         'legacy-reusable',
       );
+      const malformed = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'onchain',
+        'legacy-malformed',
+      );
 
       expect(paid?.amountPaid.toString()).toBe('10');
       expect(paid?.amountIssued.toString()).toBe('0');
@@ -125,6 +147,9 @@ describe('indexeddb quote storage constraints', () => {
       expect(reusable?.amountPaid.toString()).toBe('21');
       expect(reusable?.amountIssued.toString()).toBe('8');
       expect(reusable?.remoteUpdatedAt).toBe(null);
+      expect(malformed?.amountPaid.toString()).toBe('0');
+      expect(malformed?.amountIssued.toString()).toBe('0');
+      expect(malformed?.remoteUpdatedAt).toBe(null);
     } finally {
       repositories.db.close();
       await Dexie.delete(dbName);

@@ -200,6 +200,7 @@ describe('shared SQL schema migrations', () => {
           JSON.stringify({ pubkey: '02', amountPaid: '21', amountIssued: '8' }),
           1,
         ],
+        ['onchain-malformed', 'onchain', null, null, '{not-json', 1],
       ] as const;
 
       for (const [quoteId, method, state, amount, quoteDataJson, reusable] of rows) {
@@ -255,6 +256,12 @@ describe('shared SQL schema migrations', () => {
         },
         {
           quoteId: 'bolt11-unpaid',
+          amountPaid: '0',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'onchain-malformed',
           amountPaid: '0',
           amountIssued: '0',
           remoteUpdatedAt: null,

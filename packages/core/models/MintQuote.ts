@@ -23,7 +23,9 @@ interface MintQuoteBase<M extends MintMethod> {
   expiry: number | null;
   pubkey?: string;
   reusable: boolean;
+  /** Mint-reported cumulative amount paid toward this quote. */
   amountPaid: Amount;
+  /** Mint-reported cumulative amount issued from this quote. */
   amountIssued: Amount;
   /**
    * Mint-reported Remote Quote Update Time in protocol seconds, or `null` when unavailable.
@@ -116,11 +118,23 @@ function assertValidMintQuoteAccounting(
   }
 }
 
+function assertMintQuoteMethod(
+  quote: { quote: string; method?: unknown },
+  expectedMethod: MintMethod,
+): void {
+  if (quote.method !== undefined && quote.method !== expectedMethod) {
+    throw new ProofValidationError(
+      `Mint quote ${quote.quote} reports method ${String(quote.method)} instead of ${expectedMethod}`,
+    );
+  }
+}
+
 export function mintQuoteFromBolt11Response(
   mintUrl: string,
   quote: MintMethodQuoteSnapshot<'bolt11'>,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
+  assertMintQuoteMethod(quote, 'bolt11');
   const now = options?.now ?? Date.now();
   const amount = Amount.from(quote.amount as unknown as AmountLike);
   const hasAccounting = quote.amount_paid !== undefined || quote.amount_issued !== undefined;
@@ -177,6 +191,7 @@ export function mintQuoteFromOnchainResponse(
   quote: MintMethodQuoteSnapshot<'onchain'>,
   options?: { now?: number },
 ): MintQuote<'onchain'> {
+  assertMintQuoteMethod(quote, 'onchain');
   const now = options?.now ?? Date.now();
   const amountPaid = quote.amount_paid ?? Amount.zero();
   const amountIssued = quote.amount_issued ?? Amount.zero();
@@ -209,6 +224,7 @@ export function mintQuoteFromBolt12Response(
   quote: MintMethodQuoteSnapshot<'bolt12'>,
   options?: { now?: number },
 ): MintQuote<'bolt12'> {
+  assertMintQuoteMethod(quote, 'bolt12');
   const now = options?.now ?? Date.now();
   const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
   const amountPaid = quote.amount_paid ?? Amount.zero();

@@ -6,6 +6,19 @@ function normalizeStoredAmount(value: unknown): string | null | undefined {
   return String(value);
 }
 
+function parseStoredJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function normalizeStoredUnit(value: unknown): string {
   if (typeof value !== 'string' || value.trim().length === 0) return 'sat';
   return value.trim().toLowerCase();
@@ -1117,9 +1130,7 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
             amountIssued?: string;
             remoteUpdatedAt?: number | null;
           }) => {
-            const quoteData = row.quoteDataJson
-              ? (JSON.parse(row.quoteDataJson) as Record<string, unknown>)
-              : {};
+            const quoteData = parseStoredJsonObject(row.quoteDataJson);
             const amount = normalizeStoredAmount(row.amount) ?? '0';
 
             if (row.reusable === 1) {

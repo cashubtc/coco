@@ -1459,14 +1459,26 @@ const MIGRATIONS: readonly Migration[] = [
       UPDATE coco_cashu_canonical_mint_quotes
       SET amountPaid = CASE
             WHEN reusable = 1
-              THEN COALESCE(CAST(json_extract(quoteDataJson, '$.amountPaid') AS TEXT), '0')
+              THEN COALESCE(
+                CAST(json_extract(
+                  CASE WHEN json_valid(quoteDataJson) THEN quoteDataJson ELSE '{}' END,
+                  '$.amountPaid'
+                ) AS TEXT),
+                '0'
+              )
             WHEN state IN ('PAID', 'ISSUED')
               THEN COALESCE(CAST(amount AS TEXT), '0')
             ELSE '0'
           END,
           amountIssued = CASE
             WHEN reusable = 1
-              THEN COALESCE(CAST(json_extract(quoteDataJson, '$.amountIssued') AS TEXT), '0')
+              THEN COALESCE(
+                CAST(json_extract(
+                  CASE WHEN json_valid(quoteDataJson) THEN quoteDataJson ELSE '{}' END,
+                  '$.amountIssued'
+                ) AS TEXT),
+                '0'
+              )
             WHEN state = 'ISSUED'
               THEN COALESCE(CAST(amount AS TEXT), '0')
             ELSE '0'
