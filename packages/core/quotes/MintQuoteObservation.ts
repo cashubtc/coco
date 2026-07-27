@@ -1,5 +1,11 @@
 import { isStatefulMintQuote, type MintQuote } from '../models/MintQuote';
 
+const MINT_QUOTE_STATE_RANK = {
+  UNPAID: 0,
+  PAID: 1,
+  ISSUED: 2,
+} as const;
+
 export type MintQuoteObservationDisposition =
   | 'accepted-meaningful-change'
   | 'accepted-freshness-only'
@@ -11,6 +17,21 @@ export type MintQuoteObservationDisposition =
 export interface MintQuoteObservationResolution {
   resolvedQuote: MintQuote;
   disposition: MintQuoteObservationDisposition;
+}
+
+function isMintQuoteStateDowngrade(existing: MintQuote, incoming: MintQuote): boolean {
+  return (
+    isStatefulMintQuote(existing) &&
+    isStatefulMintQuote(incoming) &&
+    MINT_QUOTE_STATE_RANK[incoming.state] < MINT_QUOTE_STATE_RANK[existing.state]
+  );
+}
+
+function hasAccountingComponentDecrease(existing: MintQuote, incoming: MintQuote): boolean {
+  return (
+    incoming.amountPaid.lessThan(existing.amountPaid) ||
+    incoming.amountIssued.lessThan(existing.amountIssued)
+  );
 }
 
 function hasMeaningfulChange(existing: MintQuote | null, incoming: MintQuote): boolean {
@@ -82,14 +103,22 @@ export function resolveMintQuoteObservation(
     };
   }
 
+  if (
+    existing &&
+    (hasAccountingComponentDecrease(existing, incoming) ||
+      isMintQuoteStateDowngrade(existing, incoming))
+  ) {
+    return {
+      resolvedQuote: existing,
+      disposition: 'ignored-stale',
+    };
+  }
+
   if (existing && (existing.remoteUpdatedAt === null || incoming.remoteUpdatedAt === null)) {
     const hasNewerAccounting = incoming.amountPaid
       .add(incoming.amountIssued)
       .greaterThan(existing.amountPaid.add(existing.amountIssued));
-    const hasMonotonicComponents =
-      !incoming.amountPaid.lessThan(existing.amountPaid) &&
-      !incoming.amountIssued.lessThan(existing.amountIssued);
-    if (!hasNewerAccounting || !hasMonotonicComponents) {
+    if (!hasNewerAccounting) {
       return {
         resolvedQuote: existing,
         disposition: 'ignored-stale',

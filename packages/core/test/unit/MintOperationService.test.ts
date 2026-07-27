@@ -896,7 +896,7 @@ describe('MintOperationService', () => {
     );
   });
 
-  it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection without emitting', async () => {
+  it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection at a newer update time', async () => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromBolt11Response(mintUrl, {
         quote: 'quote-snapshot-paid',
@@ -905,6 +905,7 @@ describe('MintOperationService', () => {
         unit: 'sat',
         expiry: Math.floor(Date.now() / 1000) + 3600,
         state: 'PAID',
+        updated_at: 20,
       }),
     );
     const before = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
@@ -923,6 +924,7 @@ describe('MintOperationService', () => {
         unit: 'sat',
         expiry: Math.floor(Date.now() / 1000) + 7200,
         state: 'UNPAID',
+        updated_at: 21,
       }),
     );
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
@@ -931,6 +933,7 @@ describe('MintOperationService', () => {
     expect(observed.request).toBe('lnbc1canonical');
     expect(stored?.state).toBe('PAID');
     expect(stored?.request).toBe('lnbc1canonical');
+    expect(stored?.remoteUpdatedAt).toBe(20);
     expect(stored?.updatedAt).toBe(before?.updatedAt);
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
@@ -1008,6 +1011,50 @@ describe('MintOperationService', () => {
     expect(stored?.updatedAt).toBe(before?.updatedAt);
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
+
+  for (const accountingDecrease of [
+    { field: 'amount paid', paid: 9, issued: 2 },
+    { field: 'amount issued', paid: 10, issued: 1 },
+  ]) {
+    it(`recordMintQuoteSnapshot ignores newer timestamps with decreased ${accountingDecrease.field}`, async () => {
+      const quoteIdSuffix = accountingDecrease.field.replace(' ', '-');
+      const onchainQuoteId = `onchain-quote-newer-decreased-${quoteIdSuffix}`;
+      await persistOnchainQuote(onchainQuoteId, {
+        paid: Amount.from(10),
+        issued: Amount.from(2),
+        remoteUpdatedAt: 20,
+      });
+      const before = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+      const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+      eventBus.on('mint-quote:updated', (event) => {
+        quoteUpdatedEvents.push(event);
+      });
+
+      const observed = await quoteLifecycle.recordMintQuoteSnapshot(
+        mintUrl,
+        'onchain',
+        cashuNormalizedOnchainFixture({
+          quote: onchainQuoteId,
+          request: 'bc1qtest',
+          unit: 'sat',
+          expiry: before?.expiry ?? null,
+          pubkey: '02'.padEnd(66, '1'),
+          amount_paid: Amount.from(accountingDecrease.paid),
+          amount_issued: Amount.from(accountingDecrease.issued),
+          updated_at: 21,
+        }),
+      );
+      const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+      expect(observed.amountPaid.toString()).toBe('10');
+      expect(observed.amountIssued.toString()).toBe('2');
+      expect(observed.remoteUpdatedAt).toBe(20);
+      expect(stored?.amountPaid.toString()).toBe('10');
+      expect(stored?.amountIssued.toString()).toBe('2');
+      expect(stored?.updatedAt).toBe(before?.updatedAt);
+      expect(quoteUpdatedEvents).toHaveLength(0);
+    });
+  }
 
   it('recordMintQuoteSnapshot warns and ignores accounting conflicts at an equal update time', async () => {
     const onchainQuoteId = 'onchain-quote-equal-timestamp';
