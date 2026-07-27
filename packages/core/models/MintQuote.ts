@@ -1,4 +1,10 @@
-import { Amount, type AmountLike } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type AmountLike,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
+} from '@cashu/cashu-ts';
 import { ProofValidationError } from './Error';
 import type {
   MintMethod,
@@ -7,7 +13,7 @@ import type {
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
 
-export type MintQuoteOnchainResponse = MintMethodQuoteSnapshot<'onchain'>;
+export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
 interface MintQuoteBase<M extends MintMethod> {
   mintUrl: string;
@@ -118,51 +124,17 @@ function assertValidMintQuoteAccounting(
   }
 }
 
-function assertMintQuoteMethod(
-  quote: { quote: string; method?: unknown },
-  expectedMethod: MintMethod,
-): void {
-  if (quote.method !== undefined && quote.method !== expectedMethod) {
-    throw new ProofValidationError(
-      `Mint quote ${quote.quote} reports method ${String(quote.method)} instead of ${expectedMethod}`,
-    );
-  }
-}
-
 export function mintQuoteFromBolt11Response(
   mintUrl: string,
-  quote: MintMethodQuoteSnapshot<'bolt11'>,
+  quote: MintQuoteBolt11Response,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
-  assertMintQuoteMethod(quote, 'bolt11');
   const now = options?.now ?? Date.now();
   const amount = Amount.from(quote.amount as unknown as AmountLike);
-  const hasAccounting = quote.amount_paid !== undefined || quote.amount_issued !== undefined;
-  let amountPaid: Amount;
-  let amountIssued: Amount;
-
-  if (hasAccounting) {
-    if (quote.amount_paid === undefined || quote.amount_issued === undefined) {
-      throw new ProofValidationError(`Mint quote ${quote.quote} has incomplete accounting`);
-    }
-    amountPaid = Amount.from(quote.amount_paid);
-    amountIssued = Amount.from(quote.amount_issued);
-  } else {
-    const isIssued = quote.state === 'ISSUED';
-    const isPaid = quote.state === 'PAID' || isIssued;
-    amountPaid = isPaid ? amount : Amount.zero();
-    amountIssued = isIssued ? amount : Amount.zero();
-  }
+  const amountPaid = Amount.from(quote.amount_paid);
+  const amountIssued = Amount.from(quote.amount_issued);
 
   assertValidMintQuoteAccounting(quote.quote, amountPaid, amountIssued);
-
-  const state =
-    quote.state ??
-    (amountPaid.isZero() && amountIssued.isZero()
-      ? 'UNPAID'
-      : amountPaid.greaterThan(amountIssued)
-        ? 'PAID'
-        : 'ISSUED');
   return {
     mintUrl,
     method: 'bolt11',
@@ -173,7 +145,7 @@ export function mintQuoteFromBolt11Response(
     amount,
     expiry: quote.expiry,
     pubkey: quote.pubkey,
-    state,
+    state: quote.state,
     reusable: false,
     amountPaid,
     amountIssued,
@@ -188,15 +160,12 @@ export function mintQuoteFromBolt11Response(
 
 export function mintQuoteFromOnchainResponse(
   mintUrl: string,
-  quote: MintMethodQuoteSnapshot<'onchain'>,
+  quote: CashuMintQuoteOnchainResponse,
   options?: { now?: number },
 ): MintQuote<'onchain'> {
-  assertMintQuoteMethod(quote, 'onchain');
   const now = options?.now ?? Date.now();
-  const amountPaid = quote.amount_paid ?? Amount.zero();
-  const amountIssued = quote.amount_issued ?? Amount.zero();
-  const canonicalAmountPaid = Amount.from(amountPaid);
-  const canonicalAmountIssued = Amount.from(amountIssued);
+  const canonicalAmountPaid = Amount.from(quote.amount_paid);
+  const canonicalAmountIssued = Amount.from(quote.amount_issued);
   assertValidMintQuoteAccounting(quote.quote, canonicalAmountPaid, canonicalAmountIssued);
   return {
     mintUrl,
@@ -221,16 +190,13 @@ export function mintQuoteFromOnchainResponse(
 
 export function mintQuoteFromBolt12Response(
   mintUrl: string,
-  quote: MintMethodQuoteSnapshot<'bolt12'>,
+  quote: MintQuoteBolt12Response,
   options?: { now?: number },
 ): MintQuote<'bolt12'> {
-  assertMintQuoteMethod(quote, 'bolt12');
   const now = options?.now ?? Date.now();
   const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
-  const amountPaid = quote.amount_paid ?? Amount.zero();
-  const amountIssued = quote.amount_issued ?? Amount.zero();
-  const canonicalAmountPaid = Amount.from(amountPaid);
-  const canonicalAmountIssued = Amount.from(amountIssued);
+  const canonicalAmountPaid = Amount.from(quote.amount_paid);
+  const canonicalAmountIssued = Amount.from(quote.amount_issued);
   assertValidMintQuoteAccounting(quote.quote, canonicalAmountPaid, canonicalAmountIssued);
   return {
     mintUrl,

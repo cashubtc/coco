@@ -47,6 +47,7 @@ export type {
   MintMethodCreateQuoteData,
   MintMethodQuoteData,
   MintMethodRemoteState,
+  MintMethodQuoteImportSnapshot,
   MintMethodQuoteSnapshot,
 } from './operations/mint/MintMethodHandler.ts';
 export type {

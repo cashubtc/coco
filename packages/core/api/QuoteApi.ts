@@ -1,5 +1,5 @@
 import type { MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethodQuoteSnapshot } from '@core/operations/mint';
+import type { MintMethodQuoteImportSnapshot } from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
@@ -33,7 +33,7 @@ export type ImportMintQuoteInput = {
   /** Mint that issued the existing quote. */
   mintUrl: string;
   /** Existing quote snapshot to persist as canonical quote state. */
-  quote: MintMethodQuoteSnapshot<'bolt11'>;
+  quote: MintMethodQuoteImportSnapshot<'bolt11'>;
   /** Mint method for the quote snapshot. */
   method: 'bolt11';
 };

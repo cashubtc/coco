@@ -210,28 +210,6 @@ describe('MintBolt11Handler', () => {
       expect(result.quoteId).toBe(quoteId);
       expect(result.method).toBe('bolt11');
     });
-
-    it('rejects a created quote whose reported method conflicts with the handler', async () => {
-      (wallet.createMintQuoteBolt11 as Mock<any>).mockImplementation(async () => ({
-        ...quote,
-        method: 'onchain',
-      }));
-
-      await expect(handler.createQuote(buildCreateQuoteContext())).rejects.toThrow(
-        'reports method onchain instead of bolt11',
-      );
-    });
-
-    it('rejects a refreshed quote whose reported method conflicts with the handler', async () => {
-      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
-        ...quote,
-        method: 'onchain',
-      }));
-
-      await expect(handler.fetchRemoteQuote(buildFetchRemoteQuoteContext())).rejects.toThrow(
-        'reports method onchain instead of bolt11',
-      );
-    });
   });
 
   describe('recoverExecuting', () => {

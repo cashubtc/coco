@@ -43,11 +43,13 @@ describe('MintOnchainHandler', () => {
   const remoteQuote: MintQuoteOnchainResponse = {
     quote: quoteId,
     request: 'bc1qtestaddress',
+    method: 'onchain',
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     pubkey,
     amount_paid: Amount.from(21),
     amount_issued: Amount.from(8),
+    updated_at: null,
   };
 
   const output = new OutputData(
