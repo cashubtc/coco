@@ -1090,6 +1090,49 @@ describe('MintOperationService', () => {
     ).resolves.toBeNull();
   });
 
+  it('rejects BOLT11 imports whose Remote Quote Update Time is not a safe integer', async () => {
+    const invalidTimestamps: unknown[] = ['1721234567', Number.NaN, Number.MAX_SAFE_INTEGER + 1];
+
+    for (const [index, updatedAt] of invalidTimestamps.entries()) {
+      const invalid = {
+        quote: `quote-invalid-updated-at-${index}`,
+        request: 'lnbc1invalidtimestamp',
+        amount: Amount.from(12),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        updated_at: updatedAt,
+      } as unknown as MintMethodQuoteImportSnapshot<'bolt11'>;
+
+      await expect(quoteLifecycle.importMintQuote(mintUrl, 'bolt11', invalid)).rejects.toThrow(
+        'has invalid updated_at',
+      );
+      await expect(
+        quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it('rejects a reusable import with a fractional Remote Quote Update Time', async () => {
+    const invalid = {
+      quote: 'onchain-invalid-updated-at',
+      request: 'bc1qinvalidtimestamp',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(5),
+      amount_issued: Amount.zero(),
+      updated_at: 1_721_234_567.5,
+    } as MintMethodQuoteImportSnapshot<'onchain'>;
+
+    await expect(quoteLifecycle.importMintQuote(mintUrl, 'onchain', invalid)).rejects.toThrow(
+      'has invalid updated_at',
+    );
+    await expect(
+      quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+    ).resolves.toBeNull();
+  });
+
   it('rejects imported Mint Quote Accounting where issued exceeds paid', async () => {
     const invalid = {
       quote: 'quote-invalid-accounting',

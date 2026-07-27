@@ -1036,6 +1036,15 @@ export class QuoteLifecycle {
       );
     }
 
+    const updatedAt = (quote as { updated_at?: unknown }).updated_at;
+    if (
+      updatedAt !== undefined &&
+      updatedAt !== null &&
+      (typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt))
+    ) {
+      throw new ProofValidationError(`Mint quote ${quote.quote} has invalid updated_at`);
+    }
+
     if (method === 'bolt11') {
       const bolt11Quote = quote as MintMethodQuoteImportSnapshot<'bolt11'>;
       const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
@@ -1094,7 +1103,7 @@ export class QuoteLifecycle {
         amount,
         amount_paid: amountPaid,
         amount_issued: amountIssued,
-        updated_at: bolt11Quote.updated_at ?? null,
+        updated_at: updatedAt ?? null,
         state,
       } as MintMethodQuoteSnapshot<M>;
     }
@@ -1102,7 +1111,7 @@ export class QuoteLifecycle {
     return {
       ...quote,
       method,
-      updated_at: quote.updated_at ?? null,
+      updated_at: updatedAt ?? null,
     } as MintMethodQuoteSnapshot<M>;
   }
 
