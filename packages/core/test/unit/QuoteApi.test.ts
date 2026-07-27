@@ -46,9 +46,10 @@ const makeMintQuote = (): MintQuote<'bolt11'> => ({
   unit: 'sat',
   expiry: Math.floor(Date.now() / 1000) + 3600,
   state: 'UNPAID',
-  lastObservedRemoteState: 'UNPAID',
-  lastObservedRemoteStateAt: Date.now(),
   reusable: false,
+  amountPaid: Amount.zero(),
+  amountIssued: Amount.zero(),
+  remoteUpdatedAt: null,
   quoteData: {
     amount: Amount.from(10),
   },

@@ -91,8 +91,8 @@ issuance completion.
 
 For BOLT11 quotes, the invoice is available at `quote.request`. For reusable
 onchain quotes, the address/payment request is also available at `quote.request`
-and claimable balance is derived from `quote.quoteData.amountPaid -
-quote.quoteData.amountIssued`.
+and claimable balance is derived from `quote.amountPaid -
+quote.amountIssued`.
 
 ## Operation States
 
@@ -173,7 +173,7 @@ const refreshed = await coco.quotes.mint.refresh({
   quoteId: quote.quoteId,
 });
 
-const claimable = refreshed.quoteData.amountPaid.subtract(refreshed.quoteData.amountIssued);
+const claimable = refreshed.amountPaid.subtract(refreshed.amountIssued);
 ```
 
 To mint part of the available balance explicitly, prepare an operation with the

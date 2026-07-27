@@ -14,7 +14,7 @@ import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
 import type { Mint } from '../../models/Mint';
 import { meltQuoteFromBolt11Response } from '../../models/MeltQuote';
-import { mintQuoteFromBolt11Response } from '../../models/MintQuote';
+import { mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response } from '../normalizedMintQuoteFixtures.ts';
 import type { PendingMeltOperation } from '../../operations/melt';
 import type { PendingMintOperation } from '../../operations/mint';
 import { MemoryRepositories } from '../../repositories/memory';
@@ -524,9 +524,10 @@ describe('initializeCoco', () => {
           unit: 'sat',
           expiry: Math.floor(Date.now() / 1000) + 3600,
           state: 'PAID',
-          lastObservedRemoteState: 'PAID',
-          lastObservedRemoteStateAt: observedAt,
           reusable: false,
+          amountPaid: Amount.from(10),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: {
             amount: Amount.from(10),
           },

@@ -1,6 +1,6 @@
 import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
-import type { RealTimeTransport } from './RealTimeTransport.ts';
+import type { RealTimeTransport, TransportMessageEvent } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
@@ -124,7 +124,7 @@ export class SubscriptionManager {
 
   private ensureMessageListener(mintUrl: string): void {
     if (this.messageHandlerByMint.has(mintUrl)) return;
-    const handler = (evt: any) => {
+    const handler = (evt: TransportMessageEvent) => {
       try {
         const data = typeof evt.data === 'string' ? evt.data : evt.data?.toString?.();
         if (!data) return;
@@ -141,12 +141,14 @@ export class SubscriptionManager {
         if ('method' in parsed && parsed.method === 'subscribe') {
           const subId = parsed.params?.subId;
           const active = subId ? this.subscriptions.get(subId) : undefined;
-          if (active) {
-            for (const cb of active.callbacks) {
-              Promise.resolve(cb((parsed as WsNotification<unknown>).params.payload)).catch((err) =>
-                this.logger?.error('Subscription callback error', { mintUrl, subId, err }),
-              );
-            }
+          if (active && subId) {
+            void this.deliverSubscriptionPayload(
+              mintUrl,
+              subId,
+              active,
+              (parsed as WsNotification<unknown>).params.payload,
+              evt.normalizedPayload,
+            );
           }
         } else if ('error' in parsed && (parsed as WsResponse).error) {
           const resp = parsed as WsResponse;
@@ -221,6 +223,50 @@ export class SubscriptionManager {
     const t2 = this.getTransport(mintUrl);
     t2.on(mintUrl, 'open', onOpen);
     this.openHandlerByMint.set(mintUrl, onOpen);
+  }
+
+  private async deliverSubscriptionPayload(
+    mintUrl: string,
+    subId: string,
+    active: ActiveSubscription<unknown>,
+    payload: unknown,
+    normalizedPayload?: unknown,
+  ): Promise<void> {
+    let deliveredPayload = payload;
+    if (active.kind === 'bolt11_mint_quote' && normalizedPayload !== undefined) {
+      deliveredPayload = normalizedPayload;
+    } else if (active.kind === 'bolt11_mint_quote') {
+      const quoteId =
+        payload &&
+        typeof payload === 'object' &&
+        typeof (payload as { quote?: unknown }).quote === 'string'
+          ? (payload as { quote: string }).quote
+          : undefined;
+      if (!quoteId) return;
+
+      try {
+        deliveredPayload = await this.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
+      } catch (err) {
+        this.logger?.error('Failed to normalize BOLT11 mint quote subscription payload', {
+          mintUrl,
+          quoteId,
+          err,
+        });
+        return;
+      }
+    }
+
+    if (this.subscriptions.get(subId) !== active) return;
+
+    for (const cb of active.callbacks) {
+      try {
+        Promise.resolve(cb(deliveredPayload)).catch((err) =>
+          this.logger?.error('Subscription callback error', { mintUrl, subId, err }),
+        );
+      } catch (err) {
+        this.logger?.error('Subscription callback error', { mintUrl, subId, err });
+      }
+    }
   }
 
   async subscribe<TPayload = unknown>(

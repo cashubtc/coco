@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import {
   deserializeAmount,
   normalizeMintUrl,
@@ -46,9 +47,10 @@ export class IdbLegacyMintQuoteRepository implements LegacyMintQuoteRepository {
           unit: row.unit,
           expiry: row.expiry,
           pubkey: row.pubkey ?? undefined,
-          lastObservedRemoteState: row.state,
-          lastObservedRemoteStateAt: now,
           reusable: false,
+          amountPaid: row.state === 'PAID' ? amount : Amount.zero(),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: { amount },
           createdAt: now,
           updatedAt: now,

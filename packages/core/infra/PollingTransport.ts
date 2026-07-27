@@ -430,15 +430,8 @@ export class PollingTransport implements RealTimeTransport {
       if (!task.subId || !task.filter || unsubscribed?.has(task.subId)) continue;
       const outcome = outcomesByQuoteId.get(task.filter);
       if (outcome?.status !== 'updated' || outcome.quote.method !== method) continue;
-      const notification: WsNotification<unknown> = {
-        jsonrpc: '2.0',
-        method: 'subscribe',
-        params: {
-          subId: task.subId,
-          payload: mintQuoteToMethodSnapshot(outcome.quote),
-        },
-      };
-      this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
+      const payload = mintQuoteToMethodSnapshot(outcome.quote);
+      this.emitNormalizedNotification(mintUrl, task.subId, payload);
     }
   }
 
@@ -482,12 +475,7 @@ export class PollingTransport implements RealTimeTransport {
         const subs = yToSubs.get(y);
         if (!subs) continue;
         for (const subId of subs.values()) {
-          const notification: WsNotification<unknown> = {
-            jsonrpc: '2.0',
-            method: 'subscribe',
-            params: { subId, payload },
-          };
-          this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
+          this.emitNormalizedNotification(mintUrl, subId, payload);
         }
       }
       return;
@@ -517,12 +505,19 @@ export class PollingTransport implements RealTimeTransport {
       default:
         throw new Error(`Unsupported polling task kind: ${String(task.kind)}`);
     }
+    this.emitNormalizedNotification(mintUrl, task.subId!, payload);
+  }
+
+  private emitNormalizedNotification(mintUrl: string, subId: string, payload: unknown): void {
     const notification: WsNotification<unknown> = {
       jsonrpc: '2.0',
       method: 'subscribe',
-      params: { subId: task.subId!, payload },
+      params: { subId, payload },
     };
-    this.emit(mintUrl, 'message', { data: JSON.stringify(notification) });
+    this.emit(mintUrl, 'message', {
+      data: JSON.stringify(notification),
+      normalizedPayload: payload,
+    });
   }
 
   private emit(mintUrl: string, event: 'open' | 'message' | 'error' | 'close', evt: any): void {

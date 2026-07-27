@@ -8,12 +8,14 @@ import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
 import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error.ts';
+import { type MintQuote } from '../../models/MintQuote.ts';
 import {
-  mintQuoteFromBolt11Response,
-  mintQuoteFromBolt12Response,
-  mintQuoteFromOnchainResponse,
-  type MintQuote,
-} from '../../models/MintQuote.ts';
+  cashuNormalizedBolt11Fixture,
+  mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response,
+  mintQuoteFromBolt12Fixture as mintQuoteFromBolt12Response,
+  mintQuoteFromOnchainFixture as mintQuoteFromOnchainResponse,
+} from '../normalizedMintQuoteFixtures.ts';
+import type { CompatibleMintQuoteBolt11Response } from '../../operations/mint/MintMethodHandler.ts';
 import type { ProofRepository } from '../../repositories/index.ts';
 import { MemoryKeysetRepository } from '../../repositories/memory/MemoryKeysetRepository.ts';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository.ts';
@@ -26,6 +28,21 @@ import { waitFor } from '../waitFor.ts';
 
 const mintUrl = 'https://mint.test';
 const expiry = Math.floor(Date.now() / 1000) + 3600;
+
+function bolt11PollingSnapshot(
+  quoteId: string,
+  overrides: Partial<CompatibleMintQuoteBolt11Response> = {},
+) {
+  return cashuNormalizedBolt11Fixture({
+    quote: quoteId,
+    request: `lnbc1${quoteId}`,
+    amount: Amount.from(10),
+    unit: 'sat',
+    expiry,
+    state: 'PAID',
+    ...overrides,
+  });
+}
 
 describe('QuoteLifecycle mint quote polling', () => {
   let eventBus: EventBus<CoreEvents>;
@@ -41,14 +58,9 @@ describe('QuoteLifecycle mint quote polling', () => {
     mintQuoteRepository = new MemoryMintQuoteRepository();
     mintAdapter = {
       checkMintQuoteBatch: mock(async () => []),
-      checkMintQuote: mock(async (_mintUrl: string, _method: string, quoteId: string) => ({
-        quote: quoteId,
-        request: `lnbc1${quoteId}`,
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      })),
+      checkMintQuote: mock(async (_mintUrl: string, _method: string, quoteId: string) =>
+        bolt11PollingSnapshot(quoteId),
+      ),
     } as unknown as MintAdapter;
 
     mintRepository = new MemoryMintRepository();
@@ -178,22 +190,8 @@ describe('QuoteLifecycle mint quote polling', () => {
     await persistBolt11Quote('quote-a');
     await persistBolt11Quote('quote-b');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-b',
-        request: 'lnbc1quote-b',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-b'),
+      bolt11PollingSnapshot('quote-a'),
     ]);
     const persistedDuringEvents: Array<MintQuote | null> = [];
     eventBus.on('mint-quote:updated', async ({ quote }) => {
@@ -222,38 +220,10 @@ describe('QuoteLifecycle mint quote polling', () => {
     await persistBolt11Quote('quote-b');
     await persistBolt11Quote('quote-c');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
-      {
-        quote: 'quote-c',
-        request: 'lnbc1quote-c',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'UNPAID',
-      },
-      {
-        quote: 'quote-c',
-        request: 'lnbc1quote-c',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
-      {
-        quote: 'extra-quote',
-        request: 'lnbc1extra',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-a'),
+      bolt11PollingSnapshot('quote-c', { state: 'UNPAID' }),
+      bolt11PollingSnapshot('quote-c'),
+      bolt11PollingSnapshot('extra-quote', { request: 'lnbc1extra' }),
       { request: 'identity-less' },
     ]);
 
@@ -296,25 +266,11 @@ describe('QuoteLifecycle mint quote polling', () => {
   it('retains one attributable observation from identical and partly malformed duplicates', async () => {
     await persistBolt11Quote('quote-a');
     await persistBolt11Quote('quote-b');
-    const validA = {
-      quote: 'quote-a',
-      request: 'lnbc1quote-a',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry,
-      state: 'PAID',
-    };
+    const validA = bolt11PollingSnapshot('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
       validA,
       { ...validA },
-      {
-        quote: 'quote-b',
-        request: 'lnbc1quote-b',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-b'),
       {
         quote: 'quote-b',
         unit: 'sat',
@@ -341,16 +297,62 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
+  it('rejects BOLT11 duplicates with conflicting canonical accounting', async () => {
+    await persistBolt11Quote('quote-a');
+    const first = bolt11PollingSnapshot('quote-a', {
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.zero(),
+    });
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      first,
+      {
+        ...first,
+        amount_paid: Amount.from(12),
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({
+      status: 'failed',
+      failure: { category: 'malformed-response' },
+    });
+    await expect(
+      mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a'),
+    ).resolves.toMatchObject({ state: 'UNPAID' });
+  });
+
+  it('rejects duplicates with conflicting Remote Quote Update Times', async () => {
+    await persistBolt11Quote('quote-a');
+    const first = bolt11PollingSnapshot('quote-a', {
+      updated_at: 1_721_234_567,
+    });
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      first,
+      {
+        ...first,
+        updated_at: 1_721_234_568,
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({
+      status: 'failed',
+      failure: { category: 'malformed-response' },
+    });
+    await expect(
+      quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: 'quote-a' }),
+    ).resolves.toMatchObject({ remoteUpdatedAt: null });
+  });
+
   it('normalizes units when identifying equivalent duplicate observations', async () => {
     await persistBolt11Quote('quote-a');
-    const valid = {
-      quote: 'quote-a',
-      request: 'lnbc1quote-a',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry,
-      state: 'PAID',
-    };
+    const valid = bolt11PollingSnapshot('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
       valid,
       { ...valid, unit: 'SAT' },
@@ -371,15 +373,7 @@ describe('QuoteLifecycle mint quote polling', () => {
   it('accepts a null pubkey for an unlocked polling observation', async () => {
     await persistBolt11Quote('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        pubkey: null,
-        state: 'PAID',
-      },
+      { ...bolt11PollingSnapshot('quote-a'), pubkey: null },
     ]);
 
     const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
@@ -397,22 +391,8 @@ describe('QuoteLifecycle mint quote polling', () => {
     await persistBolt11Quote('quote-a');
     await persistBolt11Quote('quote-b');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: '   ',
-        expiry,
-        state: 'PAID',
-      },
-      {
-        quote: 'quote-b',
-        request: 'lnbc1quote-b',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-a', { unit: '   ' }),
+      bolt11PollingSnapshot('quote-b'),
     ]);
 
     const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
@@ -427,32 +407,28 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
-  it('rejects accounting-only BOLT11 polling snapshots without changing canonical state', async () => {
+  it('persists cashu-ts-normalized BOLT11 polling accounting', async () => {
     await persistBolt11Quote('quote-a');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
+      bolt11PollingSnapshot('quote-a', {
         amount_paid: Amount.from(10),
         amount_issued: Amount.zero(),
         updated_at: 1_721_234_567,
-        unit: 'sat',
-        expiry,
-      },
+        state: 'PAID',
+      }),
     ]);
 
     const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
       { mintUrl, quoteId: 'quote-a' },
     ]);
 
-    expect(result.outcomes[0]).toMatchObject({
-      status: 'failed',
-      failure: { category: 'validation' },
-    });
+    expect(result.outcomes[0]).toMatchObject({ status: 'updated' });
     const canonical = await mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a');
-    expect(canonical?.state).toBe('UNPAID');
-    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
+    expect(canonical?.state).toBe('PAID');
+    expect(canonical?.amountPaid.toString()).toBe('10');
+    expect(canonical?.amountIssued.toString()).toBe('0');
+    expect(canonical?.remoteUpdatedAt).toBe(1_721_234_567);
+    expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(100);
   });
 
   it('records attributable BOLT12 and on-chain observations', async () => {
@@ -498,8 +474,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       'onchain',
       'onchain-quote',
     );
-    expect(storedBolt12?.reusable && storedBolt12.quoteData.amountPaid.toString()).toBe('20');
-    expect(storedOnchain?.reusable && storedOnchain.quoteData.amountPaid.toString()).toBe('30');
+    expect(storedBolt12?.reusable && storedBolt12.amountPaid.toString()).toBe('20');
+    expect(storedOnchain?.reusable && storedOnchain.amountPaid.toString()).toBe('30');
   });
 
   it('rejects canonical identity conflicts and over-issued reusable observations', async () => {
@@ -556,9 +532,7 @@ describe('QuoteLifecycle mint quote polling', () => {
       'onchain-over-issued',
     );
     expect(storedConflict?.request).toBe('lno1bolt12-conflict');
-    expect(storedOverIssued?.reusable && storedOverIssued.quoteData.amountIssued.toString()).toBe(
-      '0',
-    );
+    expect(storedOverIssued?.reusable && storedOverIssued.amountIssued.toString()).toBe('0');
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt12')).toBe(1);
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'onchain')).toBe(1);
   });
@@ -646,22 +620,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>)
         .mockRejectedValueOnce(error)
         .mockResolvedValueOnce([
-          {
-            quote: 'quote-a',
-            request: 'lnbc1quote-a',
-            amount: Amount.from(10),
-            unit: 'sat',
-            expiry,
-            state: 'PAID',
-          },
-          {
-            quote: 'quote-b',
-            request: 'lnbc1quote-b',
-            amount: Amount.from(10),
-            unit: 'sat',
-            expiry,
-            state: 'PAID',
-          },
+          bolt11PollingSnapshot('quote-a'),
+          bolt11PollingSnapshot('quote-b'),
         ]);
 
       const failed = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
@@ -692,22 +652,8 @@ describe('QuoteLifecycle mint quote polling', () => {
       await persistBolt11Quote('quote-a');
       await persistBolt11Quote('quote-b');
       (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-        {
-          quote: 'quote-a',
-          request: 'lnbc1quote-a',
-          amount: Amount.from(10),
-          unit: 'sat',
-          expiry,
-          state: 'PAID',
-        },
-        {
-          quote: 'quote-b',
-          request: 'lnbc1quote-b',
-          amount: Amount.from(10),
-          unit: 'sat',
-          expiry,
-          state: 'PAID',
-        },
+        bolt11PollingSnapshot('quote-a'),
+        bolt11PollingSnapshot('quote-b'),
       ]);
       const storageError = new Error('storage unavailable');
       if (failureStage === 'canonical read') {
@@ -855,14 +801,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     await persistBolt11Quote('quote-a');
     await setNut29Methods(undefined);
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-a'),
     ]);
 
     const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
@@ -878,22 +817,8 @@ describe('QuoteLifecycle mint quote polling', () => {
     await persistBolt11Quote('quote-a');
     await persistBolt11Quote('quote-b');
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        quote: 'quote-b',
-        request: 'lnbc1quote-b',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
-      {
-        quote: 'quote-a',
-        request: 'lnbc1quote-a',
-        amount: Amount.from(10),
-        unit: 'sat',
-        expiry,
-        state: 'PAID',
-      },
+      bolt11PollingSnapshot('quote-b'),
+      bolt11PollingSnapshot('quote-a'),
     ]);
     const notifications: Array<{ params?: { payload?: { quote?: string } } }> = [];
     const transport = new PollingTransport(
@@ -942,24 +867,7 @@ describe('QuoteLifecycle mint quote polling', () => {
     (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockImplementationOnce(
       async () => {
         await batchGate;
-        return [
-          {
-            quote: 'watcher-a',
-            request: 'lnbc1watcher-a',
-            amount: Amount.from(10),
-            unit: 'sat',
-            expiry,
-            state: 'PAID',
-          },
-          {
-            quote: 'watcher-b',
-            request: 'lnbc1watcher-b',
-            amount: Amount.from(10),
-            unit: 'sat',
-            expiry,
-            state: 'PAID',
-          },
-        ];
+        return [bolt11PollingSnapshot('watcher-a'), bolt11PollingSnapshot('watcher-b')];
       },
     );
     const notifications: Array<{ params?: { payload?: { quote?: string } } }> = [];

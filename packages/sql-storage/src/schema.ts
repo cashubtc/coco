@@ -1446,6 +1446,50 @@ const MIGRATIONS: readonly Migration[] = [
         ON coco_cashu_melt_quotes(mintUrl, quoteId);
     `,
   },
+  {
+    id: '037_mint_quote_accounting',
+    sql: `
+      ALTER TABLE coco_cashu_canonical_mint_quotes
+        ADD COLUMN amountPaid TEXT NOT NULL DEFAULT '0';
+      ALTER TABLE coco_cashu_canonical_mint_quotes
+        ADD COLUMN amountIssued TEXT NOT NULL DEFAULT '0';
+      ALTER TABLE coco_cashu_canonical_mint_quotes
+        ADD COLUMN remoteUpdatedAt INTEGER;
+
+      UPDATE coco_cashu_canonical_mint_quotes
+      SET amountPaid = CASE
+            WHEN reusable = 1
+              THEN COALESCE(
+                CAST(json_extract(
+                  CASE WHEN json_valid(quoteDataJson) THEN quoteDataJson ELSE '{}' END,
+                  '$.amountPaid'
+                ) AS TEXT),
+                '0'
+              )
+            WHEN state IN ('PAID', 'ISSUED')
+              THEN COALESCE(CAST(amount AS TEXT), '0')
+            ELSE '0'
+          END,
+          amountIssued = CASE
+            WHEN reusable = 1
+              THEN COALESCE(
+                CAST(json_extract(
+                  CASE WHEN json_valid(quoteDataJson) THEN quoteDataJson ELSE '{}' END,
+                  '$.amountIssued'
+                ) AS TEXT),
+                '0'
+              )
+            WHEN state = 'ISSUED'
+              THEN COALESCE(CAST(amount AS TEXT), '0')
+            ELSE '0'
+          END,
+          remoteUpdatedAt = NULL,
+          quoteDataJson = CASE
+            WHEN json_valid(quoteDataJson) THEN quoteDataJson
+            ELSE '{}'
+          END;
+    `,
+  },
 ];
 
 // Export for testing

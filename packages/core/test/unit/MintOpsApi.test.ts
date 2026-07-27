@@ -123,9 +123,10 @@ describe('MintOpsApi', () => {
       amount: Amount.from(12),
       expiry: Math.floor(Date.now() / 1000) + 3600,
       state: 'PAID',
-      lastObservedRemoteState: 'PAID',
-      lastObservedRemoteStateAt: Date.now(),
       reusable: false,
+      amountPaid: Amount.from(12),
+      amountIssued: Amount.zero(),
+      remoteUpdatedAt: null,
       quoteData: {
         amount: Amount.from(12),
       },

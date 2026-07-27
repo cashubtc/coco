@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { ensureSchemaUpTo, MIGRATIONS, type SqlDatabase } from '../index.ts';
+import {
+  ensureSchemaUpTo,
+  MIGRATIONS,
+  SqliteMintQuoteRepository,
+  type SqlDatabase,
+} from '../index.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 
 const EXPECTED_MIGRATION_IDS = [
@@ -43,6 +48,7 @@ const EXPECTED_MIGRATION_IDS = [
   '034_clean_unquoted_mint_operations',
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
+  '037_mint_quote_accounting',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -181,6 +187,109 @@ describe('shared SQL schema migrations', () => {
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
   });
+
+  itWithDatabase(
+    'backfills canonical Mint Quote Accounting without inventing remote time',
+    async (db) => {
+      await ensureSchemaUpTo(db, '037_mint_quote_accounting');
+
+      const rows = [
+        ['bolt11-unpaid', 'bolt11', 'UNPAID', '10', '{}', 0],
+        ['bolt11-paid', 'bolt11', 'PAID', '10', '{}', 0],
+        ['bolt11-issued', 'bolt11', 'ISSUED', '10', '{}', 0],
+        [
+          'onchain-reusable',
+          'onchain',
+          null,
+          null,
+          JSON.stringify({ pubkey: '02', amountPaid: '21', amountIssued: '8' }),
+          1,
+        ],
+        ['onchain-malformed', 'onchain', null, null, '{not-json', 1],
+      ] as const;
+
+      for (const [quoteId, method, state, amount, quoteDataJson, reusable] of rows) {
+        await db.run(
+          `INSERT INTO coco_cashu_canonical_mint_quotes
+          (mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey, quoteDataJson,
+           lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            'https://mint.test',
+            method,
+            quoteId,
+            state,
+            `request-${quoteId}`,
+            amount,
+            'sat',
+            null,
+            method === 'onchain' ? '02' : null,
+            quoteDataJson,
+            state,
+            123_000,
+            reusable,
+            1,
+            2,
+          ],
+        );
+      }
+
+      await ensureSchemaUpTo(db);
+
+      const migrated = await db.all<{
+        quoteId: string;
+        amountPaid: string;
+        amountIssued: string;
+        remoteUpdatedAt: number | null;
+      }>(
+        `SELECT quoteId, amountPaid, amountIssued, remoteUpdatedAt
+       FROM coco_cashu_canonical_mint_quotes ORDER BY quoteId`,
+      );
+
+      expect(migrated).toEqual([
+        {
+          quoteId: 'bolt11-issued',
+          amountPaid: '10',
+          amountIssued: '10',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'bolt11-paid',
+          amountPaid: '10',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'bolt11-unpaid',
+          amountPaid: '0',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'onchain-malformed',
+          amountPaid: '0',
+          amountIssued: '0',
+          remoteUpdatedAt: null,
+        },
+        {
+          quoteId: 'onchain-reusable',
+          amountPaid: '21',
+          amountIssued: '8',
+          remoteUpdatedAt: null,
+        },
+      ]);
+
+      const mintQuoteRepository = new SqliteMintQuoteRepository(db);
+      const malformed = await mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'onchain',
+        'onchain-malformed',
+      );
+      expect(malformed?.method).toBe('onchain');
+      expect(malformed?.amountPaid.toString()).toBe('0');
+      expect(malformed?.amountIssued.toString()).toBe('0');
+    },
+  );
 
   itWithDatabase('upgrades mint operations to allow failed state persistence', async (db) => {
     await ensureSchemaUpTo(db, '020_mint_operations_failed_state');

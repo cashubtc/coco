@@ -747,8 +747,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(quote.reusable).toBe(true);
           expect(quote.request).toBeDefined();
           expect(quote.quoteData.pubkey).toBeDefined();
-          expectAmountEquals(expect, quote.quoteData.amountPaid, 0);
-          expectAmountEquals(expect, quote.quoteData.amountIssued, 0);
+          expectAmountEquals(expect, quote.amountPaid, 0);
+          expectAmountEquals(expect, quote.amountIssued, 0);
 
           const fundedQuote = await waitForOnchainQuoteAvailable(
             mgr,
@@ -757,7 +757,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             testAmount(12),
           );
           expect(fundedQuote.quoteId).toBe(quote.quoteId);
-          expectAmountEquals(expect, fundedQuote.quoteData.amountIssued, 0);
+          expectAmountEquals(expect, fundedQuote.amountIssued, 0);
           expect(getMintQuoteAvailableAmount(fundedQuote).greaterThanOrEqual(Amount.from(12))).toBe(
             true,
           );

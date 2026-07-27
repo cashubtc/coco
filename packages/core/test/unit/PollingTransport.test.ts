@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { PollingTransport } from '../../infra/PollingTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import { NullLogger } from '../../logging';
-import { mintQuoteFromBolt11Response } from '../../models/MintQuote.ts';
+import { mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response } from '../normalizedMintQuoteFixtures.ts';
 import type { QuoteIdentity } from '../../models/QuoteIdentity.ts';
 import type { MintMethod } from '../../operations/mint/MintMethodHandler.ts';
 import type {

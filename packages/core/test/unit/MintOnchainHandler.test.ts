@@ -43,11 +43,13 @@ describe('MintOnchainHandler', () => {
   const remoteQuote: MintQuoteOnchainResponse = {
     quote: quoteId,
     request: 'bc1qtestaddress',
+    method: 'onchain',
     unit: 'sat',
     expiry: Math.floor(Date.now() / 1000) + 3600,
     pubkey,
     amount_paid: Amount.from(21),
     amount_issued: Amount.from(8),
+    updated_at: null,
   };
 
   const output = new OutputData(
@@ -84,10 +86,11 @@ describe('MintOnchainHandler', () => {
       expiry: remoteQuote.expiry,
       pubkey,
       reusable: true,
+      amountPaid: Amount.zero(),
+      amountIssued: Amount.zero(),
+      remoteUpdatedAt: null,
       quoteData: {
         pubkey,
-        amountPaid: Amount.from(0),
-        amountIssued: Amount.from(0),
       },
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -201,8 +204,8 @@ describe('MintOnchainHandler', () => {
     expect(result.method).toBe('onchain');
     expect(result.reusable).toBe(true);
     expect(result.quoteData.pubkey).toBe(pubkey);
-    expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
-    expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(result.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(result.amountIssued.equals(Amount.from(8))).toBe(true);
     expect(getMintQuoteAvailableAmount(result).equals(Amount.from(13))).toBe(true);
   });
 
@@ -252,8 +255,8 @@ describe('MintOnchainHandler', () => {
     const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
 
     expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', quoteId);
-    expect(result.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
-    expect(result.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(result.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(result.amountIssued.equals(Amount.from(8))).toBe(true);
   });
 
   it('prepares deterministic outputs without requiring available quote balance', async () => {

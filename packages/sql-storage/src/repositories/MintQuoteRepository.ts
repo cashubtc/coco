@@ -26,8 +26,9 @@ type MintQuoteRow = {
   expiry: number | null;
   pubkey?: string | null;
   quoteDataJson?: string | null;
-  lastObservedRemoteState?: string | null;
-  lastObservedRemoteStateAt?: number | null;
+  amountPaid: string | number;
+  amountIssued: string | number;
+  remoteUpdatedAt: number | null;
   reusable: number;
   createdAt: number;
   updatedAt: number;
@@ -36,8 +37,6 @@ type MintQuoteRow = {
 type SerializedQuoteData = {
   amount?: string | number;
   pubkey?: string;
-  amountPaid?: string | number;
-  amountIssued?: string | number;
 };
 
 function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
@@ -66,20 +65,27 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
       expiry: row.expiry,
       pubkey,
       reusable: true,
+      amountPaid: deserializeAmount(row.amountPaid),
+      amountIssued: deserializeAmount(row.amountIssued),
+      remoteUpdatedAt: row.remoteUpdatedAt,
       quoteData: {
         pubkey,
         ...(amount !== undefined ? { amount } : {}),
-        amountPaid: deserializeAmount(quoteData.amountPaid ?? 0),
-        amountIssued: deserializeAmount(quoteData.amountIssued ?? 0),
       },
-      lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } as MintQuote;
   }
 
   const amount = deserializeAmount(quoteData.amount ?? row.amount ?? 0);
-  const state = (row.state ?? row.lastObservedRemoteState ?? 'UNPAID') as MintMethodRemoteState;
+  const amountPaid = deserializeAmount(row.amountPaid);
+  const amountIssued = deserializeAmount(row.amountIssued);
+  const state = (row.state ??
+    (amountPaid.isZero() && amountIssued.isZero()
+      ? 'UNPAID'
+      : amountPaid.greaterThan(amountIssued)
+        ? 'PAID'
+        : 'ISSUED')) as MintMethodRemoteState;
   return {
     mintUrl: row.mintUrl,
     method: 'bolt11',
@@ -91,9 +97,10 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
     unit: row.unit,
     expiry: row.expiry,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: (row.lastObservedRemoteState ?? state) as MintMethodRemoteState,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     reusable: false,
+    amountPaid,
+    amountIssued,
+    remoteUpdatedAt: row.remoteUpdatedAt,
     quoteData: { amount },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -110,15 +117,11 @@ function serializeQuoteData(quote: MintQuote): string {
     return stringifyJson({
       pubkey: quote.quoteData.pubkey,
       ...(amount !== undefined ? { amount: serializeAmount(amount) } : {}),
-      amountPaid: serializeAmount(quote.quoteData.amountPaid),
-      amountIssued: serializeAmount(quote.quoteData.amountIssued),
     });
   }
 
   return stringifyJson({
     pubkey: quote.quoteData.pubkey,
-    amountPaid: serializeAmount(quote.quoteData.amountPaid),
-    amountIssued: serializeAmount(quote.quoteData.amountIssued),
   });
 }
 
@@ -133,7 +136,7 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     const normalizedMintUrl = normalizeMintUrl(identity.mintUrl);
     const rows = await this.db.all<MintQuoteRow>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
-              quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+              quoteDataJson, amountPaid, amountIssued, remoteUpdatedAt, reusable,
               createdAt, updatedAt
        FROM coco_cashu_canonical_mint_quotes
        WHERE mintUrl = ? AND quoteId = ?`,
@@ -153,7 +156,7 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
   async getMintQuote(mintUrl: string, method: string, quoteId: string): Promise<MintQuote | null> {
     const row = await this.db.get<MintQuoteRow>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
-              quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+              quoteDataJson, amountPaid, amountIssued, remoteUpdatedAt, reusable,
               createdAt, updatedAt
        FROM coco_cashu_canonical_mint_quotes
        WHERE mintUrl = ? AND method = ? AND quoteId = ? LIMIT 1`,
@@ -183,8 +186,8 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     await this.db.run(
       `INSERT INTO coco_cashu_canonical_mint_quotes
          (mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey, quoteDataJson,
-          lastObservedRemoteState, lastObservedRemoteStateAt, reusable, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          amountPaid, amountIssued, remoteUpdatedAt, reusable, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(mintUrl, method, quoteId) DO UPDATE SET
          state=excluded.state,
          request=excluded.request,
@@ -193,8 +196,9 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
          expiry=excluded.expiry,
          pubkey=excluded.pubkey,
          quoteDataJson=excluded.quoteDataJson,
-         lastObservedRemoteState=excluded.lastObservedRemoteState,
-         lastObservedRemoteStateAt=excluded.lastObservedRemoteStateAt,
+         amountPaid=excluded.amountPaid,
+         amountIssued=excluded.amountIssued,
+         remoteUpdatedAt=excluded.remoteUpdatedAt,
          reusable=excluded.reusable,
          updatedAt=excluded.updatedAt`,
       [
@@ -208,8 +212,9 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
         quote.expiry,
         quote.pubkey ?? null,
         serializeQuoteData(quote),
-        getMintQuoteRemoteState(quote) ?? null,
-        quote.lastObservedRemoteStateAt ?? now,
+        serializeAmount(quote.amountPaid),
+        serializeAmount(quote.amountIssued),
+        quote.remoteUpdatedAt,
         quote.reusable ? 1 : 0,
         quote.createdAt,
         quote.updatedAt || now,
@@ -226,16 +231,19 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
   ): Promise<void> {
     await this.db.run(
       `UPDATE coco_cashu_canonical_mint_quotes
-       SET state = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, updatedAt = ?
+       SET state = ?,
+           amountPaid = CASE WHEN ? IN ('PAID', 'ISSUED') THEN amount ELSE '0' END,
+           amountIssued = CASE WHEN ? = 'ISSUED' THEN amount ELSE '0' END,
+           updatedAt = ?
        WHERE mintUrl = ? AND method = ? AND quoteId = ?`,
-      [state, state, observedAt, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
+      [state, state, state, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
     );
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {
     const rows = await this.db.all<MintQuoteRow>(
       `SELECT mintUrl, method, quoteId, state, request, amount, unit, expiry, pubkey,
-              quoteDataJson, lastObservedRemoteState, lastObservedRemoteStateAt, reusable,
+              quoteDataJson, amountPaid, amountIssued, remoteUpdatedAt, reusable,
               createdAt, updatedAt
        FROM coco_cashu_canonical_mint_quotes
        WHERE (state IS NULL OR state != 'ISSUED') ${method ? 'AND method = ?' : ''}`,

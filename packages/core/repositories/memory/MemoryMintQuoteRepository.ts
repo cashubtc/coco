@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { QuoteIdentityConflictError } from '@core/models/Error';
 import { isMintQuotePending, isStatefulMintQuote, type MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
@@ -75,8 +76,8 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     this.quotes.set(key, {
       ...existing,
       state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
+      amountPaid: state === 'UNPAID' ? Amount.zero() : existing.amount,
+      amountIssued: state === 'ISSUED' ? existing.amount : Amount.zero(),
       updatedAt: observedAt,
     });
   }

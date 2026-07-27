@@ -24,26 +24,30 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { UnitAmount } from '../../amounts.ts';
 import type { MintQuote } from '../../models/MintQuote';
 
-type OptionalV5QuoteBase<T extends MintQuoteBaseResponse> = Omit<
+type OptionalImportQuoteMetadata<T extends MintQuoteBaseResponse> = Omit<
   T,
-  'method' | 'amount_paid' | 'amount_issued' | 'updated_at'
+  'method' | 'updated_at'
 > &
-  Partial<Pick<MintQuoteBaseResponse, 'method' | 'amount_paid' | 'amount_issued' | 'updated_at'>>;
+  Partial<Pick<MintQuoteBaseResponse, 'method' | 'updated_at'>>;
 
 /**
- * Temporary compatibility for caller-provided v4 snapshots at Quote Lifecycle's public import
- * boundary. MintAdapter responses are normalized by cashu-ts v5. Slice #299 can retire the
- * optional accounting fields once Coco's canonical mint quote model owns them.
+ * Compatibility for caller-provided legacy snapshots at Quote Lifecycle's public import seam.
+ * These snapshots bypass cashu-ts wire normalization, so Coco derives missing canonical BOLT11
+ * accounting or compatibility state before admitting them to the normalized runtime interface.
  */
 export type CompatibleMintQuoteBolt11Response = Omit<
-  OptionalV5QuoteBase<MintQuoteBolt11Response>,
-  'amount'
+  OptionalImportQuoteMetadata<MintQuoteBolt11Response>,
+  'amount' | 'amount_paid' | 'amount_issued' | 'state'
 > & {
   amount: Amount;
+  amount_paid?: Amount;
+  amount_issued?: Amount;
+  state?: MintQuoteBolt11Response['state'];
 };
-export type CompatibleMintQuoteOnchainResponse = OptionalV5QuoteBase<MintQuoteOnchainResponse>;
+export type CompatibleMintQuoteOnchainResponse =
+  OptionalImportQuoteMetadata<MintQuoteOnchainResponse>;
 export type CompatibleMintQuoteBolt12Response = Omit<
-  OptionalV5QuoteBase<MintQuoteBolt12Response>,
+  OptionalImportQuoteMetadata<MintQuoteBolt12Response>,
   'amount'
 > & {
   amount?: Amount | null;
@@ -61,7 +65,7 @@ export interface MintMethodDefinitions {
       amount: Amount;
     };
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
-    quote: CompatibleMintQuoteBolt11Response;
+    quote: MintQuoteBolt11Response;
   };
   onchain: {
     methodData: Record<string, never>;
@@ -70,11 +74,9 @@ export interface MintMethodDefinitions {
     };
     quoteData: {
       pubkey: string;
-      amountPaid: Amount;
-      amountIssued: Amount;
     };
     remoteState: never;
-    quote: CompatibleMintQuoteOnchainResponse;
+    quote: MintQuoteOnchainResponse;
   };
   bolt12: {
     methodData: Record<string, never>;
@@ -86,11 +88,9 @@ export interface MintMethodDefinitions {
     quoteData: {
       pubkey: string;
       amount?: Amount;
-      amountPaid: Amount;
-      amountIssued: Amount;
     };
     remoteState: never;
-    quote: CompatibleMintQuoteBolt12Response;
+    quote: MintQuoteBolt12Response;
   };
 }
 
@@ -105,6 +105,13 @@ export type MintMethodRemoteState<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['remoteState'];
 export type MintMethodQuoteSnapshot<M extends MintMethod = MintMethod> =
   MintMethodDefinitions[M]['quote'];
+export type MintMethodQuoteImportSnapshot<M extends MintMethod = MintMethod> = M extends 'bolt11'
+  ? CompatibleMintQuoteBolt11Response
+  : M extends 'onchain'
+    ? CompatibleMintQuoteOnchainResponse
+    : M extends 'bolt12'
+      ? CompatibleMintQuoteBolt12Response
+      : never;
 
 export interface MintMethodMeta<M extends MintMethod = MintMethod> {
   method: M;

@@ -18,6 +18,7 @@ import type {
 import type {
   MintExecutionResult,
   MintMethodHandler,
+  MintMethodQuoteImportSnapshot,
   MintMethodQuoteSnapshot,
   PendingMintCheckResult,
   RecoverExecutingResult,
@@ -26,12 +27,14 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { getMintQuoteAvailableAmount } from '../../models/MintQuote';
 import {
-  getMintQuoteAvailableAmount,
-  mintQuoteFromBolt11Response,
-  mintQuoteFromBolt12Response,
-  mintQuoteFromOnchainResponse,
-} from '../../models/MintQuote';
+  cashuNormalizedBolt11Fixture,
+  cashuNormalizedOnchainFixture,
+  mintQuoteFromBolt11Fixture as mintQuoteFromBolt11Response,
+  mintQuoteFromBolt12Fixture as mintQuoteFromBolt12Response,
+  mintQuoteFromOnchainFixture as mintQuoteFromOnchainResponse,
+} from '../normalizedMintQuoteFixtures.ts';
 import { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -575,6 +578,9 @@ describe('MintOperationService', () => {
     expect(storedQuote?.quoteId).toBe(created.quoteId);
     expect(storedQuote?.method).toBe('bolt11');
     expect(storedQuote?.reusable).toBe(false);
+    expect(storedQuote?.amountPaid.equals(Amount.zero())).toBe(true);
+    expect(storedQuote?.amountIssued.equals(Amount.zero())).toBe(true);
+    expect(storedQuote?.remoteUpdatedAt).toBe(null);
     expect(operations).toHaveLength(0);
     expect(handler.createQuote).toHaveBeenCalled();
     expect(handler.prepare).not.toHaveBeenCalled();
@@ -674,7 +680,9 @@ describe('MintOperationService', () => {
         amount: Amount.from(10),
         unit: 'sat',
         expiry: Math.floor(Date.now() / 1000) + 3600,
-        state: 'PAID',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: 1_721_234_569,
       }),
     );
 
@@ -688,6 +696,9 @@ describe('MintOperationService', () => {
 
     expect(handler.fetchRemoteQuote).toHaveBeenCalled();
     expect(refreshed.state).toBe('PAID');
+    expect(refreshed.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(refreshed.amountIssued.equals(Amount.zero())).toBe(true);
+    expect(refreshed.remoteUpdatedAt).toBe(1_721_234_569);
     expect(refreshed.request).toBe('lnbc1paid');
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
@@ -727,7 +738,7 @@ describe('MintOperationService', () => {
     eventBus.on('mint-quote:updated', async ({ quote }) => {
       const storedQuote = await quoteRepo.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
       if (storedQuote?.method === 'onchain') {
-        persistedDuringEvent.push(storedQuote.quoteData.amountPaid.toString());
+        persistedDuringEvent.push(storedQuote.amountPaid.toString());
       }
     });
 
@@ -740,8 +751,8 @@ describe('MintOperationService', () => {
     expect(onchainHandler.fetchRemoteQuote).toHaveBeenCalled();
     expect(refreshed.method).toBe('onchain');
     if (refreshed.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(refreshed.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
-    expect(refreshed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(refreshed.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(refreshed.amountIssued.equals(Amount.from(8))).toBe(true);
     expect(getMintQuoteAvailableAmount(refreshed).equals(Amount.from(13))).toBe(true);
     expect(persistedDuringEvent).toEqual(['21']);
   });
@@ -818,10 +829,10 @@ describe('MintOperationService', () => {
     if (refreshed.method !== 'onchain') throw new Error('Expected onchain quote');
     expect(stored?.method).toBe('onchain');
     if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
-    expect(refreshed.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
-    expect(refreshed.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
-    expect(stored.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
-    expect(stored.quoteData.amountIssued.equals(Amount.from(5))).toBe(true);
+    expect(refreshed.amountPaid.equals(Amount.from(7))).toBe(true);
+    expect(refreshed.amountIssued.equals(Amount.from(5))).toBe(true);
+    expect(stored.amountPaid.equals(Amount.from(7))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(5))).toBe(true);
     expect(quoteUpdatedEvents).toHaveLength(1);
   });
 
@@ -842,14 +853,18 @@ describe('MintOperationService', () => {
       quoteUpdatedEvents.push(event);
     });
 
-    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'bolt11', {
-      quote: 'quote-snapshot-paid',
-      request: 'lnbc1stale',
-      amount: Amount.from(10),
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 7200,
-      state: 'UNPAID',
-    });
+    const observed = await quoteLifecycle.recordMintQuoteSnapshot(
+      mintUrl,
+      'bolt11',
+      cashuNormalizedBolt11Fixture({
+        quote: 'quote-snapshot-paid',
+        request: 'lnbc1stale',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 7200,
+        state: 'UNPAID',
+      }),
+    );
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', 'quote-snapshot-paid');
 
     expect(observed.state).toBe('PAID');
@@ -871,51 +886,18 @@ describe('MintOperationService', () => {
       quoteUpdatedEvents.push(event);
     });
 
-    const observed = await quoteLifecycle.recordMintQuoteSnapshot(mintUrl, 'onchain', {
-      quote: onchainQuoteId,
-      request: 'bc1qtest',
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      pubkey: '02'.padEnd(66, '1'),
-      amount_paid: Amount.from(7),
-      amount_issued: Amount.from(5),
-    });
-    const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
-
-    expect(observed.method).toBe('onchain');
-    if (observed.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(stored?.method).toBe('onchain');
-    if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
-    expect(observed.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
-    expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
-    expect(stored.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
-    expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
-    expect(quoteUpdatedEvents).toHaveLength(0);
-  });
-
-  it('recordMintQuoteSnapshot preserves partial reusable snapshot event semantics', async () => {
-    const onchainQuoteId = 'onchain-quote-partial-snapshot';
-    await persistOnchainQuote(onchainQuoteId, {
-      paid: Amount.from(10),
-      issued: Amount.from(8),
-    });
-    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
-    eventBus.on('mint-quote:updated', (event) => {
-      quoteUpdatedEvents.push(event);
-    });
-    const partialSnapshot = {
-      quote: onchainQuoteId,
-      request: 'bc1qtest',
-      unit: 'sat',
-      expiry: Math.floor(Date.now() / 1000) + 3600,
-      pubkey: '02'.padEnd(66, '1'),
-      amount_paid: Amount.from(12),
-    } as MintMethodQuoteSnapshot<'onchain'>;
-
     const observed = await quoteLifecycle.recordMintQuoteSnapshot(
       mintUrl,
       'onchain',
-      partialSnapshot,
+      cashuNormalizedOnchainFixture({
+        quote: onchainQuoteId,
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        pubkey: '02'.padEnd(66, '1'),
+        amount_paid: Amount.from(7),
+        amount_issued: Amount.from(5),
+      }),
     );
     const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
 
@@ -923,10 +905,10 @@ describe('MintOperationService', () => {
     if (observed.method !== 'onchain') throw new Error('Expected onchain quote');
     expect(stored?.method).toBe('onchain');
     if (stored?.method !== 'onchain') throw new Error('Expected stored onchain quote');
-    expect(observed.quoteData.amountPaid.equals(Amount.from(12))).toBe(true);
-    expect(observed.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
-    expect(stored.quoteData.amountPaid.equals(Amount.from(12))).toBe(true);
-    expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(observed.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(observed.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(stored.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(8))).toBe(true);
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
 
@@ -1051,8 +1033,144 @@ describe('MintOperationService', () => {
       method: 'bolt11',
       amount_paid: Amount.from(12),
       amount_issued: Amount.zero(),
-      updated_at: null,
+      updated_at: 1_721_234_567,
     });
+  });
+
+  it('imports legacy BOLT11 state as canonical Mint Quote Accounting', async () => {
+    const imported = await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      quote: 'quote-legacy-accounting',
+      request: 'lnbc1legacy',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    });
+
+    expect(imported.state).toBe('PAID');
+    expect(imported.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(imported.amountIssued.equals(Amount.zero())).toBe(true);
+    expect(imported.remoteUpdatedAt).toBe(null);
+  });
+
+  it('imports BOLT11 accounting without state and derives its compatibility state', async () => {
+    const imported = await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      quote: 'quote-accounting-only',
+      request: 'lnbc1accounting',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(12),
+      updated_at: 1_721_234_568,
+    } as MintMethodQuoteImportSnapshot<'bolt11'>);
+
+    expect(imported.state).toBe('ISSUED');
+    expect(imported.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(imported.amountIssued.equals(Amount.from(12))).toBe(true);
+    expect(imported.remoteUpdatedAt).toBe(1_721_234_568);
+  });
+
+  it('rejects an imported snapshot whose method conflicts with the route', async () => {
+    const conflicting = {
+      quote: 'quote-conflicting-method',
+      request: 'lnbc1conflict',
+      method: 'onchain',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+    } as unknown as MintMethodQuoteImportSnapshot<'bolt11'>;
+
+    await expect(quoteLifecycle.importMintQuote(mintUrl, 'bolt11', conflicting)).rejects.toThrow(
+      'reports method onchain instead of bolt11',
+    );
+    await expect(
+      quoteRepo.getMintQuoteById({ mintUrl, quoteId: conflicting.quote }),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects BOLT11 imports whose Remote Quote Update Time is not a safe integer', async () => {
+    const invalidTimestamps: unknown[] = ['1721234567', Number.NaN, Number.MAX_SAFE_INTEGER + 1];
+
+    for (const [index, updatedAt] of invalidTimestamps.entries()) {
+      const invalid = {
+        quote: `quote-invalid-updated-at-${index}`,
+        request: 'lnbc1invalidtimestamp',
+        amount: Amount.from(12),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        updated_at: updatedAt,
+      } as unknown as MintMethodQuoteImportSnapshot<'bolt11'>;
+
+      await expect(quoteLifecycle.importMintQuote(mintUrl, 'bolt11', invalid)).rejects.toThrow(
+        'has invalid updated_at',
+      );
+      await expect(
+        quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it('rejects a reusable import with a fractional Remote Quote Update Time', async () => {
+    const invalid = {
+      quote: 'onchain-invalid-updated-at',
+      request: 'bc1qinvalidtimestamp',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(5),
+      amount_issued: Amount.zero(),
+      updated_at: 1_721_234_567.5,
+    } as MintMethodQuoteImportSnapshot<'onchain'>;
+
+    await expect(quoteLifecycle.importMintQuote(mintUrl, 'onchain', invalid)).rejects.toThrow(
+      'has invalid updated_at',
+    );
+    await expect(
+      quoteLifecycle.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects imported Mint Quote Accounting where issued exceeds paid', async () => {
+    const invalid = {
+      quote: 'quote-invalid-accounting',
+      request: 'lnbc1invalid',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      amount_paid: Amount.from(5),
+      amount_issued: Amount.from(6),
+      updated_at: null,
+    } as MintMethodQuoteImportSnapshot<'bolt11'>;
+
+    await expect(quoteLifecycle.importMintQuote(mintUrl, 'bolt11', invalid)).rejects.toThrow(
+      'amount_issued greater than amount_paid',
+    );
+    await expect(
+      quoteRepo.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects over-issued reusable quote imports', async () => {
+    const invalid = {
+      quote: 'onchain-invalid-accounting',
+      request: 'bc1qinvalid',
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      pubkey: '02'.padEnd(66, '1'),
+      amount_paid: Amount.from(5),
+      amount_issued: Amount.from(6),
+      updated_at: null,
+    } as MintMethodQuoteImportSnapshot<'onchain'>;
+
+    await expect(quoteLifecycle.importMintQuote(mintUrl, 'onchain', invalid)).rejects.toThrow(
+      'amount_issued greater than amount_paid',
+    );
+    await expect(
+      quoteRepo.getMintQuoteById({ mintUrl, quoteId: invalid.quote }),
+    ).resolves.toBeNull();
   });
 
   it('prepare uses the persisted canonical quote state after stale import attempts', async () => {
@@ -1067,7 +1185,7 @@ describe('MintOperationService', () => {
       }),
     );
 
-    const staleQuote: MintMethodQuoteSnapshot<'bolt11'> = {
+    const staleQuote: MintMethodQuoteImportSnapshot<'bolt11'> = {
       quote: 'quote-canonical-paid',
       request: 'lnbc1canonical',
       amount: Amount.from(12),
@@ -1104,7 +1222,7 @@ describe('MintOperationService', () => {
   });
 
   it('quote import delegates unsupported quote units to capability validation', async () => {
-    const importedQuote: MintMethodQuoteSnapshot<'bolt11'> = {
+    const importedQuote: MintMethodQuoteImportSnapshot<'bolt11'> = {
       quote: 'quote-usd',
       request: 'lnbc1imported',
       amount: Amount.from(12),
@@ -1242,7 +1360,7 @@ describe('MintOperationService', () => {
     expect(onchainHandler.fetchRemoteQuote).not.toHaveBeenCalled();
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(quote.quoteData.amountIssued.equals(Amount.zero())).toBe(true);
+    expect(quote.amountIssued.equals(Amount.zero())).toBe(true);
   });
 
   it('finalize subtracts executing reusable onchain siblings from claimable balance', async () => {
@@ -1872,7 +1990,7 @@ describe('MintOperationService', () => {
       checkPending: mock(
         async (): Promise<PendingMintCheckResult<'onchain'>> => ({
           observedRemoteStateAt: Date.now(),
-          quoteSnapshot: {
+          quoteSnapshot: cashuNormalizedOnchainFixture({
             quote: onchainQuoteId,
             request: 'bc1qtest',
             unit: 'sat',
@@ -1880,7 +1998,7 @@ describe('MintOperationService', () => {
             pubkey: '02'.padEnd(66, '1'),
             amount_paid: Amount.from(7),
             amount_issued: Amount.zero(),
-          },
+          }),
           category: 'waiting',
         }),
       ),
@@ -1897,7 +2015,7 @@ describe('MintOperationService', () => {
     expect(stored?.state).toBe('pending');
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(quote.quoteData.amountPaid.equals(Amount.from(7))).toBe(true);
+    expect(quote.amountPaid.equals(Amount.from(7))).toBe(true);
   });
 
   it('checkPendingOperation preserves monotonic onchain quote counters', async () => {
@@ -1916,7 +2034,7 @@ describe('MintOperationService', () => {
       checkPending: mock(
         async (): Promise<PendingMintCheckResult<'onchain'>> => ({
           observedRemoteStateAt: Date.now(),
-          quoteSnapshot: {
+          quoteSnapshot: cashuNormalizedOnchainFixture({
             quote: onchainQuoteId,
             request: 'bc1qtest',
             unit: 'sat',
@@ -1924,7 +2042,7 @@ describe('MintOperationService', () => {
             pubkey: '02'.padEnd(66, '1'),
             amount_paid: Amount.from(7),
             amount_issued: Amount.from(5),
-          },
+          }),
           category: 'waiting',
         }),
       ),
@@ -1939,8 +2057,8 @@ describe('MintOperationService', () => {
 
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
-    expect(quote.quoteData.amountPaid.equals(Amount.from(10))).toBe(true);
-    expect(quote.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(quote.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(quote.amountIssued.equals(Amount.from(8))).toBe(true);
   });
 
   it('recordQuoteObservation persists the canonical quote before emitting mint-quote:updated', async () => {
@@ -1984,6 +2102,9 @@ describe('MintOperationService', () => {
         expiry: pendingOp.expiry,
         state: 'PAID',
         reusable: false,
+        amountPaid: pendingOp.amount,
+        amountIssued: Amount.zero(),
+        remoteUpdatedAt: null,
         quoteData: {
           amount: pendingOp.amount,
         },
