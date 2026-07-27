@@ -1,6 +1,6 @@
 import type { Logger } from '../logging/Logger.ts';
 import type { WebSocketFactory } from './WsConnectionManager.ts';
-import type { RealTimeTransport } from './RealTimeTransport.ts';
+import type { RealTimeTransport, TransportMessageEvent } from './RealTimeTransport.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { PollingTransport } from './PollingTransport.ts';
 import { HybridTransport } from './HybridTransport.ts';
@@ -124,7 +124,7 @@ export class SubscriptionManager {
 
   private ensureMessageListener(mintUrl: string): void {
     if (this.messageHandlerByMint.has(mintUrl)) return;
-    const handler = (evt: any) => {
+    const handler = (evt: TransportMessageEvent) => {
       try {
         const data = typeof evt.data === 'string' ? evt.data : evt.data?.toString?.();
         if (!data) return;
@@ -147,6 +147,7 @@ export class SubscriptionManager {
               subId,
               active,
               (parsed as WsNotification<unknown>).params.payload,
+              evt.normalizedPayload,
             );
           }
         } else if ('error' in parsed && (parsed as WsResponse).error) {
@@ -229,9 +230,12 @@ export class SubscriptionManager {
     subId: string,
     active: ActiveSubscription<unknown>,
     payload: unknown,
+    normalizedPayload?: unknown,
   ): Promise<void> {
     let deliveredPayload = payload;
-    if (active.kind === 'bolt11_mint_quote') {
+    if (active.kind === 'bolt11_mint_quote' && normalizedPayload !== undefined) {
+      deliveredPayload = normalizedPayload;
+    } else if (active.kind === 'bolt11_mint_quote') {
       const quoteId =
         payload &&
         typeof payload === 'object' &&
@@ -252,10 +256,16 @@ export class SubscriptionManager {
       }
     }
 
+    if (this.subscriptions.get(subId) !== active) return;
+
     for (const cb of active.callbacks) {
-      Promise.resolve(cb(deliveredPayload)).catch((err) =>
-        this.logger?.error('Subscription callback error', { mintUrl, subId, err }),
-      );
+      try {
+        Promise.resolve(cb(deliveredPayload)).catch((err) =>
+          this.logger?.error('Subscription callback error', { mintUrl, subId, err }),
+        );
+      } catch (err) {
+        this.logger?.error('Subscription callback error', { mintUrl, subId, err });
+      }
     }
   }
 

@@ -1138,11 +1138,11 @@ export async function ensureSchema(db: IdbDb): Promise<void> {
               row.amountIssued = normalizeStoredAmount(quoteData.amountIssued) ?? '0';
               delete quoteData.amountPaid;
               delete quoteData.amountIssued;
-              row.quoteDataJson = stringifyJson(quoteData);
             } else {
               row.amountPaid = row.state === 'PAID' || row.state === 'ISSUED' ? amount : '0';
               row.amountIssued = row.state === 'ISSUED' ? amount : '0';
             }
+            row.quoteDataJson = stringifyJson(quoteData);
             row.remoteUpdatedAt = null;
           },
         );

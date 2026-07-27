@@ -119,6 +119,23 @@ describe('indexeddb quote storage constraints', () => {
         createdAt: 1,
         updatedAt: 2,
       },
+      {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'legacy-bolt11-malformed',
+        state: 'PAID',
+        request: 'lnbc1malformed',
+        amount: '13',
+        unit: 'sat',
+        expiry: null,
+        pubkey: null,
+        quoteDataJson: '{not-json',
+        lastObservedRemoteState: 'PAID',
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      },
     ]);
     legacy.close();
 
@@ -140,6 +157,11 @@ describe('indexeddb quote storage constraints', () => {
         'onchain',
         'legacy-malformed',
       );
+      const malformedBolt11 = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'bolt11',
+        'legacy-bolt11-malformed',
+      );
 
       expect(paid?.amountPaid.toString()).toBe('10');
       expect(paid?.amountIssued.toString()).toBe('0');
@@ -150,6 +172,9 @@ describe('indexeddb quote storage constraints', () => {
       expect(malformed?.amountPaid.toString()).toBe('0');
       expect(malformed?.amountIssued.toString()).toBe('0');
       expect(malformed?.remoteUpdatedAt).toBe(null);
+      expect(malformedBolt11?.amountPaid.toString()).toBe('13');
+      expect(malformedBolt11?.amountIssued.toString()).toBe('0');
+      expect(malformedBolt11?.remoteUpdatedAt).toBe(null);
     } finally {
       repositories.db.close();
       await Dexie.delete(dbName);

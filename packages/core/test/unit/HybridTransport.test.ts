@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { HybridTransport } from '../../infra/HybridTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
+import type { TransportMessageEvent } from '../../infra/RealTimeTransport';
 import type { WebSocketLike } from '../../infra/WsConnectionManager';
 import { NullLogger } from '../../logging';
 
@@ -182,6 +183,43 @@ describe('HybridTransport', () => {
   });
 
   describe('message deduplication', () => {
+    it('forwards normalized polling payloads while deduplicating matching WebSocket events', async () => {
+      const normalized = { quote: 'q1', state: 'PAID' as const };
+      const checkMintQuote = mock(async () => normalized);
+      const wsFactory = (_url: string) => mockSocket;
+      const hybrid = new HybridTransport(
+        wsFactory,
+        { checkMintQuote } as unknown as MintAdapter,
+        { slowPollingIntervalMs: 20_000 },
+        new NullLogger(),
+      );
+      const notifications: TransportMessageEvent[] = [];
+      let resolvePolling!: (event: TransportMessageEvent) => void;
+      const pollingEvent = new Promise<TransportMessageEvent>((resolve) => {
+        resolvePolling = resolve;
+      });
+      hybrid.on(mintUrl, 'message', (event: TransportMessageEvent) => {
+        const parsed = JSON.parse(String(event.data));
+        if (parsed.method !== 'subscribe') return;
+        notifications.push(event);
+        if (event.normalizedPayload !== undefined) resolvePolling(event);
+      });
+
+      hybrid.send(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { kind: 'bolt11_mint_quote', subId: 'sub1', filters: ['q1'] },
+        id: 1,
+      });
+      const event = await pollingEvent;
+
+      expect(event.normalizedPayload).toBe(normalized);
+      expect(notifications).toHaveLength(1);
+      mockSocket.triggerMessage(String(event.data));
+      expect(notifications).toHaveLength(1);
+      hybrid.closeAll();
+    });
+
     it('should dedupe same state from both transports', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
