@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import { SubscriptionManager } from '../../infra/SubscriptionManager';
 import type { RealTimeTransport } from '../../infra/RealTimeTransport';
@@ -288,6 +289,59 @@ describe('SubscriptionManager pause/resume', () => {
     const activeByMint = (subManager as any).activeByMint as Map<string, Set<string>>;
     expect(subscriptions.has(subId)).toBe(true);
     expect(activeByMint.get(mintUrl)?.has(subId)).toBe(true);
+
+    await subManager.unsubscribe(mintUrl, subId);
+  });
+
+  it('normalizes raw BOLT11 quote notifications through cashu-ts before delivery', async () => {
+    const mintUrl = 'https://mint.example.com';
+    const normalized = {
+      method: 'bolt11' as const,
+      quote: 'quote1',
+      request: 'lnbc1test',
+      amount: Amount.from(10),
+      unit: 'sat',
+      expiry: null,
+      state: 'PAID' as const,
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.zero(),
+      updated_at: null,
+    };
+    const checkMintQuote = mock(async () => normalized);
+    subManager = new SubscriptionManager(
+      mockTransport,
+      { checkMintQuote } as unknown as MintAdapter,
+      new NullLogger(),
+    );
+    let receivePayload: (payload: typeof normalized) => void = () => {};
+    const receivedPayload = new Promise<typeof normalized>((resolve) => {
+      receivePayload = resolve;
+    });
+
+    const { subId } = await subManager.subscribe<typeof normalized>(
+      mintUrl,
+      'bolt11_mint_quote',
+      ['quote1'],
+      receivePayload,
+    );
+    mockTransport.triggerMessage(mintUrl, {
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        subId,
+        payload: {
+          quote: 'quote1',
+          request: 'lnbc1test',
+          amount: 10,
+          unit: 'sat',
+          amount_paid: 10,
+          amount_issued: 0,
+        },
+      },
+    });
+
+    await expect(receivedPayload).resolves.toBe(normalized);
+    expect(checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', 'quote1');
 
     await subManager.unsubscribe(mintUrl, subId);
   });

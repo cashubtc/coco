@@ -188,7 +188,9 @@ function areMintQuotePollingSnapshotsEqual(
     const rightBolt11 = right as MintMethodQuoteSnapshot<'bolt11'>;
     return (
       Amount.from(leftBolt11.amount).equals(Amount.from(rightBolt11.amount)) &&
-      leftBolt11.state === rightBolt11.state
+      leftBolt11.state === rightBolt11.state &&
+      Amount.from(leftBolt11.amount_paid).equals(Amount.from(rightBolt11.amount_paid)) &&
+      Amount.from(leftBolt11.amount_issued).equals(Amount.from(rightBolt11.amount_issued))
     );
   }
 

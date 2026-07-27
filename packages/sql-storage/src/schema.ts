@@ -1483,7 +1483,11 @@ const MIGRATIONS: readonly Migration[] = [
               THEN COALESCE(CAST(amount AS TEXT), '0')
             ELSE '0'
           END,
-          remoteUpdatedAt = NULL;
+          remoteUpdatedAt = NULL,
+          quoteDataJson = CASE
+            WHEN json_valid(quoteDataJson) THEN quoteDataJson
+            ELSE '{}'
+          END;
     `,
   },
 ];

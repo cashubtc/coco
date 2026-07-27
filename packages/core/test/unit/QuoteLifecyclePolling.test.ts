@@ -297,6 +297,33 @@ describe('QuoteLifecycle mint quote polling', () => {
     expect(await quoteLifecycle.getMintQuotePollingLimit(mintUrl, 'bolt11')).toBe(1);
   });
 
+  it('rejects BOLT11 duplicates with conflicting canonical accounting', async () => {
+    await persistBolt11Quote('quote-a');
+    const first = bolt11PollingSnapshot('quote-a', {
+      amount_paid: Amount.from(10),
+      amount_issued: Amount.zero(),
+    });
+    (mintAdapter.checkMintQuoteBatch as ReturnType<typeof mock>).mockResolvedValueOnce([
+      first,
+      {
+        ...first,
+        amount_paid: Amount.from(12),
+      },
+    ]);
+
+    const result = await quoteLifecycle.checkMintQuotesForPolling('bolt11', [
+      { mintUrl, quoteId: 'quote-a' },
+    ]);
+
+    expect(result.outcomes[0]).toMatchObject({
+      status: 'failed',
+      failure: { category: 'malformed-response' },
+    });
+    await expect(
+      mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', 'quote-a'),
+    ).resolves.toMatchObject({ state: 'UNPAID' });
+  });
+
   it('normalizes units when identifying equivalent duplicate observations', async () => {
     await persistBolt11Quote('quote-a');
     const valid = bolt11PollingSnapshot('quote-a');

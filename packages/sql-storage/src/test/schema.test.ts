@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { ensureSchemaUpTo, MIGRATIONS, type SqlDatabase } from '../index.ts';
+import {
+  ensureSchemaUpTo,
+  MIGRATIONS,
+  SqliteMintQuoteRepository,
+  type SqlDatabase,
+} from '../index.ts';
 import { createBunSqlDatabase } from './bunSqlDatabase.ts';
 
 const EXPECTED_MIGRATION_IDS = [
@@ -273,6 +278,16 @@ describe('shared SQL schema migrations', () => {
           remoteUpdatedAt: null,
         },
       ]);
+
+      const mintQuoteRepository = new SqliteMintQuoteRepository(db);
+      const malformed = await mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'onchain',
+        'onchain-malformed',
+      );
+      expect(malformed?.method).toBe('onchain');
+      expect(malformed?.amountPaid.toString()).toBe('0');
+      expect(malformed?.amountIssued.toString()).toBe('0');
     },
   );
 
