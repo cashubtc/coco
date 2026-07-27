@@ -179,6 +179,7 @@ function areMintQuotePollingSnapshotsEqual(
     left.request !== right.request ||
     normalizeUnit(left.unit) !== normalizeUnit(right.unit) ||
     left.expiry !== right.expiry ||
+    left.updated_at !== right.updated_at ||
     left.pubkey !== right.pubkey
   ) {
     return false;
