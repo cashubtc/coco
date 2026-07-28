@@ -985,6 +985,8 @@ export class Manager {
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: quoteLifecycleLogger,
+      withMintQuoteTransaction: (fn) =>
+        repositories.withTransaction(({ mintQuoteRepository }) => fn(mintQuoteRepository)),
     });
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,

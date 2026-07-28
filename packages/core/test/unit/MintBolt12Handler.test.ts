@@ -6,6 +6,7 @@ import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MintBolt12Handler } from '../../infra/handlers/mint/MintBolt12Handler';
 import type { Logger } from '../../logging/Logger';
+import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
 import type { MintService } from '../../services/MintService';
@@ -13,6 +14,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
 import type {
   ExecuteContext,
+  FetchRemoteMintQuoteContext,
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
@@ -91,6 +93,17 @@ describe('MintBolt12Handler', () => {
     eventBus,
     logger,
     ...overrides,
+  });
+
+  const buildFetchRemoteQuoteContext = (): FetchRemoteMintQuoteContext<'bolt12'> => ({
+    quote: mintQuoteFromBolt12Response(mintUrl, quote()),
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
   });
 
   const buildPendingContext = (remoteQuote: MintQuoteBolt12Response): PendingContext<'bolt12'> => {
@@ -173,6 +186,22 @@ describe('MintBolt12Handler', () => {
     expect(result.quoteId).toBe(quoteId);
     expect(result.pubkey).toBe(pubkey);
     expect(result.reusable).toBe(true);
+  });
+
+  it('fetches the latest BOLT12 quote through the mint adapter', async () => {
+    const remoteQuote = quote({
+      amount_paid: Amount.from(21),
+      amount_issued: Amount.from(8),
+      updated_at: 20,
+    });
+    (mintAdapter.checkMintQuote as Mock<any>).mockImplementationOnce(async () => remoteQuote);
+
+    const result = await handler.fetchRemoteQuote(buildFetchRemoteQuoteContext());
+
+    expect(mintAdapter.checkMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt12', quoteId);
+    expect(result.amountPaid.equals(Amount.from(21))).toBe(true);
+    expect(result.amountIssued.equals(Amount.from(8))).toBe(true);
+    expect(result.remoteUpdatedAt).toBe(20);
   });
 
   it('rejects fixed-amount quotes when the mint omits the response amount', async () => {

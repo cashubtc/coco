@@ -41,12 +41,14 @@ jobs:
       - name: Run core custom-unit integration tests
         run: ./scripts/test-integration.sh core --custom-unit usd
 
+      - name: Normalize core integration coverage paths
+        run: sed -i 's|^SF:|SF:packages/core/|' packages/core/coverage/integration/lcov.info
+
       - name: Upload core integration coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         uses: codecov/codecov-action@v7
         with:
-          working-directory: packages/core
-          files: coverage/integration/lcov.info
+          files: packages/core/coverage/integration/lcov.info
           disable_search: true
           fail_ci_if_error: true
           flags: core-integration
