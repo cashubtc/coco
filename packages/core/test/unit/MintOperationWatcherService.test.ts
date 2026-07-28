@@ -359,7 +359,7 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('records PAID subscription updates without re-checking the quote remotely', async () => {
+  it('records paid accounting even when the compatibility state contradicts it', async () => {
     const operation = makePendingOperation();
     const observePendingOperation = mock(async () => {
       throw new Error('should not re-check');
@@ -376,8 +376,8 @@ describe('MintOperationWatcherService', () => {
         expiry: quote.expiry,
         state: quote.state,
         reusable: false as const,
-        amountPaid: quote.state === 'UNPAID' ? Amount.zero() : quote.amount,
-        amountIssued: quote.state === 'ISSUED' ? quote.amount : Amount.zero(),
+        amountPaid: Amount.from(quote.amount_paid),
+        amountIssued: Amount.from(quote.amount_issued),
         remoteUpdatedAt: quote.updated_at,
         quoteData: {
           amount: quote.amount,
@@ -419,7 +419,10 @@ describe('MintOperationWatcherService', () => {
       amount: operation.amount,
       unit: operation.unit,
       expiry: operation.expiry,
-      state: 'PAID',
+      state: 'UNPAID',
+      amount_paid: operation.amount,
+      amount_issued: Amount.zero(),
+      updated_at: 20,
     });
 
     expect(getOperation).not.toHaveBeenCalled();
@@ -427,14 +430,19 @@ describe('MintOperationWatcherService', () => {
     expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
-      expect.objectContaining({ quote: quoteId, state: 'PAID' }),
+      expect.objectContaining({
+        quote: quoteId,
+        state: 'UNPAID',
+        amount_paid: operation.amount,
+        amount_issued: Amount.zero(),
+      }),
     );
     expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
   });
 
-  it('stops watching expired subscription updates without recording unimportant states', async () => {
+  it('records canonical accounting before stopping an expired subscription', async () => {
     const operation = makePendingOperation();
     const recordMintQuoteSnapshot = mock(async () => makeBolt11Quote());
 
@@ -463,15 +471,18 @@ describe('MintOperationWatcherService', () => {
       unit: operation.unit,
       expiry: Math.floor(Date.now() / 1000) - 1,
       state: 'UNPAID',
+      amount_paid: Amount.zero(),
+      amount_issued: Amount.zero(),
+      updated_at: 20,
     });
 
-    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledTimes(1);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 
     await watcher.stop();
   });
 
-  it('records ISSUED subscription updates and stops watching the operation', async () => {
+  it('stops on issued accounting even when the compatibility state contradicts it', async () => {
     const operation = makePendingOperation();
     const recordMintQuoteSnapshot = mock(
       async (_mintUrl: string, _method: string, quote: MintQuoteBolt11Response) => ({
@@ -485,8 +496,8 @@ describe('MintOperationWatcherService', () => {
         expiry: quote.expiry,
         state: quote.state,
         reusable: false as const,
-        amountPaid: quote.state === 'UNPAID' ? Amount.zero() : quote.amount,
-        amountIssued: quote.state === 'ISSUED' ? quote.amount : Amount.zero(),
+        amountPaid: Amount.from(quote.amount_paid),
+        amountIssued: Amount.from(quote.amount_issued),
         remoteUpdatedAt: quote.updated_at,
         quoteData: {
           amount: quote.amount,
@@ -523,13 +534,21 @@ describe('MintOperationWatcherService', () => {
       amount: operation.amount,
       unit: operation.unit,
       expiry: operation.expiry,
-      state: 'ISSUED',
+      state: 'PAID',
+      amount_paid: operation.amount,
+      amount_issued: operation.amount,
+      updated_at: 21,
     });
 
     expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
       mintUrl,
       'bolt11',
-      expect.objectContaining({ quote: quoteId, state: 'ISSUED' }),
+      expect.objectContaining({
+        quote: quoteId,
+        state: 'PAID',
+        amount_paid: operation.amount,
+        amount_issued: operation.amount,
+      }),
     );
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 

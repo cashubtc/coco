@@ -1,21 +1,36 @@
 import type { EventBus, CoreEvents } from '../../events/index.ts';
 import type { Logger } from '../../logging/Logger.ts';
+import { redactError } from '../../logging/redaction.ts';
 import type { MintSwapOperationService } from '../../operations/mintSwap/index.ts';
 import type { Repositories } from '../../repositories/index.ts';
+import { OperationInProgressError } from '../../models/Error.ts';
 import { OperationEventOutboxPublisher } from '../OperationEventOutboxPublisher.ts';
 
 export interface MintSwapOperationProcessorOptions {
   sweepIntervalMs?: number;
   dueBatchSize?: number;
+  /** @deprecated Use the state-specific retry delay options. */
   baseRetryDelayMs?: number;
+  /** @deprecated Use the state-specific retry delay options. */
   maxRetryDelayMs?: number;
+  sourceBaseRetryDelayMs?: number;
+  sourceMaxRetryDelayMs?: number;
+  postPaymentBaseRetryDelayMs?: number;
+  postPaymentMaxRetryDelayMs?: number;
+  outboxBaseRetryDelayMs?: number;
+  outboxMaxRetryDelayMs?: number;
+  /** @internal Deterministic jitter source for tests. */
+  random?: () => number;
 }
 
 export class MintSwapOperationProcessor {
   private readonly sweepIntervalMs: number;
   private readonly dueBatchSize: number;
-  private readonly baseRetryDelayMs: number;
-  private readonly maxRetryDelayMs: number;
+  private readonly sourceBaseRetryDelayMs: number;
+  private readonly sourceMaxRetryDelayMs: number;
+  private readonly postPaymentBaseRetryDelayMs: number;
+  private readonly postPaymentMaxRetryDelayMs: number;
+  private readonly random: () => number;
   private readonly outbox: OperationEventOutboxPublisher;
   private running = false;
   private sweeping = false;
@@ -33,13 +48,23 @@ export class MintSwapOperationProcessor {
   ) {
     this.sweepIntervalMs = options.sweepIntervalMs ?? 5_000;
     this.dueBatchSize = options.dueBatchSize ?? 50;
-    this.baseRetryDelayMs = options.baseRetryDelayMs ?? 1_000;
-    this.maxRetryDelayMs = options.maxRetryDelayMs ?? 60_000;
+    this.sourceBaseRetryDelayMs =
+      options.sourceBaseRetryDelayMs ?? options.baseRetryDelayMs ?? 1_000;
+    this.sourceMaxRetryDelayMs = options.sourceMaxRetryDelayMs ?? options.maxRetryDelayMs ?? 30_000;
+    this.postPaymentBaseRetryDelayMs =
+      options.postPaymentBaseRetryDelayMs ?? options.baseRetryDelayMs ?? 2_000;
+    this.postPaymentMaxRetryDelayMs =
+      options.postPaymentMaxRetryDelayMs ?? options.maxRetryDelayMs ?? 300_000;
+    this.random = options.random ?? Math.random;
     this.outbox = new OperationEventOutboxPublisher(
       repositories.operationEventOutboxRepository,
       bus,
       logger,
-      options,
+      {
+        baseRetryDelayMs: options.outboxBaseRetryDelayMs,
+        maxRetryDelayMs: options.outboxMaxRetryDelayMs,
+        random: options.random,
+      },
     );
   }
 
@@ -143,6 +168,9 @@ export class MintSwapOperationProcessor {
       await this.service.recordProcessorSuccess(operationId);
       await this.outbox.publishDue();
     } catch (error) {
+      // A foreground command owns the parent lock. It will persist the next durable state and a
+      // later event/sweep can reconcile it; this is not a remote failure and needs no backoff.
+      if (error instanceof OperationInProgressError) return;
       const operation = await this.service.get(operationId);
       if (
         !operation ||
@@ -154,11 +182,15 @@ export class MintSwapOperationProcessor {
         return;
       }
       const attempt = operation.retry.attemptCount + 1;
-      const delay = Math.min(
-        this.maxRetryDelayMs,
-        this.baseRetryDelayMs * 2 ** Math.min(attempt - 1, 16),
-      );
-      const message = error instanceof Error ? error.message : String(error);
+      const afterPayment =
+        operation.state === 'destination_funded' || operation.state === 'issuing';
+      const baseDelay = afterPayment
+        ? this.postPaymentBaseRetryDelayMs
+        : this.sourceBaseRetryDelayMs;
+      const maxDelay = afterPayment ? this.postPaymentMaxRetryDelayMs : this.sourceMaxRetryDelayMs;
+      const retryCeiling = Math.min(maxDelay, baseDelay * 2 ** Math.min(attempt - 1, 16));
+      const delay = Math.floor(this.random() * Math.max(1, retryCeiling));
+      const message = redactError(error);
       await this.service.recordProcessorFailure(operationId, message, Date.now() + delay);
       this.logger?.warn('Mint swap reconciliation delayed', {
         operationId,
@@ -175,7 +207,7 @@ export class MintSwapOperationProcessor {
       const task = this.sweep()
         .catch((error) => {
           this.logger?.warn('Mint swap periodic sweep failed', {
-            error: error instanceof Error ? error.message : String(error),
+            error: redactError(error),
           });
         })
         .finally(() => {

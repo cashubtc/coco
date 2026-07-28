@@ -11,7 +11,7 @@ describe('resolveMintQuoteObservation', () => {
   const mintUrl = 'https://mint.test';
   const expiry = Math.floor(Date.now() / 1000) + 3600;
 
-  it('classifies a forward BOLT11 state transition as meaningful', () => {
+  it('treats a compatibility-only BOLT11 state transition as freshness-only', () => {
     const existing = mintQuoteFromBolt11Fixture(mintUrl, {
       quote: 'bolt11-state-change',
       request: 'lnbc1test',
@@ -29,8 +29,9 @@ describe('resolveMintQuoteObservation', () => {
 
     const resolution = resolveMintQuoteObservation(existing, incoming);
 
-    expect(resolution.disposition).toBe('accepted-meaningful-change');
-    expect(resolution.resolvedQuote).toBe(incoming);
+    expect(resolution.disposition).toBe('accepted-freshness-only');
+    expect(resolution.resolvedQuote.state).toBe('PAID');
+    expect(resolution.resolvedQuote.remoteUpdatedAt).toBe(21);
   });
 
   it('classifies freshness-only changes for amountless BOLT12 quotes', () => {

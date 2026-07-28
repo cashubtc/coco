@@ -11,3 +11,9 @@ export function sensitiveValueFingerprint(value: string): string {
 export function redactSensitiveValue(value: string): string {
   return `[redacted:${sensitiveValueFingerprint(value)}]`;
 }
+
+/** Converts an arbitrary failure into a correlation token without retaining its message. */
+export function redactError(error: unknown): string {
+  const value = error instanceof Error ? error.message : String(error);
+  return `error:${redactSensitiveValue(value)}`;
+}

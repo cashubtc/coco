@@ -15,7 +15,7 @@ describe('IndexedDB mint-swap migration', () => {
     try {
       await repositories.init();
 
-      expect(repositories.db.verno).toBe(33);
+      expect(repositories.db.verno).toBe(34);
       const parent = repositories.db.table('coco_cashu_mint_swap_operations');
       const outbox = repositories.db.table('coco_cashu_operation_event_outbox');
       expect(parent.schema.primKey.name).toBe('id');

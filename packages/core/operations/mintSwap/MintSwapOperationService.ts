@@ -8,8 +8,13 @@ import {
 } from '@cashu/cashu-ts';
 
 import type { Logger } from '../../logging/Logger.ts';
+import { redactError } from '../../logging/redaction.ts';
 import type { MeltQuote } from '../../models/MeltQuote.ts';
-import type { MintQuote } from '../../models/MintQuote.ts';
+import {
+  getMintQuoteAvailableAmount,
+  isStatefulMintQuote,
+  type MintQuote,
+} from '../../models/MintQuote.ts';
 import type { OperationEventOutboxRecord } from '../../models/OperationEventOutbox.ts';
 import { evaluateMintSwapDispatchWindow } from '../../models/MintSwapPolicy.ts';
 import type { Repositories, RepositoryTransactionScope } from '../../repositories/index.ts';
@@ -32,6 +37,7 @@ import {
   createMintSwapPreparedPlanFingerprint,
   isTerminalMintSwapState,
   validateMintSwapAccounting,
+  type MintSwapAttentionReason,
   type MintSwapEventType,
   type MintSwapOperation,
   type MintSwapOperationState,
@@ -144,9 +150,14 @@ export class MintSwapOperationService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.repositories.mintSwapOperationRepository.create(initial);
 
+    // The parent becomes visible to recovery as soon as it is created. Hold the same operation
+    // lock used by refresh/retry before persistence so a periodic sweep cannot mistake a live,
+    // long-running preparation for an interrupted one.
+    const releaseOperationLock = await this.operationLock.acquire(operationId);
     try {
+      await this.repositories.mintSwapOperationRepository.create(initial);
+
       // Persist recovery-critical NUT-20 key material before creating the remote locked quote.
       const keyPair = await this.keyRingService.generateMintQuoteKeyPair();
       if (keyPair.derivationIndex === undefined) {
@@ -248,6 +259,8 @@ export class MintSwapOperationService {
     } catch (cause) {
       await this.failPreparation(operationId);
       throw new MintSwapPreparationError(operationId, cause);
+    } finally {
+      releaseOperationLock();
     }
   }
 
@@ -262,12 +275,26 @@ export class MintSwapOperationService {
     return this.withOperationLock(operationId, async () => {
       const operation = await this.requireOperation(operationId);
       if (operation.state !== 'prepared') return operation;
-      await this.assertPreflight(
-        operation.sourceMintUrl,
-        operation.destinationMintUrl,
-        operation.destinationAmount,
-      );
-      this.assertDispatchWindow(operation);
+      const violation = await this.getPreparedPlanViolation(operation);
+      if (violation) {
+        return this.moveToAttention(operation, violation.reason, violation.message);
+      }
+      try {
+        await this.assertPreflight(
+          operation.sourceMintUrl,
+          operation.destinationMintUrl,
+          operation.destinationAmount,
+        );
+        await this.requireDestinationRecoveryKey(operation);
+        this.assertDispatchWindow(operation);
+      } catch (error) {
+        await this.failPreparedBeforeDispatch(
+          operation,
+          'dispatch_preflight_failed',
+          'Mint swap dispatch requirements were no longer satisfied',
+        );
+        throw error;
+      }
 
       // Commit both child and parent authorization before the irreversible remote melt call.
       let executingChild!: ExecutingMeltOperation;
@@ -463,6 +490,12 @@ export class MintSwapOperationService {
 
   private async refreshUnlocked(operationId: string): Promise<MintSwapOperation> {
     const operation = await this.requireOperation(operationId);
+    if (operation.preparedPlan && operation.state !== 'needs_attention') {
+      const violation = await this.getPreparedPlanViolation(operation);
+      if (violation) {
+        return this.moveToAttention(operation, violation.reason, violation.message);
+      }
+    }
     switch (operation.state) {
       case 'preparing':
         return this.recoverPreparing(operation);
@@ -578,6 +611,29 @@ export class MintSwapOperationService {
   }
 
   private async issueDestination(operation: MintSwapOperation): Promise<MintSwapOperation> {
+    if (!(await this.hasDestinationRecoveryKey(operation))) {
+      return this.moveToAttention(
+        operation,
+        'required_recovery_capability_missing',
+        'Destination NUT-20 recovery key is unavailable after source payment',
+      );
+    }
+    let quote: MintQuote<'bolt11'>;
+    try {
+      quote = await this.refreshDestinationAccounting(operation);
+    } catch (error) {
+      if (!(error instanceof MintSwapAccountingContradictionError)) throw error;
+      return this.moveToAttention(operation, 'canonical_observation_conflict', error.message);
+    }
+    if (
+      quote.amountIssued.isZero() &&
+      getMintQuoteAvailableAmount(quote).lessThan(operation.destinationAmount)
+    ) {
+      // Source payment is canonical, but the destination has not exposed enough mintable value.
+      // Stay forward-only and let durable recovery poll again without attempting issuance.
+      return this.requireOperation(operation.id);
+    }
+
     // As with the source leg, durable authorization precedes remote issuance.
     let executingChild!: ExecutingMintOperation;
     await this.repositories.withTransaction(async (scope) => {
@@ -597,6 +653,11 @@ export class MintSwapOperationService {
         'mint-swap-op:issuing',
       );
     });
+    if (!quote.amountIssued.isZero()) {
+      // Any observed issuance makes another POST unsafe. Recover only the persisted output plan.
+      await this.mintOperationService.recoverOwnedExecuting(executingChild, operation.id);
+      return this.requireOperation(operation.id);
+    }
     const result = await this.mintOperationService.executeOwnedRemote(executingChild, operation.id);
     try {
       await this.repositories.withTransaction(async (scope) => {
@@ -637,6 +698,15 @@ export class MintSwapOperationService {
         if (!(error instanceof MintSwapAccountingContradictionError)) throw error;
         return this.moveToAttention(operation, 'accounting_mismatch', error.message);
       }
+    } else if (
+      (child.state === 'executing' || child.state === 'pending') &&
+      !(await this.hasDestinationRecoveryKey(operation))
+    ) {
+      return this.moveToAttention(
+        operation,
+        'required_recovery_capability_missing',
+        'Destination NUT-20 recovery key is unavailable after source payment',
+      );
     } else if (child.state === 'executing') {
       await this.mintOperationService.recoverOwnedExecuting(child, operation.id);
     } else if (child.state === 'pending') {
@@ -655,6 +725,20 @@ export class MintSwapOperationService {
     operation: MintSwapOperation,
     childId: string,
   ): Promise<MintSwapOperation> {
+    let quote: MintQuote<'bolt11'>;
+    try {
+      quote = await this.refreshDestinationAccounting(operation);
+    } catch (error) {
+      if (!(error instanceof MintSwapAccountingContradictionError)) throw error;
+      return this.moveToAttention(operation, 'canonical_observation_conflict', error.message);
+    }
+    if (
+      quote.amountIssued.isZero() &&
+      getMintQuoteAvailableAmount(quote).lessThan(operation.destinationAmount)
+    ) {
+      return this.requireOperation(operation.id);
+    }
+
     let executing!: ExecutingMintOperation;
     await this.repositories.withTransaction(async (scope) => {
       executing = await this.mintOperationService.authorizeOwnedExecutionInTransaction(
@@ -667,6 +751,10 @@ export class MintSwapOperationService {
         destinationIssueAuthorizedAt: current.destinationIssueAuthorizedAt ?? Date.now(),
       }));
     });
+    if (!quote.amountIssued.isZero()) {
+      await this.mintOperationService.recoverOwnedExecuting(executing, operation.id);
+      return this.requireOperation(operation.id);
+    }
     const result = await this.mintOperationService.executeOwnedRemote(executing, operation.id);
     await this.repositories.withTransaction(async (scope) => {
       const finalized = await this.mintOperationService.applyOwnedExecutionInTransaction(
@@ -680,6 +768,38 @@ export class MintSwapOperationService {
       }
     });
     return this.requireOperation(operation.id);
+  }
+
+  /**
+   * Refreshes and validates the destination's canonical Mint Quote Accounting before any issuance
+   * or restoration decision. The deprecated BOLT11 state projection is intentionally ignored.
+   */
+  private async refreshDestinationAccounting(
+    operation: MintSwapOperation,
+  ): Promise<MintQuote<'bolt11'>> {
+    const quoteRef = operation.destinationQuoteRef;
+    if (!quoteRef) {
+      throw new MintSwapAccountingContradictionError('Destination quote reference is missing');
+    }
+    const quote = await this.quoteLifecycle.refreshMintQuote(
+      quoteRef.mintUrl,
+      quoteRef.method,
+      quoteRef.quoteId,
+    );
+    if (
+      !isStatefulMintQuote(quote) ||
+      quote.mintUrl !== operation.destinationMintUrl ||
+      quote.quoteId !== quoteRef.quoteId ||
+      quote.unit !== operation.unit ||
+      !quote.amount.equals(operation.destinationAmount) ||
+      quote.pubkey !== operation.destinationNut20Key?.publicKey ||
+      quote.remoteUpdatedAt === null
+    ) {
+      throw new MintSwapAccountingContradictionError(
+        'Destination quote no longer matches the prepared mint swap or lacks current accounting',
+      );
+    }
+    return quote;
   }
 
   private async advanceSourceFundedInScope(
@@ -889,6 +1009,71 @@ export class MintSwapOperationService {
     ]);
   }
 
+  private async getPreparedPlanViolation(
+    operation: MintSwapOperation,
+  ): Promise<{ reason: MintSwapAttentionReason; message: string } | null> {
+    const [destinationChild, sourceChild] = await Promise.all([
+      this.repositories.mintOperationRepository.getById(operation.destinationMintOperationId!),
+      this.repositories.meltOperationRepository.getById(operation.sourceMeltOperationId!),
+    ]);
+    if (
+      !destinationChild ||
+      destinationChild.parentSwapOperationId !== operation.id ||
+      !sourceChild ||
+      sourceChild.parentSwapOperationId !== operation.id
+    ) {
+      return {
+        reason: 'ownership_conflict',
+        message: 'Mint swap child ownership no longer matches the prepared plan',
+      };
+    }
+    if (
+      !('outputData' in destinationChild) ||
+      !('inputProofSecrets' in sourceChild) ||
+      !('changeOutputData' in sourceChild)
+    ) {
+      return {
+        reason: 'missing_post_effect_recovery_material',
+        message: 'Mint swap child recovery material is incomplete',
+      };
+    }
+    const fingerprint = createMintSwapPreparedPlanFingerprint({
+      destinationMintOperationId: destinationChild.id,
+      sourceMeltOperationId: sourceChild.id,
+      destinationQuoteRef: operation.destinationQuoteRef!,
+      sourceQuoteRef: operation.sourceQuoteRef!,
+      destinationAmount: operation.destinationAmount,
+      unit: 'sat',
+      sourceInputProofSecrets: sourceChild.inputProofSecrets,
+      destinationOutputData: destinationChild.outputData,
+      sourceOutputData: {
+        changeOutputData: sourceChild.changeOutputData,
+        swapOutputData: sourceChild.swapOutputData,
+      },
+      maximumSourceDebit: operation.preparedPlan!.maximumSourceDebit,
+    });
+    if (fingerprint !== operation.preparedPlan!.fingerprint) {
+      return {
+        reason: 'prepared_plan_mismatch',
+        message: 'Mint swap child data no longer matches the authorized prepared plan',
+      };
+    }
+    return null;
+  }
+
+  private async hasDestinationRecoveryKey(operation: MintSwapOperation): Promise<boolean> {
+    const keyRef = operation.destinationNut20Key;
+    if (!keyRef) return false;
+    const key = await this.keyRingService.getMintQuoteKeyPair(keyRef.publicKey);
+    return key?.derivationIndex === keyRef.derivationIndex;
+  }
+
+  private async requireDestinationRecoveryKey(operation: MintSwapOperation): Promise<void> {
+    if (!(await this.hasDestinationRecoveryKey(operation))) {
+      throw new Error('Destination NUT-20 recovery key is unavailable');
+    }
+  }
+
   private assertDestinationQuote(
     quote: MintQuote,
     amount: Amount,
@@ -898,9 +1083,12 @@ export class MintSwapOperationService {
       quote.method !== 'bolt11' ||
       quote.unit !== 'sat' ||
       !quote.amount.equals(amount) ||
-      quote.pubkey !== expectedPublicKey
+      quote.pubkey !== expectedPublicKey ||
+      quote.remoteUpdatedAt === null
     ) {
-      throw new Error('Destination quote does not match the mint swap intent');
+      throw new Error(
+        'Destination quote does not match the mint swap intent or lacks current accounting',
+      );
     }
   }
 
@@ -950,14 +1138,50 @@ export class MintSwapOperationService {
     } catch (error) {
       this.logger?.warn('Failed to persist mint swap preparation failure', {
         operationId,
-        error: error instanceof Error ? error.message : String(error),
+        error: redactError(error),
       });
+    }
+  }
+
+  private async failPreparedBeforeDispatch(
+    operation: MintSwapOperation,
+    code: string,
+    reason: string,
+  ): Promise<MintSwapOperation> {
+    try {
+      const wallet = await this.getWallet(operation.sourceMintUrl);
+      await this.repositories.withTransaction(async (scope) => {
+        await this.meltOperationService.rollbackOwnedPreparedInTransaction(
+          operation.sourceMeltOperationId!,
+          operation.id,
+          wallet,
+          scope,
+          reason,
+        );
+        await this.casInScope(
+          scope,
+          operation.id,
+          (current) => ({
+            ...current,
+            state: 'failed',
+            terminalFailure: { code, reason, at: Date.now() },
+          }),
+          'mint-swap-op:failed',
+        );
+      });
+      return this.requireOperation(operation.id);
+    } catch {
+      return this.moveToAttention(
+        operation,
+        'source_reclamation_unproven',
+        'Source reservation could not be reclaimed before dispatch',
+      );
     }
   }
 
   private async moveToAttention(
     operation: MintSwapOperation,
-    reason: 'ownership_conflict' | 'accounting_mismatch' | 'source_paid_destination_terminal',
+    reason: MintSwapAttentionReason,
     message: string,
   ): Promise<MintSwapOperation> {
     return this.mutate(

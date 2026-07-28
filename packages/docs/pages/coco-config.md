@@ -46,8 +46,16 @@ export interface CocoConfig {
       disabled?: boolean;
       sweepIntervalMs?: number;
       dueBatchSize?: number;
+      /** @deprecated Prefer the state-specific retry options below. */
       baseRetryDelayMs?: number;
+      /** @deprecated Prefer the state-specific retry options below. */
       maxRetryDelayMs?: number;
+      sourceBaseRetryDelayMs?: number;
+      sourceMaxRetryDelayMs?: number;
+      postPaymentBaseRetryDelayMs?: number;
+      postPaymentMaxRetryDelayMs?: number;
+      outboxBaseRetryDelayMs?: number;
+      outboxMaxRetryDelayMs?: number;
     };
   };
 }

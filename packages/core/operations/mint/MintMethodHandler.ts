@@ -64,6 +64,7 @@ export interface MintMethodDefinitions {
     quoteData: {
       amount: Amount;
     };
+    /** @deprecated Compatibility projection of canonical Mint Quote Accounting. */
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
     quote: MintQuoteBolt11Response;
   };
@@ -156,6 +157,8 @@ export interface RecoverExecutingContext<
 > extends BaseHandlerDeps {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
+  /** Canonical quote persisted before operation recovery is allowed to advance. */
+  canonicalQuote?: MintQuote<M>;
 }
 
 export interface PendingContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
@@ -184,6 +187,7 @@ export type RecoverExecutingResult =
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
 export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
+  /** @deprecated Return `quoteSnapshot` with canonical accounting whenever available. */
   observedRemoteState?: MintMethodRemoteState<M>;
   observedRemoteStateAt: number;
   quoteSnapshot?: MintMethodQuoteSnapshot<M>;

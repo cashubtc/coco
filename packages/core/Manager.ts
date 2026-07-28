@@ -79,6 +79,8 @@ import type { Plugin, PluginExtensions, ServiceMap } from './plugin.ts';
 import { QuoteLifecycle } from './quotes/QuoteLifecycle.ts';
 import {
   getMintQuoteAmount,
+  isBolt11MintQuoteIssued,
+  isBolt11MintQuotePaid,
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
@@ -161,6 +163,12 @@ export interface CocoConfig {
       dueBatchSize?: number;
       baseRetryDelayMs?: number;
       maxRetryDelayMs?: number;
+      sourceBaseRetryDelayMs?: number;
+      sourceMaxRetryDelayMs?: number;
+      postPaymentBaseRetryDelayMs?: number;
+      postPaymentMaxRetryDelayMs?: number;
+      outboxBaseRetryDelayMs?: number;
+      outboxMaxRetryDelayMs?: number;
     };
   };
   /**
@@ -598,6 +606,12 @@ export class Manager {
     dueBatchSize?: number;
     baseRetryDelayMs?: number;
     maxRetryDelayMs?: number;
+    sourceBaseRetryDelayMs?: number;
+    sourceMaxRetryDelayMs?: number;
+    postPaymentBaseRetryDelayMs?: number;
+    postPaymentMaxRetryDelayMs?: number;
+    outboxBaseRetryDelayMs?: number;
+    outboxMaxRetryDelayMs?: number;
   }): Promise<boolean> {
     if (this.disposed) return false;
     if (this.mintSwapOperationProcessor?.isRunning()) return false;
@@ -671,7 +685,7 @@ export class Manager {
         continue;
       }
 
-      if (quote.state === 'ISSUED') {
+      if (isBolt11MintQuoteIssued(quote)) {
         skipped.push(quote.quote);
         continue;
       }
@@ -823,7 +837,7 @@ export class Manager {
         operation.method,
         operation.quoteId,
       );
-      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
+      if (!quote || !isStatefulMintQuote(quote) || !isBolt11MintQuotePaid(quote)) continue;
 
       const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
       if (!trusted) {

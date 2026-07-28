@@ -41,6 +41,7 @@ export type {
   OperationEventOutboxRecord,
 } from './models/index.ts';
 export {
+  applyBolt11MintQuoteStateFallback,
   compareHistoryEntries,
   getMintQuoteAmount,
   getMintQuoteRemoteState,

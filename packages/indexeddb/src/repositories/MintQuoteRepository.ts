@@ -1,5 +1,6 @@
 import type { MintQuoteRepository } from '@cashu/coco-core/adapter';
 import {
+  applyBolt11MintQuoteStateFallback,
   deserializeAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
@@ -188,13 +189,9 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       .table('coco_cashu_canonical_mint_quotes')
       .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
     if (!existing) return;
-    await (this.db as any).table('coco_cashu_canonical_mint_quotes').put({
-      ...existing,
-      state,
-      amountPaid: state === 'UNPAID' ? '0' : existing.amount,
-      amountIssued: state === 'ISSUED' ? existing.amount : '0',
-      updatedAt: observedAt,
-    } as MintQuoteRow);
+    const quote = rowToMintQuote(existing);
+    if (!isStatefulMintQuote(quote)) return;
+    await this.upsertMintQuote(applyBolt11MintQuoteStateFallback(quote, state, observedAt));
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {

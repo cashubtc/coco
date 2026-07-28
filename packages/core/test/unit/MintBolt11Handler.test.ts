@@ -358,7 +358,12 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
-    it('returns the observed remote state with a normalized ready category', async () => {
+    it('uses canonical accounting when the compatibility state is contradictory', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+        ...quote,
+        state: 'UNPAID',
+      });
+
       const result = await handler.checkPending(buildPendingContext());
 
       expect(result.observedRemoteState).toBe('PAID');

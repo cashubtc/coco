@@ -216,12 +216,21 @@ await initializeCoco({
     mintSwapOperationProcessor: {
       sweepIntervalMs: 5_000,
       dueBatchSize: 50,
-      baseRetryDelayMs: 1_000,
-      maxRetryDelayMs: 60_000,
+      sourceBaseRetryDelayMs: 1_000,
+      sourceMaxRetryDelayMs: 30_000,
+      postPaymentBaseRetryDelayMs: 2_000,
+      postPaymentMaxRetryDelayMs: 300_000,
+      outboxBaseRetryDelayMs: 1_000,
+      outboxMaxRetryDelayMs: 60_000,
     },
   },
 });
 ```
+
+Retries use exponential full jitter. Source-side reconciliation is capped at 30 seconds, while
+post-payment destination recovery can back off to five minutes because it must keep retrying
+ambiguous issuance without converting temporary unavailability into failure. Durable event
+delivery uses its own one-minute cap.
 
 Disabling the processor stops automatic reconciliation and outbox publication; explicit
 `refresh()` and startup recovery remain available.

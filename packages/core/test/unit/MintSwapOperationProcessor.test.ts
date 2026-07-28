@@ -1,6 +1,8 @@
+import { Amount } from '@cashu/cashu-ts';
 import { describe, expect, it, mock } from 'bun:test';
 
 import { EventBus, type CoreEvents } from '../../events/index.ts';
+import { OperationInProgressError } from '../../models/Error.ts';
 import type { OperationEventOutboxRecord } from '../../models/OperationEventOutbox.ts';
 import type { MintSwapOperationService } from '../../operations/mintSwap/index.ts';
 import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
@@ -41,7 +43,7 @@ describe('OperationEventOutboxPublisher', () => {
       repositories.operationEventOutboxRepository,
       bus,
       undefined,
-      { baseRetryDelayMs: 10 },
+      { baseRetryDelayMs: 10, random: () => 0.999 },
     );
 
     await publisher.publishDue(100);
@@ -109,7 +111,7 @@ describe('MintSwapOperationProcessor', () => {
       repositories,
       new EventBus<CoreEvents>(),
       undefined,
-      { sweepIntervalMs: 60_000, baseRetryDelayMs: 100 },
+      { sweepIntervalMs: 60_000, baseRetryDelayMs: 100, random: () => 0.5 },
     );
 
     const before = Date.now();
@@ -117,7 +119,85 @@ describe('MintSwapOperationProcessor', () => {
     await tick();
     await processor.stop();
     expect(recordFailure).toHaveBeenCalledTimes(1);
-    expect(recordFailure.mock.calls[0]![2]).toBeGreaterThanOrEqual(before + 100);
+    expect(recordFailure.mock.calls[0]![2]).toBeGreaterThanOrEqual(before + 50);
+    expect(recordFailure.mock.calls[0]![2]).toBeLessThanOrEqual(Date.now() + 50);
+    expect(recordFailure.mock.calls[0]![1]).not.toContain('mint temporarily unavailable');
+    expect(recordFailure.mock.calls[0]![1]).toContain('[redacted:');
+  });
+
+  it('uses the longer post-payment retry policy with full jitter', async () => {
+    const repositories = new MemoryRepositories();
+    const operation = makePreparedMintSwapOperation({
+      state: 'destination_funded',
+      revision: 0,
+      sourceDispatchAuthorizedAt: Date.now(),
+      settlement: {
+        sourcePaymentFee: Amount.from(6),
+        totalSourceFee: Amount.from(8),
+        sourceMeltChangeAmount: Amount.from(2),
+        sourceKeepAmount: Amount.zero(),
+        sourceReturnedAmount: Amount.from(2),
+        finalSourceDebit: Amount.from(108),
+      },
+    });
+    await repositories.mintSwapOperationRepository.create(operation);
+    const recordFailure = mock(async (_id: string, _error: string, _nextAttemptAt: number) =>
+      Promise.resolve(operation),
+    );
+    const service = {
+      refresh: mock(async () => {
+        throw new Error('destination temporarily unavailable');
+      }),
+      get: mock(async () => operation),
+      recordProcessorSuccess: mock(async () => operation),
+      recordProcessorFailure: recordFailure,
+    } as unknown as MintSwapOperationService;
+    const processor = new MintSwapOperationProcessor(
+      service,
+      repositories,
+      new EventBus<CoreEvents>(),
+      undefined,
+      { sweepIntervalMs: 60_000, random: () => 0.5 },
+    );
+
+    const before = Date.now();
+    await processor.start();
+    await tick();
+    await processor.stop();
+
+    expect(recordFailure.mock.calls[0]![2]).toBeGreaterThanOrEqual(before + 1_000);
+    expect(recordFailure.mock.calls[0]![2]).toBeLessThanOrEqual(Date.now() + 1_000);
+  });
+
+  it('does not persist retry backoff while a foreground command owns the operation lock', async () => {
+    const repositories = new MemoryRepositories();
+    const operation = makePreparedMintSwapOperation({
+      state: 'source_inflight',
+      revision: 0,
+      sourceDispatchAuthorizedAt: Date.now(),
+    });
+    await repositories.mintSwapOperationRepository.create(operation);
+    const recordFailure = mock(async () => operation);
+    const service = {
+      refresh: mock(async () => {
+        throw new OperationInProgressError(operation.id);
+      }),
+      get: mock(async () => operation),
+      recordProcessorSuccess: mock(async () => operation),
+      recordProcessorFailure: recordFailure,
+    } as unknown as MintSwapOperationService;
+    const processor = new MintSwapOperationProcessor(
+      service,
+      repositories,
+      new EventBus<CoreEvents>(),
+      undefined,
+      { sweepIntervalMs: 60_000 },
+    );
+
+    await processor.start();
+    await tick();
+    await processor.stop();
+    expect(recordFailure).not.toHaveBeenCalled();
   });
 });
 

@@ -152,7 +152,9 @@ export interface MintQuoteRepository {
   upsertMintQuote(quote: MintQuote): Promise<void>;
 
   /**
-   * Update state for the exact method-scoped mint quote row.
+   * Update canonical BOLT11 accounting from a legacy state observation.
+   *
+   * @deprecated Persist a canonical quote observation with `amountPaid` and `amountIssued`.
    */
   setMintQuoteState(
     mintUrl: string,

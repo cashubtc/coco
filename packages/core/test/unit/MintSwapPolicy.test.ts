@@ -3,7 +3,7 @@ import {
   DEFAULT_MINT_SWAP_DISPATCH_WINDOW_SECONDS,
   evaluateMintSwapDispatchWindow,
 } from '../../models/MintSwapPolicy';
-import { redactSensitiveValue } from '../../logging/redaction';
+import { redactError, redactSensitiveValue } from '../../logging/redaction';
 
 describe('mint swap protocol policy', () => {
   it('uses the earliest finite expiry and the 120-second default', () => {
@@ -47,5 +47,14 @@ describe('mint swap protocol policy', () => {
     expect(redacted).toBe(redactSensitiveValue(secret));
     expect(redacted).not.toContain(secret);
     expect(redacted).toMatch(/^\[redacted:[0-9a-f]{12}\]$/);
+  });
+
+  it('redacts arbitrary error messages before persistence or logging', () => {
+    const secret = 'lnbc1-sensitive-invoice';
+    const redacted = redactError(new Error(`Failed quote ${secret}`));
+
+    expect(redacted).toContain('[redacted:');
+    expect(redacted).not.toContain(secret);
+    expect(redacted).not.toContain('Failed quote');
   });
 });

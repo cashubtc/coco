@@ -773,7 +773,7 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['21']);
   });
 
-  it('refreshMintQuote ignores a stale direct BOLT11 observation', async () => {
+  it('refreshMintQuote preserves canonical BOLT11 accounting against a direct regression', async () => {
     await quoteRepo.upsertMintQuote(
       mintQuoteFromBolt11Response(mintUrl, {
         quote: 'quote-direct-refresh',
@@ -811,7 +811,7 @@ describe('MintOperationService', () => {
     expect(quoteUpdatedEvents).toHaveLength(0);
   });
 
-  it('refreshMintQuote ignores stale direct reusable accounting', async () => {
+  it('refreshMintQuote preserves canonical reusable accounting against a direct regression', async () => {
     const onchainQuoteId = 'onchain-quote-direct-refresh';
     await persistOnchainQuote(onchainQuoteId, {
       paid: Amount.from(10),
@@ -1678,9 +1678,100 @@ describe('MintOperationService', () => {
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', accountingQuote.quote);
     expect(stored?.state).toBe('PAID');
     if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
-    expect(stored.quoteData.amountPaid?.equals(Amount.from(12))).toBe(true);
-    expect(stored.quoteData.amountIssued?.equals(Amount.from(4))).toBe(true);
-    expect(stored.quoteData.remoteUpdatedAt).toBe(20);
+    expect(stored.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(4))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(20);
+  });
+
+  it('does not regress BOLT11 accounting when the compatibility state is unchanged', async () => {
+    const accountingQuote = {
+      quote: 'quote-accounting-same-state',
+      request: 'lnbc1accounting',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(4),
+      updated_at: 20,
+    } as unknown as MintQuoteBolt11Response;
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', accountingQuote);
+
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      ...accountingQuote,
+      amount_issued: Amount.from(2),
+      updated_at: 21,
+    } as unknown as MintQuoteBolt11Response);
+
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', accountingQuote.quote);
+    expect(stored?.state).toBe('PAID');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(4))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(20);
+  });
+
+  it('ignores a compatibility-only snapshot after remotely ordered accounting', async () => {
+    const accountingQuote = {
+      quote: 'quote-accounting-before-legacy',
+      request: 'lnbc1accounting',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'PAID',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(4),
+      updated_at: 20,
+    } as unknown as MintQuoteBolt11Response;
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', accountingQuote);
+
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      ...accountingQuote,
+      state: 'ISSUED',
+      amount_issued: Amount.from(12),
+      updated_at: null,
+    } as unknown as MintQuoteBolt11Response);
+
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', accountingQuote.quote);
+    expect(stored?.method).toBe('bolt11');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.amountPaid.equals(Amount.from(12))).toBe(true);
+    expect(stored.amountIssued.equals(Amount.from(4))).toBe(true);
+    expect(stored.remoteUpdatedAt).toBe(20);
+  });
+
+  it('emits when BOLT11 accounting advances without changing compatibility state', async () => {
+    const accountingQuote = {
+      quote: 'quote-accounting-same-state-advance',
+      request: 'lnbc1accounting',
+      amount: Amount.from(12),
+      unit: 'sat',
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      state: 'UNPAID',
+      amount_paid: Amount.from(12),
+      amount_issued: Amount.from(2),
+      updated_at: 20,
+    } as unknown as MintQuoteBolt11Response;
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', accountingQuote);
+    const quoteUpdatedEvents: Array<CoreEvents['mint-quote:updated']> = [];
+    eventBus.on('mint-quote:updated', (event) => {
+      quoteUpdatedEvents.push(event);
+    });
+
+    await quoteLifecycle.importMintQuote(mintUrl, 'bolt11', {
+      ...accountingQuote,
+      state: 'ISSUED',
+      amount_issued: Amount.from(4),
+      updated_at: 21,
+    } as unknown as MintQuoteBolt11Response);
+
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', accountingQuote.quote);
+    expect(stored?.state).toBe('PAID');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.amountIssued.equals(Amount.from(4))).toBe(true);
+    expect(quoteUpdatedEvents).toHaveLength(1);
+    expect(quoteUpdatedEvents[0]?.quote.state).toBe('PAID');
+    expect(quoteUpdatedEvents[0]?.quote.amountIssued.equals(Amount.from(4))).toBe(true);
   });
 
   it('quote import delegates unsupported quote units to capability validation', async () => {
@@ -2436,6 +2527,36 @@ describe('MintOperationService', () => {
     );
   });
 
+  it('does not overwrite canonical BOLT11 accounting with a compatibility state', async () => {
+    const pendingOp = makePendingOp('pending-accounting-snapshot');
+    await operationRepo.create(pendingOp);
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedRemoteState: 'ISSUED',
+      observedRemoteStateAt: Date.now(),
+      quoteSnapshot: cashuNormalizedBolt11Fixture({
+        quote: pendingOp.quoteId,
+        request: pendingOp.request,
+        amount: pendingOp.amount,
+        unit: pendingOp.unit,
+        expiry: pendingOp.expiry,
+        state: 'ISSUED',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.from(4),
+        updated_at: 20,
+      }),
+      category: 'ready',
+    } satisfies PendingMintCheckResult<'bolt11'>);
+
+    await service.observePendingOperation(pendingOp.id);
+
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', pendingOp.quoteId);
+    expect(quote?.method).toBe('bolt11');
+    if (quote?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(quote.state).toBe('PAID');
+    expect(quote.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(quote.amountIssued.equals(Amount.from(4))).toBe(true);
+  });
+
   it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {
     const onchainQuoteId = 'onchain-quote-pending-check';
     await persistOnchainQuote(onchainQuoteId, { paid: Amount.zero(), issued: Amount.zero() });
@@ -2540,7 +2661,7 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
-  it('recordQuoteObservation applies compatibility state to the latest canonical quote', async () => {
+  it('recordQuoteObservation cannot override the latest remotely ordered accounting', async () => {
     const initialExpiry = Math.floor(Date.now() / 1000) + 3600;
     const newerExpiry = initialExpiry + 3600;
     await quoteRepo.upsertMintQuote(
@@ -2594,8 +2715,8 @@ describe('MintOperationService', () => {
     await Promise.all([newerSnapshot, compatibilityObservation]);
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
 
-    expect(stored?.state).toBe('ISSUED');
-    expect(stored?.amountIssued.toString()).toBe('10');
+    expect(stored?.state).toBe('PAID');
+    expect(stored?.amountIssued.toString()).toBe('0');
     expect(stored?.request).toBe('lnbc1newer');
     expect(stored?.expiry).toBe(newerExpiry);
     expect(stored?.remoteUpdatedAt).toBe(21);
@@ -2697,6 +2818,39 @@ describe('MintOperationService', () => {
     expect(handler.execute).not.toHaveBeenCalled();
     await service.executeOwnedRemote(executing, 'swap-parent');
     expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('records canonical BOLT11 issuance when applying a parent-owned result', async () => {
+    const operation: ExecutingMintOperation = {
+      ...makeExecutingOp('owned-mint-accounting'),
+      parentSwapOperationId: 'swap-parent',
+    };
+    await persistQuote(operation.quoteId);
+    await operationRepo.create(operation);
+    (proofService as any).forTransaction = mock(() => proofService);
+
+    const finalized = await service.applyOwnedExecutionInTransaction(
+      operation,
+      'swap-parent',
+      { status: 'ISSUED', proofs: [makeProof('out-1')] },
+      {
+        mintQuoteRepository: quoteRepo,
+        mintOperationRepository: operationRepo,
+        proofRepository: proofRepo,
+      } as any,
+    );
+    const quote = await quoteRepo.getMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+
+    expect(finalized.state).toBe('finalized');
+    expect(quote?.method).toBe('bolt11');
+    if (quote?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(quote.amountPaid.equals(operation.amount)).toBe(true);
+    expect(quote.amountIssued.equals(operation.amount)).toBe(true);
+    expect(quote.state).toBe('ISSUED');
   });
 
   it('rejects issued proofs that do not match the prepared destination outputs', async () => {

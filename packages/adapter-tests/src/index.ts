@@ -824,7 +824,7 @@ export async function runMintOperationRepositoryContract(
           mintUrl: 'https://mint.test/',
           quoteId: 'canonical-quote',
           quote: 'canonical-quote',
-          remoteUpdatedAt: 10,
+          remoteUpdatedAt: null,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
         await repositories.mintQuoteRepository.setMintQuoteState(
@@ -853,7 +853,112 @@ export async function runMintOperationRepositoryContract(
         expect(stored!.quoteData.amount.equals(Amount.from(3))).toBe(true);
         expect(stored!.amountPaid.equals(Amount.from(3))).toBe(true);
         expect(stored!.amountIssued.equals(Amount.zero())).toBe(true);
-        expect(stored!.remoteUpdatedAt).toBe(10);
+        expect(stored!.remoteUpdatedAt).toBe(null);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+          'UNPAID',
+          30,
+        );
+        const afterLegacyRegression = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+        );
+        expect(afterLegacyRegression?.method).toBe('bolt11');
+        if (afterLegacyRegression?.method !== 'bolt11') {
+          throw new Error('Expected BOLT11 quote after legacy fallback update');
+        }
+        expect(afterLegacyRegression.state).toBe('PAID');
+        expect(afterLegacyRegression.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(afterLegacyRegression.amountIssued.isZero()).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not let legacy state override remotely ordered mint quote accounting', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'ordered-canonical-quote',
+          quote: 'ordered-canonical-quote',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'ISSUED',
+          20,
+        );
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        expect(stored?.method).toBe('bolt11');
+        if (stored?.method !== 'bolt11') {
+          throw new Error('Expected remotely ordered BOLT11 quote');
+        }
+        expect(stored.state).toBe('PAID');
+        expect(stored.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored.amountIssued.isZero()).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(10);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('derives deprecated BOLT11 state from canonical quote accounting', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          quoteId: 'canonical-accounting-authority',
+          quote: 'canonical-accounting-authority',
+          state: 'ISSUED',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        const paid = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        const pending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        expect(paid?.method).toBe('bolt11');
+        if (paid?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(paid.state).toBe('PAID');
+        expect(paid.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(paid.amountIssued.isZero()).toBe(true);
+        expect(pending).toHaveLength(1);
+
+        await repositories.mintQuoteRepository.upsertMintQuote({
+          ...quote,
+          state: 'UNPAID',
+          amountIssued: Amount.from(3),
+        });
+        const issued = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        const remaining = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        expect(issued?.method).toBe('bolt11');
+        if (issued?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(issued.state).toBe('ISSUED');
+        expect(issued.amountIssued.equals(Amount.from(3))).toBe(true);
+        expect(remaining).toHaveLength(0);
       } finally {
         await dispose();
       }

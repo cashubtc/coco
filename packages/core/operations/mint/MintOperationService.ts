@@ -48,6 +48,7 @@ import { OperationIdLock } from '../OperationIdLock';
 import {
   getMintQuoteAvailableAmount,
   getMintQuoteAmount,
+  mintQuoteToMethodSnapshot,
   type MintQuote,
 } from '../../models/MintQuote';
 import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
@@ -298,7 +299,7 @@ export class MintOperationService {
       ...this.buildDeps(repositories),
       operation: initOperation,
       wallet,
-      importedQuote: quote,
+      importedQuote: mintQuoteToMethodSnapshot<'bolt11'>(quote as MintQuote<'bolt11'>),
     });
     const pendingOperation: PendingMintOperation = {
       ...pending,
@@ -383,6 +384,9 @@ export class MintOperationService {
         createdByOperationId: operation.id,
       }),
     );
+    if (operation.method === 'bolt11') {
+      await this.quoteLifecycle.recordMintQuoteIssuanceInTransaction(operation, repositories);
+    }
     const finalized: FinalizedMintOperation = {
       ...operation,
       state: 'finalized',
@@ -754,10 +758,24 @@ export class MintOperationService {
         executing.mintUrl,
         executing.unit,
       );
+      const storedQuote = await this.quoteLifecycle.getMintQuote(
+        executing.mintUrl,
+        executing.method,
+        executing.quoteId,
+      );
+      const canonicalQuote =
+        executing.method === 'bolt11' && storedQuote
+          ? await this.quoteLifecycle.refreshMintQuote(
+              executing.mintUrl,
+              executing.method,
+              executing.quoteId,
+            )
+          : undefined;
       const result = await handler.recoverExecuting({
         ...this.buildDeps(),
         operation: executing as any,
         wallet,
+        canonicalQuote: canonicalQuote as any,
       });
 
       switch (result.status) {
@@ -1160,11 +1178,7 @@ export class MintOperationService {
     }
 
     if (current.method === 'bolt11') {
-      await this.quoteLifecycle.recordMintQuoteObservation(
-        current as PendingOrLaterOperation,
-        'ISSUED',
-        Date.now(),
-      );
+      await this.quoteLifecycle.recordMintQuoteIssuance(current as PendingOrLaterOperation);
     }
 
     const finalized: FinalizedMintOperation = {
@@ -1294,9 +1308,7 @@ export class MintOperationService {
         op.method,
         result.quoteSnapshot as MintMethodQuoteSnapshot,
       );
-    }
-
-    if (result.observedRemoteState !== undefined) {
+    } else if (result.observedRemoteState !== undefined) {
       await this.quoteLifecycle.recordMintQuoteObservation(
         op,
         result.observedRemoteState,
