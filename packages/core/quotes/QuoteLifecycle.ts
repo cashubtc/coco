@@ -1179,19 +1179,26 @@ export class QuoteLifecycle {
     existingQuote: MintQuote | null;
   }> {
     await beforePersist?.(canonicalQuote);
-    const observationKey = [
-      canonicalQuote.mintUrl,
-      canonicalQuote.method,
-      canonicalQuote.quoteId,
-    ].join('::');
+    return this.resolveAndPersistMintQuoteObservationUnderLock(
+      canonicalQuote,
+      () => canonicalQuote,
+    );
+  }
+
+  private async resolveAndPersistMintQuoteObservationUnderLock(
+    ref: MintQuoteRef,
+    buildObservation: (existing: MintQuote | null) => MintQuote,
+  ): Promise<{
+    quote: MintQuote;
+    remoteStateChanged: boolean;
+    existingQuote: MintQuote | null;
+  }> {
+    const observationKey = [ref.mintUrl, ref.method, ref.quoteId].join('::');
     const release = await this.mintQuoteObservationLock.acquire(observationKey);
     try {
       return await this.withMintQuoteTransaction(async (repository) => {
-        const existing = await repository.getMintQuote(
-          canonicalQuote.mintUrl,
-          canonicalQuote.method,
-          canonicalQuote.quoteId,
-        );
+        const existing = await repository.getMintQuote(ref.mintUrl, ref.method, ref.quoteId);
+        const canonicalQuote = buildObservation(existing);
         const resolution = resolveMintQuoteObservation(existing, canonicalQuote);
         this.warnForIgnoredMintQuoteObservation(resolution.disposition, existing, canonicalQuote);
 
@@ -1269,26 +1276,26 @@ export class QuoteLifecycle {
     observedAt = Date.now(),
   ): Promise<MintQuote> {
     await this.ensureMintQuoteRecordForOperation(operation);
-    const existing = await this.mintQuoteRepository.getMintQuote(
-      operation.mintUrl,
-      operation.method,
-      operation.quoteId,
-    );
-    if (!existing) {
-      throw new Error(
-        `Cannot record quote observation: mint quote ${operation.quoteId} for ${operation.method} at ${operation.mintUrl} was not found`,
-      );
-    }
-    if (!isStatefulMintQuote(existing)) return existing;
+    const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteObservationUnderLock(
+      operation,
+      (existing) => {
+        if (!existing) {
+          throw new Error(
+            `Cannot record quote observation: mint quote ${operation.quoteId} for ${operation.method} at ${operation.mintUrl} was not found`,
+          );
+        }
+        if (!isStatefulMintQuote(existing)) return existing;
 
-    const { quote, remoteStateChanged } = await this.resolveAndPersistMintQuoteObservation({
-      ...existing,
-      state,
-      amountPaid: state === 'UNPAID' ? Amount.zero() : existing.amount,
-      amountIssued: state === 'ISSUED' ? existing.amount : Amount.zero(),
-      remoteUpdatedAt: null,
-      updatedAt: observedAt,
-    });
+        return {
+          ...existing,
+          state,
+          amountPaid: state === 'UNPAID' ? Amount.zero() : existing.amount,
+          amountIssued: state === 'ISSUED' ? existing.amount : Amount.zero(),
+          remoteUpdatedAt: null,
+          updatedAt: observedAt,
+        };
+      },
+    );
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
 
     return quote;

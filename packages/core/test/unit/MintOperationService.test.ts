@@ -2511,6 +2511,67 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
+  it('recordQuoteObservation applies compatibility state to the latest canonical quote', async () => {
+    const initialExpiry = Math.floor(Date.now() / 1000) + 3600;
+    const newerExpiry = initialExpiry + 3600;
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1old',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: initialExpiry,
+        state: 'PAID',
+        updated_at: 20,
+      }),
+    );
+    const pendingOp = {
+      ...makePendingOp('pending-concurrent-compatibility-observation'),
+      request: 'lnbc1old',
+      expiry: initialExpiry,
+    };
+    const newerAtPersist = createDeferred();
+    const releaseNewerPersist = createDeferred();
+    const originalUpsert = quoteRepo.upsertMintQuote.bind(quoteRepo);
+    let delayedNewerSnapshot = false;
+    quoteRepo.upsertMintQuote = mock(async (quote) => {
+      if (!delayedNewerSnapshot && quote.remoteUpdatedAt === 21) {
+        delayedNewerSnapshot = true;
+        newerAtPersist.resolve();
+        await releaseNewerPersist.promise;
+      }
+      return originalUpsert(quote);
+    }) as typeof quoteRepo.upsertMintQuote;
+
+    const newerSnapshot = quoteLifecycle.recordMintQuoteSnapshot(
+      mintUrl,
+      'bolt11',
+      cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: 'lnbc1newer',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: newerExpiry,
+        state: 'PAID',
+        updated_at: 21,
+      }),
+    );
+    await newerAtPersist.promise;
+
+    const compatibilityObservation = quoteLifecycle.recordMintQuoteObservation(pendingOp, 'ISSUED');
+    for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    releaseNewerPersist.resolve();
+
+    await Promise.all([newerSnapshot, compatibilityObservation]);
+    const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(stored?.state).toBe('ISSUED');
+    expect(stored?.amountIssued.toString()).toBe('10');
+    expect(stored?.request).toBe('lnbc1newer');
+    expect(stored?.expiry).toBe(newerExpiry);
+    expect(stored?.remoteUpdatedAt).toBe(21);
+  });
+
   it('recordQuoteObservation ignores stale compatibility-state accounting', async () => {
     await persistQuote();
     const pendingOp = makePendingOp('pending-stale-state-observation');
