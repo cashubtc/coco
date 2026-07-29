@@ -16,6 +16,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import { assessMintQuoteClaimability } from './MintQuoteClaimability.ts';
 
 export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
@@ -175,16 +176,14 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   return undefined;
 }
 
+/** Returns mint-reported availability without local issuance or reservation facts. */
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
-  return quote.amountPaid.subtract(quote.amountIssued);
+  return assessMintQuoteClaimability(quote).remoteAvailable;
 }
 
 export function isMintQuotePending(quote: MintQuote): boolean {
-  if (isStatefulMintQuote(quote)) {
-    return !isBolt11MintQuoteIssued(quote);
-  }
-
-  return true;
+  const { status } = assessMintQuoteClaimability(quote);
+  return status === 'waiting' || status === 'claimable';
 }
 
 function assertValidMintQuoteAccounting(

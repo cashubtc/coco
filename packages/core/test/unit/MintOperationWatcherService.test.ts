@@ -340,8 +340,8 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('watches canonical mint quotes created after startup', async () => {
-    const quote = makeBolt11Quote();
+  it('watches canonical quotes from accounting when compatibility state disagrees', async () => {
+    const quote = { ...makeBolt11Quote(), state: 'ISSUED' as const };
     const watcher = makeWatcher({
       options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
     });
@@ -447,7 +447,7 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('keeps watching expired unpaid subscription updates', async () => {
+  it('records expired unpaid subscription updates and keeps watching', async () => {
     const operation = makePendingOperation();
     const recordMintQuoteSnapshot = mock(async () => makeBolt11Quote());
 
@@ -478,7 +478,11 @@ describe('MintOperationWatcherService', () => {
       state: 'UNPAID',
     });
 
-    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'bolt11',
+      expect.objectContaining({ quote: quoteId, state: 'UNPAID' }),
+    );
     expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
@@ -742,7 +746,7 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('drops incomplete onchain payloads without stopping the watch', async () => {
+  it('passes incomplete onchain payloads to canonical validation without stopping the watch', async () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
@@ -772,13 +776,17 @@ describe('MintOperationWatcherService', () => {
       amount_paid: Amount.from(10),
     });
 
-    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain',
+      expect.objectContaining({ quote: quoteId }),
+    );
     expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
   });
 
-  it('keeps watching an incomplete onchain payload after expiry', async () => {
+  it('passes incomplete onchain payloads after expiry to canonical validation', async () => {
     const operation = makeOnchainOperation();
     const recordMintQuoteSnapshot = mock(async () => makeOnchainQuote());
 
@@ -807,7 +815,11 @@ describe('MintOperationWatcherService', () => {
       expiry: Math.floor(Date.now() / 1000) - 1,
     });
 
-    expect(recordMintQuoteSnapshot).not.toHaveBeenCalled();
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledWith(
+      mintUrl,
+      'onchain',
+      expect.objectContaining({ quote: quoteId }),
+    );
     expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
@@ -851,7 +863,7 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
-  it('keeps reusable onchain quote watches after operation finalization', async () => {
+  it('keeps onchain balance quote watches after operation finalization', async () => {
     const operation = makeOnchainOperation();
 
     const watcher = makeWatcher({
@@ -909,7 +921,7 @@ describe('MintOperationWatcherService', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps watching when one of multiple operation interests finalizes', async () => {
+  it('keeps canonical quote watching when all operation interests finalize', async () => {
     const first = makePendingOperation();
     const second = { ...makePendingOperation(), id: 'mint-op-2' };
 
@@ -936,13 +948,13 @@ describe('MintOperationWatcherService', () => {
       operationId: second.id,
       operation: { ...second, state: 'finalized' },
     });
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('stops operation-specific watch interest when an operation fails', async () => {
+  it('keeps canonical quote watching when an operation fails', async () => {
     const operation = makePendingOperation();
 
     const watcher = makeWatcher({
@@ -961,7 +973,7 @@ describe('MintOperationWatcherService', () => {
       operation: makeFailedOperation(operation),
     });
 
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
 
     await watcher.stop();
     expect(unsubscribe).toHaveBeenCalledTimes(1);

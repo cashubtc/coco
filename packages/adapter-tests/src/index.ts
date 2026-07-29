@@ -809,6 +809,38 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('selects pending mint quotes from canonical accounting instead of compatibility state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const amount = Amount.from(3);
+        await repositories.mintQuoteRepository.upsertMintQuote(
+          createDummyMintQuote({
+            quoteId: 'accounting-waiting',
+            quote: 'accounting-waiting',
+            state: 'ISSUED',
+            amountPaid: Amount.zero(),
+            amountIssued: Amount.zero(),
+          }),
+        );
+        await repositories.mintQuoteRepository.upsertMintQuote(
+          createDummyMintQuote({
+            quoteId: 'accounting-complete',
+            quote: 'accounting-complete',
+            state: 'UNPAID',
+            amountPaid: amount,
+            amountIssued: amount,
+          }),
+        );
+
+        const pending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.quoteId).toBe('accounting-waiting');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('looks up canonical mint quotes by identity without method', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

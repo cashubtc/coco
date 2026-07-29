@@ -141,8 +141,14 @@ describe('MintBolt12Handler', () => {
 
   const buildRecoverContext = (
     remoteQuote: MintQuoteBolt12Response,
-  ): RecoverExecutingContext<'bolt12'> =>
-    buildExecuteContext(remoteQuote) as RecoverExecutingContext<'bolt12'>;
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'bolt12'> => ({
+    ...buildExecuteContext(remoteQuote),
+    localClaimabilityFacts,
+  });
 
   beforeEach(() => {
     wallet = {
@@ -480,5 +486,17 @@ describe('MintBolt12Handler', () => {
     expect(result).toEqual({ status: 'FINALIZED' });
     expect(wallet.mintProofsBolt12).toHaveBeenCalled();
     expect(proofService.saveProofs).toHaveBeenCalled();
+  });
+
+  it('does not retry balance already consumed by finalized local operations', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext(quote({ amount_paid: Amount.from(10) }), {
+        finalizedAmount: Amount.from(10),
+        reservedAmount: Amount.zero(),
+      }),
+    );
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });

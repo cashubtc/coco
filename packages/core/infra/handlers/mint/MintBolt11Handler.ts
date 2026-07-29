@@ -22,15 +22,9 @@ import {
   MintQuoteValidationError,
 } from '../../../models/Error';
 import type { KeyRingService } from '../../../services/KeyRingService';
-import {
-  deriveBolt11MintQuoteState,
-  isBolt11MintQuoteIssued,
-  isBolt11MintQuotePaid,
-  isBolt11MintQuoteUnpaid,
-  mintQuoteFromBolt11Response,
-  type MintQuote,
-} from '../../../models/MintQuote';
+import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
+import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   constructor(private readonly keyRingService: KeyRingService) {}
@@ -179,13 +173,32 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       remoteQuote.pubkey !== ctx.operation.pubkey
     ) {
       return {
-        status: 'TERMINAL',
+        status: 'PENDING',
         error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
       };
     }
 
-    const canonicalRemoteQuote = mintQuoteFromBolt11Response(mintUrl, remoteQuote);
-    if (isBolt11MintQuotePaid(canonicalRemoteQuote)) {
+    const quote = mintQuoteObservationFromBolt11Response(mintUrl, remoteQuote);
+    const assessment = assessMintQuoteClaimability(quote, {
+      ...ctx.localClaimabilityFacts,
+      requestedAmount: ctx.operation.amount,
+    });
+
+    if (assessment.status === 'invalid') {
+      return {
+        status: 'TERMINAL',
+        error: `Recovered: quote ${quoteId} has invalid claimability accounting`,
+      };
+    }
+
+    if (assessment.status === 'waiting') {
+      return {
+        status: 'PENDING',
+        error: `Recovered: quote ${quoteId} is not yet claimable`,
+      };
+    }
+
+    if (assessment.status === 'claimable') {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
         const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
@@ -212,11 +225,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
             // Quote already issued; fall through to proof recovery
-          } else if (err.code === 20007) {
-            return {
-              status: 'TERMINAL',
-              error: `Recovered: quote ${quoteId} expired while executing mint`,
-            };
           } else {
             return {
               status: 'PENDING',
@@ -230,16 +238,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           };
         }
       }
-    } else if (isBolt11MintQuoteUnpaid(canonicalRemoteQuote)) {
-      return {
-        status: 'PENDING',
-        error: `Recovered: quote ${quoteId} is still UNPAID`,
-      };
-    } else if (!isBolt11MintQuoteIssued(canonicalRemoteQuote)) {
-      return {
-        status: 'PENDING',
-        error: `Recovered: quote ${quoteId} has unresolved Mint Quote Accounting`,
-      };
     }
 
     try {
@@ -272,50 +270,41 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
     this.assertPendingQuoteMatchesOperation(quote, ctx.operation);
-    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, quote);
-    const remoteState = deriveBolt11MintQuoteState(
-      canonicalQuote.amountPaid,
-      canonicalQuote.amountIssued,
-    );
-    ctx.logger?.info('Pending mint quote accounting', {
-      mintUrl,
-      quoteId,
-      amountPaid: canonicalQuote.amountPaid.toString(),
-      amountIssued: canonicalQuote.amountIssued.toString(),
-      compatibilityState: remoteState,
-    });
     const observedRemoteStateAt = Date.now();
+    const canonicalQuote = mintQuoteObservationFromBolt11Response(mintUrl, quote, {
+      now: observedRemoteStateAt,
+    });
+    const assessment = assessMintQuoteClaimability(canonicalQuote, {
+      requestedAmount: ctx.operation.amount,
+    });
+    ctx.logger?.info('Pending mint quote claimability assessed', {
+      mintUrl,
+      status: assessment.status,
+    });
 
-    if (isBolt11MintQuoteUnpaid(canonicalQuote)) {
+    if (assessment.status === 'invalid') {
       return {
-        observedRemoteState: remoteState,
         observedRemoteStateAt,
         quoteSnapshot: quote,
-        category: 'waiting',
-      };
-    }
-    if (isBolt11MintQuotePaid(canonicalQuote)) {
-      return {
-        observedRemoteState: remoteState,
-        observedRemoteStateAt,
-        quoteSnapshot: quote,
-        category: 'ready',
-      };
-    }
-    if (isBolt11MintQuoteIssued(canonicalQuote)) {
-      return {
-        observedRemoteState: remoteState,
-        observedRemoteStateAt,
-        quoteSnapshot: quote,
-        category: 'completed',
+        category: 'terminal',
+        terminalFailure: {
+          reason: `BOLT11 mint quote ${quoteId} has invalid claimability accounting`,
+          code: 'invalid_quote',
+          retryable: false,
+          observedAt: observedRemoteStateAt,
+        },
       };
     }
 
     return {
-      observedRemoteState: remoteState,
       observedRemoteStateAt,
       quoteSnapshot: quote,
-      category: 'waiting',
+      category:
+        assessment.status === 'claimable'
+          ? 'ready'
+          : assessment.status === 'complete'
+            ? 'completed'
+            : 'waiting',
     };
   }
 

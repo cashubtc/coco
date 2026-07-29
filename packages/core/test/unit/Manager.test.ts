@@ -1455,7 +1455,7 @@ describe('initializeCoco', () => {
       expect(clearCache).toHaveBeenCalledWith('https://mint.test');
     });
 
-    it('requeues pending mint operations backed by paid canonical quotes', async () => {
+    it('requeues pending mint operations from canonical accounting', async () => {
       const manager = await initializeCoco({
         ...baseConfig,
         watchers: {
@@ -1477,7 +1477,9 @@ describe('initializeCoco', () => {
           amount: operation.amount,
           unit: operation.unit,
           expiry: Math.floor(Date.now() / 1000) + 3600,
-          state: 'PAID',
+          state: 'UNPAID',
+          amount_paid: operation.amount,
+          amount_issued: Amount.zero(),
         }),
       );
 
