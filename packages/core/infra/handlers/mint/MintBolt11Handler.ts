@@ -1,3 +1,6 @@
+import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
+import { bytesToHex } from '@noble/curves/utils.js';
+import { assertSameUnit } from '@core/amounts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -12,16 +15,41 @@ import type {
   PendingMintCheckResult,
   FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
-import { MintOperationError } from '../../../models/Error';
-import { assertSameUnit } from '@core/amounts';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
-import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
-import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
+import { MintOperationError } from '../../../models/Error';
+import type { KeyRingService } from '../../../services/KeyRingService';
+import {
+  deriveBolt11MintQuoteState,
+  isBolt11MintQuoteIssued,
+  isBolt11MintQuotePaid,
+  isBolt11MintQuoteUnpaid,
+  mintQuoteFromBolt11Response,
+  type MintQuote,
+} from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
+  constructor(private readonly keyRingService: KeyRingService) {}
+
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
-    const remoteQuote = await ctx.wallet.createMintQuoteBolt11(ctx.createQuoteData.amount.amount);
+    const { amount, locked, pubkey } = ctx.createQuoteData;
+    const shouldLock = locked === true || pubkey !== undefined;
+    if (shouldLock) {
+      await ctx.mintService.assertNutSupported(ctx.mintUrl, 20, 'locked BOLT11 mint quote');
+    }
+    const lockPubkey =
+      shouldLock && !pubkey
+        ? (await this.keyRingService.generateMintQuoteKeyPair()).publicKeyHex
+        : pubkey;
+    if (lockPubkey && pubkey) {
+      await this.requireQuoteKey(lockPubkey);
+    }
+    const remoteQuote = lockPubkey
+      ? await ctx.wallet.createLockedMintQuote(amount.amount, lockPubkey)
+      : await ctx.wallet.createMintQuoteBolt11(amount.amount);
+    if (lockPubkey && remoteQuote.pubkey !== lockPubkey) {
+      throw new Error('Mint returned a BOLT11 quote with an unexpected NUT-20 public key');
+    }
     return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
 
@@ -39,7 +67,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   ): Promise<PendingMintOperation<'bolt11'> & MintMethodMeta<'bolt11'>> {
     const quote = ctx.importedQuote;
     if (!quote) {
-      throw new Error(`Mint quote ${ctx.operation.quoteId ?? '(missing)'} was not provided`);
+      throw new Error('BOLT11 mint quote was not provided');
     }
 
     if (!quote.amount || quote.amount.isZero()) {
@@ -47,9 +75,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
-        `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
-      );
+      throw new Error(`Mint quote ${quote.quote} does not match the operation quote`);
     }
 
     if (!quote.amount.equals(ctx.operation.amount)) {
@@ -59,6 +85,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
 
     assertSameUnit(quote.unit, ctx.operation.unit, `Mint quote ${quote.quote}`);
+    await this.requireQuoteKey(quote.pubkey);
 
     const outputData = await ctx.proofService.createOutputsAndIncrementCounters(
       ctx.operation.mintUrl,
@@ -88,12 +115,13 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
 
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<MintExecutionResult> {
     const outputData = deserializeOutputData(ctx.operation.outputData);
+    const mintConfig = await this.getMintConfig(ctx.operation.pubkey);
 
     try {
       const proofs = await ctx.wallet.mintProofsBolt11(
         ctx.operation.amount,
         ctx.operation.quoteId,
-        undefined,
+        mintConfig,
         {
           type: 'custom',
           data: outputData.keep,
@@ -104,6 +132,14 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     } catch (err) {
       if (err instanceof MintOperationError && err.code === 20002) {
         return { status: 'ALREADY_ISSUED' };
+      }
+      if (ctx.operation.pubkey) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const message = `Locked BOLT11 mint failed: ${errorMessage}`;
+        if (err instanceof MintOperationError) {
+          throw new MintOperationError(err.code, message);
+        }
+        throw new Error(message);
       }
       throw err;
     }
@@ -117,22 +153,35 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     } catch (error) {
       ctx.logger?.warn('Failed to check mint quote state during recovery', {
         mintUrl,
-        quoteId,
-        error: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : typeof error,
+        ...(error instanceof MintOperationError ? { errorCode: error.code } : {}),
       });
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         status: 'PENDING',
-        error: error instanceof Error ? error.message : String(error),
+        error: `Failed to check mint quote during recovery: ${errorMessage}`,
       };
     }
 
-    if (remoteQuote.state === 'PAID') {
+    if (
+      (ctx.operation.pubkey !== undefined || remoteQuote.pubkey !== undefined) &&
+      remoteQuote.pubkey !== ctx.operation.pubkey
+    ) {
+      return {
+        status: 'TERMINAL',
+        error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
+      };
+    }
+
+    const canonicalRemoteQuote = mintQuoteFromBolt11Response(mintUrl, remoteQuote);
+    if (isBolt11MintQuotePaid(canonicalRemoteQuote)) {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
+        const mintConfig = await this.getMintConfig(ctx.operation.pubkey);
         const proofs = await ctx.wallet.mintProofsBolt11(
           ctx.operation.amount,
           ctx.operation.quoteId,
-          undefined,
+          mintConfig,
           {
             type: 'custom',
             data: outputData.keep,
@@ -160,25 +209,26 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           } else {
             return {
               status: 'PENDING',
-              error: err.message,
+              error: `Mint issuance retry failed: ${err.message}`,
             };
           }
         } else {
+          const errorMessage = err instanceof Error ? err.message : String(err);
           return {
             status: 'PENDING',
-            error: err instanceof Error ? err.message : String(err),
+            error: `Mint issuance retry failed: ${errorMessage}`,
           };
         }
       }
-    } else if (remoteQuote.state === 'UNPAID') {
+    } else if (isBolt11MintQuoteUnpaid(canonicalRemoteQuote)) {
       return {
         status: 'PENDING',
         error: `Recovered: quote ${quoteId} is still UNPAID`,
       };
-    } else if (remoteQuote.state !== 'ISSUED') {
+    } else if (!isBolt11MintQuoteIssued(canonicalRemoteQuote)) {
       return {
         status: 'PENDING',
-        error: `Recovered: quote ${quoteId} remains in remote state ${remoteQuote.state}`,
+        error: `Recovered: quote ${quoteId} has unresolved Mint Quote Accounting`,
       };
     }
 
@@ -199,44 +249,85 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       }
       return { status: 'FINALIZED' };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         status: 'PENDING',
-        error: error instanceof Error ? error.message : String(error),
+        error: `Mint proof recovery failed: ${errorMessage}`,
       };
     }
   }
 
   async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult<'bolt11'>> {
     const { mintUrl, quoteId } = ctx.operation;
-    ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
+    ctx.logger?.info('Checking pending mint operation', { mintUrl });
 
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
-    ctx.logger?.info('Pending mint quote state', { mintUrl, quoteId, state: quote.state });
+    const canonicalQuote = mintQuoteFromBolt11Response(mintUrl, quote);
+    const remoteState = deriveBolt11MintQuoteState(
+      canonicalQuote.amountPaid,
+      canonicalQuote.amountIssued,
+    );
+    ctx.logger?.info('Pending mint quote accounting', {
+      mintUrl,
+      amountPaid: canonicalQuote.amountPaid.toString(),
+      amountIssued: canonicalQuote.amountIssued.toString(),
+      compatibilityState: remoteState,
+    });
     const observedRemoteStateAt = Date.now();
 
-    switch (quote.state) {
-      case 'UNPAID':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'waiting',
-        };
-      case 'PAID':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'ready',
-        };
-      case 'ISSUED':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'completed',
-        };
-      default:
-        throw new Error(
-          `Unexpected mint quote state: ${quote.state} for quote ${quoteId} at mint ${mintUrl}`,
-        );
+    if (isBolt11MintQuoteUnpaid(canonicalQuote)) {
+      return {
+        observedRemoteState: remoteState,
+        observedRemoteStateAt,
+        quoteSnapshot: quote,
+        category: 'waiting',
+      };
     }
+    if (isBolt11MintQuotePaid(canonicalQuote)) {
+      return {
+        observedRemoteState: remoteState,
+        observedRemoteStateAt,
+        quoteSnapshot: quote,
+        category: 'ready',
+      };
+    }
+    if (isBolt11MintQuoteIssued(canonicalQuote)) {
+      return {
+        observedRemoteState: remoteState,
+        observedRemoteStateAt,
+        quoteSnapshot: quote,
+        category: 'completed',
+      };
+    }
+
+    return {
+      observedRemoteState: remoteState,
+      observedRemoteStateAt,
+      quoteSnapshot: quote,
+      category: 'waiting',
+    };
+  }
+
+  async validateQuoteForPrepare(quote: MintQuote<'bolt11'>): Promise<void> {
+    await this.requireQuoteKey(quote.pubkey);
+  }
+
+  private async requireQuoteKey(pubkey: string | undefined): Promise<void> {
+    if (!pubkey) return;
+    const key = await this.keyRingService.getMintQuoteKeyPair(pubkey);
+    if (!key) {
+      throw new Error('Missing NUT-20 mint quote key for locked BOLT11 quote');
+    }
+  }
+
+  private async getMintConfig(
+    pubkey: string | undefined,
+  ): Promise<{ privkey: string } | undefined> {
+    if (!pubkey) return undefined;
+    const key = await this.keyRingService.getMintQuoteKeyPair(pubkey);
+    if (!key) {
+      throw new Error('Missing NUT-20 mint quote key for locked BOLT11 quote');
+    }
+    return { privkey: bytesToHex(key.secretKey) };
   }
 }
