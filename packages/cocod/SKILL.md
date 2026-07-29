@@ -117,6 +117,10 @@ Use these commands when a server responds with HTTP `402` and an `X-Cashu` payme
 
 AGENT rule: `cocod x-cashu handle <request>` can spend funds. Prefer `cocod x-cashu parse <request>` first to preview amount/requirements, then ask permission before handling unless already instructed.
 
+Compatibility: cocod accepts `creqA` and `creqB` requests. Coco enforces NUT-10 spending
+conditions: P2PK-locked requests are paid with locked outputs, and unsupported or malformed
+conditions fail with a 400 before any proofs move.
+
 ```bash
 # Parse an encoded X-Cashu request from a 402 response header
 cocod x-cashu parse <request>

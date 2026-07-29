@@ -49,6 +49,10 @@ All commands are available under `cocod`.
 - `x-cashu parse <request>` - Parse an encoded payment request
 - `x-cashu handle <request>` - Settle request and return `X-Cashu: cashuB...` header value
 
+Both `creqA` and `creqB` encodings are accepted. NUT-10 spending conditions are enforced
+by Coco: P2PK-locked requests are paid with locked outputs; unsupported or malformed
+conditions return a 400 before any proofs move.
+
 ### Daemon control
 
 - `ping` - Check daemon connectivity

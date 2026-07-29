@@ -1,6 +1,7 @@
 # cocod
 
-`cocod` is a Cashu wallet CLI with a local daemon.
+`cocod` is a Cashu wallet CLI with a local daemon, built on the Coco packages in this
+workspace.
 
 If you like simple tools: run commands in your terminal, and let the daemon handle wallet state in the background.
 
@@ -15,17 +16,24 @@ If you like simple tools: run commands in your terminal, and let the daemon hand
 
 ## Install
 
-```bash
-bun install --global cocod
-```
-
-Or from source:
+The package is private and runs from workspace source. From the repo root:
 
 ```bash
-git clone <repository-url>
-cd cocod
 bun install
+bun run build            # cocod resolves @cashu/coco-* through their dist/ exports
+bun packages/cocod/src/index.ts --help
 ```
+
+To get a global `cocod` command, link the package:
+
+```bash
+cd packages/cocod && bun link
+```
+
+Note: the `coco-cashu-plugin-npc` dependency currently declares an exact peer on a
+`@cashu/coco-core` release candidate, so `bun install` prints an unmet-peer warning
+against the workspace core. Install still succeeds; the plugin is due to be re-cut
+with a range peer.
 
 ## Quick start
 
@@ -89,6 +97,16 @@ cocod x-cashu parse "<encoded-x-cashu-request>"
 cocod x-cashu handle "<encoded-x-cashu-request>"
 ```
 
+Cocod accepts `creqA` and `creqB` requests. NUT-10 spending conditions are handled by
+Coco: P2PK-locked requests are paid with locked outputs, while unsupported or malformed
+conditions are rejected with a clear error before any proofs move.
+
+## Upgrading from 0.0.16 or earlier
+
+The wallet database migrates in place on first start. Migrations are one-way; if you want a
+rollback path to the previous release, copy `~/.cocod/coco.db` somewhere safe before
+upgrading and delete the copy once you're settled.
+
 ## How it works
 
 - CLI: `src/cli.ts`
@@ -112,6 +130,8 @@ Logging defaults:
 
 ## Development
 
+From `packages/cocod` (run `bun run build` at the repo root first):
+
 ```bash
 # Run CLI from source
 bun src/index.ts --help
@@ -120,13 +140,10 @@ bun src/index.ts --help
 bun run daemon
 
 # Typecheck
-bun run lint
+bun run typecheck
 
 # Tests
 bun test
-
-# Isolated daemon smoke test
-bun run smoke:daemon
 ```
 
 ## Docs
