@@ -445,6 +445,80 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
   };
 }
 
+export async function runMintQuoteRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintQuoteRepository contract', () => {
+    it('keeps canonical BOLT11 accounting authoritative over legacy state updates', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'UNPAID',
+          20,
+        );
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+
+        expect(stored?.method).toBe('bolt11');
+        if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(stored.state).toBe('PAID');
+        expect(stored.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored.amountIssued.isZero()).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(10);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('selects pending BOLT11 quotes from accounting instead of stored state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const pending = createDummyMintQuote({
+          quoteId: 'accounting-pending',
+          quote: 'accounting-pending',
+          state: 'ISSUED',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+        });
+        const issued = createDummyMintQuote({
+          quoteId: 'accounting-issued',
+          quote: 'accounting-issued',
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.from(3),
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(pending);
+        await repositories.mintQuoteRepository.upsertMintQuote(issued);
+
+        const storedPending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        const pendingIds = storedPending.map((quote) => quote.quoteId);
+
+        expect(pendingIds.includes('accounting-pending')).toBe(true);
+        expect(pendingIds.includes('accounting-issued')).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
 export async function runMintOperationRepositoryContract(
   options: ContractOptions,
   runner: ContractRunner,
@@ -583,6 +657,8 @@ export async function runMintOperationRepositoryContract(
           mintUrl: 'https://mint.test/',
           quoteId: 'canonical-quote',
           quote: 'canonical-quote',
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
           remoteUpdatedAt: 10,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
@@ -590,7 +666,7 @@ export async function runMintOperationRepositoryContract(
           'https://mint.test',
           'bolt11',
           'canonical-quote',
-          'PAID',
+          'UNPAID',
           20,
         );
 

@@ -5,6 +5,7 @@ import {
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
   runPaymentRequestReceiveRepositoryContract,
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
@@ -47,6 +48,8 @@ runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect 
 runProofRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 

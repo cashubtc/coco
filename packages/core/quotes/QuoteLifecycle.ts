@@ -8,7 +8,10 @@ import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
 import {
+  applyBolt11MintQuoteStateFallback,
+  deriveBolt11MintQuoteState,
   getMintQuoteAmount,
+  isBolt11MintQuoteIssued,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -519,7 +522,6 @@ export class QuoteLifecycle {
       (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
-      quoteId: persistedQuote.quoteId,
       method,
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
@@ -1077,13 +1079,7 @@ export class QuoteLifecycle {
         );
       }
 
-      const state =
-        bolt11Quote.state ??
-        (amountPaid.isZero() && amountIssued.isZero()
-          ? 'UNPAID'
-          : amountPaid.greaterThan(amountIssued)
-            ? 'PAID'
-            : 'ISSUED');
+      const state = deriveBolt11MintQuoteState(amountPaid, amountIssued);
 
       return {
         ...bolt11Quote,
@@ -1245,7 +1241,6 @@ export class QuoteLifecycle {
     this.logger?.warn(message, {
       mintUrl: incoming.mintUrl,
       method: incoming.method,
-      quoteId: incoming.quoteId,
       existingRemoteUpdatedAt: existing?.remoteUpdatedAt ?? null,
       incomingRemoteUpdatedAt: incoming.remoteUpdatedAt,
       existingAmountPaid: existing?.amountPaid.toString(),
@@ -1283,16 +1278,12 @@ export class QuoteLifecycle {
             `Cannot record quote observation: mint quote ${operation.quoteId} for ${operation.method} at ${operation.mintUrl} was not found`,
           );
         }
-        if (!isStatefulMintQuote(existing)) return existing;
-
-        return {
-          ...existing,
-          state,
-          amountPaid: state === 'UNPAID' ? Amount.zero() : existing.amount,
-          amountIssued: state === 'ISSUED' ? existing.amount : Amount.zero(),
-          remoteUpdatedAt: null,
-          updatedAt: observedAt,
-        };
+        if (!isStatefulMintQuote(existing)) {
+          throw new Error(
+            `Cannot record legacy quote state for ${operation.method} mint quote ${operation.quoteId}`,
+          );
+        }
+        return applyBolt11MintQuoteStateFallback(existing, state, observedAt);
       },
     );
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
@@ -1550,7 +1541,7 @@ export class QuoteLifecycle {
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
+    if (isStatefulMintQuote(quote) && isBolt11MintQuoteIssued(quote)) {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
     }
   }

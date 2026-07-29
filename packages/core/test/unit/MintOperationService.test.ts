@@ -933,7 +933,10 @@ describe('MintOperationService', () => {
     expect(quoteUpdatedEvents).toHaveLength(0);
     expect(logger.warn).toHaveBeenCalledWith(
       'Ignoring Mint Quote Observation with invalid accounting',
-      expect.objectContaining({ quoteId: onchainQuoteId }),
+      expect.objectContaining({ mintUrl, method: 'onchain' }),
+    );
+    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
+      onchainQuoteId,
     );
   });
 
@@ -1135,10 +1138,12 @@ describe('MintOperationService', () => {
       expect.objectContaining({
         mintUrl,
         method: 'onchain',
-        quoteId: onchainQuoteId,
         existingAmountPaid: '10',
         incomingAmountPaid: '11',
       }),
+    );
+    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
+      onchainQuoteId,
     );
   });
 
@@ -1249,10 +1254,12 @@ describe('MintOperationService', () => {
       expect.objectContaining({
         mintUrl,
         method: 'onchain',
-        quoteId: onchainQuoteId,
         incomingAmountPaid: '9',
         incomingAmountIssued: '11',
       }),
+    );
+    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
+      onchainQuoteId,
     );
   });
 
@@ -2625,7 +2632,7 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
-  it('recordQuoteObservation applies compatibility state to the latest canonical quote', async () => {
+  it('recordQuoteObservation cannot override newer ordered accounting', async () => {
     const initialExpiry = Math.floor(Date.now() / 1000) + 3600;
     const newerExpiry = initialExpiry + 3600;
     await quoteRepo.upsertMintQuote(
@@ -2679,8 +2686,8 @@ describe('MintOperationService', () => {
     await Promise.all([newerSnapshot, compatibilityObservation]);
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
 
-    expect(stored?.state).toBe('ISSUED');
-    expect(stored?.amountIssued.toString()).toBe('10');
+    expect(stored?.state).toBe('PAID');
+    expect(stored?.amountIssued.toString()).toBe('0');
     expect(stored?.request).toBe('lnbc1newer');
     expect(stored?.expiry).toBe(newerExpiry);
     expect(stored?.remoteUpdatedAt).toBe(21);
