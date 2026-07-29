@@ -45,7 +45,6 @@ import {
   getMintQuoteAmount,
   type MintQuote,
 } from '../../models/MintQuote';
-import { isMintQuoteExpired } from '../../models/MintQuoteExpiry';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
 
@@ -863,10 +862,6 @@ export class MintOperationService {
     quote: MintQuote,
     targetOperationId?: string,
   ): Promise<Amount> {
-    if (isMintQuoteExpired(quote)) {
-      return Amount.zero();
-    }
-
     let remoteAvailable = getMintQuoteAvailableAmount(quote);
     const siblings = await this.mintOperationRepository.getByQuoteId(
       quote.mintUrl,

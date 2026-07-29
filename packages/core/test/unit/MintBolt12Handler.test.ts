@@ -387,7 +387,7 @@ describe('MintBolt12Handler', () => {
     expect(result.category).toBe('ready');
   });
 
-  it('treats a funded quote with a past positive expiry as terminal', async () => {
+  it('keeps a funded quote claimable after expiry', async () => {
     const result = await handler.checkPending(
       buildPendingContext(
         quote({
@@ -397,8 +397,8 @@ describe('MintBolt12Handler', () => {
       ),
     );
 
-    expect(result.category).toBe('terminal');
-    expect(result.terminalFailure?.code).toBe('quote_expired');
+    expect(result.category).toBe('ready');
+    expect(result.terminalFailure).toBeUndefined();
   });
 
   it('mints with the keyring private key and custom outputs', async () => {
@@ -455,5 +455,18 @@ describe('MintBolt12Handler', () => {
     }
     expect(result.error).toContain(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+  });
+
+  it('retries funded execution recovery after expiry', async () => {
+    const expiredQuote = quote({
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      amount_paid: Amount.from(10),
+    });
+
+    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
+
+    expect(result).toEqual({ status: 'FINALIZED' });
+    expect(wallet.mintProofsBolt12).toHaveBeenCalled();
+    expect(proofService.saveProofs).toHaveBeenCalled();
   });
 });
