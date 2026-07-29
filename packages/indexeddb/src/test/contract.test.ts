@@ -10,6 +10,7 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -57,6 +58,8 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('indexeddb quote storage constraints', () => {
   it('migrates canonical Mint Quote Accounting without inventing remote time', async () => {

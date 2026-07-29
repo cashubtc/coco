@@ -1,4 +1,5 @@
 import {
+  applyBolt11MintQuoteStateFallback,
   deserializeAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
@@ -229,15 +230,9 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<void> {
-    await this.db.run(
-      `UPDATE coco_cashu_canonical_mint_quotes
-       SET state = ?,
-           amountPaid = CASE WHEN ? IN ('PAID', 'ISSUED') THEN amount ELSE '0' END,
-           amountIssued = CASE WHEN ? = 'ISSUED' THEN amount ELSE '0' END,
-           updatedAt = ?
-       WHERE mintUrl = ? AND method = ? AND quoteId = ?`,
-      [state, state, state, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
-    );
+    const quote = await this.getMintQuote(mintUrl, method, quoteId);
+    if (!quote || !isStatefulMintQuote(quote)) return;
+    await this.upsertMintQuote(applyBolt11MintQuoteStateFallback(quote, state, observedAt));
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {
@@ -246,7 +241,7 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
               quoteDataJson, amountPaid, amountIssued, remoteUpdatedAt, reusable,
               createdAt, updatedAt
        FROM coco_cashu_canonical_mint_quotes
-       WHERE (state IS NULL OR state != 'ISSUED') ${method ? 'AND method = ?' : ''}`,
+       ${method ? 'WHERE method = ?' : ''}`,
       method ? [method] : [],
     );
     return rows.map(rowToMintQuote).filter(isMintQuotePending);

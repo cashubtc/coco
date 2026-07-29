@@ -38,6 +38,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId ?? undefined,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -91,6 +92,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      parentSwapOperationId: operation.parentSwapOperationId ?? null,
     };
   }
 
@@ -115,6 +117,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       ? JSON.stringify(operation.terminalFailure)
       : null,
     outputDataJson: JSON.stringify(operation.outputData),
+    parentSwapOperationId: operation.parentSwapOperationId ?? null,
   };
 };
 
@@ -142,6 +145,9 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       const existing = await table.get(operation.id);
       if (!existing) {
         throw new Error(`MintOperation with id ${operation.id} not found`);
+      }
+      if ((existing.parentSwapOperationId ?? undefined) !== operation.parentSwapOperationId) {
+        throw new Error(`Cannot change parent ownership of MintOperation ${operation.id}`);
       }
 
       const row = operationToRow(operation);

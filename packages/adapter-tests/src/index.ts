@@ -16,6 +16,8 @@ import {
   type ReceiveOperation,
   type SendOperation,
   type AuthSession,
+  type MintSwapOperation,
+  type OperationEventOutboxRecord,
   QuoteIdentityConflictError,
 } from '@cashu/coco-core/adapter';
 
@@ -445,6 +447,223 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
   };
 }
 
+export function createDummyMintSwapOperation(
+  overrides: Partial<MintSwapOperation> = {},
+): MintSwapOperation {
+  const destinationAmount = Amount.from(9_007_199_254_740_993n);
+  const sourcePreparationFee = Amount.from(1);
+  const sourceMeltInputFee = Amount.from(2);
+  return {
+    id: 'mint-swap-op',
+    state: 'prepared',
+    revision: 0,
+    sourceMintUrl: 'https://source-mint.test',
+    destinationMintUrl: 'https://destination-mint.test',
+    unit: 'sat',
+    destinationAmount,
+    destinationQuoteRef: {
+      mintUrl: 'https://destination-mint.test',
+      method: 'bolt11',
+      quoteId: 'destination-quote',
+    },
+    destinationMintOperationId: 'destination-mint-op',
+    sourceQuoteRef: {
+      mintUrl: 'https://source-mint.test',
+      method: 'bolt11',
+      quoteId: 'source-melt-quote',
+    },
+    sourceMeltOperationId: 'source-melt-op',
+    destinationNut20Key: { publicKey: '02adaptertest', derivationIndex: 42 },
+    preparedPlan: {
+      fingerprint: 'adapter-contract-fingerprint',
+      dispatchDeadline: 1_700_000_600,
+      requiredDispatchWindowSeconds: 120,
+      sourceMeltAmount: destinationAmount,
+      sourceFeeReserve: Amount.from(10),
+      sourcePreparationFee,
+      sourceMeltInputFee,
+      minimumSourceDebit: destinationAmount.add(sourcePreparationFee).add(sourceMeltInputFee),
+      maximumSourceDebit: destinationAmount.add(Amount.from(13)),
+      reservedSourceAmount: destinationAmount.add(Amount.from(13)),
+    },
+    retry: { attemptCount: 0 },
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+export function createDummyOperationEventOutboxRecord(
+  overrides: Partial<OperationEventOutboxRecord> = {},
+): OperationEventOutboxRecord {
+  return {
+    id: 'mint-swap-event',
+    operationId: 'mint-swap-op',
+    revision: 1,
+    eventType: 'mint-swap-op:prepared',
+    payload: {
+      operationId: 'mint-swap-op',
+      revision: 1,
+      state: 'prepared',
+      sourceMintUrl: 'https://source-mint.test',
+      destinationMintUrl: 'https://destination-mint.test',
+      unit: 'sat',
+      destinationAmount: '9007199254740993',
+    },
+    createdAt: 1_700_000_000_001,
+    publishAttempts: 0,
+    ...overrides,
+  };
+}
+
+export async function runMintSwapRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintSwapOperationRepository contract', () => {
+    it('round-trips decimal amounts and child lookups', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintSwapOperation();
+        await repositories.mintSwapOperationRepository.create(operation);
+        const stored = await repositories.mintSwapOperationRepository.getById(operation.id);
+        const byDestination =
+          await repositories.mintSwapOperationRepository.getByDestinationMintOperationId(
+            'destination-mint-op',
+          );
+        const bySource =
+          await repositories.mintSwapOperationRepository.getBySourceMeltOperationId(
+            'source-melt-op',
+          );
+
+        expect(stored?.destinationAmount.toString()).toBe('9007199254740993');
+        expect(stored?.preparedPlan?.sourceMeltAmount.toString()).toBe('9007199254740993');
+        expect(stored?.preparedPlan?.maximumSourceDebit.toString()).toBe('9007199254741006');
+        expect(byDestination?.id).toBe(operation.id);
+        expect(bySource?.id).toBe(operation.id);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('allows one compare-and-set winner per revision', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintSwapOperation();
+        await repositories.mintSwapOperationRepository.create(operation);
+        const next = {
+          ...operation,
+          revision: 1,
+          retry: { attemptCount: 1, nextAttemptAt: 1_700_000_001_000 },
+          updatedAt: 1_700_000_000_002,
+        } satisfies MintSwapOperation;
+        const results = await Promise.all([
+          repositories.mintSwapOperationRepository.compareAndSet(next, 0),
+          repositories.mintSwapOperationRepository.compareAndSet(next, 0),
+        ]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('enforces unique child ownership', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.mintSwapOperationRepository.create(createDummyMintSwapOperation());
+        await expectThrows(
+          () =>
+            repositories.mintSwapOperationRepository.create(
+              createDummyMintSwapOperation({ id: 'other-mint-swap-op' }),
+            ),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('returns automatic due work in deterministic due order', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const base = createDummyMintSwapOperation();
+        const preparing = (id: string, nextAttemptAt: number): MintSwapOperation => ({
+          id,
+          state: 'preparing',
+          revision: 0,
+          sourceMintUrl: base.sourceMintUrl,
+          destinationMintUrl: base.destinationMintUrl,
+          unit: 'sat',
+          destinationAmount: base.destinationAmount,
+          retry: { attemptCount: 1, nextAttemptAt },
+          createdAt: base.createdAt,
+          updatedAt: base.updatedAt,
+        });
+        await repositories.mintSwapOperationRepository.create(preparing('due-later', 20));
+        await repositories.mintSwapOperationRepository.create(preparing('due-first', 10));
+
+        const due = await repositories.mintSwapOperationRepository.getDue(20, 10);
+        expect(due.map(({ id }) => id).join(',')).toBe('due-first,due-later');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls parent and outbox writes back together', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (tx) => {
+              await tx.mintSwapOperationRepository.create(createDummyMintSwapOperation());
+              await tx.operationEventOutboxRepository.enqueue(
+                createDummyOperationEventOutboxRecord(),
+              );
+              throw new Error('injected rollback');
+            }),
+          expect,
+        );
+        expect(await repositories.mintSwapOperationRepository.getById('mint-swap-op')).toBe(null);
+        expect(await repositories.operationEventOutboxRepository.getUnpublished(10)).toHaveLength(
+          0,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  describe('OperationEventOutboxRepository contract', () => {
+    it('enforces logical uniqueness and durable publication state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.operationEventOutboxRepository.enqueue(
+          createDummyOperationEventOutboxRecord(),
+        );
+        await expectThrows(
+          () =>
+            repositories.operationEventOutboxRepository.enqueue(
+              createDummyOperationEventOutboxRecord({ id: 'duplicate-logical-event' }),
+            ),
+          expect,
+        );
+        await repositories.operationEventOutboxRepository.markPublished(
+          'mint-swap-event',
+          1_700_000_000_010,
+        );
+        expect(await repositories.operationEventOutboxRepository.getUnpublished(10)).toHaveLength(
+          0,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
 export async function runMintOperationRepositoryContract(
   options: ContractOptions,
   runner: ContractRunner,
@@ -452,6 +671,28 @@ export async function runMintOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MintOperationRepository contract', () => {
+    it('round-trips mint-swap ownership', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ parentSwapOperationId: 'swap-parent' });
+        await repositories.mintOperationRepository.create(operation);
+
+        expect(
+          (await repositories.mintOperationRepository.getById(operation.id))?.parentSwapOperationId,
+        ).toBe('swap-parent');
+        await expectThrows(
+          () =>
+            repositories.mintOperationRepository.update({
+              ...operation,
+              parentSwapOperationId: 'different-parent',
+            }),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips init mint operation quote ids', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -583,7 +824,7 @@ export async function runMintOperationRepositoryContract(
           mintUrl: 'https://mint.test/',
           quoteId: 'canonical-quote',
           quote: 'canonical-quote',
-          remoteUpdatedAt: 10,
+          remoteUpdatedAt: null,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
         await repositories.mintQuoteRepository.setMintQuoteState(
@@ -612,7 +853,112 @@ export async function runMintOperationRepositoryContract(
         expect(stored!.quoteData.amount.equals(Amount.from(3))).toBe(true);
         expect(stored!.amountPaid.equals(Amount.from(3))).toBe(true);
         expect(stored!.amountIssued.equals(Amount.zero())).toBe(true);
-        expect(stored!.remoteUpdatedAt).toBe(10);
+        expect(stored!.remoteUpdatedAt).toBe(null);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+          'UNPAID',
+          30,
+        );
+        const afterLegacyRegression = await repositories.mintQuoteRepository.getMintQuote(
+          'https://mint.test',
+          'bolt11',
+          'canonical-quote',
+        );
+        expect(afterLegacyRegression?.method).toBe('bolt11');
+        if (afterLegacyRegression?.method !== 'bolt11') {
+          throw new Error('Expected BOLT11 quote after legacy fallback update');
+        }
+        expect(afterLegacyRegression.state).toBe('PAID');
+        expect(afterLegacyRegression.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(afterLegacyRegression.amountIssued.isZero()).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not let legacy state override remotely ordered mint quote accounting', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          mintUrl: 'https://mint.test/',
+          quoteId: 'ordered-canonical-quote',
+          quote: 'ordered-canonical-quote',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'ISSUED',
+          20,
+        );
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        expect(stored?.method).toBe('bolt11');
+        if (stored?.method !== 'bolt11') {
+          throw new Error('Expected remotely ordered BOLT11 quote');
+        }
+        expect(stored.state).toBe('PAID');
+        expect(stored.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored.amountIssued.isZero()).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(10);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('derives deprecated BOLT11 state from canonical quote accounting', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          quoteId: 'canonical-accounting-authority',
+          quote: 'canonical-accounting-authority',
+          state: 'ISSUED',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        const paid = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        const pending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        expect(paid?.method).toBe('bolt11');
+        if (paid?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(paid.state).toBe('PAID');
+        expect(paid.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(paid.amountIssued.isZero()).toBe(true);
+        expect(pending).toHaveLength(1);
+
+        await repositories.mintQuoteRepository.upsertMintQuote({
+          ...quote,
+          state: 'UNPAID',
+          amountIssued: Amount.from(3),
+        });
+        const issued = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        const remaining = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        expect(issued?.method).toBe('bolt11');
+        if (issued?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(issued.state).toBe('ISSUED');
+        expect(issued.amountIssued.equals(Amount.from(3))).toBe(true);
+        expect(remaining).toHaveLength(0);
       } finally {
         await dispose();
       }
@@ -1376,6 +1722,28 @@ export async function runMeltOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MeltOperationRepository contract', () => {
+    it('round-trips mint-swap ownership', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ parentSwapOperationId: 'swap-parent' });
+        await repositories.meltOperationRepository.create(operation);
+
+        expect(
+          (await repositories.meltOperationRepository.getById(operation.id))?.parentSwapOperationId,
+        ).toBe('swap-parent');
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.update({
+              ...operation,
+              parentSwapOperationId: 'different-parent',
+            }),
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

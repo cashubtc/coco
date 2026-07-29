@@ -57,6 +57,7 @@ export default defineConfig({
           { text: 'Receive Operations', link: '/pages/receive-operations' },
           { text: 'Mint Operations', link: '/pages/mint-operations' },
           { text: 'Melt Operations', link: '/pages/melt-operations' },
+          { text: 'Mint Swaps', link: '/pages/mint-swaps' },
           { text: 'Coco Config', link: '/pages/coco-config' },
           { text: 'Plugins', link: '/pages/plugins' },
         ],

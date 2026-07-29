@@ -7,8 +7,12 @@ import type { MintAdapter } from '../infra';
 import type { MeltHandlerProvider } from '../infra/handlers/melt';
 import type { MintHandlerProvider } from '../infra/handlers/mint';
 import type { Logger } from '../logging/Logger';
+import { redactSensitiveValue } from '../logging/redaction';
 import {
+  applyBolt11MintQuoteStateFallback,
+  deriveBolt11MintQuoteState,
   getMintQuoteAmount,
+  isBolt11MintQuoteIssued,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -31,7 +35,12 @@ import {
   QuoteIdentityConflictError,
   UnknownMintError,
 } from '../models/Error';
-import type { MeltQuoteRepository, MintQuoteRepository, ProofRepository } from '../repositories';
+import type {
+  MeltQuoteRepository,
+  MintQuoteRepository,
+  ProofRepository,
+  RepositoryTransactionScope,
+} from '../repositories';
 import type { MintService } from '../services/MintService';
 import type { ProofService } from '../services/ProofService';
 import type { WalletService } from '../services/WalletService';
@@ -520,7 +529,7 @@ export class QuoteLifecycle {
       (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
-      quoteId: persistedQuote.quoteId,
+      quoteRef: redactSensitiveValue(persistedQuote.quoteId),
       method,
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
@@ -1173,6 +1182,7 @@ export class QuoteLifecycle {
   private async resolveAndPersistMintQuoteObservation(
     canonicalQuote: MintQuote,
     beforePersist?: (quote: MintQuote) => Promise<void>,
+    repository?: MintQuoteRepository,
   ): Promise<{
     quote: MintQuote;
     remoteStateChanged: boolean;
@@ -1182,12 +1192,14 @@ export class QuoteLifecycle {
     return this.resolveAndPersistMintQuoteObservationUnderLock(
       canonicalQuote,
       () => canonicalQuote,
+      repository,
     );
   }
 
   private async resolveAndPersistMintQuoteObservationUnderLock(
     ref: MintQuoteRef,
     buildObservation: (existing: MintQuote | null) => MintQuote,
+    repositoryOverride?: MintQuoteRepository,
   ): Promise<{
     quote: MintQuote;
     remoteStateChanged: boolean;
@@ -1196,7 +1208,7 @@ export class QuoteLifecycle {
     const observationKey = [ref.mintUrl, ref.method, ref.quoteId].join('::');
     const release = await this.mintQuoteObservationLock.acquire(observationKey);
     try {
-      return await this.withMintQuoteTransaction(async (repository) => {
+      const resolveWithRepository = async (repository: MintQuoteRepository) => {
         const existing = await repository.getMintQuote(ref.mintUrl, ref.method, ref.quoteId);
         const canonicalQuote = buildObservation(existing);
         const resolution = resolveMintQuoteObservation(existing, canonicalQuote);
@@ -1224,7 +1236,10 @@ export class QuoteLifecycle {
           remoteStateChanged: resolution.disposition === 'accepted-meaningful-change',
           existingQuote: existing,
         };
-      });
+      };
+      return repositoryOverride
+        ? await resolveWithRepository(repositoryOverride)
+        : await this.withMintQuoteTransaction(resolveWithRepository);
     } finally {
       release();
     }
@@ -1284,21 +1299,98 @@ export class QuoteLifecycle {
             `Cannot record quote observation: mint quote ${operation.quoteId} for ${operation.method} at ${operation.mintUrl} was not found`,
           );
         }
-        if (!isStatefulMintQuote(existing)) return existing;
-
-        return {
-          ...existing,
-          state,
-          amountPaid: state === 'UNPAID' ? Amount.zero() : existing.amount,
-          amountIssued: state === 'ISSUED' ? existing.amount : Amount.zero(),
-          remoteUpdatedAt: null,
-          updatedAt: observedAt,
-        };
+        if (!isStatefulMintQuote(existing)) {
+          throw new Error(
+            `Cannot record legacy quote state for ${operation.method} mint quote ${operation.quoteId}`,
+          );
+        }
+        return applyBolt11MintQuoteStateFallback(existing, state, observedAt);
       },
     );
     await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
-
     return quote;
+  }
+
+  /**
+   * Records accounting established by successful local persistence of deterministic BOLT11
+   * issuance. This is a first-class accounting update; legacy state remains only a projection.
+   */
+  async recordMintQuoteIssuance(
+    operation: PendingOrLaterOperation,
+    observedAt = Date.now(),
+  ): Promise<MintQuote<'bolt11'>> {
+    await this.ensureMintQuoteRecordForOperation(operation);
+    const { quote, remoteStateChanged } = await this.recordMintQuoteIssuanceWithRepository(
+      operation,
+      this.mintQuoteRepository,
+      observedAt,
+    );
+    await this.emitMintQuoteUpdatedIfNeeded(quote, remoteStateChanged);
+    return quote;
+  }
+
+  /**
+   * Persists successful BOLT11 issuance inside a parent-owned transaction.
+   *
+   * @internal The parent transition/outbox is the notification boundary for this path.
+   */
+  async recordMintQuoteIssuanceInTransaction(
+    operation: PendingOrLaterOperation,
+    repositories: RepositoryTransactionScope,
+    observedAt = Date.now(),
+  ): Promise<MintQuote<'bolt11'>> {
+    const { quote } = await this.recordMintQuoteIssuanceWithRepository(
+      operation,
+      repositories.mintQuoteRepository,
+      observedAt,
+    );
+    return quote;
+  }
+
+  private async recordMintQuoteIssuanceWithRepository(
+    operation: PendingOrLaterOperation,
+    repository: MintQuoteRepository,
+    observedAt: number,
+  ): Promise<{ quote: MintQuote<'bolt11'>; remoteStateChanged: boolean }> {
+    if (operation.method !== 'bolt11') {
+      throw new Error(`Cannot record BOLT11 issuance for ${operation.method} mint operation`);
+    }
+    const existing = await repository.getMintQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    if (!existing || !isStatefulMintQuote(existing)) {
+      throw new Error(
+        `Cannot record issuance: BOLT11 mint quote ${operation.quoteId} was not found`,
+      );
+    }
+
+    const amountPaid = existing.amountPaid.greaterThan(operation.amount)
+      ? existing.amountPaid
+      : operation.amount;
+    const amountIssued = existing.amountIssued.greaterThan(operation.amount)
+      ? existing.amountIssued
+      : operation.amount;
+    const canonicalObservation: MintQuote<'bolt11'> = {
+      ...existing,
+      state: deriveBolt11MintQuoteState(amountPaid, amountIssued),
+      amountPaid,
+      amountIssued,
+      updatedAt: observedAt,
+    };
+    const resolution = await this.resolveAndPersistMintQuoteObservation(
+      canonicalObservation,
+      undefined,
+      repository,
+    );
+    if (!isStatefulMintQuote(resolution.quote)) {
+      throw new Error(`Canonical quote ${operation.quoteId} changed method during issuance`);
+    }
+    return {
+      quote: resolution.quote,
+      remoteStateChanged: resolution.remoteStateChanged,
+    };
   }
 
   async createMeltQuote<M extends MeltMethod>(
@@ -1555,7 +1647,7 @@ export class QuoteLifecycle {
       throw new Error(`Cannot prepare ${context}: quote is expired`);
     }
 
-    if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
+    if (isStatefulMintQuote(quote) && isBolt11MintQuoteIssued(quote)) {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
     }
   }

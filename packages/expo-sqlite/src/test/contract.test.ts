@@ -10,6 +10,7 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapRepositoryContract,
   createDummyMint,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -173,6 +174,8 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('expo-sqlite web transaction compatibility', () => {
   it('uses withTransactionAsync when exclusive transactions are unavailable on web', async () => {

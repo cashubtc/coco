@@ -97,6 +97,21 @@ export class OperationInProgressError extends Error {
   }
 }
 
+/** Raised when a parent-owned child saga is advanced outside its owning swap coordinator. */
+export class ParentOwnedOperationError extends Error {
+  readonly operationId: string;
+  readonly parentSwapOperationId: string;
+
+  constructor(operationId: string, parentSwapOperationId: string) {
+    super(
+      `Operation ${operationId} is owned by mint swap ${parentSwapOperationId} and cannot be advanced directly`,
+    );
+    this.name = 'ParentOwnedOperationError';
+    this.operationId = operationId;
+    this.parentSwapOperationId = parentSwapOperationId;
+  }
+}
+
 export class AuthSessionError extends Error {
   readonly mintUrl: string;
   constructor(mintUrl: string, message?: string, cause?: unknown) {

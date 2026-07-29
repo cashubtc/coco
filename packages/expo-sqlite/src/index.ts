@@ -24,6 +24,8 @@ export class SqliteRepositories implements Repositories {
   readonly receiveOperationRepository: Repositories['receiveOperationRepository'];
   readonly paymentRequestReceiveOperationRepository: Repositories['paymentRequestReceiveOperationRepository'];
   readonly paymentRequestReceiveAttemptRepository: Repositories['paymentRequestReceiveAttemptRepository'];
+  readonly mintSwapOperationRepository: Repositories['mintSwapOperationRepository'];
+  readonly operationEventOutboxRepository: Repositories['operationEventOutboxRepository'];
   private readonly db: ExpoSqliteDb;
 
   private readonly repositories: SqlStorageRepositories;
@@ -49,6 +51,8 @@ export class SqliteRepositories implements Repositories {
       this.repositories.paymentRequestReceiveOperationRepository;
     this.paymentRequestReceiveAttemptRepository =
       this.repositories.paymentRequestReceiveAttemptRepository;
+    this.mintSwapOperationRepository = this.repositories.mintSwapOperationRepository;
+    this.operationEventOutboxRepository = this.repositories.operationEventOutboxRepository;
   }
 
   async init(): Promise<void> {

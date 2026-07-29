@@ -19,6 +19,10 @@ import type {
   SendOperation,
   SendOperationState,
 } from '../operations/send/SendOperation.ts';
+import type {
+  MintSwapOperation,
+  MintSwapOperationState,
+} from '../operations/mintSwap/MintSwapOperation.ts';
 
 export type HistoryType = 'mint' | 'melt' | 'send' | 'receive';
 
@@ -126,7 +130,34 @@ export type LegacyHistoryEntry =
   | LegacySendHistoryEntry
   | LegacyReceiveHistoryEntry;
 
-export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry;
+export interface MintSwapHistoryEntry {
+  id: string;
+  source: 'operation';
+  type: 'mint-swap';
+  operationId: string;
+  createdAt: number;
+  updatedAt: number;
+  sourceMintUrl: string;
+  destinationMintUrl: string;
+  /** Source mint retained for compatibility with generic history consumers. */
+  mintUrl: string;
+  unit: 'sat';
+  amount: Amount;
+  state: MintSwapOperationState;
+  minimumSourceDebit?: Amount;
+  maximumSourceDebit?: Amount;
+  finalSourceDebit?: Amount;
+  totalSourceFee?: Amount;
+  reasonCode?: string;
+  error?: string;
+}
+
+export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry | MintSwapHistoryEntry;
+
+export interface HistoryFilter {
+  mintUrl?: string;
+  types?: readonly (HistoryType | 'mint-swap')[];
+}
 
 export type LegacyHistoryRowInput = {
   legacyHistoryId: string | number;
@@ -144,7 +175,7 @@ export type LegacyHistoryRowInput = {
 };
 
 export function isOperationHistoryEntry(entry: HistoryEntry): entry is OperationHistoryEntry {
-  return entry.source === 'operation';
+  return entry.source === 'operation' && entry.type !== 'mint-swap';
 }
 
 export function isLegacyHistoryEntry(entry: HistoryEntry): entry is LegacyHistoryEntry {
@@ -182,6 +213,29 @@ export function parseHistoryEntryId(id: string):
 export function compareHistoryEntries(a: HistoryEntry, b: HistoryEntry): number {
   if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
   return b.id.localeCompare(a.id);
+}
+
+export function projectMintSwapOperation(operation: MintSwapOperation): MintSwapHistoryEntry {
+  return {
+    id: `mint-swap:${operation.id}`,
+    source: 'operation',
+    type: 'mint-swap',
+    operationId: operation.id,
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt,
+    sourceMintUrl: operation.sourceMintUrl,
+    destinationMintUrl: operation.destinationMintUrl,
+    mintUrl: operation.sourceMintUrl,
+    unit: operation.unit,
+    amount: operation.destinationAmount,
+    state: operation.state,
+    minimumSourceDebit: operation.preparedPlan?.minimumSourceDebit,
+    maximumSourceDebit: operation.preparedPlan?.maximumSourceDebit,
+    finalSourceDebit: operation.settlement?.finalSourceDebit,
+    totalSourceFee: operation.settlement?.totalSourceFee,
+    reasonCode: operation.attention?.reason ?? operation.terminalFailure?.code,
+    error: operation.attention?.message ?? operation.terminalFailure?.reason,
+  };
 }
 
 export function projectSendOperation(operation: SendOperation): SendHistoryEntry | null {

@@ -1,4 +1,4 @@
-import type { HistoryEntry } from '@core/models/History';
+import type { HistoryEntry, HistoryFilter } from '@core/models/History';
 import type { HistoryService } from '@core/services';
 
 export class HistoryApi {
@@ -8,8 +8,12 @@ export class HistoryApi {
     this.historyService = historyService;
   }
 
-  async getPaginatedHistory(offset = 0, limit = 25): Promise<HistoryEntry[]> {
-    return this.historyService.getPaginatedHistory(offset, limit);
+  async getPaginatedHistory(
+    offset = 0,
+    limit = 25,
+    filter?: HistoryFilter,
+  ): Promise<HistoryEntry[]> {
+    return this.historyService.getPaginatedHistory(offset, limit, filter);
   }
 
   async getHistoryEntryById(id: string): Promise<HistoryEntry | null> {

@@ -102,6 +102,25 @@ describe('memory quote repositories', () => {
     );
   });
 
+  it('does not let a legacy BOLT11 state fallback regress canonical accounting', async () => {
+    const repository = new MemoryMintQuoteRepository();
+    const quote = makeMintQuote({
+      state: 'PAID',
+      amountPaid: Amount.from(1),
+      amountIssued: Amount.zero(),
+    });
+    await repository.upsertMintQuote(quote);
+
+    await repository.setMintQuoteState(quote.mintUrl, quote.method, quote.quoteId, 'UNPAID', 10);
+    const stored = await repository.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+
+    expect(stored?.method).toBe('bolt11');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.amountPaid.equals(Amount.from(1))).toBe(true);
+    expect(stored.amountIssued.isZero()).toBe(true);
+    expect(stored.state).toBe('PAID');
+  });
+
   it('looks up melt quotes by canonical identity and rejects method collisions', async () => {
     const repository = new MemoryMeltQuoteRepository();
     await repository.upsertMeltQuote(makeMeltQuote({ quoteId: 'identity-melt' }));
