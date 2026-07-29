@@ -1,4 +1,8 @@
-import { getEncodedToken, type Logger } from '@cashu/coco-core';
+import {
+  getEncodedToken,
+  type Logger,
+  type PaymentRequestSpendingConditionRequirement,
+} from '@cashu/coco-core';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { nip19 } from 'nostr-tools';
@@ -307,6 +311,10 @@ export function createRouteHandlers(
 
           const mintUrl = body.mintUrl || state.mintUrl;
           const parsed = await state.manager.paymentRequests.parse(body.request);
+          const conditionError = spendingConditionError(parsed.spendingCondition);
+          if (conditionError) {
+            return Response.json({ error: conditionError }, { status: 400 });
+          }
           if (!parsed.payableMints.includes(mintUrl)) {
             return Response.json(
               {
@@ -445,6 +453,21 @@ export function createRouteHandlers(
       }),
     },
   };
+}
+
+/**
+ * Coco resolves NUT-10 spending conditions at parse: P2PK is enforced upstream by
+ * preparing locked outputs, while unsupported or malformed conditions make prepare
+ * throw. Surface the latter as a 400 with a clear reason instead of a late 500.
+ */
+function spendingConditionError(
+  spendingCondition: PaymentRequestSpendingConditionRequirement | undefined,
+): string | null {
+  if (!spendingCondition || spendingCondition.kind === 'P2PK') {
+    return null;
+  }
+  const label = spendingCondition.kind === 'malformed' ? 'a malformed' : 'an unsupported';
+  return `Request carries ${label} NUT-10 spending condition (${spendingCondition.nut10Kind}) that cannot be paid safely`;
 }
 
 export function buildRoutes(

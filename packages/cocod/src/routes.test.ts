@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { toAmount, type Manager } from '@cashu/coco-core';
+import { Database } from 'bun:sqlite';
+import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
+import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
 import { createRouteHandlers } from './routes';
 import { DaemonStateManager } from './utils/state';
+
+// A creqB (TLV + bech32m) payment request for 21 sat carrying a P2PK NUT-10
+// spending condition, generated once with the workspace @cashu/cashu-ts.
+const CREQB_P2PK_FIXTURE =
+  'CREQB1QYQQ2UN9WYKNZQSQPQQQQQQQQQQQQ9GRQQQSQPQQQYQQ2QQCDP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99E3K7MGXQQX8GETNWSS8QCTED4JKUAQ8QQ0QZQQPQYPQQ9MGW368QUE69UHK27RPD4CXCEFWVDHK6TMSV9USSQZFQYQQZQQZQPPRQVNP89SKXCE3V56RSCEJX4JK2ETZ8YERSWTZX5CRXVTRVV6NWERP89NX2DEJVCEKVEFJ8QMRZEPJXC6XYERRXQMNGV3S893RZVPHVFSNYU24ZDV';
 
 function unlockedStateManager(manager?: unknown): DaemonStateManager {
   const stateManager = new DaemonStateManager();
@@ -66,6 +73,65 @@ describe('routes', () => {
     const body = (await response.json()) as { error?: string };
     expect(response.status).toBe(400);
     expect(body.error).toBe('Request is required');
+  });
+
+  test('/x-cashu/parse accepts a creqB request and keeps its P2PK lock intact', async () => {
+    // Real core against an in-memory database: proves the workspace decoder does not
+    // discard the NUT-10 condition and that core classifies it as an enforceable P2PK
+    // lock. This test gates the removal of cocod's former creqB/NUT-10 rejections.
+    const repo = new SqliteRepositories({ database: new Database(':memory:') });
+    const manager = await initializeCoco({
+      repo,
+      seedGetter: async () => new Uint8Array(64).fill(7),
+    });
+    try {
+      const parsed = await manager.paymentRequests.parse(CREQB_P2PK_FIXTURE);
+      expect(parsed.spendingCondition?.kind).toBe('P2PK');
+      expect(parsed.amount?.toNumber()).toBe(21);
+
+      const stateManager = unlockedStateManager(manager);
+      const routes = createRouteHandlers(stateManager);
+      const response = await routes['/x-cashu/parse']!.POST!(
+        postJson('/x-cashu/parse', { request: CREQB_P2PK_FIXTURE }),
+        stateManager.getState(),
+      );
+      const body = (await response.json()) as { output?: string };
+      expect(response.status).toBe(200);
+      expect(body.output).toContain('21 Sats');
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  test('/x-cashu/handle rejects unsupported spending conditions before preparing proofs', async () => {
+    let prepareCalled = false;
+    const manager = {
+      paymentRequests: {
+        parse: async () => ({
+          payableMints: ['https://mint.example.com'],
+          allowedMints: [],
+          transport: { type: 'inband' },
+          spendingCondition: { kind: 'unsupported', nut10Kind: 'HTLC' },
+        }),
+        prepare: async () => {
+          prepareCalled = true;
+          throw new Error('should not prepare');
+        },
+      },
+    };
+    const stateManager = unlockedStateManager(manager);
+    const routes = createRouteHandlers(stateManager);
+
+    const response = await routes['/x-cashu/handle']!.POST!(
+      postJson('/x-cashu/handle', { request: 'creqA-fake' }),
+      stateManager.getState(),
+    );
+
+    const body = (await response.json()) as { error?: string };
+    expect(response.status).toBe(400);
+    expect(body.error).toContain('NUT-10');
+    expect(body.error).toContain('HTLC');
+    expect(prepareCalled).toBe(false);
   });
 
   test('/balance reports numeric per-mint totals from the v2 balance snapshots', async () => {
