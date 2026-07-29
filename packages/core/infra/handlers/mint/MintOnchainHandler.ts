@@ -14,7 +14,6 @@ import {
   type MintQuoteOnchainResponse,
 } from '../../../models/MintQuote';
 import { mintQuoteObservationFromOnchainResponse } from '../../../models/MintQuoteObservationFactory';
-import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -175,13 +174,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: onchain quote ${operation.quoteId} expired while executing mint`,
-      };
-    }
-
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
     if (!quoteKey) {
       return {
@@ -283,20 +275,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `Onchain mint quote ${operation.quoteId} expired before operation ${operation.id} could be minted`,
-          code: 'quote_expired',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
     return {
       observedRemoteStateAt,
       quoteSnapshot: remoteQuote,
@@ -391,10 +369,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     return Amount.from(quote.amount_paid ?? Amount.zero()).subtract(
       Amount.from(quote.amount_issued ?? Amount.zero()),
     );
-  }
-
-  private isExpired(quote: MintQuoteOnchainResponse): boolean {
-    return isMintQuoteExpired(quote);
   }
 
   private isAlreadyIssuedError(error: unknown): boolean {

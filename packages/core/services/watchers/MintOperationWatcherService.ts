@@ -10,7 +10,6 @@ import type {
 } from '@core/operations/mint';
 import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
-import { isMintQuoteExpired } from '../../models/MintQuoteExpiry.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
@@ -34,14 +33,14 @@ const mintQuoteWatchPolicies: {
     subscriptionKind: 'bolt11_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) => payload.state === 'PAID' || payload.state === 'ISSUED',
-    shouldStopWatching: (payload) => payload.state === 'ISSUED' || isMintQuoteExpired(payload),
+    shouldStopWatching: (payload) => payload.state === 'ISSUED',
   },
   onchain: {
     subscriptionKind: 'onchain_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: (payload) => isMintQuoteExpired(payload),
+    shouldStopWatching: () => false,
     keepWatchingWithoutOperationInterest: true,
   },
   bolt12: {
@@ -49,7 +48,7 @@ const mintQuoteWatchPolicies: {
     getPayloadQuoteId: (payload) => payload.quote,
     shouldRecordPayload: (payload) =>
       payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: (payload) => isMintQuoteExpired(payload),
+    shouldStopWatching: () => false,
     keepWatchingWithoutOperationInterest: true,
   },
 };

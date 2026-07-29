@@ -99,8 +99,9 @@ but the mint has not yet reported as issued.
 _Avoid_: Remote issued amount, proof reservation
 
 **Quote Expiry**:
-The time after which a quote can no longer receive a new payment. Expiry does not prevent claiming
-value that was already paid before expiry.
+The payment deadline advertised by a quote. For a Mint Quote it is advisory metadata for initiating
+new payments, not a determinant of Mint Quote Claimability, issuance, Operation Recovery, or Quote
+Observation.
 _Avoid_: Claim deadline, quote invalidity
 
 **Background Watcher**:

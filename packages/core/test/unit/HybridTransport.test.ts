@@ -399,7 +399,7 @@ describe('HybridTransport', () => {
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
     });
 
-    it('should not dedupe unchanged onchain quote counters when expiry status changes', async () => {
+    it('should dedupe unchanged onchain quote counters when only wall-clock expiry changes', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
 
@@ -421,7 +421,7 @@ describe('HybridTransport', () => {
 
       await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiryMs - Date.now() + 1)));
       mockSocket.triggerMessage(notification);
-      expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
     });
 
     it('should bypass dedupe when no state or complete amount counters are present', async () => {

@@ -9,7 +9,7 @@
  * - pending: Deterministic outputData persisted; quote may now settle remotely
  * - executing: Mint or recovery call in progress
  * - finalized: Quote reached terminal ISSUED state; proofs were saved when recoverable
- * - failed: Operation reached a terminal non-issued state (for example, quote expiry)
+ * - failed: Operation reached a terminal non-issued state (for example, invalid quote data)
  */
 export type MintOperationState = 'init' | 'pending' | 'executing' | 'finalized' | 'failed';
 

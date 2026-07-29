@@ -22,7 +22,6 @@ import {
   mintQuoteObservationFromOnchainResponse,
 } from '../models/MintQuoteObservationFactory.ts';
 import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
-import { isMintQuoteExpired } from '../models/MintQuoteExpiry';
 import {
   HttpResponseError,
   MintOperationError,
@@ -1551,10 +1550,6 @@ export class QuoteLifecycle {
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (isMintQuoteExpired(quote)) {
-      throw new Error(`Cannot prepare ${context}: quote is expired`);
-    }
-
     if (isStatefulMintQuote(quote) && quote.state === 'ISSUED') {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
     }

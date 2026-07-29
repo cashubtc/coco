@@ -6,7 +6,6 @@ import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
-import { isMintQuoteExpired } from '../../../models/MintQuoteExpiry';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -187,13 +186,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
-      };
-    }
-
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
     if (!quoteKey) {
       return {
@@ -289,20 +281,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         terminalFailure: {
           reason: validationError.message,
           code: 'invalid_quote',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
-    if (this.isExpired(remoteQuote)) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT12 mint quote ${operation.quoteId} expired before operation ${operation.id} could be minted`,
-          code: 'quote_expired',
           retryable: false,
           observedAt: observedRemoteStateAt,
         },
@@ -421,10 +399,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
   private getAvailableAmount(quote: MintQuoteBolt12Response): Amount {
     return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
-  }
-
-  private isExpired(quote: MintQuoteBolt12Response): boolean {
-    return isMintQuoteExpired(quote);
   }
 
   private isAlreadyIssuedError(error: unknown): boolean {
