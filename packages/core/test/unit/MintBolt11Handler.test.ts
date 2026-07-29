@@ -143,6 +143,10 @@ describe('MintBolt11Handler', () => {
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
+    localClaimabilityFacts: {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
     mintAdapter,
     proofService,
     proofRepository,
@@ -213,12 +217,12 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('recoverExecuting', () => {
-    it('returns a terminal result when the mint quote expired during execution', async () => {
+    it('keeps ordinary mint errors pending during recovery', async () => {
       const result = await handler.recoverExecuting(buildRecoverContext());
 
       expect(result).toEqual({
-        status: 'TERMINAL',
-        error: `Recovered: quote ${quoteId} expired while executing mint`,
+        status: 'PENDING',
+        error: 'Quote expired',
       });
       expect((wallet.mintProofsBolt11 as Mock<any>).mock.calls.length).toBe(1);
       expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
@@ -267,10 +271,20 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
-    it('returns the observed remote state with a normalized ready category', async () => {
+    it('uses canonical accounting when compatibility state disagrees', async () => {
+      (
+        mintAdapter.checkMintQuote as Mock<
+          (mintUrl: string, method: 'bolt11', quoteId: string) => Promise<MintQuoteBolt11Response>
+        >
+      ).mockImplementation(async () => ({
+        ...quote,
+        state: 'UNPAID',
+      }));
+
       const result = await handler.checkPending(buildPendingContext());
 
-      expect(result.observedRemoteState).toBe('PAID');
+      expect(result.observedRemoteState).toBeUndefined();
+      expect(result.quoteSnapshot).toEqual(expect.objectContaining({ state: 'UNPAID' }));
       expect(result.category).toBe('ready');
       expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
     });

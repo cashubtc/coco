@@ -79,6 +79,7 @@ import {
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
+import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -629,7 +630,7 @@ export class Manager {
         continue;
       }
 
-      if (quote.state === 'ISSUED') {
+      if (assessMintQuoteClaimability(quote).status === 'complete') {
         skipped.push(quote.quote);
         continue;
       }
@@ -765,12 +766,18 @@ export class Manager {
     for (const operation of pendingOperations) {
       if (mintUrl && operation.mintUrl !== mintUrl) continue;
 
-      const quote = await this.quoteLifecycle.getMintQuote(
+      const assessment = await this.mintOperationService.getMintQuoteClaimability(
         operation.mintUrl,
         operation.method,
         operation.quoteId,
+        {
+          requestedAmount: operation.amount,
+          targetOperationId: operation.id,
+        },
       );
-      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
+      if (!assessment || (assessment.status !== 'claimable' && assessment.status !== 'complete')) {
+        continue;
+      }
 
       const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
       if (!trusted) {

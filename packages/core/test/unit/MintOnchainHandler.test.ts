@@ -137,9 +137,15 @@ describe('MintOnchainHandler', () => {
     outputData: serializeOutputData({ keep: [output], send: [] }),
   });
 
-  const buildRecoverContext = (): RecoverExecutingContext<'onchain'> => ({
+  const buildRecoverContext = (
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'onchain'> => ({
     ...buildPrepareContext(),
     operation: buildExecutingOperation(),
+    localClaimabilityFacts,
   });
 
   const buildPendingContext = (): PendingContext<'onchain'> => ({
@@ -354,6 +360,18 @@ describe('MintOnchainHandler', () => {
     });
 
     const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
+  it('subtracts other in-flight reservations before retrying onchain recovery', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext({
+        finalizedAmount: Amount.zero(),
+        reservedAmount: Amount.from(10),
+      }),
+    );
 
     expect(result.status).toBe('PENDING');
     expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();

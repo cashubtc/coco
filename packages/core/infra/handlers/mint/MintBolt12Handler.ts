@@ -6,6 +6,7 @@ import { bytesToHex } from '@noble/curves/utils.js';
 import { MintOperationError } from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
+import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -194,11 +195,20 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       };
     }
 
-    const available = this.getAvailableAmount(remoteQuote);
-    if (available.lessThan(operation.amount)) {
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote),
+      { ...ctx.localClaimabilityFacts, requestedAmount: operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      return {
+        status: 'TERMINAL',
+        error: `Recovered: BOLT12 quote ${operation.quoteId} has invalid claimability accounting`,
+      };
+    }
+    if (assessment.status !== 'claimable') {
       return {
         status: 'PENDING',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} has ${available} available, requested ${operation.amount}`,
+        error: `Recovered: BOLT12 quote ${operation.quoteId} has ${assessment.remoteAvailable} remotely available, requested ${operation.amount}`,
       };
     }
 
@@ -229,13 +239,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
             error: `Recovered: BOLT12 quote ${operation.quoteId} was already issued but proofs were not recoverable`,
           }
         );
-      }
-
-      if (this.isExpiredMintError(error)) {
-        return {
-          status: 'TERMINAL',
-          error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
-        };
       }
 
       return {
@@ -287,12 +290,35 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       };
     }
 
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote, {
+        now: observedRemoteStateAt,
+      }),
+      { requestedAmount: operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      return {
+        observedRemoteStateAt,
+        quoteSnapshot: remoteQuote,
+        category: 'terminal',
+        terminalFailure: {
+          reason: `BOLT12 mint quote ${operation.quoteId} has invalid claimability accounting`,
+          code: 'invalid_quote',
+          retryable: false,
+          observedAt: observedRemoteStateAt,
+        },
+      };
+    }
+
     return {
       observedRemoteStateAt,
       quoteSnapshot: remoteQuote,
-      category: this.getAvailableAmount(remoteQuote).greaterThanOrEqual(operation.amount)
-        ? 'ready'
-        : 'waiting',
+      category:
+        assessment.status === 'claimable'
+          ? 'ready'
+          : assessment.status === 'complete'
+            ? 'completed'
+            : 'waiting',
     };
   }
 
@@ -334,12 +360,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     assertSameUnit(quote.unit, expectedUnit, `BOLT12 mint quote ${quote.quote}`);
     this.assertQuoteAmount(quote, expectedAmount);
-
-    if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
-      throw new Error(
-        `BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`,
-      );
-    }
   }
 
   private assertQuoteAmount(quote: MintQuoteBolt12Response, expectedAmount?: Amount): void {
@@ -397,10 +417,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
   }
 
-  private getAvailableAmount(quote: MintQuoteBolt12Response): Amount {
-    return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
-  }
-
   private isAlreadyIssuedError(error: unknown): boolean {
     if (error instanceof MintOperationError && (error.code === 20002 || error.code === 11003)) {
       return true;
@@ -408,14 +424,5 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     const message = error instanceof Error ? error.message : String(error);
     return /already (issued|signed)|outputs? already/i.test(message);
-  }
-
-  private isExpiredMintError(error: unknown): boolean {
-    if (error instanceof MintOperationError && error.code === 20007) {
-      return true;
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    return /expired/i.test(message);
   }
 }

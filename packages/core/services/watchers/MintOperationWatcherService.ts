@@ -10,6 +10,7 @@ import type {
 } from '@core/operations/mint';
 import type { SubscriptionKind } from '@core/infra/SubscriptionProtocol.ts';
 import { mintQuoteToMethodSnapshot, type MintQuote } from '../../models/MintQuote.ts';
+import { assessMintQuoteClaimability } from '../../models/MintQuoteClaimability.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 type QuoteKey = string; // `${mintUrl}::${method}::${quoteId}`
@@ -21,9 +22,6 @@ function toKey(mintUrl: string, method: string, quoteId: string): QuoteKey {
 interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
   subscriptionKind: SubscriptionKind;
   getPayloadQuoteId(payload: MintMethodQuoteSnapshot<M>): string | undefined;
-  shouldRecordPayload(payload: MintMethodQuoteSnapshot<M>): boolean;
-  shouldStopWatching(payload: MintMethodQuoteSnapshot<M>): boolean;
-  keepWatchingWithoutOperationInterest?: boolean;
 }
 
 const mintQuoteWatchPolicies: {
@@ -32,24 +30,14 @@ const mintQuoteWatchPolicies: {
   bolt11: {
     subscriptionKind: 'bolt11_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
-    shouldRecordPayload: (payload) => payload.state === 'PAID' || payload.state === 'ISSUED',
-    shouldStopWatching: (payload) => payload.state === 'ISSUED',
   },
   onchain: {
     subscriptionKind: 'onchain_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
-    shouldRecordPayload: (payload) =>
-      payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: () => false,
-    keepWatchingWithoutOperationInterest: true,
   },
   bolt12: {
     subscriptionKind: 'bolt12_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
-    shouldRecordPayload: (payload) =>
-      payload.amount_paid !== undefined && payload.amount_issued !== undefined,
-    shouldStopWatching: () => false,
-    keepWatchingWithoutOperationInterest: true,
   },
 };
 
@@ -151,15 +139,16 @@ export class MintOperationWatcherService {
       const policy = this.getPolicy(quote.method);
       if (!policy) return;
 
-      const snapshot = mintQuoteToMethodSnapshot(quote);
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      if (policy.shouldStopWatching(snapshot)) {
+      if (assessMintQuoteClaimability(quote).status === 'complete') {
         await this.stopWatching(key);
         return;
       }
 
       try {
-        await this.watchMintQuotes([{ ...quote, snapshot }], { canonical: true });
+        await this.watchMintQuotes([{ ...quote, snapshot: mintQuoteToMethodSnapshot(quote) }], {
+          canonical: true,
+        });
       } catch (err) {
         this.logger?.error('Failed to start watching canonical mint quote', {
           mintUrl: quote.mintUrl,
@@ -360,7 +349,10 @@ export class MintOperationWatcherService {
       operationIdsByKey.set(key, operationIds);
     }
 
-    await this.watchMintQuotes(Array.from(uniqueByQuote.values()), { operationIdsByKey });
+    await this.watchMintQuotes(Array.from(uniqueByQuote.values()), {
+      canonical: true,
+      operationIdsByKey,
+    });
   }
 
   private async watchMintQuotes(
@@ -376,11 +368,6 @@ export class MintOperationWatcherService {
       if (!policy) continue;
 
       const key = toKey(quote.mintUrl, quote.method, quote.quoteId);
-      if (quote.snapshot && policy.shouldStopWatching(quote.snapshot)) {
-        await this.stopWatching(key);
-        continue;
-      }
-
       const existing = this.watchRecordByKey.get(key);
       if (existing?.stop) {
         this.addInterest(existing, key, interest);
@@ -531,21 +518,22 @@ export class MintOperationWatcherService {
     if (!quoteId) return;
 
     const key = toKey(mintUrl, record.method, quoteId);
-    if (policy.shouldRecordPayload(methodPayload)) {
-      try {
-        await this.quoteLifecycle.recordMintQuoteSnapshot(mintUrl, record.method, methodPayload);
-      } catch (err) {
-        this.logger?.error('Failed to persist mint quote update from remote update', {
-          mintUrl,
-          quoteId,
-          method: record.method,
-          err,
-        });
+    try {
+      const quote = await this.quoteLifecycle.recordMintQuoteSnapshot(
+        mintUrl,
+        record.method,
+        methodPayload,
+      );
+      if (assessMintQuoteClaimability(quote).status === 'complete') {
+        await this.stopWatching(key);
       }
-    }
-
-    if (policy.shouldStopWatching(methodPayload)) {
-      await this.stopWatching(key);
+    } catch (err) {
+      this.logger?.error('Failed to persist mint quote update from remote update', {
+        mintUrl,
+        quoteId,
+        method: record.method,
+        err,
+      });
     }
   }
 
@@ -601,7 +589,7 @@ export class MintOperationWatcherService {
       return false;
     }
 
-    return this.getPolicy(record.method)?.keepWatchingWithoutOperationInterest !== true;
+    return true;
   }
 
   private removeWatchRecord(key: QuoteKey): void {

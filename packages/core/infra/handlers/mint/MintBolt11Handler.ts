@@ -18,6 +18,7 @@ import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from 
 import { Amount, type MintQuoteBolt11Response } from '@cashu/cashu-ts';
 import { mintQuoteFromBolt11Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt11Response } from '../../../models/MintQuoteObservationFactory';
+import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
 
 export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   async createQuote(ctx: CreateMintQuoteContext<'bolt11'>): Promise<MintQuote<'bolt11'>> {
@@ -126,7 +127,27 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       };
     }
 
-    if (remoteQuote.state === 'PAID') {
+    const quote = mintQuoteObservationFromBolt11Response(mintUrl, remoteQuote);
+    const assessment = assessMintQuoteClaimability(quote, {
+      ...ctx.localClaimabilityFacts,
+      requestedAmount: ctx.operation.amount,
+    });
+
+    if (assessment.status === 'invalid') {
+      return {
+        status: 'TERMINAL',
+        error: `Recovered: quote ${quoteId} has invalid claimability accounting`,
+      };
+    }
+
+    if (assessment.status === 'waiting') {
+      return {
+        status: 'PENDING',
+        error: `Recovered: quote ${quoteId} is not yet claimable`,
+      };
+    }
+
+    if (assessment.status === 'claimable') {
       const outputData = deserializeOutputData(ctx.operation.outputData);
       try {
         const proofs = await ctx.wallet.mintProofsBolt11(
@@ -152,11 +173,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
             // Quote already issued; fall through to proof recovery
-          } else if (err.code === 20007) {
-            return {
-              status: 'TERMINAL',
-              error: `Recovered: quote ${quoteId} expired while executing mint`,
-            };
           } else {
             return {
               status: 'PENDING',
@@ -170,16 +186,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
           };
         }
       }
-    } else if (remoteQuote.state === 'UNPAID') {
-      return {
-        status: 'PENDING',
-        error: `Recovered: quote ${quoteId} is still UNPAID`,
-      };
-    } else if (remoteQuote.state !== 'ISSUED') {
-      return {
-        status: 'PENDING',
-        error: `Recovered: quote ${quoteId} remains in remote state ${remoteQuote.state}`,
-      };
     }
 
     try {
@@ -211,32 +217,42 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
-    ctx.logger?.info('Pending mint quote state', { mintUrl, quoteId, state: quote.state });
     const observedRemoteStateAt = Date.now();
+    const canonicalQuote = mintQuoteObservationFromBolt11Response(mintUrl, quote, {
+      now: observedRemoteStateAt,
+    });
+    const assessment = assessMintQuoteClaimability(canonicalQuote, {
+      requestedAmount: ctx.operation.amount,
+    });
+    ctx.logger?.info('Pending mint quote claimability assessed', {
+      mintUrl,
+      quoteId,
+      status: assessment.status,
+    });
 
-    switch (quote.state) {
-      case 'UNPAID':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'waiting',
-        };
-      case 'PAID':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'ready',
-        };
-      case 'ISSUED':
-        return {
-          observedRemoteState: quote.state,
-          observedRemoteStateAt,
-          category: 'completed',
-        };
-      default:
-        throw new Error(
-          `Unexpected mint quote state: ${quote.state} for quote ${quoteId} at mint ${mintUrl}`,
-        );
+    if (assessment.status === 'invalid') {
+      return {
+        observedRemoteStateAt,
+        quoteSnapshot: quote,
+        category: 'terminal',
+        terminalFailure: {
+          reason: `BOLT11 mint quote ${quoteId} has invalid claimability accounting`,
+          code: 'invalid_quote',
+          retryable: false,
+          observedAt: observedRemoteStateAt,
+        },
+      };
     }
+
+    return {
+      observedRemoteStateAt,
+      quoteSnapshot: quote,
+      category:
+        assessment.status === 'claimable'
+          ? 'ready'
+          : assessment.status === 'complete'
+            ? 'completed'
+            : 'waiting',
+    };
   }
 }

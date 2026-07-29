@@ -748,16 +748,12 @@ describe('MintOperationService', () => {
     );
 
     const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
-    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
-      mintUrl,
-      'onchain',
-      onchainQuoteId,
-    );
+    const assessment = await service.getMintQuoteClaimability(mintUrl, 'onchain', onchainQuoteId);
 
     expect(stored?.amountPaid.equals(Amount.from(10))).toBe(true);
     expect(stored?.amountIssued.equals(Amount.zero())).toBe(true);
     expect(stored?.remoteUpdatedAt).toBe(11);
-    expect(hasClaimableBalance).toBe(true);
+    expect(assessment?.status).toBe('claimable');
   });
 
   it('refreshMintQuote updates reusable onchain quote data before emitting', async () => {
@@ -1761,6 +1757,50 @@ describe('MintOperationService', () => {
     expect(failedEvents).toHaveLength(0);
   });
 
+  it('claimMintQuote issues atomic accounting even when compatibility state is stale', async () => {
+    await persistQuote();
+    const canonical = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+    if (!canonical || canonical.method !== 'bolt11') {
+      throw new Error('Expected canonical BOLT11 quote');
+    }
+    await quoteRepo.upsertMintQuote({ ...canonical, state: 'UNPAID' });
+    const operation = await service.prepare(canonical, canonical.amount);
+
+    const claimed = await service.claimMintQuote(mintUrl, 'bolt11', quoteId, {
+      autoClaimRemaining: false,
+    });
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.id).toBe(operation.id);
+    expect(claimed[0]?.state).toBe('finalized');
+  });
+
+  it('claimMintQuote advances a pending atomic operation from complete accounting', async () => {
+    await persistQuote();
+    const operation = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    const canonical = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+    if (!canonical || canonical.method !== 'bolt11') {
+      throw new Error('Expected canonical BOLT11 quote');
+    }
+    await quoteRepo.upsertMintQuote({
+      ...canonical,
+      state: 'UNPAID',
+      amountIssued: canonical.amount,
+    });
+    (handler.execute as Mock<typeof handler.execute>).mockResolvedValueOnce({
+      status: 'ALREADY_ISSUED',
+    });
+
+    const claimed = await service.claimMintQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.id).toBe(operation.id);
+    expect(claimed[0]?.state).toBe('finalized');
+  });
+
   it('finalize is idempotent after finalize', async () => {
     await persistQuote();
 
@@ -2109,14 +2149,10 @@ describe('MintOperationService', () => {
     });
     useAutoClaimOnchainHandler(Amount.from(10));
 
-    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
-      mintUrl,
-      'onchain',
-      onchainQuoteId,
-    );
+    const assessment = await service.getMintQuoteClaimability(mintUrl, 'onchain', onchainQuoteId);
     const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
 
-    expect(hasClaimableBalance).toBe(true);
+    expect(assessment?.status).toBe('claimable');
     expect(claimed).toHaveLength(1);
     expect(claimed[0]?.state).toBe('finalized');
   });
@@ -2136,19 +2172,19 @@ describe('MintOperationService', () => {
       expiry,
     });
 
-    const onchainClaimable = await service.hasLocallyClaimableMintQuoteBalance(
+    const onchainAssessment = await service.getMintQuoteClaimability(
       mintUrl,
       'onchain',
       onchainQuoteId,
     );
-    const bolt12Claimable = await service.hasLocallyClaimableMintQuoteBalance(
+    const bolt12Assessment = await service.getMintQuoteClaimability(
       mintUrl,
       'bolt12',
       bolt12QuoteId,
     );
 
-    expect(onchainClaimable).toBe(true);
-    expect(bolt12Claimable).toBe(true);
+    expect(onchainAssessment?.status).toBe('claimable');
+    expect(bolt12Assessment?.status).toBe('claimable');
   });
 
   it('claimMintQuote prepares and issues reusable balance after expiry', async () => {

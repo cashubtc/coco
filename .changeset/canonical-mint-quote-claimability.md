@@ -1,0 +1,10 @@
+---
+'@cashu/coco-core': patch
+'@cashu/coco-adapter-tests': patch
+'@cashu/coco-sqlite': patch
+'@cashu/coco-sqlite-bun': patch
+'@cashu/coco-expo-sqlite': patch
+---
+
+Centralize Mint Quote Claimability on canonical accounting so atomic BOLT11 and balance-based
+BOLT12/on-chain callers share readiness, reservation, scheduling, and recovery behavior.

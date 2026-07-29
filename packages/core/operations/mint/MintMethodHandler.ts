@@ -156,6 +156,10 @@ export interface RecoverExecutingContext<
 > extends BaseHandlerDeps {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
+  localClaimabilityFacts: {
+    finalizedAmount: Amount;
+    reservedAmount: Amount;
+  };
 }
 
 export interface PendingContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
