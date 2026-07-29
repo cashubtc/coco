@@ -1,11 +1,11 @@
-import { appendFile, mkdir, rename, stat, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { appendFile, mkdir, rename, stat, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
-import type { Logger } from "coco-cashu-core";
+import type { Logger } from 'coco-cashu-core';
 
-import { LOG_FILE } from "./config.js";
+import { LOG_FILE } from './config.js';
 
-export type LogLevel = "error" | "warn" | "info" | "debug";
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
 export interface AppLogger extends Logger {
   flush(): Promise<void>;
@@ -36,17 +36,17 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 5;
-const DEFAULT_SERVICE = "cocod-daemon";
+const DEFAULT_SERVICE = 'cocod-daemon';
 const REDACTED_KEYS = new Set([
-  "authorization",
-  "encryptedMnemonic",
-  "invoice",
-  "mnemonic",
-  "passphrase",
-  "request",
-  "seed",
-  "token",
-  "xCashuHeader",
+  'authorization',
+  'encryptedMnemonic',
+  'invoice',
+  'mnemonic',
+  'passphrase',
+  'request',
+  'seed',
+  'token',
+  'xCashuHeader',
 ]);
 
 const textEncoder = new TextEncoder();
@@ -64,7 +64,7 @@ export class StructuredLogger implements AppLogger {
   constructor(options: StructuredLoggerOptions = {}) {
     this.service = options.service ?? DEFAULT_SERVICE;
     this.logFile = options.logFile ?? LOG_FILE;
-    this.level = options.level ?? "info";
+    this.level = options.level ?? 'info';
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
     this.mirrorToConsole = options.mirrorToConsole ?? process.stdout.isTTY === true;
@@ -73,19 +73,19 @@ export class StructuredLogger implements AppLogger {
   }
 
   error(message: string, ...meta: unknown[]): void {
-    this.enqueue("error", message, meta);
+    this.enqueue('error', message, meta);
   }
 
   warn(message: string, ...meta: unknown[]): void {
-    this.enqueue("warn", message, meta);
+    this.enqueue('warn', message, meta);
   }
 
   info(message: string, ...meta: unknown[]): void {
-    this.enqueue("info", message, meta);
+    this.enqueue('info', message, meta);
   }
 
   debug(message: string, ...meta: unknown[]): void {
-    this.enqueue("debug", message, meta);
+    this.enqueue('debug', message, meta);
   }
 
   log(level: LogLevel, message: string, ...meta: unknown[]): void {
@@ -123,7 +123,7 @@ export class StructuredLogger implements AppLogger {
       .then(async () => {
         await this.ensureInitialized();
         await this.rotateIfNeeded(line);
-        await appendFile(this.logFile, line, "utf8");
+        await appendFile(this.logFile, line, 'utf8');
 
         if (this.mirrorToConsole) {
           this.writeToConsole(level, line);
@@ -131,13 +131,13 @@ export class StructuredLogger implements AppLogger {
       })
       .catch((error) => {
         this.writeToConsole(
-          "error",
+          'error',
           `${JSON.stringify({
             ts: new Date().toISOString(),
-            level: "error",
+            level: 'error',
             service: this.service,
             pid: process.pid,
-            event: "logger.write_failed",
+            event: 'logger.write_failed',
             error: serializeError(error),
           })}\n`,
         );
@@ -197,7 +197,7 @@ export class StructuredLogger implements AppLogger {
   }
 
   private writeToConsole(level: LogLevel, line: string): void {
-    if (level === "error" || level === "warn") {
+    if (level === 'error' || level === 'warn') {
       process.stderr.write(line);
       return;
     }
@@ -255,7 +255,7 @@ function sanitizeRecord(record: Record<string, unknown>): Record<string, unknown
 
 function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
   if (key && REDACTED_KEYS.has(key)) {
-    return "[REDACTED]";
+    return '[REDACTED]';
   }
 
   if (value instanceof Error) {
@@ -263,7 +263,7 @@ function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
   }
 
   if (depth >= 4) {
-    return "[Truncated]";
+    return '[Truncated]';
   }
 
   if (Array.isArray(value)) {
@@ -280,7 +280,7 @@ function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
     return sanitized;
   }
 
-  if (typeof value === "bigint") {
+  if (typeof value === 'bigint') {
     return value.toString();
   }
 
@@ -292,7 +292,7 @@ function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
 
@@ -302,13 +302,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function parseLogLevel(value: string | undefined): LogLevel {
   switch (value) {
-    case "error":
-    case "warn":
-    case "info":
-    case "debug":
+    case 'error':
+    case 'warn':
+    case 'info':
+    case 'debug':
       return value;
     default:
-      return "info";
+      return 'info';
   }
 }
 
@@ -355,5 +355,5 @@ async function safeDelete(filePath: string): Promise<void> {
 }
 
 function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }

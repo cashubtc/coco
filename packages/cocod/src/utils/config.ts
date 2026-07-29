@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir } from 'node:os';
 
 export const CONFIG_DIR = `${homedir()}/.cocod`;
 export const SOCKET_PATH = process.env.COCOD_SOCKET || `${CONFIG_DIR}/cocod.sock`;

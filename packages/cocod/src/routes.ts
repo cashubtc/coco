@@ -2,38 +2,38 @@ import {
   getEncodedToken,
   type InbandPaymentRequestExecutionResult,
   type Logger,
-} from "coco-cashu-core";
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english.js";
-import { nip19 } from "nostr-tools";
+} from 'coco-cashu-core';
+import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
+import { nip19 } from 'nostr-tools';
 
-import { encryptMnemonic } from "./utils/crypto.js";
-import { CONFIG_FILE, SALT_FILE } from "./utils/config.js";
-import { serializeError } from "./utils/logger.js";
-import { initializeWallet } from "./utils/wallet.js";
-import type { WalletConfig } from "./utils/config.js";
-import type { AppLogger } from "./utils/logger.js";
+import { encryptMnemonic } from './utils/crypto.js';
+import { CONFIG_FILE, SALT_FILE } from './utils/config.js';
+import { serializeError } from './utils/logger.js';
+import { initializeWallet } from './utils/wallet.js';
+import type { WalletConfig } from './utils/config.js';
+import type { AppLogger } from './utils/logger.js';
 import type {
   DaemonStateManager,
   LockedState,
   UnlockedState,
   RouteHandler,
-} from "./utils/state.js";
+} from './utils/state.js';
 
 export function createRouteHandlers(
   stateManager: DaemonStateManager,
   logger?: Logger,
 ): Record<string, { GET?: RouteHandler; POST?: RouteHandler }> {
   return {
-    "/ping": {
-      GET: async () => Response.json({ output: "pong" }),
+    '/ping': {
+      GET: async () => Response.json({ output: 'pong' }),
     },
-    "/status": {
+    '/status': {
       GET: async (_req, state) => {
         return Response.json({ output: state.status });
       },
     },
-    "/init": {
+    '/init': {
       POST: stateManager.requireUninitialized(async (req: Request) => {
         try {
           const body = (await req.json()) as {
@@ -45,17 +45,17 @@ export function createRouteHandlers(
           let mnemonic: string;
           if (body.mnemonic) {
             if (!validateMnemonic(body.mnemonic, wordlist)) {
-              return Response.json({ error: "Invalid mnemonic" }, { status: 400 });
+              return Response.json({ error: 'Invalid mnemonic' }, { status: 400 });
             }
             mnemonic = body.mnemonic;
           } else {
             mnemonic = generateMnemonic(wordlist, 256);
           }
 
-          const mintUrl = body.mintUrl || "https://mint.minibits.cash/Bitcoin";
+          const mintUrl = body.mintUrl || 'https://mint.minibits.cash/Bitcoin';
           const encrypted = !!body.passphrase;
 
-          await Bun.write(CONFIG_FILE, "");
+          await Bun.write(CONFIG_FILE, '');
           await Bun.file(CONFIG_FILE).delete();
 
           let config: WalletConfig;
@@ -101,17 +101,17 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/unlock": {
+    '/unlock': {
       POST: stateManager.requireLocked(async (req: Request, state: LockedState) => {
         try {
           const body = (await req.json()) as { passphrase: string };
 
           if (!body.passphrase) {
-            return Response.json({ error: "Passphrase required" }, { status: 400 });
+            return Response.json({ error: 'Passphrase required' }, { status: 400 });
           }
 
           const salt = await Bun.file(SALT_FILE).text();
-          const { decryptMnemonic } = await import("./utils/crypto.js");
+          const { decryptMnemonic } = await import('./utils/crypto.js');
           const mnemonic = await decryptMnemonic(state.encryptedMnemonic, body.passphrase, salt);
 
           const config: WalletConfig = {
@@ -127,14 +127,14 @@ export function createRouteHandlers(
 
           stateManager.setUnlocked(manager, state.mintUrl, seed);
 
-          return Response.json({ output: "Unlocked" });
+          return Response.json({ output: 'Unlocked' });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return Response.json({ error: `Unlock failed: ${message}` }, { status: 401 });
         }
       }),
     },
-    "/npc/address": {
+    '/npc/address': {
       GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
         try {
           const info = await state.manager.ext.npc.getInfo();
@@ -149,7 +149,7 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/npc/username": {
+    '/npc/username': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const { username, confirm } = (await req.json()) as {
@@ -157,7 +157,7 @@ export function createRouteHandlers(
             confirm?: boolean;
           };
           if (!username) {
-            return Response.json({ error: "Username is required" }, { status: 400 });
+            return Response.json({ error: 'Username is required' }, { status: 400 });
           }
           if (confirm) {
             const res = await state.manager.ext.npc.setUsername(username, confirm);
@@ -165,7 +165,7 @@ export function createRouteHandlers(
               return Response.json({ output: res });
             } else {
               return Response.json({
-                error: `Failed to set username. Required amount: ${res.pr.amount}. Required mints: ${res.pr.mints?.join(",")}`,
+                error: `Failed to set username. Required amount: ${res.pr.amount}. Required mints: ${res.pr.mints?.join(',')}`,
               });
             }
           } else {
@@ -180,7 +180,7 @@ export function createRouteHandlers(
                 { status: 402 },
               );
             } else {
-              return Response.json({ error: "Invalid response" });
+              return Response.json({ error: 'Invalid response' });
             }
           }
         } catch (error) {
@@ -190,7 +190,7 @@ export function createRouteHandlers(
       }),
     },
 
-    "/balance": {
+    '/balance': {
       GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
         try {
           const balance = await state.manager.wallet.getBalances();
@@ -205,7 +205,7 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/receive/cashu": {
+    '/receive/cashu': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { token: string };
@@ -217,18 +217,18 @@ export function createRouteHandlers(
           if (e instanceof Error) {
             return Response.json({ error: e.message });
           }
-          return Response.json({ error: "Receive failed" });
+          return Response.json({ error: 'Receive failed' });
         }
       }),
     },
-    "/receive/bolt11": {
+    '/receive/bolt11': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
           const quote = await state.manager.ops.mint.prepare({
             mintUrl,
-            method: "bolt11",
+            method: 'bolt11',
             amount: body.amount,
             methodData: {},
           });
@@ -239,7 +239,7 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/send/cashu": {
+    '/send/cashu': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
@@ -254,14 +254,14 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/send/bolt11": {
+    '/send/bolt11': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { invoice: string; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
           const prepared = await state.manager.ops.melt.prepare({
             mintUrl,
-            method: "bolt11",
+            method: 'bolt11',
             methodData: { invoice: body.invoice },
           });
           await state.manager.ops.melt.execute(prepared);
@@ -272,21 +272,21 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/x-cashu/parse": {
+    '/x-cashu/parse': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const { request } = (await req.json()) as { request?: string };
           if (!request) {
-            return Response.json({ error: "Request is required" }, { status: 400 });
+            return Response.json({ error: 'Request is required' }, { status: 400 });
           }
 
           const parsed = await state.manager.paymentRequests.parse(request);
           const mintMsg =
             parsed.allowedMints?.length > 0
               ? `from one of ${parsed.allowedMints.length} mints`
-              : "from any mint";
+              : 'from any mint';
           const matchingMints =
-            parsed.payableMints.length > 0 ? parsed.payableMints.join("\n") : "No matching mint!";
+            parsed.payableMints.length > 0 ? parsed.payableMints.join('\n') : 'No matching mint!';
           const msg = `Request requires payment of ${parsed.amount || 0} Sats ${mintMsg}.\nMatching mints:\n${matchingMints}`;
           return Response.json({ output: msg });
         } catch (error) {
@@ -298,12 +298,12 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/x-cashu/handle": {
+    '/x-cashu/handle': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { request?: string; mintUrl?: string };
           if (!body.request) {
-            return Response.json({ error: "Request is required" }, { status: 400 });
+            return Response.json({ error: 'Request is required' }, { status: 400 });
           }
 
           const mintUrl = body.mintUrl || state.mintUrl;
@@ -316,7 +316,7 @@ export function createRouteHandlers(
               { status: 400 },
             );
           }
-          if (parsed.transport.type !== "inband") {
+          if (parsed.transport.type !== 'inband') {
             return Response.json(
               {
                 error: `Cocod can not handle payment requests that are not inband`,
@@ -333,7 +333,7 @@ export function createRouteHandlers(
           const xCashuHeader = `X-Cashu: ${getEncodedToken(res.token)}`;
 
           if (!xCashuHeader) {
-            return Response.json({ error: "Failed to settle X-Cashu request" }, { status: 500 });
+            return Response.json({ error: 'Failed to settle X-Cashu request' }, { status: 500 });
           }
 
           return Response.json({ output: xCashuHeader });
@@ -346,7 +346,7 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/mints/add": {
+    '/mints/add': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { url: string };
@@ -358,12 +358,12 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/mints/list": {
+    '/mints/list': {
       GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
         try {
           const mints = await state.manager.mint.getAllTrustedMints();
           return Response.json({
-            output: mints.map((m) => m.mintUrl).join("\n"),
+            output: mints.map((m) => m.mintUrl).join('\n'),
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -371,7 +371,7 @@ export function createRouteHandlers(
         }
       }),
     },
-    "/mints/info": {
+    '/mints/info': {
       POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         try {
           const body = (await req.json()) as { url: string };
@@ -384,22 +384,22 @@ export function createRouteHandlers(
       }),
     },
 
-    "/history": {
+    '/history': {
       GET: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         const url = new URL(req.url);
-        const offsetParam = url.searchParams.get("offset");
-        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get('offset');
+        const limitParam = url.searchParams.get('limit');
 
         const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
         const limit = limitParam ? parseInt(limitParam, 10) : 20;
 
         if (isNaN(offset) || offset < 0) {
-          return Response.json({ error: "Invalid offset parameter" }, { status: 400 });
+          return Response.json({ error: 'Invalid offset parameter' }, { status: 400 });
         }
 
         if (isNaN(limit) || limit < 1 || limit > 100) {
           return Response.json(
-            { error: "Invalid limit parameter (must be 1-100)" },
+            { error: 'Invalid limit parameter (must be 1-100)' },
             { status: 400 },
           );
         }
@@ -408,16 +408,16 @@ export function createRouteHandlers(
         return Response.json({ output: entries });
       }),
     },
-    "/events": {
+    '/events': {
       GET: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
         const KEEP_ALIVE_INTERVAL = 5000; // 5 seconds (prevent 8-10s idle timeout)
 
         const stream = new ReadableStream({
           start(controller) {
             // Subscribe to history updates
-            const unsubscribe = state.manager.on("history:updated", (payload) => {
+            const unsubscribe = state.manager.on('history:updated', (payload) => {
               const eventData = JSON.stringify({
-                type: "history:updated",
+                type: 'history:updated',
                 timestamp: new Date().toISOString(),
                 data: payload,
               });
@@ -427,11 +427,11 @@ export function createRouteHandlers(
 
             // Send periodic keep-alive pings to prevent connection timeout
             const keepAliveInterval = setInterval(() => {
-              controller.enqueue(new TextEncoder().encode(": ping\n\n"));
+              controller.enqueue(new TextEncoder().encode(': ping\n\n'));
             }, KEEP_ALIVE_INTERVAL);
 
             // Cleanup on client disconnect
-            req.signal.addEventListener("abort", () => {
+            req.signal.addEventListener('abort', () => {
               clearInterval(keepAliveInterval);
               unsubscribe();
               controller.close();
@@ -441,9 +441,9 @@ export function createRouteHandlers(
 
         return new Response(stream, {
           headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-store",
-            Connection: "keep-alive",
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-store',
+            Connection: 'keep-alive',
           },
         });
       }),
@@ -453,7 +453,7 @@ export function createRouteHandlers(
 
 export function buildRoutes(
   routeHandlers: Record<string, { GET?: RouteHandler; POST?: RouteHandler }>,
-  getState: () => import("./utils/state.js").DaemonState,
+  getState: () => import('./utils/state.js').DaemonState,
   logger?: AppLogger,
 ): Record<
   string,
@@ -490,7 +490,7 @@ export function buildRoutes(
 async function runRoute(
   path: string,
   req: Request,
-  getState: () => import("./utils/state.js").DaemonState,
+  getState: () => import('./utils/state.js').DaemonState,
   handler: RouteHandler,
   logger?: AppLogger,
 ): Promise<Response> {
@@ -501,9 +501,9 @@ async function runRoute(
   try {
     const response = await handler(req, getState());
     const durationMs = Math.round(performance.now() - startedAt);
-    const level = response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info";
+    const level = response.status >= 500 ? 'error' : response.status >= 400 ? 'warn' : 'info';
 
-    requestLogger?.log?.(level, "request.completed", {
+    requestLogger?.log?.(level, 'request.completed', {
       durationMs,
       state: getState().status,
       status: response.status,
@@ -511,12 +511,12 @@ async function runRoute(
 
     return response;
   } catch (error) {
-    requestLogger?.error("request.failed", {
+    requestLogger?.error('request.failed', {
       durationMs: Math.round(performance.now() - startedAt),
       error: serializeError(error),
       state: getState().status,
     });
 
-    return Response.json({ error: "Internal server error" }, { status: 500 });
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

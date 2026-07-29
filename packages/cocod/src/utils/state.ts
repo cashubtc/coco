@@ -1,24 +1,24 @@
-import type { Manager } from "coco-cashu-core";
+import type { Manager } from 'coco-cashu-core';
 
 export interface UninitializedState {
-  status: "UNINITIALIZED";
+  status: 'UNINITIALIZED';
 }
 
 export interface LockedState {
-  status: "LOCKED";
+  status: 'LOCKED';
   encryptedMnemonic: string;
   mintUrl: string;
 }
 
 export interface UnlockedState {
-  status: "UNLOCKED";
+  status: 'UNLOCKED';
   manager: Manager;
   mintUrl: string;
   seed: Uint8Array;
 }
 
 export interface ErrorState {
-  status: "ERROR";
+  status: 'ERROR';
   message: string;
 }
 
@@ -29,7 +29,7 @@ export type RouteHandler = (req: Request, state: DaemonState) => Promise<Respons
 export class DaemonStateManager {
   private state: DaemonState;
 
-  constructor(initialState: DaemonState = { status: "UNINITIALIZED" }) {
+  constructor(initialState: DaemonState = { status: 'UNINITIALIZED' }) {
     this.state = initialState;
   }
 
@@ -38,39 +38,39 @@ export class DaemonStateManager {
   }
 
   isUnlocked(): this is { getState: () => UnlockedState } {
-    return this.state.status === "UNLOCKED";
+    return this.state.status === 'UNLOCKED';
   }
 
   isLocked(): this is { getState: () => LockedState } {
-    return this.state.status === "LOCKED";
+    return this.state.status === 'LOCKED';
   }
 
   isUninitialized(): boolean {
-    return this.state.status === "UNINITIALIZED";
+    return this.state.status === 'UNINITIALIZED';
   }
 
   setLocked(encryptedMnemonic: string, mintUrl: string): void {
-    this.state = { status: "LOCKED", encryptedMnemonic, mintUrl };
+    this.state = { status: 'LOCKED', encryptedMnemonic, mintUrl };
   }
 
   setUnlocked(manager: Manager, mintUrl: string, seed: Uint8Array): void {
-    this.state = { status: "UNLOCKED", manager, mintUrl, seed };
+    this.state = { status: 'UNLOCKED', manager, mintUrl, seed };
   }
 
   setUninitialized(): void {
-    this.state = { status: "UNINITIALIZED" };
+    this.state = { status: 'UNINITIALIZED' };
   }
 
   setError(message: string): void {
-    this.state = { status: "ERROR", message };
+    this.state = { status: 'ERROR', message };
   }
 
   requireUnlocked(
     handler: (req: Request, state: UnlockedState) => Promise<Response>,
   ): RouteHandler {
     return async (req: Request, state: DaemonState) => {
-      if (state.status !== "UNLOCKED") {
-        if (state.status === "LOCKED") {
+      if (state.status !== 'UNLOCKED') {
+        if (state.status === 'LOCKED') {
           return Response.json(
             {
               error: "Wallet is locked. Run 'cocod unlock <passphrase>' to decrypt.",
@@ -78,7 +78,7 @@ export class DaemonStateManager {
             { status: 403 },
           );
         }
-        if (state.status === "UNINITIALIZED") {
+        if (state.status === 'UNINITIALIZED') {
           return Response.json(
             {
               error: "Wallet not initialized. Run 'cocod init [mnemonic]' first.",
@@ -86,7 +86,7 @@ export class DaemonStateManager {
             { status: 503 },
           );
         }
-        return Response.json({ error: "Wallet error" }, { status: 500 });
+        return Response.json({ error: 'Wallet error' }, { status: 500 });
       }
       return handler(req, state as UnlockedState);
     };
@@ -94,10 +94,10 @@ export class DaemonStateManager {
 
   requireUninitialized(handler: (req: Request) => Promise<Response>): RouteHandler {
     return async (req: Request, state: DaemonState) => {
-      if (state.status !== "UNINITIALIZED") {
+      if (state.status !== 'UNINITIALIZED') {
         return Response.json(
           {
-            error: "Wallet already initialized. Delete ~/.cocod/config.json to reset.",
+            error: 'Wallet already initialized. Delete ~/.cocod/config.json to reset.',
           },
           { status: 409 },
         );
@@ -108,8 +108,8 @@ export class DaemonStateManager {
 
   requireLocked(handler: (req: Request, state: LockedState) => Promise<Response>): RouteHandler {
     return async (req: Request, state: DaemonState) => {
-      if (state.status !== "LOCKED") {
-        if (state.status === "UNINITIALIZED") {
+      if (state.status !== 'LOCKED') {
+        if (state.status === 'UNINITIALIZED') {
           return Response.json(
             {
               error: "Wallet not initialized. Run 'cocod init [mnemonic]' first.",
@@ -117,10 +117,10 @@ export class DaemonStateManager {
             { status: 503 },
           );
         }
-        if (state.status === "UNLOCKED") {
-          return Response.json({ error: "Wallet is already unlocked" }, { status: 409 });
+        if (state.status === 'UNLOCKED') {
+          return Response.json({ error: 'Wallet is already unlocked' }, { status: 409 });
         }
-        return Response.json({ error: "Wallet error" }, { status: 500 });
+        return Response.json({ error: 'Wallet error' }, { status: 500 });
       }
       return handler(req, state as LockedState);
     };

@@ -1,16 +1,16 @@
-import { mnemonicToSeedSync } from "@scure/bip39";
-import { CONFIG_FILE, SOCKET_PATH, PID_FILE } from "./utils/config.js";
-import { createDaemonLogger, serializeError } from "./utils/logger.js";
-import { DaemonStateManager } from "./utils/state.js";
-import { initializeWallet } from "./utils/wallet.js";
-import { createRouteHandlers, buildRoutes } from "./routes.js";
-import type { WalletConfig } from "./utils/config.js";
+import { mnemonicToSeedSync } from '@scure/bip39';
+import { CONFIG_FILE, SOCKET_PATH, PID_FILE } from './utils/config.js';
+import { createDaemonLogger, serializeError } from './utils/logger.js';
+import { DaemonStateManager } from './utils/state.js';
+import { initializeWallet } from './utils/wallet.js';
+import { createRouteHandlers, buildRoutes } from './routes.js';
+import type { WalletConfig } from './utils/config.js';
 
 export async function startDaemon() {
   const stateManager = new DaemonStateManager();
   const logger = createDaemonLogger();
 
-  logger.info("daemon.start.requested", {
+  logger.info('daemon.start.requested', {
     pidFile: PID_FILE,
     socketPath: SOCKET_PATH,
   });
@@ -26,8 +26,8 @@ export async function startDaemon() {
       },
     });
     testConn.end();
-    logger.warn("daemon.start.skipped", {
-      reason: "already_running",
+    logger.warn('daemon.start.skipped', {
+      reason: 'already_running',
       socketPath: SOCKET_PATH,
     });
     await logger.flush();
@@ -38,7 +38,7 @@ export async function startDaemon() {
   }
 
   try {
-    await Bun.write(PID_FILE, "");
+    await Bun.write(PID_FILE, '');
     await Bun.file(PID_FILE).delete();
   } catch {
     // Directory creation failed or file didn't exist
@@ -65,39 +65,39 @@ export async function startDaemon() {
 
       if (config.encrypted) {
         stateManager.setLocked(config.mnemonic, config.mintUrl);
-        logger.info("wallet.config_loaded", {
+        logger.info('wallet.config_loaded', {
           encrypted: true,
           mintUrl: config.mintUrl,
-          state: "LOCKED",
+          state: 'LOCKED',
         });
       } else {
         const manager = await initializeWallet(
           config,
           undefined,
-          logger.child({ component: "wallet" }),
+          logger.child({ component: 'wallet' }),
         );
         const seed = mnemonicToSeedSync(config.mnemonic);
         stateManager.setUnlocked(manager, config.mintUrl, seed);
-        logger.info("wallet.config_loaded", {
+        logger.info('wallet.config_loaded', {
           encrypted: false,
           mintUrl: config.mintUrl,
-          state: "UNLOCKED",
+          state: 'UNLOCKED',
         });
       }
     } else {
-      logger.info("wallet.config_missing");
+      logger.info('wallet.config_missing');
     }
   } catch (error) {
-    logger.warn("wallet.config_load_failed", { error: serializeError(error) });
+    logger.warn('wallet.config_load_failed', { error: serializeError(error) });
     stateManager.setError(String(error));
   }
 
-  const routeHandlers = createRouteHandlers(stateManager, logger.child({ component: "wallet" }));
+  const routeHandlers = createRouteHandlers(stateManager, logger.child({ component: 'wallet' }));
   const routes = buildRoutes(
     routeHandlers,
     () => stateManager.getState(),
     logger.child({
-      component: "http",
+      component: 'http',
     }),
   );
 
@@ -110,7 +110,7 @@ export async function startDaemon() {
     }
 
     isShuttingDown = true;
-    logger.info("daemon.shutdown.requested", { reason });
+    logger.info('daemon.shutdown.requested', { reason });
 
     server?.stop();
 
@@ -120,7 +120,7 @@ export async function startDaemon() {
       // File might not exist
     }
 
-    logger.info("daemon.shutdown.completed", { reason });
+    logger.info('daemon.shutdown.completed', { reason });
     await logger.flush();
     process.exit(0);
   };
@@ -129,18 +129,18 @@ export async function startDaemon() {
     unix: SOCKET_PATH,
     routes: {
       ...routes,
-      "/stop": {
+      '/stop': {
         POST: async () => {
-          logger.info("daemon.stop_requested", { reason: "http_stop" });
+          logger.info('daemon.stop_requested', { reason: 'http_stop' });
           setTimeout(() => {
-            void cleanup("http_stop");
+            void cleanup('http_stop');
           }, 100);
-          return Response.json({ output: "Daemon stopping" });
+          return Response.json({ output: 'Daemon stopping' });
         },
       },
     },
     async fetch(req) {
-      logger.warn("request.unknown_endpoint", {
+      logger.warn('request.unknown_endpoint', {
         method: req.method,
         url: req.url,
       });
@@ -148,26 +148,26 @@ export async function startDaemon() {
     },
   });
 
-  logger.info("daemon.started", { socketPath: SOCKET_PATH });
+  logger.info('daemon.started', { socketPath: SOCKET_PATH });
   if (stateManager.isUninitialized()) {
-    logger.info("wallet.uninitialized");
+    logger.info('wallet.uninitialized');
   }
 
-  process.on("unhandledRejection", (error) => {
-    logger.error("daemon.unhandled_rejection", { error: serializeError(error) });
+  process.on('unhandledRejection', (error) => {
+    logger.error('daemon.unhandled_rejection', { error: serializeError(error) });
   });
 
-  process.on("uncaughtException", (error) => {
-    logger.error("daemon.uncaught_exception", { error: serializeError(error) });
+  process.on('uncaughtException', (error) => {
+    logger.error('daemon.uncaught_exception', { error: serializeError(error) });
     void logger.flush().finally(() => {
       process.exit(1);
     });
   });
 
-  process.on("SIGINT", () => {
-    void cleanup("sigint");
+  process.on('SIGINT', () => {
+    void cleanup('sigint');
   });
-  process.on("SIGTERM", () => {
-    void cleanup("sigterm");
+  process.on('SIGTERM', () => {
+    void cleanup('sigterm');
   });
 }

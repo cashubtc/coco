@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { stat } from 'node:fs/promises';
 
 export const DEFAULT_LOG_LINES = 50;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -10,18 +10,18 @@ interface FollowLogOptions {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 export function parseLogLineCount(value: string): number {
   if (!/^\d+$/.test(value)) {
-    throw new Error("--lines must be a positive integer");
+    throw new Error('--lines must be a positive integer');
   }
 
   const lineCount = Number.parseInt(value, 10);
 
   if (!Number.isInteger(lineCount) || lineCount < 1) {
-    throw new Error("--lines must be a positive integer");
+    throw new Error('--lines must be a positive integer');
   }
 
   return lineCount;
@@ -29,18 +29,18 @@ export function parseLogLineCount(value: string): number {
 
 export function tailLogLines(content: string, lineCount: number): string {
   if (content.length === 0) {
-    return "";
+    return '';
   }
 
-  const hasTrailingNewline = content.endsWith("\n");
+  const hasTrailingNewline = content.endsWith('\n');
   const normalizedContent = hasTrailingNewline ? content.slice(0, -1) : content;
 
   if (normalizedContent.length === 0) {
     return content;
   }
 
-  const lines = normalizedContent.split("\n");
-  const tailedContent = lines.slice(-lineCount).join("\n");
+  const lines = normalizedContent.split('\n');
+  const tailedContent = lines.slice(-lineCount).join('\n');
 
   return hasTrailingNewline ? `${tailedContent}\n` : tailedContent;
 }

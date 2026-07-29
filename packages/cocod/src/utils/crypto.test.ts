@@ -1,12 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from 'bun:test';
 
-import { decryptMnemonic, encryptMnemonic } from "./crypto";
+import { decryptMnemonic, encryptMnemonic } from './crypto';
 
-describe("crypto", () => {
-  test("encrypts and decrypts mnemonic", async () => {
+describe('crypto', () => {
+  test('encrypts and decrypts mnemonic', async () => {
     const mnemonic =
-      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    const passphrase = "secret-passphrase";
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+    const passphrase = 'secret-passphrase';
 
     const { ciphertext, salt } = await encryptMnemonic(mnemonic, passphrase);
     const decrypted = await decryptMnemonic(ciphertext, passphrase, salt);
@@ -14,11 +14,11 @@ describe("crypto", () => {
     expect(decrypted).toBe(mnemonic);
   });
 
-  test("fails with wrong passphrase", async () => {
+  test('fails with wrong passphrase', async () => {
     const mnemonic =
-      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    const { ciphertext, salt } = await encryptMnemonic(mnemonic, "correct-passphrase");
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+    const { ciphertext, salt } = await encryptMnemonic(mnemonic, 'correct-passphrase');
 
-    await expect(decryptMnemonic(ciphertext, "wrong-passphrase", salt)).rejects.toThrow();
+    await expect(decryptMnemonic(ciphertext, 'wrong-passphrase', salt)).rejects.toThrow();
   });
 });
