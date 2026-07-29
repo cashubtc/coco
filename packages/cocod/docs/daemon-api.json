@@ -1,0 +1,245 @@
+{
+  "name": "cocod-daemon-api",
+  "version": "0.0.12",
+  "transport": {
+    "protocol": "http",
+    "unixSocketEnv": "COCOD_SOCKET",
+    "defaultUnixSocket": "~/.cocod/cocod.sock"
+  },
+  "responseContract": {
+    "success": {
+      "shape": {
+        "output": "unknown"
+      }
+    },
+    "error": {
+      "shape": {
+        "error": "string"
+      }
+    }
+  },
+  "endpoints": [
+    {
+      "path": "/ping",
+      "method": "GET",
+      "state": "any",
+      "responses": {
+        "200": "{ output: \"pong\" }"
+      }
+    },
+    {
+      "path": "/status",
+      "method": "GET",
+      "state": "any",
+      "responses": {
+        "200": "{ output: \"UNINITIALIZED\" | \"LOCKED\" | \"UNLOCKED\" | \"ERROR\" }"
+      }
+    },
+    {
+      "path": "/init",
+      "method": "POST",
+      "state": "UNINITIALIZED",
+      "body": {
+        "mnemonic": "string (optional)",
+        "passphrase": "string (optional)",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "400": "{ error: \"Invalid mnemonic\" }",
+        "409": "{ error: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/unlock",
+      "method": "POST",
+      "state": "LOCKED",
+      "body": {
+        "passphrase": "string"
+      },
+      "responses": {
+        "200": "{ output: \"Unlocked\" }",
+        "400": "{ error: string }",
+        "401": "{ error: string }",
+        "409": "{ error: string }",
+        "503": "{ error: string }"
+      }
+    },
+    {
+      "path": "/balance",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "responses": {
+        "200": "{ output: Record<string, { sats: number }> }",
+        "403": "{ error: string }",
+        "503": "{ error: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/receive/cashu",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "token": "string"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/receive/bolt11",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "amount": "number",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/send/cashu",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "amount": "number",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/send/bolt11",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "invoice": "string",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/x-cashu/parse",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "request": "string"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "400": "{ error: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/x-cashu/handle",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "request": "string",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "400": "{ error: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/mints/add",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "url": "string"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/mints/list",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/mints/info",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "url": "string"
+      },
+      "responses": {
+        "200": "{ output: unknown }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/history",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "query": {
+        "offset": "number (optional, default 0)",
+        "limit": "number (optional, default 20, max 100)"
+      },
+      "responses": {
+        "200": "{ output: unknown[] }",
+        "400": "{ error: string }"
+      }
+    },
+    {
+      "path": "/events",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "responses": {
+        "200": "text/event-stream"
+      }
+    },
+    {
+      "path": "/npc/address",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/npc/username",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "username": "string",
+        "confirm": "boolean (optional)"
+      },
+      "responses": {
+        "200": "{ output: unknown }",
+        "400": "{ error: string }",
+        "402": "{ error: string }",
+        "500": "{ error: string }"
+      }
+    },
+    {
+      "path": "/stop",
+      "method": "POST",
+      "state": "any",
+      "responses": {
+        "200": "{ output: \"Daemon stopping\" }"
+      }
+    }
+  ]
+}
