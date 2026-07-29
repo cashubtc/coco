@@ -1,4 +1,5 @@
-import type { Manager } from 'coco-cashu-core';
+import type { Manager } from '@cashu/coco-core';
+import type { NPCAccountApi } from 'coco-cashu-plugin-npc';
 
 export interface UninitializedState {
   status: 'UNINITIALIZED';
@@ -15,6 +16,7 @@ export interface UnlockedState {
   manager: Manager;
   mintUrl: string;
   seed: Uint8Array;
+  npcAccount: NPCAccountApi;
 }
 
 export interface ErrorState {
@@ -53,8 +55,13 @@ export class DaemonStateManager {
     this.state = { status: 'LOCKED', encryptedMnemonic, mintUrl };
   }
 
-  setUnlocked(manager: Manager, mintUrl: string, seed: Uint8Array): void {
-    this.state = { status: 'UNLOCKED', manager, mintUrl, seed };
+  setUnlocked(
+    manager: Manager,
+    mintUrl: string,
+    seed: Uint8Array,
+    npcAccount: NPCAccountApi,
+  ): void {
+    this.state = { status: 'UNLOCKED', manager, mintUrl, seed, npcAccount };
   }
 
   setUninitialized(): void {

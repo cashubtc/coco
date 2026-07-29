@@ -1,8 +1,4 @@
-import {
-  getEncodedToken,
-  type InbandPaymentRequestExecutionResult,
-  type Logger,
-} from 'coco-cashu-core';
+import { getEncodedToken, type Logger } from '@cashu/coco-core';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { nip19 } from 'nostr-tools';
@@ -83,9 +79,9 @@ export function createRouteHandlers(
               createdAt: new Date().toISOString(),
             };
 
-            const manager = await initializeWallet(config, undefined, logger);
+            const { manager, npcAccount } = await initializeWallet(config, undefined, logger);
             const seed = mnemonicToSeedSync(mnemonic);
-            stateManager.setUnlocked(manager, mintUrl, seed);
+            stateManager.setUnlocked(manager, mintUrl, seed, npcAccount);
           }
 
           await Bun.write(CONFIG_FILE, JSON.stringify(config, null, 2));
@@ -122,10 +118,10 @@ export function createRouteHandlers(
             createdAt: new Date().toISOString(),
           };
 
-          const manager = await initializeWallet(config, undefined, logger);
+          const { manager, npcAccount } = await initializeWallet(config, undefined, logger);
           const seed = mnemonicToSeedSync(mnemonic);
 
-          stateManager.setUnlocked(manager, state.mintUrl, seed);
+          stateManager.setUnlocked(manager, state.mintUrl, seed, npcAccount);
 
           return Response.json({ output: 'Unlocked' });
         } catch (error) {
@@ -137,7 +133,7 @@ export function createRouteHandlers(
     '/npc/address': {
       GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
         try {
-          const info = await state.manager.ext.npc.getInfo();
+          const info = await state.npcAccount.getInfo();
           if (info.name) {
             return Response.json({ output: `${info.name}@npubx.cash` });
           }
@@ -160,7 +156,7 @@ export function createRouteHandlers(
             return Response.json({ error: 'Username is required' }, { status: 400 });
           }
           if (confirm) {
-            const res = await state.manager.ext.npc.setUsername(username, confirm);
+            const res = await state.npcAccount.setUsername(username, confirm);
             if (res.success) {
               return Response.json({ output: res });
             } else {
@@ -169,7 +165,7 @@ export function createRouteHandlers(
               });
             }
           } else {
-            const res = await state.manager.ext.npc.setUsername(username);
+            const res = await state.npcAccount.setUsername(username);
             if (res.success) {
               return Response.json({ output: res });
             } else if (res.success === false) {
@@ -193,11 +189,13 @@ export function createRouteHandlers(
     '/balance': {
       GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
         try {
-          const balance = await state.manager.wallet.getBalances();
+          const balances = await state.manager.wallet.balances.byMint();
           const augmentedBalance: Record<string, { [unit: string]: number }> = {};
-          Object.keys(balance).forEach((url) => {
-            augmentedBalance[url] = { sats: balance[url] || 0 };
-          });
+          for (const [url, snapshot] of Object.entries(balances)) {
+            // total (spendable + reserved) matches v2's own getBalances(), which sums the
+            // same ready-proof set the v1 output contract was pinned against
+            augmentedBalance[url] = { sats: snapshot.total.toNumber() };
+          }
           return Response.json({ output: augmentedBalance });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -212,10 +210,10 @@ export function createRouteHandlers(
           const token = body.token;
           const preparedOp = await state.manager.ops.receive.prepare({ token });
           await state.manager.ops.receive.execute(preparedOp);
-          return Response.json({ output: `Received ${preparedOp.amount}` });
-        } catch (e) {
-          if (e instanceof Error) {
-            return Response.json({ error: e.message });
+          return Response.json({ output: `Received ${preparedOp.amount.toNumber()}` });
+        } catch (error) {
+          if (error instanceof Error) {
+            return Response.json({ error: error.message });
           }
           return Response.json({ error: 'Receive failed' });
         }
@@ -226,12 +224,12 @@ export function createRouteHandlers(
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
-          const quote = await state.manager.ops.mint.prepare({
+          const quote = await state.manager.quotes.mint.create({
             mintUrl,
             method: 'bolt11',
             amount: body.amount,
-            methodData: {},
           });
+          await state.manager.ops.mint.prepare({ quote, amount: body.amount });
           return Response.json({ output: quote.request });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -259,11 +257,12 @@ export function createRouteHandlers(
         try {
           const body = (await req.json()) as { invoice: string; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
-          const prepared = await state.manager.ops.melt.prepare({
+          const quote = await state.manager.quotes.melt.create({
             mintUrl,
             method: 'bolt11',
             methodData: { invoice: body.invoice },
           });
+          const prepared = await state.manager.ops.melt.prepare({ quote });
           await state.manager.ops.melt.execute(prepared);
           return Response.json({ output: `Paid invoice: ${body.invoice}` });
         } catch (error) {
@@ -287,7 +286,7 @@ export function createRouteHandlers(
               : 'from any mint';
           const matchingMints =
             parsed.payableMints.length > 0 ? parsed.payableMints.join('\n') : 'No matching mint!';
-          const msg = `Request requires payment of ${parsed.amount || 0} Sats ${mintMsg}.\nMatching mints:\n${matchingMints}`;
+          const msg = `Request requires payment of ${parsed.amount?.toNumber() ?? 0} Sats ${mintMsg}.\nMatching mints:\n${matchingMints}`;
           return Response.json({ output: msg });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -327,14 +326,11 @@ export function createRouteHandlers(
 
           const prepared = await state.manager.paymentRequests.prepare(parsed, { mintUrl });
 
-          const res = (await state.manager.paymentRequests.execute(
-            prepared,
-          )) as InbandPaymentRequestExecutionResult;
-          const xCashuHeader = `X-Cashu: ${getEncodedToken(res.token)}`;
-
-          if (!xCashuHeader) {
+          const res = await state.manager.paymentRequests.execute(prepared);
+          if (res.type !== 'inband') {
             return Response.json({ error: 'Failed to settle X-Cashu request' }, { status: 500 });
           }
+          const xCashuHeader = `X-Cashu: ${getEncodedToken(res.token)}`;
 
           return Response.json({ output: xCashuHeader });
         } catch (error) {

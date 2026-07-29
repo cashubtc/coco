@@ -1,7 +1,7 @@
 import { appendFile, mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import type { Logger } from 'coco-cashu-core';
+import type { Logger } from '@cashu/coco-core';
 
 import { LOG_FILE } from './config.js';
 

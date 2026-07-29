@@ -71,13 +71,13 @@ export async function startDaemon() {
           state: 'LOCKED',
         });
       } else {
-        const manager = await initializeWallet(
+        const { manager, npcAccount } = await initializeWallet(
           config,
           undefined,
           logger.child({ component: 'wallet' }),
         );
         const seed = mnemonicToSeedSync(config.mnemonic);
-        stateManager.setUnlocked(manager, config.mintUrl, seed);
+        stateManager.setUnlocked(manager, config.mintUrl, seed, npcAccount);
         logger.info('wallet.config_loaded', {
           encrypted: false,
           mintUrl: config.mintUrl,
@@ -113,6 +113,28 @@ export async function startDaemon() {
     logger.info('daemon.shutdown.requested', { reason });
 
     server?.stop();
+
+    const state = stateManager.getState();
+    if (state.status === 'UNLOCKED') {
+      // Give watchers, processors, and plugins a graceful stop, but never block shutdown on it.
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        state.manager.dispose().catch((error) => {
+          logger.warn('daemon.dispose_failed', { error: serializeError(error) });
+        }),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            resolve();
+          }, 3000);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut) {
+        logger.warn('daemon.dispose_timed_out', { timeoutMs: 3000 });
+      }
+    }
 
     try {
       await Bun.file(PID_FILE).delete();
