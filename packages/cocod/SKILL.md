@@ -43,6 +43,12 @@ bun run build            # cocod resolves @cashu/coco-* through their dist/ expo
 cd packages/cocod && bun link   # provides a global `cocod` command
 ```
 
+Alternatively, install the last standalone release from npm:
+
+```bash
+bun install -g cocod
+```
+
 ## Version Compatibility
 
 This skill is version-pinned to an exact `cocod` version.
@@ -56,7 +62,7 @@ Check your installed CLI version:
 cocod --version
 ```
 
-If the version does not match the pinned values in this file, rebuild and relink from the workspace before using this skill.
+If the version does not match the pinned values in this file, update `cocod` before using this skill — rebuild and relink if installed from the workspace, or update the npm install.
 
 ## Quick Start
 
