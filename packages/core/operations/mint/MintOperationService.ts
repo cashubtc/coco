@@ -354,12 +354,18 @@ export class MintOperationService {
     const releaseLock = await this.acquireOperationLockAfterWait(operationId);
     try {
       const operation = await this.mintOperationRepository.getById(operationId);
+      if (operation && isTerminalOperation(operation)) {
+        return operation;
+      }
       if (!operation || operation.state !== 'pending') {
         throw new Error(
           `Cannot execute operation ${operationId}: expected state 'pending' but found '${
             operation?.state ?? 'not found'
           }'`,
         );
+      }
+      if (!(await this.mintService.isTrustedMint(operation.mintUrl))) {
+        throw new UnknownMintError(`Mint ${operation.mintUrl} is not trusted`);
       }
 
       const pendingOp = operation as PendingMintOperation;
@@ -785,6 +791,13 @@ export class MintOperationService {
     const claimed: MintOperation[] = [];
 
     for (const quote of quotes) {
+      if (!(await this.mintService.isTrustedMint(quote.mintUrl))) {
+        this.logger?.debug('Skipping pending mint quote for untrusted mint', {
+          mintUrl: quote.mintUrl,
+          method: quote.method,
+        });
+        continue;
+      }
       claimed.push(
         ...(await this.claimMintQuote(quote.mintUrl, quote.method, quote.quoteId, options)),
       );
@@ -1156,7 +1169,7 @@ export class MintOperationService {
       );
     }
 
-    if (canonicalQuote && (result.category !== 'terminal' || result.quoteSnapshot !== undefined)) {
+    if (canonicalQuote && result.category !== 'terminal') {
       const siblings = await this.mintOperationRepository.getByQuoteId(
         op.mintUrl,
         op.method,

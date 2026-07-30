@@ -530,9 +530,8 @@ export class MintOperationWatcherService {
     } catch (err) {
       this.logger?.error('Failed to persist mint quote update from remote update', {
         mintUrl,
-        quoteId,
         method: record.method,
-        err,
+        errorName: err instanceof Error ? err.name : typeof err,
       });
     }
   }

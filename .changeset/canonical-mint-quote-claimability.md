@@ -4,6 +4,7 @@
 '@cashu/coco-sqlite': patch
 '@cashu/coco-sqlite-bun': patch
 '@cashu/coco-expo-sqlite': patch
+'@cashu/coco-indexeddb': patch
 ---
 
 Centralize Mint Quote Claimability on canonical accounting so atomic BOLT11 and balance-based

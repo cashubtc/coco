@@ -19,3 +19,17 @@
 - Keep BOLT11 `state` only for compatibility projection and import behavior.
 - Keep Mint Quote expiry out of Claimability and caller decisions.
 - Preserve Quote Observation persistence before Quote-backed Operation advancement.
+
+## PR #400 stack reconciliation
+
+- [x] Refresh and pin PR #400 at `7bacc48df5e9012b3fcc1e43a05648eaa264f1b3`.
+- [x] Rebase the PR #398 delta onto the pinned PR #400 head.
+- [x] Transplant only the claimability delta onto `master` after PR #400 merged.
+- [x] Remove competing BOLT11-specific runtime claimability predicates.
+- [x] Preserve locked BOLT11 creation, signing, and exact-output recovery through the common seam.
+- [x] Keep ownership contradictions ambiguity-preserving for future `needs_attention` recovery.
+- [x] Restore transactional, monotonic repository observation and compatibility-state updates.
+- [x] Fix explicit execution versus Background Watcher/processor coordination.
+- [x] Run focused, adapter contract, build, typecheck, and formatting verification.
+- [ ] Run Docker-backed live-mint integration tests (Docker is unavailable in this environment).
+- [x] Review the combined stack against issues #387 and #365.

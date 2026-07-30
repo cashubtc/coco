@@ -424,7 +424,33 @@ describe('MintBolt11Handler', () => {
       expect(result).toEqual({ status: 'FINALIZED' });
       const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
       expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      const customOutputs = call?.[3] as
+        | { type: 'custom'; data: Array<{ blindedMessage: { B_: string } }> }
+        | undefined;
+      expect(customOutputs?.data.map(({ blindedMessage }) => blindedMessage.B_)).toEqual([
+        'B_out_1',
+        'B_out_2',
+      ]);
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps NUT-20 ownership contradictions pending for ambiguity-preserving recovery', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
+        ...quote,
+        pubkey: `02${'22'.repeat(32)}`,
+      }));
+
+      const result = await handler.recoverExecuting({
+        ...buildRecoverContext(),
+        operation: { ...executingOperation, pubkey: quotePubkey },
+      });
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
+      });
+      expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
+      expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
     });
 
     it('preserves quote context in recovery errors and logs', async () => {
@@ -519,9 +545,14 @@ describe('MintBolt11Handler', () => {
       expect(result.quoteSnapshot).toEqual(expect.objectContaining({ state: 'UNPAID' }));
       expect(result.category).toBe('ready');
       expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
-      for (const [, meta] of (logger.info as Mock<any>).mock.calls) {
-        expect(meta).toMatchObject({ mintUrl, quoteId });
-      }
+      expect(logger.info).toHaveBeenCalledWith('Checking pending mint operation', {
+        mintUrl,
+        quoteId,
+      });
+      expect(logger.info).toHaveBeenCalledWith('Pending mint quote claimability assessed', {
+        mintUrl,
+        status: 'claimable',
+      });
     });
   });
 });

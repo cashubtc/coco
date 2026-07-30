@@ -47,6 +47,7 @@ export class MintOperationProcessor {
   private offRequeue?: () => void;
   private offUntrusted?: () => void;
   private claimingQuotes = new Set<string>();
+  private quoteClaimsNeedingFollowUp = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
 
   private handlers = new Map<string, OperationHandler>();
@@ -279,6 +280,7 @@ export class MintOperationProcessor {
 
     const key = `${mintUrl}::${method}::${quoteId}`;
     if (this.claimingQuotes.has(key)) {
+      this.quoteClaimsNeedingFollowUp.add(key);
       this.logger?.debug('Mint quote claim already in progress', {
         mintUrl,
         method,
@@ -316,6 +318,10 @@ export class MintOperationProcessor {
         });
       } finally {
         this.claimingQuotes.delete(key);
+        const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
+        if (needsFollowUp && this.running) {
+          this.scheduleQuoteClaim(mintUrl, method, quoteId);
+        }
       }
     })();
 

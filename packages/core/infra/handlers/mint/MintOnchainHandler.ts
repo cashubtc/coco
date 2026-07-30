@@ -120,6 +120,15 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       ctx.operation.quoteId,
     );
     this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromOnchainResponse(ctx.operation.mintUrl, remoteQuote),
+      { requestedAmount: ctx.operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      throw new MintQuoteValidationError(
+        `Onchain mint quote ${ctx.operation.quoteId} is not claimable: ${assessment.status}`,
+      );
+    }
 
     const proofs = await ctx.wallet.mintProofsOnchain(
       ctx.operation.amount,
@@ -288,20 +297,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       }),
       { requestedAmount: operation.amount },
     );
-    if (assessment.status === 'invalid') {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `Onchain mint quote ${operation.quoteId} has invalid claimability accounting`,
-          code: 'invalid_quote',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
     return {
       observedRemoteStateAt,
       quoteSnapshot: remoteQuote,

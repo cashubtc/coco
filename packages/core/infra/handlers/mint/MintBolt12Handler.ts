@@ -125,6 +125,15 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       ctx.operation.quoteId,
     );
     this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromBolt12Response(ctx.operation.mintUrl, remoteQuote),
+      { requestedAmount: ctx.operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      throw new MintQuoteValidationError(
+        `BOLT12 mint quote ${ctx.operation.quoteId} is not claimable: ${assessment.status}`,
+      );
+    }
 
     try {
       const proofs = await ctx.wallet.mintProofsBolt12(
@@ -300,20 +309,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       }),
       { requestedAmount: operation.amount },
     );
-    if (assessment.status === 'invalid') {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT12 mint quote ${operation.quoteId} has invalid claimability accounting`,
-          code: 'invalid_quote',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
     return {
       observedRemoteStateAt,
       quoteSnapshot: remoteQuote,

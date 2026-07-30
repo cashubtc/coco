@@ -11,7 +11,6 @@ import {
   applyBolt11MintQuoteStateFallback,
   deriveBolt11MintQuoteState,
   getMintQuoteAmount,
-  isBolt11MintQuoteIssued,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,

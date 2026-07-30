@@ -230,23 +230,33 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     await this.db.run(
       `UPDATE coco_cashu_canonical_mint_quotes
        SET state = CASE
-             WHEN amountIssued = amount OR ? = 'ISSUED' THEN 'ISSUED'
-             WHEN amountPaid = amount OR ? = 'PAID' THEN 'PAID'
+             WHEN ? = 'ISSUED' OR amountIssued = amount THEN 'ISSUED'
+             WHEN ? IN ('PAID', 'ISSUED') OR amountPaid = amount THEN 'PAID'
              ELSE 'UNPAID'
            END,
            amountPaid = CASE WHEN ? IN ('PAID', 'ISSUED') THEN amount ELSE amountPaid END,
            amountIssued = CASE WHEN ? = 'ISSUED' THEN amount ELSE amountIssued END,
-           updatedAt = ?
+           updatedAt = CASE WHEN updatedAt > ? THEN updatedAt ELSE ? END
        WHERE mintUrl = ? AND method = ? AND quoteId = ?
          AND method = 'bolt11'
          AND amount IS NOT NULL
          AND remoteUpdatedAt IS NULL
          AND (
-           (amountPaid = '0' AND amountIssued = '0')
-           OR (amountPaid = amount AND amountIssued = '0')
-           OR (amountPaid = amount AND amountIssued = amount)
+           (amountPaid = '0' AND amountIssued = '0') OR
+           (amountPaid = amount AND amountIssued = '0') OR
+           (amountPaid = amount AND amountIssued = amount)
          )`,
-      [state, state, state, state, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
+      [
+        state,
+        state,
+        state,
+        state,
+        observedAt,
+        observedAt,
+        normalizeMintUrl(mintUrl),
+        method,
+        quoteId,
+      ],
     );
   }
 

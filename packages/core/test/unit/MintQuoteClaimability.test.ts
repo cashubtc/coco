@@ -253,13 +253,26 @@ describe('assessMintQuoteClaimability', () => {
 
     const assessment = assessMintQuoteClaimability(quote, {
       requestedAmount: amount,
-      finalizedAmount: amount,
       reservedAmount: amount,
     });
 
     expect(assessment.status).toBe('claimable');
     expect(assessment.remoteAvailable.equals(amount)).toBe(true);
     expect(assessment.claimAmount?.equals(amount)).toBe(true);
+  });
+
+  it('treats a full finalized local BOLT11 operation as complete while remote issuance lags', () => {
+    const amount = Amount.from(10);
+    const quote = { ...makeBolt11Quote(), amountPaid: Amount.from(11) };
+
+    const assessment = assessMintQuoteClaimability(quote, {
+      finalizedAmount: amount,
+      reservedAmount: amount,
+    });
+
+    expect(assessment.status).toBe('complete');
+    expect(assessment.remoteAvailable.equals(Amount.from(11))).toBe(true);
+    expect(assessment.claimAmount).toBeUndefined();
   });
 
   it.each([
@@ -280,19 +293,45 @@ describe('assessMintQuoteClaimability', () => {
     expect(assessment.claimAmount).toBeUndefined();
   });
 
-  it.each([
-    ['partial issuance', 10, 5],
-    ['payment above the fixed amount', 11, 0],
-  ] as const)('classifies atomic %s as invalid', (_case, paid, issued) => {
+  it('classifies partial atomic issuance as invalid', () => {
     const quote = {
       ...makeBolt11Quote(),
-      amountPaid: Amount.from(paid),
-      amountIssued: Amount.from(issued),
+      amountPaid: Amount.from(10),
+      amountIssued: Amount.from(5),
     };
 
     const assessment = assessMintQuoteClaimability(quote);
 
     expect(assessment.status).toBe('invalid');
+    expect(assessment.claimAmount).toBeUndefined();
+  });
+
+  it('claims exactly the fixed BOLT11 amount when remote payment exceeds it', () => {
+    const amount = Amount.from(10);
+    const quote = {
+      ...makeBolt11Quote(),
+      amountPaid: Amount.from(11),
+    };
+
+    const assessment = assessMintQuoteClaimability(quote);
+
+    expect(assessment.status).toBe('claimable');
+    expect(assessment.remoteAvailable.equals(Amount.from(11))).toBe(true);
+    expect(assessment.claimAmount?.equals(amount)).toBe(true);
+  });
+
+  it('treats an overpaid BOLT11 quote as complete after its fixed amount is issued', () => {
+    const amount = Amount.from(10);
+    const quote = {
+      ...makeBolt11Quote(),
+      amountPaid: Amount.from(11),
+      amountIssued: amount,
+    };
+
+    const assessment = assessMintQuoteClaimability(quote);
+
+    expect(assessment.status).toBe('complete');
+    expect(assessment.remoteAvailable.equals(Amount.from(1))).toBe(true);
     expect(assessment.claimAmount).toBeUndefined();
   });
 });

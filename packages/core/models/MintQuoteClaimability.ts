@@ -30,14 +30,16 @@ function assessAtomicClaimability(
   remoteAvailable: Amount,
 ): MintQuoteClaimabilityAssessment {
   if (
-    quote.amountPaid.greaterThan(quote.amount) ||
     (!quote.amountIssued.isZero() && !quote.amountIssued.equals(quote.amount)) ||
     (facts.requestedAmount !== undefined && !facts.requestedAmount.equals(quote.amount))
   ) {
     return invalid(remoteAvailable);
   }
 
-  if (quote.amountIssued.equals(quote.amount)) {
+  if (
+    quote.amountIssued.equals(quote.amount) ||
+    facts.finalizedAmount?.greaterThanOrEqual(quote.amount)
+  ) {
     return { status: 'complete', remoteAvailable };
   }
 

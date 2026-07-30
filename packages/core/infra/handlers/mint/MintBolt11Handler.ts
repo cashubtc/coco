@@ -282,20 +282,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       status: assessment.status,
     });
 
-    if (assessment.status === 'invalid') {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: quote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT11 mint quote ${quoteId} has invalid claimability accounting`,
-          code: 'invalid_quote',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
     return {
       observedRemoteStateAt,
       quoteSnapshot: quote,

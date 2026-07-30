@@ -433,6 +433,35 @@ describe('MintBolt12Handler', () => {
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
   });
 
+  it('rejects contradictory fresh accounting before mint submission', async () => {
+    await expect(
+      handler.execute(
+        buildExecuteContext(
+          quote({
+            amount_paid: Amount.from(9),
+            amount_issued: Amount.from(10),
+          }),
+        ),
+      ),
+    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} is not claimable: invalid`);
+
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
+    const result = await handler.execute(
+      buildExecuteContext(
+        quote({
+          amount_paid: Amount.from(1),
+          amount_issued: Amount.zero(),
+        }),
+      ),
+    );
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects execution when the remote quote pubkey changes', async () => {
     const changedPubkey = '02' + '22'.repeat(32);
 

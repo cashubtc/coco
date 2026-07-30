@@ -434,15 +434,20 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual([]);
   });
 
-  it('deduplicates concurrent claim requests for the same quote', async () => {
+  it('coalesces quote updates during an active assessment into one follow-up claim', async () => {
     let releaseAssessment!: () => void;
     const assessmentGate = new Promise<void>((resolve) => {
       releaseAssessment = resolve;
     });
+    let assessmentCalls = 0;
     mockMintOperationService = {
       ...mockMintOperationService,
       async getMintQuoteClaimability() {
-        await assessmentGate;
+        assessmentCalls++;
+        if (assessmentCalls === 1) {
+          await assessmentGate;
+          return { status: 'waiting' };
+        }
         return { status: 'claimable' };
       },
     } as unknown as MintOperationService;
@@ -472,6 +477,7 @@ describe('MintOperationProcessor', () => {
     releaseAssessment();
     await processor.waitForCompletion();
 
+    expect(assessmentCalls).toBe(2);
     expect(claimCalls).toEqual([
       { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-5' },
     ]);
