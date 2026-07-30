@@ -7,6 +7,7 @@ import {
   type MeltQuoteOnchainResponse,
   type Wallet,
   type Proof,
+  type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
@@ -142,6 +143,44 @@ export interface ExecuteContext<M extends MeltMethod = MeltMethod> extends BaseH
   reservedProofs: Proof[];
 }
 
+/**
+ * Minimal context for one authorized remote source effect.
+ *
+ * Repository and proof services are deliberately absent so remote commands cannot perform local
+ * writes before their result is applied in a composing transaction.
+ */
+export interface OwnedMeltRemoteContext<M extends MeltMethod = MeltMethod> {
+  operation: ExecutingMeltOperation & MeltMethodMeta<M>;
+  wallet: Wallet;
+  mintAdapter: MintAdapter;
+  proofs: Proof[];
+  logger?: Logger;
+}
+
+export type OwnedMeltRemoteResult<M extends MeltMethod = MeltMethod> =
+  | {
+      operationId: string;
+      phase: 'pre_swap';
+      sendProofs: Proof[];
+      keepProofs: Proof[];
+    }
+  | {
+      operationId: string;
+      phase: 'melt';
+      response: {
+        state: MeltMethodRemoteState<M>;
+        change?: SerializedBlindedSignature[];
+        payment_preimage?: string | null;
+        outpoint?: string | null;
+      };
+    };
+
+export interface ApplyOwnedMeltRemoteContext<
+  M extends MeltMethod = MeltMethod,
+> extends BaseHandlerDeps {
+  operation: ExecutingMeltOperation & MeltMethodMeta<M>;
+}
+
 export interface PendingContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {
   operation: PendingMeltOperation & MeltMethodMeta<M>;
   wallet: Wallet;
@@ -201,6 +240,11 @@ export interface MeltMethodHandler<M extends MeltMethod = MeltMethod> {
   fetchRemoteQuote(ctx: FetchRemoteMeltQuoteContext<M>): Promise<MeltQuote<M>>;
   prepare(ctx: BasePrepareContext<M>): Promise<PreparedMeltOperation & MeltMethodMeta<M>>;
   execute(ctx: ExecuteContext<M>): Promise<ExecutionResult<M>>;
+  executeOwnedRemote?(ctx: OwnedMeltRemoteContext<M>): Promise<OwnedMeltRemoteResult<M>>;
+  applyOwnedRemote?(
+    ctx: ApplyOwnedMeltRemoteContext<M>,
+    result: OwnedMeltRemoteResult<M>,
+  ): Promise<ExecutionResult<M> | (ExecutingMeltOperation & MeltMethodMeta<M>)>;
   finalize?(ctx: FinalizeContext<M>): Promise<FinalizeResult<M>>;
   rollback?(ctx: RollbackContext<M>): Promise<void>;
   checkPending?(ctx: PendingContext<M>): Promise<PendingCheckResult>;

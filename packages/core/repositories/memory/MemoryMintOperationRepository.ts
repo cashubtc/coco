@@ -8,13 +8,19 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     if (this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} already exists`);
     }
+    this.assertUniqueParentOwnership(operation);
     this.operations.set(operation.id, { ...operation });
   }
 
   async update(operation: MintOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const existing = this.operations.get(operation.id);
+    if (!existing) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
+    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
+      throw new Error(`Cannot change parent ownership of MintOperation ${operation.id}`);
+    }
+    this.assertUniqueParentOwnership(operation);
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
   }
 
@@ -73,6 +79,24 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   }
 
   async delete(id: string): Promise<void> {
+    const operation = this.operations.get(id);
+    if (operation?.parentSwapOperationId) {
+      throw new Error(`Cannot delete parent-owned MintOperation ${id}`);
+    }
     this.operations.delete(id);
+  }
+
+  private assertUniqueParentOwnership(operation: MintOperation): void {
+    if (!operation.parentSwapOperationId) return;
+    for (const existing of this.operations.values()) {
+      if (
+        existing.id !== operation.id &&
+        existing.parentSwapOperationId === operation.parentSwapOperationId
+      ) {
+        throw new Error(
+          `Mint swap ${operation.parentSwapOperationId} already owns destination MintOperation ${existing.id}`,
+        );
+      }
+    }
   }
 }

@@ -10,11 +10,13 @@ import {
   type SerializedBlindedSignature,
 } from '@cashu/cashu-ts';
 import { MintOperationError, ProofValidationError } from '@core/models';
+import type { Logger } from '../../../logging/Logger.ts';
 import type {
   BasePrepareContext,
   CreateMeltQuoteContext,
   ExecuteContext,
   ExecutionResult,
+  ExecutingMeltOperation,
   FetchRemoteMeltQuoteContext,
   FinalizeContext,
   FinalizeResult,
@@ -23,6 +25,9 @@ import type {
   MeltMethod,
   MeltMethodQuoteSnapshot,
   MeltMethodRemoteState,
+  OwnedMeltRemoteContext,
+  OwnedMeltRemoteResult,
+  ApplyOwnedMeltRemoteContext,
   PendingCheckResult,
   PendingContext,
   PreparedMeltOperation,
@@ -32,6 +37,7 @@ import type {
 import {
   computeYHexForSecrets,
   deserializeOutputData,
+  getSecretsFromSerializedOutputData,
   mapProofToCoreProof,
   serializeOutputData,
   type SerializedOutputData,
@@ -74,7 +80,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
   ): Promise<MeltMethodQuoteSnapshot<M>>;
 
   protected abstract executeMelt(
-    ctx: ExecuteContext<M>,
+    ctx: Pick<ExecuteContext<M>, 'operation' | 'wallet' | 'mintAdapter' | 'logger'>,
     proofsToMelt: Proof[],
     changeOutputs: OutputDataLike[],
     quoteId: string,
@@ -467,6 +473,144 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
   }
 
   /**
+   * Execute exactly one authorized remote step for a parent-owned melt child.
+   *
+   * No repository services are present in this context. A pre-swap result must be applied and
+   * durably checkpointed before a later call is allowed to dispatch the melt.
+   */
+  async executeOwnedRemote(ctx: OwnedMeltRemoteContext<M>): Promise<OwnedMeltRemoteResult<M>> {
+    const { operation } = ctx;
+    if (operation.parentExecutionPhase === 'pre_swap_authorized') {
+      if (!operation.needsSwap || !operation.swapOutputData) {
+        throw new Error(`Melt child ${operation.id} has an invalid pre-swap authorization`);
+      }
+      const swapData = deserializeOutputData(operation.swapOutputData);
+      const sendAmount = OutputData.sumOutputAmounts(swapData.send);
+      const outputConfig: OutputConfig = {
+        send: { type: 'custom', data: swapData.send },
+        keep: { type: 'custom', data: swapData.keep },
+      };
+      const { send, keep } = await ctx.wallet.send(sendAmount, ctx.proofs, undefined, outputConfig);
+      return {
+        operationId: operation.id,
+        phase: 'pre_swap',
+        sendProofs: send,
+        keepProofs: keep,
+      };
+    }
+
+    if (operation.parentExecutionPhase !== 'melt_authorized') {
+      throw new Error(`Melt child ${operation.id} has no authorized remote step`);
+    }
+    const changeOutputData = deserializeOutputData(operation.changeOutputData);
+    const response = await this.executeMelt(
+      ctx,
+      ctx.proofs,
+      changeOutputData.keep,
+      operation.quoteId,
+    );
+    return { operationId: operation.id, phase: 'melt', response };
+  }
+
+  /** Apply one remote result using transaction-scoped proof services supplied by the parent. */
+  async applyOwnedRemote(
+    ctx: ApplyOwnedMeltRemoteContext<M>,
+    result: OwnedMeltRemoteResult<M>,
+  ): Promise<ExecutionResult<M> | (ExecutingMeltOperation & MeltMethodMeta<M>)> {
+    const { operation } = ctx;
+    if (result.operationId !== operation.id) {
+      throw new Error(`Melt result operation ${result.operationId} does not match ${operation.id}`);
+    }
+
+    if (result.phase === 'pre_swap') {
+      if (operation.parentExecutionPhase !== 'pre_swap_authorized' || !operation.swapOutputData) {
+        throw new Error(`Melt child ${operation.id} is not awaiting a pre-swap result`);
+      }
+      const expected = getSecretsFromSerializedOutputData(operation.swapOutputData);
+      this.assertProofSecrets(expected.sendSecrets, result.sendProofs, 'pre-swap send');
+      this.assertProofSecrets(expected.keepSecrets, result.keepProofs, 'pre-swap keep');
+
+      await ctx.proofService.setProofState(operation.mintUrl, operation.inputProofSecrets, 'spent');
+      const newProofs = [
+        ...mapProofToCoreProof(operation.mintUrl, 'ready', result.keepProofs, {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+        }),
+        ...mapProofToCoreProof(operation.mintUrl, 'inflight', result.sendProofs, {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+        }),
+      ];
+      const expectedSecrets = [...expected.keepSecrets, ...expected.sendSecrets];
+      const existing = await ctx.proofRepository.getProofsBySecrets(
+        operation.mintUrl,
+        expectedSecrets,
+      );
+      if (existing.length === 0) {
+        await ctx.proofService.saveProofs(operation.mintUrl, newProofs);
+      } else if (existing.length !== expectedSecrets.length) {
+        throw new Error(`Melt child ${operation.id} has a partial pre-swap output set`);
+      } else if (
+        existing.some((proof) => {
+          const expectedState = expected.keepSecrets.includes(proof.secret) ? 'ready' : 'inflight';
+          return (
+            proof.createdByOperationId !== operation.id ||
+            proof.state !== expectedState ||
+            proof.unit !== operation.unit
+          );
+        })
+      ) {
+        throw new Error(`Melt child ${operation.id} has an invalid pre-swap output set`);
+      }
+      return { ...operation, parentExecutionPhase: 'melt_authorized' };
+    }
+
+    if (operation.parentExecutionPhase !== 'melt_authorized') {
+      throw new Error(`Melt child ${operation.id} is not awaiting a melt result`);
+    }
+    const proofsToMelt = operation.needsSwap
+      ? getSecretsFromSerializedOutputData(operation.swapOutputData!).sendSecrets
+      : operation.inputProofSecrets;
+
+    switch (result.response.state) {
+      case 'PAID': {
+        const meltInputAmount = this.getMeltInputAmount(operation);
+        const { changeAmount, effectiveFee } = this.calculateSettlementAmounts(
+          meltInputAmount,
+          operation.amount,
+          result.response.change,
+        );
+        await this.finalizeOperation(ctx, result.response.change);
+        return buildPaidResult(operation, {
+          changeAmount,
+          effectiveFee,
+          finalizedData: this.buildFinalizedData(result.response),
+        });
+      }
+      case 'PENDING':
+        return buildPendingResult(operation);
+      case 'UNPAID':
+        await ctx.proofService.restoreProofsToReady(operation.mintUrl, proofsToMelt);
+        return buildFailedResult(operation);
+      default:
+        throw new Error(
+          `Unexpected melt response state ${String(result.response.state)} for ${operation.id}`,
+        );
+    }
+  }
+
+  private assertProofSecrets(expected: string[], proofs: Proof[], label: string): void {
+    const expectedSorted = [...expected].sort();
+    const actualSorted = proofs.map(({ secret }) => secret).sort();
+    if (
+      expectedSorted.length !== actualSorted.length ||
+      expectedSorted.some((secret, index) => secret !== actualSorted[index])
+    ) {
+      throw new Error(`Melt ${label} proofs do not match deterministic outputs`);
+    }
+  }
+
+  /**
    * Handle the melt response and return the appropriate execution result.
    */
   private async handleMeltResponse(
@@ -640,7 +784,14 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
    * Called immediately when melt returns PAID, or later when a pending melt succeeds.
    */
   private async finalizeOperation(
-    ctx: ExecuteContext<M> | FinalizeContext<M> | RecoverExecutingContext<M>,
+    ctx: {
+      operation:
+        | ExecuteContext<M>['operation']
+        | FinalizeContext<M>['operation']
+        | RecoverExecutingContext<M>['operation'];
+      proofService: ExecuteContext<M>['proofService'];
+      logger?: Logger;
+    },
     change?: SerializedBlindedSignature[],
   ): Promise<void> {
     const {

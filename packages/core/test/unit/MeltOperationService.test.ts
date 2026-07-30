@@ -4,6 +4,7 @@ import { MeltOperationService } from '../../operations/melt/MeltOperationService
 import { MemoryMeltOperationRepository } from '../../repositories/memory/MemoryMeltOperationRepository.ts';
 import { MemoryMeltQuoteRepository } from '../../repositories/memory/MemoryMeltQuoteRepository.ts';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository.ts';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories.ts';
 import { EventBus } from '../../events/EventBus.ts';
 import type { CoreEvents } from '../../events/types.ts';
 import type { ProofService } from '../../services/ProofService.ts';
@@ -37,6 +38,7 @@ import {
   UnknownMintError,
   ProofValidationError,
   OperationInProgressError,
+  ParentOwnedOperationError,
   QuoteIdentityConflictError,
 } from '../../models/Error.ts';
 
@@ -259,6 +261,26 @@ describe('MeltOperationService', () => {
           state: 'pending',
         } as PendingMeltOperation,
       })),
+      executeOwnedRemote: mock(async ({ operation }) => ({
+        operationId: operation.id,
+        phase: 'melt',
+        response: { state: 'PENDING' },
+      })),
+      applyOwnedRemote: mock(async ({ operation }, result) =>
+        result.phase === 'pre_swap'
+          ? {
+              ...operation,
+              parentExecutionPhase: 'melt_authorized',
+              updatedAt: Date.now(),
+            }
+          : {
+              status: 'PENDING',
+              pending: {
+                ...operation,
+                state: 'pending',
+              },
+            },
+      ),
     } as MeltMethodHandler;
 
     handlerProvider = {
@@ -267,6 +289,23 @@ describe('MeltOperationService', () => {
 
     proofService = {
       releaseProofs: mock(async () => {}),
+      forTransaction: mock((repositories) => ({
+        setProofState: mock(
+          async (
+            proofMintUrl: string,
+            secrets: string[],
+            state: 'inflight' | 'ready' | 'spent',
+          ) => {
+            await repositories.proofRepository.setProofState(proofMintUrl, secrets, state);
+          },
+        ),
+        saveProofs: mock(async (proofMintUrl: string, proofs: CoreProof[]) => {
+          await repositories.proofRepository.saveProofs(proofMintUrl, proofs);
+        }),
+        restoreProofsToReady: mock(async (proofMintUrl: string, secrets: string[]) => {
+          await repositories.proofRepository.setProofState(proofMintUrl, secrets, 'ready');
+        }),
+      })),
     } as unknown as ProofService;
 
     mintService = {
@@ -366,6 +405,128 @@ describe('MeltOperationService', () => {
     it('throws for invalid amount', async () => {
       expect(service.init(mintUrl, 'bolt11', { invoice, amountSats: -1 })).rejects.toThrow(
         ProofValidationError,
+      );
+    });
+  });
+
+  describe('parent-owned orchestration commands', () => {
+    const parentSwapOperationId = 'mint-swap-parent';
+
+    it('keeps standalone execution from advancing a parent-owned child', async () => {
+      const operation = makePreparedOp('owned-direct-execute', {
+        parentSwapOperationId,
+      });
+      await meltOperationRepository.create(operation);
+
+      await expect(service.execute(operation.id)).rejects.toBeInstanceOf(ParentOwnedOperationError);
+
+      expect((await meltOperationRepository.getById(operation.id))?.state).toBe('prepared');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('persists each authorization checkpoint before starting its repository-free remote phase', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = makePreparedOp('owned-pre-swap-checkpoint', {
+        parentSwapOperationId,
+        needsSwap: true,
+        inputProofSecrets: ['owned-input'],
+        swapOutputData: { keep: [], send: [] },
+      });
+      await repositories.proofRepository.saveProofs(mintUrl, [makeProof('owned-input')]);
+      await repositories.proofRepository.reserveProofs(
+        mintUrl,
+        operation.inputProofSecrets,
+        operation.id,
+      );
+      await repositories.meltOperationRepository.create(operation);
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        mintAdapter,
+        eventBus,
+        logger,
+      );
+      let authorizationTransactionReturned = false;
+      let applyTransactionReturned = false;
+
+      const authorized = await repositories.withTransaction((transaction) =>
+        ownedService.authorizeOwnedExecutionInTransaction(
+          operation.id,
+          parentSwapOperationId,
+          transaction,
+        ),
+      );
+      authorizationTransactionReturned = true;
+
+      expect((await repositories.meltOperationRepository.getById(operation.id))?.state).toBe(
+        'executing',
+      );
+      expect(authorized.parentExecutionPhase).toBe('pre_swap_authorized');
+      expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
+
+      (handler.executeOwnedRemote as Mock<any>).mockImplementationOnce(
+        async (context: Record<string, unknown>) => {
+          expect(authorizationTransactionReturned).toBe(true);
+          expect('proofRepository' in context).toBe(false);
+          expect('proofService' in context).toBe(false);
+          expect('meltOperationRepository' in context).toBe(false);
+          expect(
+            (await repositories.meltOperationRepository.getById(operation.id))
+              ?.parentExecutionPhase,
+          ).toBe('pre_swap_authorized');
+          return {
+            operationId: operation.id,
+            phase: 'pre_swap',
+            keepProofs: [],
+            sendProofs: [],
+          };
+        },
+      );
+
+      const preSwapResult = await ownedService.executeOwnedRemoteStep(
+        authorized,
+        parentSwapOperationId,
+      );
+      const meltAuthorized = await repositories.withTransaction((transaction) =>
+        ownedService.applyOwnedRemoteStepInTransaction(
+          authorized,
+          parentSwapOperationId,
+          preSwapResult,
+          transaction,
+        ),
+      );
+      applyTransactionReturned = true;
+
+      expect(meltAuthorized.state).toBe('executing');
+      expect(
+        meltAuthorized.state === 'executing' ? meltAuthorized.parentExecutionPhase : undefined,
+      ).toBe('melt_authorized');
+      expect(
+        (await repositories.meltOperationRepository.getById(operation.id))?.parentExecutionPhase,
+      ).toBe('melt_authorized');
+
+      (handler.executeOwnedRemote as Mock<any>).mockImplementationOnce(
+        async ({ operation: remoteOperation, ...context }: Record<string, any>) => {
+          expect(applyTransactionReturned).toBe(true);
+          expect(remoteOperation.parentExecutionPhase).toBe('melt_authorized');
+          expect('proofRepository' in context).toBe(false);
+          expect('proofService' in context).toBe(false);
+          return {
+            operationId: operation.id,
+            phase: 'melt',
+            response: { state: 'PENDING' },
+          };
+        },
+      );
+
+      await ownedService.executeOwnedRemoteStep(
+        meltAuthorized as ExecutingMeltOperation,
+        parentSwapOperationId,
       );
     });
   });

@@ -181,11 +181,6 @@ describe('MintBolt11Handler', () => {
     operation: operationOverride,
     wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
