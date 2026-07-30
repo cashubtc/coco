@@ -19,9 +19,10 @@ import type {
   BalancesByUnit,
   CoreProof,
 } from '../types';
-import type { CounterService } from './CounterService';
+import { CounterService } from './CounterService';
 import type { ProofUnitFilter } from '../repositories';
 import type { ProofRepository } from '../repositories';
+import type { RepositoryTransactionScope } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
@@ -79,6 +80,26 @@ export class ProofService {
     this.logger = logger;
     this.eventBus = eventBus;
     this.outputDataCreator = outputDataCreator ?? OutputData;
+  }
+
+  /**
+   * Bind local proof and counter writes to a repository transaction.
+   *
+   * Events are intentionally suppressed: a composing parent publishes only after its complete
+   * transaction, including child and parent state, has committed.
+   */
+  forTransaction(repositories: RepositoryTransactionScope): ProofService {
+    return new ProofService(
+      new CounterService(repositories.counterRepository, this.logger),
+      repositories.proofRepository,
+      this.walletService,
+      this.mintService,
+      this.keyRingService,
+      this.seedService,
+      this.logger,
+      undefined,
+      this.outputDataCreator,
+    );
   }
 
   /**

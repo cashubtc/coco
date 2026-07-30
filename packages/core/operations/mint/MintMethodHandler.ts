@@ -152,9 +152,11 @@ export interface PrepareContext<M extends MintMethod = MintMethod> extends BaseH
   importedQuote?: MintMethodQuoteSnapshot<M>;
 }
 
-export interface ExecuteContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface ExecuteContext<M extends MintMethod = MintMethod> {
   operation: ExecutingMintOperation<M>;
   wallet: Wallet;
+  mintAdapter: MintAdapter;
+  logger?: Logger;
 }
 
 export interface RecoverExecutingContext<

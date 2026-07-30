@@ -12,14 +12,20 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
       throw new Error(`MeltOperation with id ${operation.id} already exists`);
     }
     this.assertNoDuplicateQuoteOperation(operation);
+    this.assertUniqueParentOwnership(operation);
     this.operations.set(operation.id, { ...operation });
   }
 
   async update(operation: MeltOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const existing = this.operations.get(operation.id);
+    if (!existing) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
+    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
+      throw new Error(`Cannot change parent ownership of MeltOperation ${operation.id}`);
+    }
     this.assertNoDuplicateQuoteOperation(operation);
+    this.assertUniqueParentOwnership(operation);
     this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
   }
 
@@ -77,6 +83,10 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   }
 
   async delete(id: string): Promise<void> {
+    const operation = this.operations.get(id);
+    if (operation?.parentSwapOperationId) {
+      throw new Error(`Cannot delete parent-owned MeltOperation ${id}`);
+    }
     this.operations.delete(id);
   }
 
@@ -92,6 +102,20 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
       ) {
         throw new Error(
           `MeltOperation already exists for mint ${operation.mintUrl} and quote ${quoteId}`,
+        );
+      }
+    }
+  }
+
+  private assertUniqueParentOwnership(operation: MeltOperation): void {
+    if (!operation.parentSwapOperationId) return;
+    for (const existing of this.operations.values()) {
+      if (
+        existing.id !== operation.id &&
+        existing.parentSwapOperationId === operation.parentSwapOperationId
+      ) {
+        throw new Error(
+          `Mint swap ${operation.parentSwapOperationId} already owns source MeltOperation ${existing.id}`,
         );
       }
     }

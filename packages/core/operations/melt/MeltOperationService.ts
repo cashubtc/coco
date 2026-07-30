@@ -1,10 +1,16 @@
-import type { MeltOperationRepository, ProofRepository } from '../../repositories';
+import type { Wallet } from '@cashu/cashu-ts';
+import type {
+  MeltOperationRepository,
+  ProofRepository,
+  RepositoryTransactionScope,
+} from '../../repositories';
 import type {
   MeltOperation,
   InitMeltOperation,
   PreparedMeltOperation,
   ExecutingMeltOperation,
   PendingMeltOperation,
+  FailedMeltOperation,
   FinalizedMeltOperation,
   RollingBackMeltOperation,
   RolledBackMeltOperation,
@@ -16,6 +22,7 @@ import type {
   MeltMethodData,
   MeltMethodInputData,
   PendingCheckResult,
+  OwnedMeltRemoteResult,
 } from './MeltMethodHandler';
 import { normalizeMeltMethodData } from './MeltMethodHandler';
 import type { MintService } from '../../services/MintService';
@@ -24,7 +31,7 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, normalizeMintUrl } from '../../utils';
+import { generateSubId, getSecretsFromSerializedOutputData, normalizeMintUrl } from '../../utils';
 import { UnknownMintError, ProofValidationError } from '../../models/Error';
 import type { MintAdapter } from '@core/infra';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt';
@@ -33,8 +40,22 @@ import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
-import { resolveOnchainMeltFeeOption, type MeltQuote } from '../../models/MeltQuote.ts';
+import {
+  meltQuoteToMethodSnapshot,
+  resolveOnchainMeltFeeOption,
+  type MeltQuote,
+} from '../../models/MeltQuote.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
+import { assertChildOperationAccess } from '../mintSwap/ChildOperationOwnership.ts';
+
+export interface PrepareOwnedMeltOperationCommand {
+  operationId: string;
+  parentSwapOperationId: string;
+  quote: MeltQuote;
+  wallet: Wallet;
+  repositories: RepositoryTransactionScope;
+  feeIndex?: number;
+}
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -82,10 +103,13 @@ export class MeltOperationService {
     this.mintScopedLock = mintScopedLock ?? new MintScopedLock();
   }
 
-  private buildDeps() {
+  private buildDeps(repositories?: RepositoryTransactionScope) {
+    const proofService = repositories
+      ? this.proofService.forTransaction(repositories)
+      : this.proofService;
     return {
-      proofRepository: this.proofRepository,
-      proofService: this.proofService,
+      proofRepository: repositories?.proofRepository ?? this.proofRepository,
+      proofService,
       walletService: this.walletService,
       mintService: this.mintService,
       mintAdapter: this.mintAdapter,
@@ -271,6 +295,203 @@ export class MeltOperationService {
     }
   }
 
+  /** Prepare and persist a parent-owned source child using transaction-scoped local writes. */
+  async prepareOwnedInTransaction(
+    command: PrepareOwnedMeltOperationCommand,
+  ): Promise<PreparedMeltOperation> {
+    const { quote, operationId, parentSwapOperationId, repositories, wallet } = command;
+    if (quote.method !== 'bolt11' || quote.unit !== 'sat') {
+      throw new Error('Mint swaps require a sat-denominated BOLT11 source quote');
+    }
+    await this.mintService.assertMethodUnitSupported(quote.mintUrl, 5, 'bolt11', quote.unit);
+    const initOperation = createMeltOperation(
+      operationId,
+      quote.mintUrl,
+      { method: 'bolt11', methodData: this.methodDataFromMeltQuote(quote) },
+      quote.unit,
+      { quoteId: quote.quoteId, parentSwapOperationId },
+    );
+    const prepared = await this.handlerProvider.get('bolt11').prepare({
+      ...this.buildDeps(repositories),
+      operation: initOperation as never,
+      wallet,
+      quote: meltQuoteToMethodSnapshot(quote as MeltQuote<'bolt11'>),
+    });
+    const preparedOperation: PreparedMeltOperation = {
+      ...prepared,
+      id: operationId,
+      parentSwapOperationId,
+      state: 'prepared',
+      updatedAt: Date.now(),
+    };
+    await repositories.meltOperationRepository.create(preparedOperation);
+    return preparedOperation;
+  }
+
+  /**
+   * Persist source execution authorization and mark its original inputs inflight.
+   *
+   * For swap-then-melt plans this authorizes only the pre-swap. Applying that result creates the
+   * separate durable `melt_authorized` checkpoint.
+   */
+  async authorizeOwnedExecutionInTransaction(
+    operationId: string,
+    parentSwapOperationId: string,
+    repositories: RepositoryTransactionScope,
+  ): Promise<ExecutingMeltOperation> {
+    const operation = await repositories.meltOperationRepository.getById(operationId);
+    if (!operation || operation.state !== 'prepared') {
+      throw new Error(
+        `Cannot authorize melt child ${operationId} from ${operation?.state ?? 'missing'}`,
+      );
+    }
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    const inputs = await repositories.proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    if (
+      inputs.length !== operation.inputProofSecrets.length ||
+      inputs.some(
+        (proof) =>
+          proof.usedByOperationId !== operation.id ||
+          proof.state !== 'ready' ||
+          proof.unit !== operation.unit,
+      )
+    ) {
+      throw new Error(`Melt child ${operation.id} does not own its complete reserved input set`);
+    }
+    const scopedProofService = this.proofService.forTransaction(repositories);
+    await scopedProofService.setProofState(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+      'inflight',
+    );
+    const executing: ExecutingMeltOperation = {
+      ...operation,
+      state: 'executing',
+      parentExecutionPhase: operation.needsSwap ? 'pre_swap_authorized' : 'melt_authorized',
+      updatedAt: Date.now(),
+    };
+    await repositories.meltOperationRepository.update(executing);
+    return executing;
+  }
+
+  /**
+   * Perform exactly one authorized remote source effect.
+   *
+   * This command receives no transaction scope and performs no repository writes.
+   */
+  async executeOwnedRemoteStep(
+    operation: ExecutingMeltOperation,
+    parentSwapOperationId: string,
+  ): Promise<OwnedMeltRemoteResult> {
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
+      operation.mintUrl,
+      operation.unit,
+    );
+    const proofSecrets =
+      operation.parentExecutionPhase === 'pre_swap_authorized'
+        ? operation.inputProofSecrets
+        : operation.needsSwap
+          ? getSecretsFromSerializedOutputData(operation.swapOutputData!).sendSecrets
+          : operation.inputProofSecrets;
+    const proofs = await this.proofRepository.getProofsBySecrets(operation.mintUrl, proofSecrets);
+    if (proofs.length !== proofSecrets.length) {
+      throw new Error(`Could not find all proofs for authorized melt step ${operation.id}`);
+    }
+    const handler = this.handlerProvider.get(operation.method);
+    if (!handler.executeOwnedRemote) {
+      throw new Error(`Melt method ${operation.method} does not support owned remote execution`);
+    }
+    return handler.executeOwnedRemote({
+      operation: operation as never,
+      wallet,
+      mintAdapter: this.mintAdapter,
+      proofs,
+      logger: this.logger,
+    });
+  }
+
+  /** Apply one remote source result atomically with the composing parent transition. */
+  async applyOwnedRemoteStepInTransaction(
+    operation: ExecutingMeltOperation,
+    parentSwapOperationId: string,
+    result: OwnedMeltRemoteResult,
+    repositories: RepositoryTransactionScope,
+  ): Promise<
+    ExecutingMeltOperation | PendingMeltOperation | FinalizedMeltOperation | FailedMeltOperation
+  > {
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    const current = await repositories.meltOperationRepository.getById(operation.id);
+    if (!current || current.state !== 'executing') {
+      throw new Error(
+        `Cannot apply melt child ${operation.id} from ${current?.state ?? 'missing'}`,
+      );
+    }
+    assertChildOperationAccess(current, parentSwapOperationId);
+    if (current.parentExecutionPhase !== operation.parentExecutionPhase) {
+      throw new Error(`Melt child ${operation.id} advanced before its remote result was applied`);
+    }
+    const handler = this.handlerProvider.get(current.method);
+    if (!handler.applyOwnedRemote) {
+      throw new Error(`Melt method ${current.method} does not support owned result application`);
+    }
+    const applied = await handler.applyOwnedRemote(
+      {
+        ...this.buildDeps(repositories),
+        operation: current as never,
+      },
+      result as never,
+    );
+    const next =
+      'status' in applied
+        ? applied.status === 'PAID'
+          ? applied.finalized
+          : applied.status === 'PENDING'
+            ? applied.pending
+            : applied.failed
+        : applied;
+    assertChildOperationAccess(next, parentSwapOperationId);
+    await repositories.meltOperationRepository.update(next);
+    return next as
+      | ExecutingMeltOperation
+      | PendingMeltOperation
+      | FinalizedMeltOperation
+      | FailedMeltOperation;
+  }
+
+  /** Roll back an undispatched parent-owned source child inside the parent transaction. */
+  async rollbackOwnedPreparedInTransaction(
+    operationId: string,
+    parentSwapOperationId: string,
+    wallet: Wallet,
+    repositories: RepositoryTransactionScope,
+    reason = 'Parent mint swap cancelled',
+  ): Promise<RolledBackMeltOperation> {
+    const operation = await repositories.meltOperationRepository.getById(operationId);
+    if (!operation || operation.state !== 'prepared') {
+      throw new Error(
+        `Cannot roll back melt child ${operationId} from ${operation?.state ?? 'missing'}`,
+      );
+    }
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    await this.handlerProvider.get(operation.method).rollback?.({
+      ...this.buildDeps(repositories),
+      operation,
+      wallet,
+    });
+    const rolledBack: RolledBackMeltOperation = {
+      ...operation,
+      state: 'rolled_back',
+      updatedAt: Date.now(),
+      error: reason,
+    };
+    await repositories.meltOperationRepository.update(rolledBack);
+    return rolledBack;
+  }
+
   /**
    * Prepare the operation by reserving proofs and creating outputs.
    * After this step, the operation can be executed or rolled back.
@@ -289,6 +510,7 @@ export class MeltOperationService {
           }'`,
         );
       }
+      assertChildOperationAccess(operation);
 
       const initOp = operation as InitMeltOperation;
       const releaseMintLock = await this.mintScopedLock.acquire(initOp.mintUrl);
@@ -363,6 +585,7 @@ export class MeltOperationService {
           }'`,
         );
       }
+      assertChildOperationAccess(operation);
 
       const preparedOp = operation as PreparedMeltOperation;
 
@@ -463,6 +686,7 @@ export class MeltOperationService {
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
+      assertChildOperationAccess(operation);
       if (operation.state === 'finalized') {
         this.logger?.debug('Operation already finalized', { operationId });
         const finalizedOp = operation as FinalizedMeltOperation;
@@ -538,6 +762,7 @@ export class MeltOperationService {
       if (!operation) {
         throw new Error(`Operation ${operationId} not found`);
       }
+      assertChildOperationAccess(operation);
 
       if (
         operation.state === 'finalized' ||
@@ -624,6 +849,7 @@ export class MeltOperationService {
       // 1. Clean up failed init operations
       const initOps = await this.meltOperationRepository.getByState('init');
       for (const op of initOps) {
+        if (op.parentSwapOperationId) continue;
         await this.recoverInitOperation(op as InitMeltOperation);
         initCount++;
       }
@@ -631,6 +857,7 @@ export class MeltOperationService {
       // 2. Log warnings for prepared operations (leave for user to decide)
       const preparedOps = await this.meltOperationRepository.getByState('prepared');
       for (const op of preparedOps) {
+        if (op.parentSwapOperationId) continue;
         this.logger?.warn('Found stale prepared operation, user can rollback manually', {
           operationId: op.id,
         });
@@ -639,6 +866,7 @@ export class MeltOperationService {
       // 3. Recover executing operations
       const executingOps = await this.meltOperationRepository.getByState('executing');
       for (const op of executingOps) {
+        if (op.parentSwapOperationId) continue;
         try {
           await this.recoverExecutingOperation(op as ExecutingMeltOperation);
           executingCount++;
@@ -653,6 +881,7 @@ export class MeltOperationService {
       // 4. Check pending operations
       const pendingOps = await this.meltOperationRepository.getByState('pending');
       for (const op of pendingOps) {
+        if (op.parentSwapOperationId) continue;
         try {
           await this.checkPendingOperation(op.id);
           pendingCount++;
@@ -667,6 +896,7 @@ export class MeltOperationService {
       // 5. Warn about rolling_back operations (need manual intervention)
       const rollingBackOps = await this.meltOperationRepository.getByState('rolling_back');
       for (const op of rollingBackOps) {
+        if (op.parentSwapOperationId) continue;
         this.logger?.warn(
           'Found operation stuck in rolling_back state. ' +
             'This indicates a crash during rollback. Manual recovery may be needed.',
@@ -701,6 +931,7 @@ export class MeltOperationService {
         }'`,
       );
     }
+    assertChildOperationAccess(op);
     const persistedQuote = await this.quoteLifecycle.getMeltQuote(
       op.mintUrl,
       op.method,
@@ -808,6 +1039,7 @@ export class MeltOperationService {
     op: ExecutingMeltOperation,
     options?: { skipLock?: boolean },
   ): Promise<void> {
+    assertChildOperationAccess(op);
     const releaseLock = options?.skipLock ? undefined : await this.acquireOperationLock(op.id);
     try {
       const current = await this.meltOperationRepository.getById(op.id);
@@ -972,11 +1204,15 @@ export class MeltOperationService {
   }
 
   async getPendingOperations(): Promise<MeltOperation[]> {
-    return this.meltOperationRepository.getPending();
+    const operations = await this.meltOperationRepository.getPending();
+    return operations.filter((operation) => operation.parentSwapOperationId === undefined);
   }
 
   async getPreparedOperations(): Promise<PreparedMeltOperation[]> {
     const ops = await this.meltOperationRepository.getByState('prepared');
-    return ops.filter((op): op is PreparedMeltOperation => op.state === 'prepared');
+    return ops.filter(
+      (op): op is PreparedMeltOperation =>
+        op.state === 'prepared' && op.parentSwapOperationId === undefined,
+    );
   }
 }
