@@ -5,8 +5,8 @@ compatibility: Requires the cocod CLI, a private package in this repository that
 metadata:
   project: cocod
   type: cashu-wallet
-  skill_version: 0.0.16
-  requires_cocod_version: 0.0.16
+  skill_version: 0.0.17
+  requires_cocod_version: 0.0.17
   networks:
     - cashu
     - bitcoin

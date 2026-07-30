@@ -1,6 +1,6 @@
 {
   "name": "cocod-daemon-api",
-  "version": "0.0.12",
+  "version": "0.0.17",
   "transport": {
     "protocol": "http",
     "unixSocketEnv": "COCOD_SOCKET",
