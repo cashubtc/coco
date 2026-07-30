@@ -638,6 +638,7 @@ export class Manager {
       if (!trusted) {
         this.logger.debug('Skipping legacy mint quote reconciliation for untrusted mint', {
           mintUrl: quote.mintUrl,
+          quoteId: quote.quote,
         });
         skipped.push(quote.quote);
         continue;
@@ -669,7 +670,8 @@ export class Manager {
       } catch (err) {
         this.logger.warn('Failed to reconcile legacy mint quote', {
           mintUrl: quote.mintUrl,
-          errorName: err instanceof Error ? err.name : typeof err,
+          quoteId: quote.quote,
+          err,
         });
         skipped.push(quote.quote);
       }

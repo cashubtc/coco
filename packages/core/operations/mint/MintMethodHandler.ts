@@ -60,7 +60,12 @@ export type CompatibleMintQuoteBolt12Response = Omit<
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
-    createQuoteData: { amount: UnitAmount; locked?: boolean; pubkey?: string };
+    createQuoteData: {
+      amount: UnitAmount;
+      locked?: boolean;
+      /** Existing Coco-owned NUT-20 key to use instead of generating a fresh key. */
+      ownedPubkey?: string;
+    };
     quoteData: {
       amount: Amount;
     };

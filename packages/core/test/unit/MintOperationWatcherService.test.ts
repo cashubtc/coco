@@ -557,6 +557,47 @@ describe('MintOperationWatcherService', () => {
     await watcher.stop();
   });
 
+  it('keeps watching after invalid issuance accounting', async () => {
+    const operation = makePendingOperation();
+    const recordMintQuoteSnapshot = mock(async () => {
+      throw new Error('Invalid Mint Quote Accounting');
+    });
+    const watcher = makeWatcher({
+      quoteLifecycle: makeQuoteLifecycle({
+        recordMintQuoteSnapshot,
+      }),
+      options: { watchExistingPendingOnStart: false, watchExistingPendingQuotesOnStart: false },
+    });
+
+    await watcher.start();
+    await bus.emit('mint-op:pending', {
+      mintUrl,
+      operationId: operation.id,
+      operation,
+    });
+
+    if (!callback) {
+      throw new Error('Expected watcher subscription callback');
+    }
+
+    await callback({
+      quote: quoteId,
+      request: operation.request,
+      amount: operation.amount,
+      unit: operation.unit,
+      expiry: operation.expiry,
+      state: 'ISSUED',
+      amount_paid: Amount.from(9),
+      amount_issued: operation.amount,
+      updated_at: 21,
+    });
+
+    expect(recordMintQuoteSnapshot).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await watcher.stop();
+  });
+
   it('creates one subscription for canonical and operation interest in the same quote', async () => {
     const quote = makeBolt11Quote();
     const operation = makePendingOperation();

@@ -1,5 +1,4 @@
 import {
-  applyBolt11MintQuoteStateFallback,
   deserializeAmount,
   deriveBolt11MintQuoteState,
   getMintQuoteAmount,
@@ -226,9 +225,29 @@ export class SqliteMintQuoteRepository implements MintQuoteRepository {
     state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<void> {
-    const quote = await this.getMintQuote(mintUrl, method, quoteId);
-    if (!quote || !isStatefulMintQuote(quote)) return;
-    await this.upsertMintQuote(applyBolt11MintQuoteStateFallback(quote, state, observedAt));
+    // Keep this legacy fallback in one conditional statement. Canonical snapshots carry
+    // remoteUpdatedAt, so a concurrent fallback becomes a no-op instead of overwriting accounting.
+    await this.db.run(
+      `UPDATE coco_cashu_canonical_mint_quotes
+       SET state = CASE
+             WHEN amountIssued = amount OR ? = 'ISSUED' THEN 'ISSUED'
+             WHEN amountPaid = amount OR ? = 'PAID' THEN 'PAID'
+             ELSE 'UNPAID'
+           END,
+           amountPaid = CASE WHEN ? IN ('PAID', 'ISSUED') THEN amount ELSE amountPaid END,
+           amountIssued = CASE WHEN ? = 'ISSUED' THEN amount ELSE amountIssued END,
+           updatedAt = ?
+       WHERE mintUrl = ? AND method = ? AND quoteId = ?
+         AND method = 'bolt11'
+         AND amount IS NOT NULL
+         AND remoteUpdatedAt IS NULL
+         AND (
+           (amountPaid = '0' AND amountIssued = '0')
+           OR (amountPaid = amount AND amountIssued = '0')
+           OR (amountPaid = amount AND amountIssued = amount)
+         )`,
+      [state, state, state, state, observedAt, normalizeMintUrl(mintUrl), method, quoteId],
+    );
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {

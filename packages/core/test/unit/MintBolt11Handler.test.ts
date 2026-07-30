@@ -278,7 +278,7 @@ describe('MintBolt11Handler', () => {
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
 
-    it('rejects a locked quote before remote creation when its key is not persisted', async () => {
+    it('rejects an owned locking key before remote creation when it is not persisted', async () => {
       (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
 
       await expect(
@@ -286,7 +286,7 @@ describe('MintBolt11Handler', () => {
           ...buildCreateQuoteContext(),
           createQuoteData: {
             amount: { amount: Amount.from(10), unit: 'sat' },
-            pubkey: quotePubkey,
+            ownedPubkey: quotePubkey,
           },
         }),
       ).rejects.toThrow('Missing NUT-20 mint quote key');
@@ -334,6 +334,19 @@ describe('MintBolt11Handler', () => {
       expect(error.code).toBe(20007);
       expect(error.message).toContain(`Quote ${quoteId} expired`);
     });
+
+    it('preserves non-protocol locked issuance errors as the cause', async () => {
+      const originalError = new Error('Transport disconnected');
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(originalError);
+
+      const error = await handler
+        .execute(buildExecuteContext({ ...executingOperation, pubkey: quotePubkey }))
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toBe('Locked BOLT11 mint failed: Transport disconnected');
+      expect(error.cause).toBe(originalError);
+    });
   });
 
   describe('recoverExecuting', () => {
@@ -370,7 +383,7 @@ describe('MintBolt11Handler', () => {
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
     });
 
-    it('returns diagnostic errors without copying quote-bearing errors into logs', async () => {
+    it('preserves quote context in recovery errors and logs', async () => {
       (mintAdapter.checkMintQuote as Mock<any>).mockRejectedValueOnce(
         new Error(`Quote ${quoteId} is temporarily unavailable`),
       );
@@ -379,17 +392,21 @@ describe('MintBolt11Handler', () => {
 
       expect(result).toEqual({
         status: 'PENDING',
-        error: `Failed to check mint quote during recovery: Quote ${quoteId} is temporarily unavailable`,
+        error: `Quote ${quoteId} is temporarily unavailable`,
       });
       expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(quoteId);
+      expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toEqual({
+        mintUrl,
+        quoteId,
+        error: `Quote ${quoteId} is temporarily unavailable`,
+      });
     });
   });
 
   describe('prepare', () => {
     it('requires the service to provide an existing quote snapshot', async () => {
       await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
-        'BOLT11 mint quote was not provided',
+        `Mint quote ${quoteId} was not provided`,
       );
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
@@ -428,6 +445,24 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
+    it.each([
+      ['quote ID', { quote: 'other-quote' }],
+      ['request', { request: 'lnbc1other' }],
+      ['unit', { unit: 'usd' }],
+      ['amount', { amount: Amount.from(11) }],
+      ['NUT-20 pubkey', { pubkey: quotePubkey }],
+    ] as Array<[string, Partial<MintQuoteBolt11Response>]>)(
+      'rejects a polled snapshot with a mismatched %s',
+      async (_field, override) => {
+        (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+          ...quote,
+          ...override,
+        });
+
+        await expect(handler.checkPending(buildPendingContext())).rejects.toThrow();
+      },
+    );
+
     it('uses canonical accounting when the compatibility state is contradictory', async () => {
       (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
         ...quote,
@@ -440,7 +475,7 @@ describe('MintBolt11Handler', () => {
       expect(result.category).toBe('ready');
       expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
       for (const [, meta] of (logger.info as Mock<any>).mock.calls) {
-        expect(JSON.stringify(meta)).not.toContain(quoteId);
+        expect(meta).toMatchObject({ mintUrl, quoteId });
       }
     });
   });

@@ -181,13 +181,15 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
     state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<void> {
-    const existing = (await (this.db as any)
-      .table('coco_cashu_canonical_mint_quotes')
-      .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
-    if (!existing) return;
-    const quote = rowToMintQuote(existing);
-    if (!isStatefulMintQuote(quote)) return;
-    await this.upsertMintQuote(applyBolt11MintQuoteStateFallback(quote, state, observedAt));
+    await this.db.runTransaction('rw', ['coco_cashu_canonical_mint_quotes'], async () => {
+      const existing = (await (this.db as any)
+        .table('coco_cashu_canonical_mint_quotes')
+        .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
+      if (!existing) return;
+      const quote = rowToMintQuote(existing);
+      if (!isStatefulMintQuote(quote)) return;
+      await this.upsertMintQuote(applyBolt11MintQuoteStateFallback(quote, state, observedAt));
+    });
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {

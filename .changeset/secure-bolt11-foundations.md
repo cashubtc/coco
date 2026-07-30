@@ -8,6 +8,6 @@
 '@cashu/coco-adapter-tests': patch
 ---
 
-Add canonical BOLT11 accounting predicates, opt-in NUT-20 locked quote handling, readable
-diagnostics, and quote-free structured logging. Keep SQL and IndexedDB quote state projections
-aligned with the canonical accounting fields.
+Add canonical BOLT11 accounting predicates and opt-in NUT-20 locked quote handling with readable
+diagnostics. Keep SQL and IndexedDB quote state projections aligned with the canonical accounting
+fields.

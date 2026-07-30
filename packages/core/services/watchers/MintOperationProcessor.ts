@@ -307,6 +307,7 @@ export class MintOperationProcessor {
       this.logger?.debug('Reusable mint quote claim already in progress', {
         mintUrl,
         method,
+        quoteId,
       });
       return;
     }
@@ -323,6 +324,7 @@ export class MintOperationProcessor {
           this.logger?.debug('Reusable mint quote has no locally claimable balance', {
             mintUrl,
             method,
+            quoteId,
           });
           return;
         }
@@ -334,7 +336,8 @@ export class MintOperationProcessor {
         this.logger?.warn('Failed to check or claim reusable mint quote', {
           mintUrl,
           method,
-          errorName: error instanceof Error ? error.name : typeof error,
+          quoteId,
+          error: error instanceof Error ? error.message : String(error),
         });
       } finally {
         this.claimingQuotes.delete(key);

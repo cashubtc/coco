@@ -522,6 +522,7 @@ export class QuoteLifecycle {
       (await this.mintQuoteRepository.getMintQuote(mintUrl, method, quote.quoteId)) ?? quote;
     this.logger?.info('Mint quote created', {
       mintUrl: persistedQuote.mintUrl,
+      quoteId: persistedQuote.quoteId,
       method,
       amount: getMintQuoteAmount(persistedQuote)?.toString(),
       unit: persistedQuote.unit,
@@ -1241,6 +1242,7 @@ export class QuoteLifecycle {
     this.logger?.warn(message, {
       mintUrl: incoming.mintUrl,
       method: incoming.method,
+      quoteId: incoming.quoteId,
       existingRemoteUpdatedAt: existing?.remoteUpdatedAt ?? null,
       incomingRemoteUpdatedAt: incoming.remoteUpdatedAt,
       existingAmountPaid: existing?.amountPaid.toString(),

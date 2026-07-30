@@ -30,8 +30,9 @@ interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
 function hasBolt11CompletedIssuance(payload: MintMethodQuoteSnapshot<'bolt11'>): boolean {
   if (payload.amount_paid === undefined || payload.amount_issued === undefined) return false;
   const amount = Amount.from(payload.amount);
+  const amountPaid = Amount.from(payload.amount_paid);
   const amountIssued = Amount.from(payload.amount_issued);
-  return amountIssued.greaterThanOrEqual(amount);
+  return !amountIssued.greaterThan(amountPaid) && amountIssued.greaterThanOrEqual(amount);
 }
 
 const mintQuoteWatchPolicies: {
@@ -150,7 +151,8 @@ export class MintOperationWatcherService {
         this.logger?.error('Failed to start watching pending mint operation', {
           operationId: operation.id,
           mintUrl: operation.mintUrl,
-          errorName: err instanceof Error ? err.name : typeof err,
+          quoteId: operation.quoteId,
+          err,
         });
       }
     });
@@ -171,8 +173,8 @@ export class MintOperationWatcherService {
       } catch (err) {
         this.logger?.error('Failed to start watching canonical mint quote', {
           mintUrl: quote.mintUrl,
-          method: quote.method,
-          errorName: err instanceof Error ? err.name : typeof err,
+          quoteId: quote.quoteId,
+          err,
         });
       }
     });
@@ -545,8 +547,9 @@ export class MintOperationWatcherService {
       } catch (err) {
         this.logger?.error('Failed to persist mint quote update from remote update', {
           mintUrl,
+          quoteId,
           method: record.method,
-          errorName: err instanceof Error ? err.name : typeof err,
+          err,
         });
       }
     }
@@ -584,11 +587,7 @@ export class MintOperationWatcherService {
     try {
       await record.stop?.();
     } catch (err) {
-      this.logger?.warn('Unsubscribe watcher failed', {
-        mintUrl: record.mintUrl,
-        method: record.method,
-        errorName: err instanceof Error ? err.name : typeof err,
-      });
+      this.logger?.warn('Unsubscribe watcher failed', { key, err });
     } finally {
       this.removeWatchRecord(key);
     }

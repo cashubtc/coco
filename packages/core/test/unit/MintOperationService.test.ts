@@ -935,9 +935,9 @@ describe('MintOperationService', () => {
       'Ignoring Mint Quote Observation with invalid accounting',
       expect.objectContaining({ mintUrl, method: 'onchain' }),
     );
-    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
-      onchainQuoteId,
-    );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection at a newer update time', async () => {
@@ -1142,9 +1142,9 @@ describe('MintOperationService', () => {
         incomingAmountPaid: '11',
       }),
     );
-    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
-      onchainQuoteId,
-    );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot accepts a monotonic accounting increase without losing freshness', async () => {
@@ -1258,9 +1258,9 @@ describe('MintOperationService', () => {
         incomingAmountIssued: '11',
       }),
     );
-    expect(JSON.stringify((logger.warn as Mock<any>).mock.calls[0]?.[1])).not.toContain(
-      onchainQuoteId,
-    );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot persists timestamp-only freshness without emitting', async () => {
