@@ -14,11 +14,11 @@
     "test": "bun test"
   },
   "peerDependencies": {
+    "@cashu/coco-core": "workspace:*",
+    "@cashu/coco-sqlite-bun": "workspace:*",
     "typescript": "^5"
   },
   "dependencies": {
-    "@cashu/coco-core": "workspace:*",
-    "@cashu/coco-sqlite-bun": "workspace:*",
     "@scure/bip39": "^2.0.1",
     "coco-cashu-plugin-npc": "3.0.0-rc.20260707.3.1.sha.debd5dd",
     "commander": "^14.0.2",
