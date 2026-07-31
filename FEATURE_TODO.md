@@ -40,4 +40,4 @@
 - [x] Join active local execution and recover orphaned executing operations in the service.
 - [x] Cover the public race and the authoritative execution state table.
 - [x] Run focused and full core unit tests, typecheck, and build for the follow-up.
-- [ ] Re-run Docker-backed core integration tests with the required mint and auth environment.
+- [x] Re-run Docker-backed core integration tests with the required mint and auth environment.

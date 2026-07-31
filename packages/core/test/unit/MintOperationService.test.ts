@@ -1894,10 +1894,14 @@ describe('MintOperationService', () => {
     const [claimed, executed] = await Promise.all([backgroundClaim, explicitExecution]);
 
     expect(claimed).toHaveLength(1);
-    expect(claimed[0]?.state).toBe('finalized');
+    const claimedOperation = claimed[0];
+    if (!claimedOperation) {
+      throw new Error('Expected background claim to return the mint operation');
+    }
+    expect(claimedOperation.state).toBe('finalized');
     expect(executed.state).toBe('finalized');
     expect(executed.id).toBe(pending.id);
-    expect(executed).toEqual(claimed[0]);
+    expect(executed).toEqual(claimedOperation);
     expect(handler.execute).toHaveBeenCalledTimes(1);
   });
 
