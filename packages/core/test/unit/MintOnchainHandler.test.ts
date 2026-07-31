@@ -5,7 +5,11 @@ import type { CoreEvents } from '../../events/types';
 import { MintOnchainHandler } from '../../infra/handlers/mint/MintOnchainHandler';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
-import { MintOperationError } from '../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../models/Error';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -246,9 +250,10 @@ describe('MintOnchainHandler', () => {
       pubkey: '02'.padEnd(66, '2'),
     }));
 
-    await expect(handler.createQuote(buildCreateQuoteContext())).rejects.toThrow(
-      'instead of requested pubkey',
-    );
+    const error = await handler.createQuote(buildCreateQuoteContext()).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('instead of requested pubkey');
   });
 
   it('fetches the latest onchain quote through the mint adapter', async () => {
@@ -283,9 +288,12 @@ describe('MintOnchainHandler', () => {
   it('fails onchain preparation when the quote key is missing', async () => {
     (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
 
-    await expect(
-      handler.prepare({ ...buildPrepareContext(), importedQuote: remoteQuote }),
-    ).rejects.toThrow('Missing NUT-20 mint quote key');
+    const error = await handler
+      .prepare({ ...buildPrepareContext(), importedQuote: remoteQuote })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteKeyError);
+    expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
   it('executes onchain mint proofs with the persisted quote key', async () => {

@@ -44,7 +44,7 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { QuoteIdentityConflictError } from '../../models/Error';
+import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -2630,6 +2630,25 @@ describe('MintOperationService', () => {
 
     expect(quote.state).toBe('PAID');
     expect(persistedDuringEvent).toEqual(['PAID']);
+  });
+
+  it('recordQuoteObservation rejects legacy state for reusable quotes with a domain error', async () => {
+    const onchainQuoteId = 'onchain-legacy-state';
+    await persistOnchainQuote(onchainQuoteId);
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('pending-onchain-legacy-state'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      request: 'bc1qtest',
+      pubkey: '02'.padEnd(66, '1'),
+    };
+
+    const error = await quoteLifecycle
+      .recordMintQuoteObservation(pendingOp, 'PAID')
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('Cannot record legacy quote state for onchain mint quote');
   });
 
   it('recordQuoteObservation cannot override newer ordered accounting', async () => {

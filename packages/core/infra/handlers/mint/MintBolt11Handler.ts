@@ -16,7 +16,11 @@ import type {
   FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
-import { MintOperationError, ProofValidationError } from '../../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../../models/Error';
 import type { KeyRingService } from '../../../services/KeyRingService';
 import {
   deriveBolt11MintQuoteState,
@@ -52,7 +56,9 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
       ? await ctx.wallet.createLockedMintQuote(amount.amount, lockPubkey)
       : await ctx.wallet.createMintQuoteBolt11(amount.amount);
     if (lockPubkey && remoteQuote.pubkey !== lockPubkey) {
-      throw new Error('Mint returned a BOLT11 quote with an unexpected NUT-20 public key');
+      throw new MintQuoteValidationError(
+        'Mint returned a BOLT11 quote with an unexpected NUT-20 public key',
+      );
     }
     return mintQuoteFromBolt11Response(ctx.mintUrl, remoteQuote);
   }
@@ -75,17 +81,17 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
 
     if (!quote.amount || quote.amount.isZero()) {
-      throw new Error(`Mint quote ${quote.quote} has invalid amount`);
+      throw new MintQuoteValidationError(`Mint quote ${quote.quote} has invalid amount`);
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
     }
 
     if (!quote.amount.equals(ctx.operation.amount)) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} amount ${quote.amount} does not match requested amount ${ctx.operation.amount}`,
       );
     }
@@ -140,11 +146,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         return { status: 'ALREADY_ISSUED' };
       }
       if (ctx.operation.pubkey) {
+        if (err instanceof MintOperationError) {
+          throw err;
+        }
         const errorMessage = err instanceof Error ? err.message : String(err);
         const message = `Locked BOLT11 mint failed: ${errorMessage}`;
-        if (err instanceof MintOperationError) {
-          throw new MintOperationError(err.code, message);
-        }
         throw new Error(message, { cause: err });
       }
       throw err;
@@ -322,18 +328,18 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     operation: PendingMintOperation<'bolt11'>,
   ): void {
     if (quote.quote !== operation.quoteId || quote.request !== operation.request) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation identity`,
       );
     }
     assertSameUnit(quote.unit, operation.unit, `Polled BOLT11 mint quote ${quote.quote}`);
     if (!Amount.from(quote.amount).equals(operation.amount)) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation amount`,
       );
     }
     if ((quote.pubkey ?? undefined) !== (operation.pubkey ?? undefined)) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Polled BOLT11 mint quote ${quote.quote} conflicts with pending operation ownership`,
       );
     }
@@ -343,7 +349,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     if (!pubkey) return;
     const key = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!key) {
-      throw new Error('Missing NUT-20 mint quote key for locked BOLT11 quote');
+      throw new MintQuoteKeyError('Missing NUT-20 mint quote key for locked BOLT11 quote');
     }
   }
 
@@ -353,7 +359,7 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     if (!pubkey) return undefined;
     const key = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!key) {
-      throw new Error('Missing NUT-20 mint quote key for locked BOLT11 quote');
+      throw new MintQuoteKeyError('Missing NUT-20 mint quote key for locked BOLT11 quote');
     }
     return { privkey: bytesToHex(key.secretKey) };
   }

@@ -28,6 +28,7 @@ import { meltQuoteToMethodSnapshot, type MeltQuote } from '../models/MeltQuote';
 import {
   HttpResponseError,
   MintOperationError,
+  MintQuoteValidationError,
   NetworkError,
   ProofValidationError,
   QuoteIdentityConflictError,
@@ -92,7 +93,7 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
       !Number.isSafeInteger(snapshot.expiry)) ||
     (snapshot.pubkey !== undefined && typeof snapshot.pubkey !== 'string')
   ) {
-    throw new ProofValidationError('Mint quote batch observation has invalid base fields');
+    throw new MintQuoteValidationError('Mint quote batch observation has invalid base fields');
   }
 
   if (method === 'bolt11') {
@@ -103,7 +104,7 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
     const hasAmountIssued = bolt11.amount_issued !== undefined;
     const hasCompleteAccounting = hasAmountPaid && hasAmountIssued;
     if (amount.isZero() || !hasCompleteAccounting) {
-      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+      throw new MintQuoteValidationError('BOLT11 mint quote batch observation is invalid');
     }
     if (
       hasState &&
@@ -111,10 +112,10 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
       bolt11.state !== 'PAID' &&
       bolt11.state !== 'ISSUED'
     ) {
-      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+      throw new MintQuoteValidationError('BOLT11 mint quote batch observation is invalid');
     }
     if (!hasState) {
-      throw new ProofValidationError('BOLT11 mint quote batch observation is invalid');
+      throw new MintQuoteValidationError('BOLT11 mint quote batch observation is invalid');
     }
     if (hasCompleteAccounting) {
       Amount.from(bolt11.amount_paid!);
@@ -127,7 +128,9 @@ function assertMintQuotePollingSnapshotStructureUnchecked(
     | MintMethodQuoteSnapshot<'bolt12'>
     | MintMethodQuoteSnapshot<'onchain'>;
   if (!hasReusableSettlementAmounts(reusable)) {
-    throw new ProofValidationError(`${method} mint quote batch observation lacks settlement data`);
+    throw new MintQuoteValidationError(
+      `${method} mint quote batch observation lacks settlement data`,
+    );
   }
   Amount.from(reusable.amount_paid ?? Amount.zero());
   Amount.from(reusable.amount_issued ?? Amount.zero());
@@ -145,17 +148,16 @@ function assertMintQuotePollingSnapshotStructure(
   try {
     return assertMintQuotePollingSnapshotStructureUnchecked(method, snapshot);
   } catch (error) {
-    if (error instanceof ProofValidationError) throw error;
-    const validationError = new ProofValidationError(
+    if (error instanceof MintQuoteValidationError) throw error;
+    throw new MintQuoteValidationError(
       `${method} mint quote batch observation has invalid amount fields`,
+      error,
     );
-    (validationError as Error & { cause?: unknown }).cause = error;
-    throw validationError;
   }
 }
 
 function isDefinitiveMintQuotePollingValidation(error: Error): boolean {
-  return error instanceof ProofValidationError || error instanceof QuoteIdentityConflictError;
+  return error instanceof MintQuoteValidationError || error instanceof QuoteIdentityConflictError;
 }
 
 function equalOptionalAmount(
@@ -587,7 +589,7 @@ export class QuoteLifecycle {
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'validation',
-        new ProofValidationError(
+        new MintQuoteValidationError(
           'Mint quote polling selections require one mint and unique non-empty quote identities',
         ),
       );
@@ -596,7 +598,7 @@ export class QuoteLifecycle {
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'validation',
-        new ProofValidationError(`Unsupported built-in mint quote polling method ${method}`),
+        new MintQuoteValidationError(`Unsupported built-in mint quote polling method ${method}`),
       );
     }
     if (!(await this.mintService.isTrustedMint(mintUrl))) {
@@ -619,7 +621,7 @@ export class QuoteLifecycle {
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'incompatibility',
-        new ProofValidationError(
+        new MintQuoteValidationError(
           `Mint ${mintUrl} does not advertise NUT-29 quote checks for ${method}`,
         ),
       );
@@ -652,7 +654,7 @@ export class QuoteLifecycle {
       return failedMintQuotePollingResult(
         normalizedIdentities,
         'malformed-response',
-        new ProofValidationError('Mint quote batch check returned a non-array response'),
+        new MintQuoteValidationError('Mint quote batch check returned a non-array response'),
       );
     }
     const snapshots = response;
@@ -666,7 +668,7 @@ export class QuoteLifecycle {
       if (!snapshot || typeof snapshot !== 'object') {
         responseFailures.push({
           category: 'malformed-response',
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response element ${responseIndex} has no identity`,
           ),
           responseIndex,
@@ -677,7 +679,7 @@ export class QuoteLifecycle {
       if (typeof responseQuoteId !== 'string' || responseQuoteId.length === 0) {
         responseFailures.push({
           category: 'malformed-response',
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response element ${responseIndex} has no identity`,
           ),
           responseIndex,
@@ -687,7 +689,7 @@ export class QuoteLifecycle {
       if (!selectedQuoteIds.has(responseQuoteId)) {
         responseFailures.push({
           category: 'malformed-response',
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response contains unselected quote ${responseQuoteId}`,
           ),
           responseIndex,
@@ -719,7 +721,7 @@ export class QuoteLifecycle {
         hasDefinitiveBatchFailure = true;
         failedByQuoteId.set(identity.quoteId, {
           category: 'malformed-response',
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response is missing quote ${identity.quoteId}`,
           ),
           responseQuoteId: identity.quoteId,
@@ -783,7 +785,7 @@ export class QuoteLifecycle {
         hasDefinitiveBatchFailure = true;
         failedByQuoteId.set(identity.quoteId, {
           category: 'malformed-response',
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response contains conflicting duplicates for quote ${identity.quoteId}`,
           ),
           responseQuoteId: identity.quoteId,
@@ -797,7 +799,7 @@ export class QuoteLifecycle {
       responseFailures.push(
         ...validCandidates.slice(1).map(({ responseIndex }) => ({
           category: 'malformed-response' as const,
-          error: new ProofValidationError(
+          error: new MintQuoteValidationError(
             `Mint quote batch response contains duplicate quote ${identity.quoteId}`,
           ),
           responseIndex,
@@ -853,7 +855,7 @@ export class QuoteLifecycle {
     snapshot = assertMintQuotePollingSnapshotStructure(method, snapshot);
     const existing = await this.mintQuoteRepository.getMintQuoteById({ mintUrl, quoteId });
     if (!existing) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Mint quote ${quoteId} batch observation has no canonical quote`,
       );
     }
@@ -866,7 +868,7 @@ export class QuoteLifecycle {
       normalizeUnit(snapshot.unit) !== existing.unit ||
       (snapshot.pubkey ?? undefined) !== (existing.pubkey ?? undefined)
     ) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Mint quote ${quoteId} batch observation conflicts with canonical identity fields`,
       );
     }
@@ -876,7 +878,7 @@ export class QuoteLifecycle {
         (snapshot as MintMethodQuoteSnapshot<'bolt11'>).amount as AmountLike,
       );
       if (!amount.equals(existing.amount)) {
-        throw new ProofValidationError(
+        throw new MintQuoteValidationError(
           `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
         );
       }
@@ -892,7 +894,7 @@ export class QuoteLifecycle {
           existingAmount !== undefined &&
           !Amount.from(incomingAmount as AmountLike).equals(existingAmount))
       ) {
-        throw new ProofValidationError(
+        throw new MintQuoteValidationError(
           `Mint quote ${quoteId} batch observation conflicts with canonical amount`,
         );
       }
@@ -1022,7 +1024,7 @@ export class QuoteLifecycle {
   ): MintMethodQuoteSnapshot<M> {
     const reportedMethod = (quote as { method?: unknown }).method;
     if (reportedMethod !== undefined && reportedMethod !== method) {
-      throw new ProofValidationError(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} reports method ${String(reportedMethod)} instead of ${method}`,
       );
     }
@@ -1033,25 +1035,31 @@ export class QuoteLifecycle {
       updatedAt !== null &&
       (typeof updatedAt !== 'number' || !Number.isSafeInteger(updatedAt))
     ) {
-      throw new ProofValidationError(`Mint quote ${quote.quote} has invalid updated_at`);
+      throw new MintQuoteValidationError(`Mint quote ${quote.quote} has invalid updated_at`);
     }
 
     if (method === 'bolt11') {
       const bolt11Quote = quote as MintMethodQuoteImportSnapshot<'bolt11'>;
       const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
       if (rawAmount === undefined || rawAmount === null) {
-        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+        throw new MintQuoteValidationError(
+          'Mint quote ' + bolt11Quote.quote + ' has invalid amount',
+        );
       }
 
       const amount = Amount.from(rawAmount as AmountLike);
       if (amount.isZero()) {
-        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+        throw new MintQuoteValidationError(
+          'Mint quote ' + bolt11Quote.quote + ' has invalid amount',
+        );
       }
 
       const hasAmountPaid = bolt11Quote.amount_paid !== undefined;
       const hasAmountIssued = bolt11Quote.amount_issued !== undefined;
       if (hasAmountPaid !== hasAmountIssued) {
-        throw new ProofValidationError(`Mint quote ${bolt11Quote.quote} has incomplete accounting`);
+        throw new MintQuoteValidationError(
+          `Mint quote ${bolt11Quote.quote} has incomplete accounting`,
+        );
       }
 
       let amountPaid: Amount;
@@ -1069,13 +1077,13 @@ export class QuoteLifecycle {
         amountPaid = amount;
         amountIssued = amount;
       } else {
-        throw new ProofValidationError(
+        throw new MintQuoteValidationError(
           `Mint quote ${bolt11Quote.quote} lacks accounting and compatibility state`,
         );
       }
 
       if (amountIssued.greaterThan(amountPaid)) {
-        throw new ProofValidationError(
+        throw new MintQuoteValidationError(
           `Mint quote ${bolt11Quote.quote} has amount_issued greater than amount_paid`,
         );
       }
@@ -1135,12 +1143,16 @@ export class QuoteLifecycle {
       const bolt11Quote = quote as MintMethodQuoteSnapshot<'bolt11'>;
       const rawAmount = (bolt11Quote as { amount?: unknown }).amount;
       if (rawAmount === undefined || rawAmount === null) {
-        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+        throw new MintQuoteValidationError(
+          'Mint quote ' + bolt11Quote.quote + ' has invalid amount',
+        );
       }
 
       const amount = Amount.from(rawAmount as AmountLike);
       if (amount.isZero()) {
-        throw new ProofValidationError('Mint quote ' + bolt11Quote.quote + ' has invalid amount');
+        throw new MintQuoteValidationError(
+          'Mint quote ' + bolt11Quote.quote + ' has invalid amount',
+        );
       }
 
       const response = { ...bolt11Quote, amount };
@@ -1281,7 +1293,7 @@ export class QuoteLifecycle {
           );
         }
         if (!isStatefulMintQuote(existing)) {
-          throw new Error(
+          throw new MintQuoteValidationError(
             `Cannot record legacy quote state for ${operation.method} mint quote ${operation.quoteId}`,
           );
         }

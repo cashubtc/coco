@@ -5,6 +5,7 @@ import {
 } from '@cashu/cashu-ts';
 import { describe, expect, it } from 'bun:test';
 
+import { MintQuoteValidationError } from '../../models/Error';
 import {
   applyBolt11MintQuoteStateFallback,
   deriveBolt11MintQuoteState,
@@ -65,7 +66,7 @@ describe('MintQuote model', () => {
   });
 
   it('rejects contradictory BOLT11 accounting', () => {
-    expect(() =>
+    const createQuote = () =>
       mintQuoteFromBolt11Response('https://mint.test', {
         quote: 'quote-invalid-accounting',
         request: 'lnbc...',
@@ -77,8 +78,10 @@ describe('MintQuote model', () => {
         amount_paid: Amount.from(100),
         amount_issued: Amount.from(101),
         updated_at: 55,
-      } satisfies MintQuoteBolt11Response),
-    ).toThrow('amount_issued greater than amount_paid');
+      } satisfies MintQuoteBolt11Response);
+
+    expect(createQuote).toThrow(MintQuoteValidationError);
+    expect(createQuote).toThrow('amount_issued greater than amount_paid');
   });
 
   it('uses canonical predicates for ready and terminal BOLT11 quotes', () => {

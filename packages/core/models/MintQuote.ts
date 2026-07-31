@@ -4,7 +4,7 @@ import {
   type MintQuoteBolt12Response,
   type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
-import { ProofValidationError } from './Error';
+import { MintQuoteValidationError } from './Error';
 import {
   mintQuoteObservationFromBolt11Response,
   mintQuoteObservationFromBolt12Response,
@@ -193,7 +193,7 @@ function assertValidMintQuoteAccounting(
   amountIssued: Amount,
 ): void {
   if (amountIssued.greaterThan(amountPaid)) {
-    throw new ProofValidationError(
+    throw new MintQuoteValidationError(
       `Mint quote ${quoteId} has amount_issued greater than amount_paid`,
     );
   }
