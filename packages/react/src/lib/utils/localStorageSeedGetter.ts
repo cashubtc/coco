@@ -1,5 +1,6 @@
 const DEFAULT_STORAGE_KEY = 'COCO_REACT_SEED';
 const SEED_LENGTH_BYTES = 64;
+const SEED_LOCK_PREFIX = 'cashu:coco-react:local-storage-seed:';
 
 export type LocalStorageSeedGetterConfig = {
   storageKey?: string;
@@ -16,6 +17,10 @@ const getBrowserWindow = (): Window & typeof globalThis => {
 
   if (!window.crypto?.getRandomValues) {
     throw new Error('localStorageSeedGetter requires window.crypto.getRandomValues.');
+  }
+
+  if (!window.navigator?.locks) {
+    throw new Error('localStorageSeedGetter requires window.navigator.locks.');
   }
 
   return window;
@@ -61,6 +66,7 @@ const createSeed = (browserWindow: Window & typeof globalThis): Uint8Array => {
  */
 export const localStorageSeedGetter = (config: LocalStorageSeedGetterConfig = {}) => {
   const storageKey = config.storageKey ?? DEFAULT_STORAGE_KEY;
+  const lockName = `${SEED_LOCK_PREFIX}${storageKey}`;
   let cachedSeed: Uint8Array | null = null;
 
   return async (): Promise<Uint8Array> => {
@@ -69,17 +75,24 @@ export const localStorageSeedGetter = (config: LocalStorageSeedGetterConfig = {}
     }
 
     const browserWindow = getBrowserWindow();
-    const storedSeed = browserWindow.localStorage.getItem(storageKey);
 
-    if (storedSeed) {
-      cachedSeed = decodeSeed(storedSeed, browserWindow);
-      return new Uint8Array(cachedSeed);
-    }
+    return browserWindow.navigator.locks.request(lockName, async () => {
+      if (cachedSeed) {
+        return new Uint8Array(cachedSeed);
+      }
 
-    const generatedSeed = createSeed(browserWindow);
-    browserWindow.localStorage.setItem(storageKey, encodeSeed(generatedSeed, browserWindow));
-    cachedSeed = generatedSeed;
+      const storedSeed = browserWindow.localStorage.getItem(storageKey);
 
-    return new Uint8Array(generatedSeed);
+      if (storedSeed) {
+        cachedSeed = decodeSeed(storedSeed, browserWindow);
+        return new Uint8Array(cachedSeed);
+      }
+
+      const generatedSeed = createSeed(browserWindow);
+      browserWindow.localStorage.setItem(storageKey, encodeSeed(generatedSeed, browserWindow));
+      cachedSeed = generatedSeed;
+
+      return new Uint8Array(generatedSeed);
+    });
   };
 };
