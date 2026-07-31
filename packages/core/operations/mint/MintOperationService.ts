@@ -335,8 +335,45 @@ export class MintOperationService {
   }
 
   async execute(operationId: string): Promise<MintOperation> {
-    const operation = await this.mintOperationRepository.getById(operationId);
-    if (operation?.state === 'pending') {
+    while (true) {
+      const operation = await this.mintOperationRepository.getById(operationId);
+      if (!operation) {
+        throw new Error(`Operation ${operationId} not found`);
+      }
+
+      if (isTerminalOperation(operation)) {
+        return operation;
+      }
+
+      if (operation.state === 'executing') {
+        if (this.isOperationLocked(operationId)) {
+          await this.operationIdLock.waitForUnlock(operationId);
+          continue;
+        }
+
+        try {
+          await this.recoverExecutingOperation(operation);
+        } catch (error) {
+          if (!(error instanceof OperationInProgressError)) {
+            throw error;
+          }
+
+          await this.operationIdLock.waitForUnlock(operationId);
+        }
+
+        const recovered = await this.mintOperationRepository.getById(operationId);
+        if (recovered?.state === 'executing') {
+          throw new Error(`Operation ${operationId} remains executing after recovery`);
+        }
+        continue;
+      }
+
+      if (operation.state !== 'pending') {
+        throw new Error(
+          `Cannot execute operation ${operationId}: expected state 'pending' but found '${operation.state}'`,
+        );
+      }
+
       const quote = await this.quoteLifecycle.getMintQuote(
         operation.mintUrl,
         operation.method,
@@ -345,9 +382,9 @@ export class MintOperationService {
       if (quote) {
         return this.claimPendingQuoteOperation(operation as PendingMintOperation, quote);
       }
-    }
 
-    return this.executeReadyOperation(operationId);
+      return this.executeReadyOperation(operationId);
+    }
   }
 
   private async executeReadyOperation(operationId: string): Promise<TerminalMintOperation> {

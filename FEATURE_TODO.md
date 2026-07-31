@@ -33,3 +33,11 @@
 - [x] Run focused, adapter contract, build, typecheck, and formatting verification.
 - [ ] Run Docker-backed live-mint integration tests (Docker is unavailable in this environment).
 - [x] Review the combined stack against issues #387 and #365.
+
+## PR #403 execution-race follow-up
+
+- [x] Remove the stale pending-only precondition from the public Mint Ops interface.
+- [x] Join active local execution and recover orphaned executing operations in the service.
+- [x] Cover the public race and the authoritative execution state table.
+- [x] Run focused and full core unit tests, typecheck, and build for the follow-up.
+- [ ] Re-run Docker-backed core integration tests with the required mint and auth environment.

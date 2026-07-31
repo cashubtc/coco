@@ -6,11 +6,13 @@ import {
   type MintQuoteBolt12Response,
   type Proof,
 } from '@cashu/cashu-ts';
+import { MintOpsApi } from '../../api/MintOpsApi';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
 import type {
   ExecutingMintOperation,
+  FailedMintOperation,
   FinalizedMintOperation,
   InitMintOperation,
   PendingMintOperation,
@@ -1870,9 +1872,10 @@ describe('MintOperationService', () => {
     expect(ops.length).toBe(1);
   });
 
-  it('execute joins a background claim that already moved the operation to executing', async () => {
+  it('public execute joins a background claim that already moved the operation to executing', async () => {
     await persistQuote();
     const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    const api = new MintOpsApi(service);
     const executionStarted = createDeferred();
     const releaseExecution = createDeferred();
     (handler.execute as Mock<any>).mockImplementationOnce(async () => {
@@ -1885,7 +1888,7 @@ describe('MintOperationService', () => {
       autoClaimRemaining: false,
     });
     await executionStarted.promise;
-    const explicitExecution = service.execute(pending.id);
+    const explicitExecution = api.execute(pending.id);
     releaseExecution.resolve();
 
     const [claimed, executed] = await Promise.all([backgroundClaim, explicitExecution]);
@@ -1894,7 +1897,59 @@ describe('MintOperationService', () => {
     expect(claimed[0]?.state).toBe('finalized');
     expect(executed.state).toBe('finalized');
     expect(executed.id).toBe(pending.id);
+    expect(executed).toEqual(claimed[0]);
     expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('execute recovers an orphaned executing operation', async () => {
+    await persistQuote();
+    const executing = makeExecutingOp('orphaned-executing');
+    await operationRepo.create(executing);
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+
+    const result = await service.execute(executing.id);
+
+    expect(result.state).toBe('finalized');
+    expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('execute rejects missing and init operations', async () => {
+    const init = makeInitOp('init-operation');
+    await operationRepo.create(init);
+
+    await expect(service.execute('missing-operation')).rejects.toThrow(
+      'Operation missing-operation not found',
+    );
+    await expect(service.execute(init.id)).rejects.toThrow(
+      "expected state 'pending' but found 'init'",
+    );
+
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
+  });
+
+  it('execute returns persisted terminal outcomes without invoking the handler', async () => {
+    const finalized: FinalizedMintOperation = {
+      ...makePendingOp('finalized-operation'),
+      state: 'finalized',
+    };
+    const failed: FailedMintOperation = {
+      ...makePendingOp('failed-operation'),
+      state: 'failed',
+      error: 'terminal failure',
+      terminalFailure: {
+        reason: 'terminal failure',
+        observedAt: Date.now(),
+      },
+    };
+    await operationRepo.create(finalized);
+    await operationRepo.create(failed);
+
+    expect(await service.execute(finalized.id)).toEqual(finalized);
+    expect(await service.execute(failed.id)).toEqual(failed);
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
   });
 
   it('finalize leaves underfunded reusable onchain operations pending', async () => {
