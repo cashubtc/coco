@@ -1,3 +1,4 @@
+import { Amount } from '@cashu/cashu-ts';
 import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { SubscriptionManager, UnsubscribeHandler } from '@core/infra/SubscriptionManager.ts';
@@ -26,14 +27,23 @@ interface MintQuoteWatchPolicy<M extends MintMethod = MintMethod> {
   keepWatchingWithoutOperationInterest?: boolean;
 }
 
+function hasBolt11CompletedIssuance(payload: MintMethodQuoteSnapshot<'bolt11'>): boolean {
+  if (payload.amount_paid === undefined || payload.amount_issued === undefined) return false;
+  const amount = Amount.from(payload.amount);
+  const amountPaid = Amount.from(payload.amount_paid);
+  const amountIssued = Amount.from(payload.amount_issued);
+  return !amountIssued.greaterThan(amountPaid) && amountIssued.greaterThanOrEqual(amount);
+}
+
 const mintQuoteWatchPolicies: {
   [M in MintMethod]?: MintQuoteWatchPolicy<M>;
 } = {
   bolt11: {
     subscriptionKind: 'bolt11_mint_quote',
     getPayloadQuoteId: (payload) => payload.quote,
-    shouldRecordPayload: (payload) => payload.state === 'PAID' || payload.state === 'ISSUED',
-    shouldStopWatching: (payload) => payload.state === 'ISSUED',
+    shouldRecordPayload: (payload) =>
+      payload.amount_paid !== undefined && payload.amount_issued !== undefined,
+    shouldStopWatching: hasBolt11CompletedIssuance,
   },
   onchain: {
     subscriptionKind: 'onchain_mint_quote',

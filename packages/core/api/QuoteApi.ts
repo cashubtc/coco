@@ -15,6 +15,8 @@ export type CreateMintQuoteInput =
       method: 'bolt11';
       amount: UnitAmountLike;
       unit?: string;
+      /** Create a NUT-20 quote locked to a fresh, persisted wallet key. */
+      locked?: boolean;
     }
   | {
       mintUrl: string;
@@ -65,6 +67,7 @@ export class MintQuoteApi {
       const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
       return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
         amount: parsed,
+        ...(input.locked === true ? { locked: true } : {}),
       });
     }
 

@@ -38,9 +38,14 @@ export type {
   QuoteIdentity,
 } from './models/index.ts';
 export {
+  applyBolt11MintQuoteStateFallback,
   compareHistoryEntries,
+  deriveBolt11MintQuoteState,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
+  isBolt11MintQuoteIssued,
+  isBolt11MintQuotePaid,
+  isBolt11MintQuoteUnpaid,
   isMintQuotePending,
   isStatefulMintQuote,
   operationHistoryId,

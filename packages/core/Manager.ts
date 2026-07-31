@@ -969,7 +969,7 @@ export class Manager {
       onchain: new MeltOnchainHandler(),
     });
     const mintHandlerProvider = new MintHandlerProvider({
-      bolt11: new MintBolt11Handler(),
+      bolt11: new MintBolt11Handler(keyRingService),
       onchain: new MintOnchainHandler(keyRingService),
       bolt12: new MintBolt12Handler(keyRingService),
     });

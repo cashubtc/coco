@@ -3,7 +3,11 @@ import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { MintOperationError } from '../../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
 import type {
@@ -73,7 +77,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
     }
@@ -108,7 +112,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   async execute(ctx: ExecuteContext<'bolt12'>): Promise<MintExecutionResult> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
     if (!quoteKey) {
-      throw new Error(
+      throw new MintQuoteKeyError(
         `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
       );
     }
@@ -316,7 +320,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   private async requireQuoteKey(pubkey: string): Promise<void> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!quoteKey) {
-      throw new Error(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
+      throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
     }
   }
 
@@ -327,7 +331,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     expectedAmount?: Amount,
   ): void {
     if (quote.pubkey !== expectedPubkey) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `BOLT12 mint quote ${quote.quote} returned pubkey ${quote.pubkey} instead of requested pubkey ${expectedPubkey}`,
       );
     }
@@ -336,7 +340,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     this.assertQuoteAmount(quote, expectedAmount);
 
     if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`,
       );
     }
@@ -349,7 +353,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     if (!quote.amount || !quote.amount.equals(expectedAmount)) {
       const observedAmount = quote.amount ?? '(missing)';
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} amount ${observedAmount} ` +
           `does not match requested amount ${expectedAmount}`,
       );

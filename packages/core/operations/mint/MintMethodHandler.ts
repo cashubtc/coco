@@ -60,10 +60,16 @@ export type CompatibleMintQuoteBolt12Response = Omit<
 export interface MintMethodDefinitions {
   bolt11: {
     methodData: Record<string, never>;
-    createQuoteData: { amount: UnitAmount };
+    createQuoteData: {
+      amount: UnitAmount;
+      locked?: boolean;
+      /** Existing Coco-owned NUT-20 key to use instead of generating a fresh key. */
+      ownedPubkey?: string;
+    };
     quoteData: {
       amount: Amount;
     };
+    /** @deprecated Compatibility projection of canonical Mint Quote Accounting. */
     remoteState: 'UNPAID' | 'PAID' | 'ISSUED';
     quote: MintQuoteBolt11Response;
   };
@@ -184,6 +190,7 @@ export type RecoverExecutingResult =
 export type PendingMintCheckCategory = 'waiting' | 'ready' | 'completed' | 'terminal';
 
 export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
+  /** @deprecated Return `quoteSnapshot` with canonical accounting whenever available. */
   observedRemoteState?: MintMethodRemoteState<M>;
   observedRemoteStateAt: number;
   quoteSnapshot?: MintMethodQuoteSnapshot<M>;

@@ -44,7 +44,7 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { QuoteIdentityConflictError } from '../../models/Error';
+import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
@@ -933,8 +933,11 @@ describe('MintOperationService', () => {
     expect(quoteUpdatedEvents).toHaveLength(0);
     expect(logger.warn).toHaveBeenCalledWith(
       'Ignoring Mint Quote Observation with invalid accounting',
-      expect.objectContaining({ quoteId: onchainQuoteId }),
+      expect.objectContaining({ mintUrl, method: 'onchain' }),
     );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot preserves BOLT11 downgrade protection at a newer update time', async () => {
@@ -1135,11 +1138,13 @@ describe('MintOperationService', () => {
       expect.objectContaining({
         mintUrl,
         method: 'onchain',
-        quoteId: onchainQuoteId,
         existingAmountPaid: '10',
         incomingAmountPaid: '11',
       }),
     );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot accepts a monotonic accounting increase without losing freshness', async () => {
@@ -1249,11 +1254,13 @@ describe('MintOperationService', () => {
       expect.objectContaining({
         mintUrl,
         method: 'onchain',
-        quoteId: onchainQuoteId,
         incomingAmountPaid: '9',
         incomingAmountIssued: '11',
       }),
     );
+    expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toMatchObject({
+      quoteId: onchainQuoteId,
+    });
   });
 
   it('recordMintQuoteSnapshot persists timestamp-only freshness without emitting', async () => {
@@ -2625,7 +2632,26 @@ describe('MintOperationService', () => {
     expect(persistedDuringEvent).toEqual(['PAID']);
   });
 
-  it('recordQuoteObservation applies compatibility state to the latest canonical quote', async () => {
+  it('recordQuoteObservation rejects legacy state for reusable quotes with a domain error', async () => {
+    const onchainQuoteId = 'onchain-legacy-state';
+    await persistOnchainQuote(onchainQuoteId);
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('pending-onchain-legacy-state'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      request: 'bc1qtest',
+      pubkey: '02'.padEnd(66, '1'),
+    };
+
+    const error = await quoteLifecycle
+      .recordMintQuoteObservation(pendingOp, 'PAID')
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('Cannot record legacy quote state for onchain mint quote');
+  });
+
+  it('recordQuoteObservation cannot override newer ordered accounting', async () => {
     const initialExpiry = Math.floor(Date.now() / 1000) + 3600;
     const newerExpiry = initialExpiry + 3600;
     await quoteRepo.upsertMintQuote(
@@ -2679,8 +2705,8 @@ describe('MintOperationService', () => {
     await Promise.all([newerSnapshot, compatibilityObservation]);
     const stored = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
 
-    expect(stored?.state).toBe('ISSUED');
-    expect(stored?.amountIssued.toString()).toBe('10');
+    expect(stored?.state).toBe('PAID');
+    expect(stored?.amountIssued.toString()).toBe('0');
     expect(stored?.request).toBe('lnbc1newer');
     expect(stored?.expiry).toBe(newerExpiry);
     expect(stored?.remoteUpdatedAt).toBe(21);

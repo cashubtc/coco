@@ -6,6 +6,7 @@ import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MintBolt12Handler } from '../../infra/handlers/mint/MintBolt12Handler';
 import type { Logger } from '../../logging/Logger';
+import { MintQuoteKeyError, MintQuoteValidationError } from '../../models/Error';
 import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
@@ -209,16 +210,19 @@ describe('MintBolt12Handler', () => {
       quote({ amount: undefined }),
     );
 
-    await expect(
-      handler.createQuote({
+    const error = await handler
+      .createQuote({
         ...buildPrepareContext(),
         mintUrl,
         createQuoteData: {
           unit: 'sat',
           amount: { amount: Amount.from(10), unit: 'sat' },
         },
-      }),
-    ).rejects.toThrow('does not match requested amount');
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('does not match requested amount');
   });
 
   it('rejects fixed-amount quotes when the mint returns a null response amount', async () => {
@@ -328,9 +332,12 @@ describe('MintBolt12Handler', () => {
   it('requires the imported quote pubkey to exist in the keyring', async () => {
     (keyRingService.getMintQuoteKeyPair as Mock<any>).mockImplementation(async () => null);
 
-    await expect(handler.prepare(buildPrepareContext({ importedQuote: quote() }))).rejects.toThrow(
-      'Missing NUT-20 mint quote key',
-    );
+    const error = await handler
+      .prepare(buildPrepareContext({ importedQuote: quote() }))
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteKeyError);
+    expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
   it('marks amountless quotes ready when paid amount covers the operation amount', async () => {
@@ -423,16 +430,21 @@ describe('MintBolt12Handler', () => {
   it('rejects execution when the remote quote pubkey changes', async () => {
     const changedPubkey = '02' + '22'.repeat(32);
 
-    await expect(
-      handler.execute(
+    const error = await handler
+      .execute(
         buildExecuteContext(
           quote({
             amount_paid: Amount.from(10),
             pubkey: changedPubkey,
           }),
         ),
-      ),
-    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
+      )
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain(
+      `BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`,
+    );
 
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });

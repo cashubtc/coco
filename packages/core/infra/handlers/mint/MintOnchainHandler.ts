@@ -7,7 +7,11 @@ import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { MintOperationError } from '../../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../../models/Error';
 import {
   mintQuoteFromOnchainResponse,
   type MintQuote,
@@ -68,7 +72,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
     }
@@ -103,7 +107,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   async execute(ctx: ExecuteContext<'onchain'>): Promise<MintExecutionResult> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
     if (!quoteKey) {
-      throw new Error(
+      throw new MintQuoteKeyError(
         `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
       );
     }
@@ -296,7 +300,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   private async requireQuoteKey(pubkey: string): Promise<void> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!quoteKey) {
-      throw new Error(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
+      throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
     }
   }
 
@@ -306,7 +310,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     expectedUnit: string,
   ): void {
     if (quote.pubkey !== expectedPubkey) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Onchain mint quote ${quote.quote} returned pubkey ${quote.pubkey} instead of requested pubkey ${expectedPubkey}`,
       );
     }
@@ -318,7 +322,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
         Amount.from(quote.amount_issued ?? Amount.zero()),
       )
     ) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Onchain mint quote ${quote.quote} has amount_issued greater than amount_paid`,
       );
     }

@@ -2,7 +2,7 @@ import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
-import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
+import { isBolt11MintQuotePaid, isStatefulMintQuote } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 interface QueueItem {
@@ -106,7 +106,7 @@ export class MintOperationProcessor {
           return;
         }
 
-        if (getMintQuoteRemoteState(quote) !== 'PAID') {
+        if (!isStatefulMintQuote(quote) || !isBolt11MintQuotePaid(quote)) {
           return;
         }
 
@@ -139,7 +139,7 @@ export class MintOperationProcessor {
         return;
       }
 
-      if (quote && getMintQuoteRemoteState(quote) === 'PAID') {
+      if (quote && isStatefulMintQuote(quote) && isBolt11MintQuotePaid(quote)) {
         this.enqueue(mintUrl, operation.id, operation.method);
       }
     });
