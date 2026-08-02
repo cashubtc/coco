@@ -30,6 +30,33 @@ Concrete core services, operation service classes, handler providers, transport
 internals, and individual memory repository classes are not part of the
 app-facing root API.
 
+## Atomic key derivation allocation
+
+The root `Repositories.keyRingRepository` implements `KeyRingAllocationRepository`:
+
+```ts
+interface KeyRingAllocationRepository extends KeyRingRepository {
+  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number>;
+}
+```
+
+This method must atomically select and persist an index greater than both the purpose's durable
+high-water mark and every stored keypair index for that purpose. Its promise resolves only after
+that allocation commits. A committed index is permanent even when later seed access, key
+derivation, or key persistence fails, so gaps are expected and must not be recycled.
+
+Allocation is deliberately unavailable on `RepositoryTransactionScope`. Implement it as an
+independent top-level storage transaction; nesting it in a caller transaction would allow a later
+rollback to reuse an index. A process-local mutex or optional read/increment/write fallback does
+not satisfy the contract because it cannot coordinate independent processes, database connections,
+or browser tabs.
+
+The Memory adapter guarantees this behavior only for callers sharing one repository object. SQL
+adapters use a native writer transaction, and IndexedDB uses one `readwrite` transaction covering
+the keypair and allocation stores. Adapter authors can run
+`runKeyRingAllocationRepositoryContract` from `@cashu/coco-adapter-tests` to verify the required
+sequences, gaps, bounds, and shared-storage behavior.
+
 ## Security
 
 Coco's built-in storage adapters do not encrypt wallet data at rest. Stored data can include
@@ -40,6 +67,12 @@ The embedding application is responsible for storage protection. Applications th
 encryption at rest should use an encrypted database, encrypted filesystem or platform storage, or
 a custom `Repositories` implementation that provides the required protection. Ensure that the
 chosen protection also covers database journals and backups.
+
+Back up and restore keypairs and key-derivation allocation metadata together. A full database
+deletion intentionally starts a new local allocation namespace. Restoring a historical snapshot can
+reproduce deterministic keys created after that snapshot when the same Wallet Seed is reused;
+applications must avoid exposing post-snapshot quote keys or rotate to a new seed/allocation
+namespace.
 
 ## SQLite adapter public API
 

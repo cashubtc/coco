@@ -34,6 +34,17 @@ console.log('Secret key:', keypair.secretKey); // Uint8Array(32)
 The secret key is sensitive cryptographic material. When setting `dumpSecretKey: true`, ensure you handle the key securely and clear it from memory when no longer needed.
 :::
 
+#### Atomic derivation allocation
+
+Coco reserves each derivation index in storage before loading the seed and deriving the key. The
+allocation sequence is independent for P2PK keys and NUT-20 mint-quote keys, and built-in durable
+adapters coordinate sessions that share the same database. Concurrent generation therefore cannot
+select the same index or deterministic key.
+
+An index remains consumed if seed access, derivation, or key persistence fails after reservation.
+This can leave intentional gaps in the sequence; gaps are safe and are never filled later. Removing
+a generated keypair also does not make its index reusable.
+
 ### Importing Existing Keypairs
 
 You can import external keypairs by providing a 32-byte secret key:
@@ -139,6 +150,7 @@ interface Keypair {
   publicKeyHex: string; // The public key as a hex string
   secretKey: Uint8Array; // The 32-byte secret key
   derivationIndex?: number; // BIP32 derivation index (if generated)
+  purpose?: 'p2pk' | 'nut20_mint_quote'; // Independent derivation branch
 }
 
 // KeyRing API methods
@@ -163,6 +175,11 @@ private keys and NUT-20 mint-quote private keys.
 
 See [Storage Adapters](./storage-adapters.md#security) for the storage security model and guidance
 on protecting wallet data.
+
+Derivation allocation metadata and keypairs form one backup unit. Restoring only keypairs without
+the allocation metadata is unsupported. Deleting the complete database or restoring an old
+snapshot resets allocation history to that state and can reproduce keys derived after the snapshot
+when the same seed is reused.
 
 ## Error Handling
 

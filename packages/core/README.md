@@ -220,6 +220,7 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 - `MintQuoteRepository`
 - `HistoryRepository`
 - `KeyRingRepository`
+- `KeyRingAllocationRepository`
 - `AuthSessionRepository`
 - `SendOperationRepository`
 - `MeltOperationRepository`
@@ -227,6 +228,13 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 - `ReceiveOperationRepository`
 
 The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
+
+`Repositories.keyRingRepository` implements `KeyRingAllocationRepository`. Its
+`reserveNextDerivationIndex(purpose)` method must permanently commit a unique, purpose-scoped
+derivation index before resolving. Transaction callbacks intentionally expose only
+`KeyRingRepository`; allocation must not be nested in a caller transaction that could later roll
+back. See the [storage adapter contract](../docs/pages/storage-adapters.md) for persistence and
+backup requirements.
 
 ## Public API surface
 
