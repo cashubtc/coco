@@ -16,6 +16,8 @@ import {
   type ReceiveOperation,
   type SendOperation,
   type AuthSession,
+  type KeypairPurpose,
+  DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
 } from '@cashu/coco-core/adapter';
 
@@ -28,6 +30,159 @@ type ContractOptions<TRepositories extends Repositories = Repositories> = {
   createRepositories: TransactionFactory<TRepositories>;
   testConcurrentRootOperationIsolation?: boolean;
 };
+
+export type KeyRingAllocationContractOptions<TRepositories extends Repositories = Repositories> = {
+  createRepositories: TransactionFactory<TRepositories>;
+  createSharedRepositories?: () => Promise<{
+    first: TRepositories;
+    second: TRepositories;
+    dispose(): Promise<void>;
+  }>;
+};
+
+function sortedIndexes(indexes: number[]): number[] {
+  return [...indexes].sort((left, right) => left - right);
+}
+
+function expectExactIndexRange(
+  indexes: number[],
+  start: number,
+  count: number,
+  expect: Expectation,
+): void {
+  const expected = Array.from({ length: count }, (_, offset) => start + offset);
+  expect(indexes.length).toBe(count);
+  expect(new Set(indexes).size).toBe(count);
+  expect(JSON.stringify(sortedIndexes(indexes))).toBe(JSON.stringify(expected));
+}
+
+function derivedKeypair(publicKeyHex: string, derivationIndex: number, purpose: KeypairPurpose) {
+  return {
+    publicKeyHex,
+    secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
+    derivationIndex,
+    purpose,
+  } as const;
+}
+
+export function runKeyRingAllocationRepositoryContract(
+  options: KeyRingAllocationContractOptions,
+  runner: ContractRunner,
+): void {
+  const { describe, it, expect } = runner;
+
+  describe('keyring derivation allocation contract', () => {
+    it('starts each purpose at zero and advances independently', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const p2pk = await Promise.all([
+          repositories.keyRingRepository.reserveNextDerivationIndex('p2pk'),
+          repositories.keyRingRepository.reserveNextDerivationIndex('p2pk'),
+          repositories.keyRingRepository.reserveNextDerivationIndex('p2pk'),
+        ]);
+        const quote = await Promise.all([
+          repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+          repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+          repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+        ]);
+
+        expectExactIndexRange(p2pk, 0, 3, expect);
+        expectExactIndexRange(quote, 0, 3, expect);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('continues above existing persisted keypairs', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.keyRingRepository.setPersistedKeyPair(
+          derivedKeypair('02' + '07'.repeat(32), 7, 'p2pk'),
+        );
+        const next = await repositories.keyRingRepository.reserveNextDerivationIndex('p2pk');
+        expect(next).toBe(8);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('allocates one exact sequence under one-root concurrency', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const indexes = await Promise.all(
+          Array.from({ length: 50 }, () =>
+            repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+          ),
+        );
+        expectExactIndexRange(indexes, 0, 50, expect);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('does not recycle abandoned or deleted allocations', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const abandoned = await repositories.keyRingRepository.reserveNextDerivationIndex('p2pk');
+        expect(abandoned).toBe(0);
+        const persistedIndex =
+          await repositories.keyRingRepository.reserveNextDerivationIndex('p2pk');
+        const keypair = derivedKeypair('02' + '08'.repeat(32), persistedIndex, 'p2pk');
+        await repositories.keyRingRepository.setPersistedKeyPair(keypair);
+        await repositories.keyRingRepository.deletePersistedKeyPair(keypair.publicKeyHex, 'p2pk');
+        expect(await repositories.keyRingRepository.reserveNextDerivationIndex('p2pk')).toBe(2);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('fails explicitly without advancing beyond the maximum child index', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        await repositories.keyRingRepository.setPersistedKeyPair(
+          derivedKeypair('02' + '09'.repeat(32), 0x7fffffff, 'nut20_mint_quote'),
+        );
+        await expectThrowsNamed(
+          () => repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+          DerivationIndexExhaustedError.name,
+          expect,
+        );
+        await expectThrowsNamed(
+          () => repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+          DerivationIndexExhaustedError.name,
+          expect,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    if (options.createSharedRepositories) {
+      it('coordinates independent roots sharing one physical store', async () => {
+        const { first, second, dispose } = await options.createSharedRepositories!();
+        try {
+          const indexes = await Promise.all([
+            ...Array.from({ length: 50 }, () =>
+              first.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+            ),
+            ...Array.from({ length: 50 }, () =>
+              second.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+            ),
+          ]);
+          expectExactIndexRange(indexes, 0, 100, expect);
+
+          const p2pk = await Promise.all([
+            first.keyRingRepository.reserveNextDerivationIndex('p2pk'),
+            second.keyRingRepository.reserveNextDerivationIndex('p2pk'),
+          ]);
+          expectExactIndexRange(p2pk, 0, 2, expect);
+        } finally {
+          await dispose();
+        }
+      });
+    }
+  });
+}
 
 export async function runRepositoryTransactionContract(
   options: ContractOptions,
@@ -167,6 +322,20 @@ async function expectThrowsError(
     thrown = error;
   }
   expect(thrown instanceof errorClass).toBe(true);
+}
+
+async function expectThrowsNamed(
+  fn: () => Promise<unknown>,
+  errorName: string,
+  expect: Expectation,
+) {
+  let thrown: unknown;
+  try {
+    await fn();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown instanceof Error ? thrown.name : undefined).toBe(errorName);
 }
 
 function createDeferred<T = void>() {
