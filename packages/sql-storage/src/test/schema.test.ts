@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite';
 import {
   ensureSchemaUpTo,
   MIGRATIONS,
+  SqliteKeyRingRepository,
   SqliteMintQuoteRepository,
   type SqlDatabase,
 } from '../index.ts';
@@ -49,6 +50,7 @@ const EXPECTED_MIGRATION_IDS = [
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
+  '038_keypair_derivation_allocations',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -186,6 +188,91 @@ describe('shared SQL schema migrations', () => {
     expect(ids).toEqual(
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
+
+    const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
+    expect(busyTimeout?.timeout).toBe(5000);
+  });
+
+  itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {
+    await ensureSchemaUpTo(db, '038_keypair_derivation_allocations');
+
+    const rows = [
+      ['p2pk-0', 0, 'p2pk'],
+      ['p2pk-6', 6, 'p2pk'],
+      ['quote-0', 0, 'nut20_mint_quote'],
+      ['quote-3', 3, 'nut20_mint_quote'],
+    ] as const;
+    for (const [publicKey, derivationIndex, purpose] of rows) {
+      await db.run(
+        `INSERT INTO coco_cashu_keypairs
+          (publicKey, secretKey, createdAt, derivationIndex, purpose)
+         VALUES (?, ?, ?, ?, ?)`,
+        [publicKey, '01'.repeat(32), derivationIndex, derivationIndex, purpose],
+      );
+    }
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.all<{ purpose: string; lastAllocatedIndex: number }>(
+        `SELECT purpose, lastAllocatedIndex
+         FROM coco_cashu_keypair_derivation_allocations
+         ORDER BY purpose`,
+      ),
+    ).toEqual([
+      { purpose: 'nut20_mint_quote', lastAllocatedIndex: 3 },
+      { purpose: 'p2pk', lastAllocatedIndex: 6 },
+    ]);
+
+    const repository = new SqliteKeyRingRepository(db);
+    await expect(repository.reserveNextDerivationIndex('p2pk')).resolves.toBe(7);
+    await expect(repository.reserveNextDerivationIndex('nut20_mint_quote')).resolves.toBe(4);
+  });
+
+  itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {
+    await ensureSchemaUpTo(db, '033_keypair_purpose');
+    await db.run(
+      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex)
+       VALUES (?, ?, ?, ?)`,
+      ['legacy-p2pk', '02'.repeat(32), 1, 12],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ purpose: string; lastAllocatedIndex: number }>(
+        `SELECT purpose, lastAllocatedIndex
+         FROM coco_cashu_keypair_derivation_allocations
+         WHERE purpose = 'p2pk'`,
+      ),
+    ).toEqual({ purpose: 'p2pk', lastAllocatedIndex: 12 });
+    await expect(new SqliteKeyRingRepository(db).reserveNextDerivationIndex('p2pk')).resolves.toBe(
+      13,
+    );
+  });
+
+  itWithDatabase('does not consume an allocation when its transaction rolls back', async (db) => {
+    await ensureSchemaUpTo(db);
+    await db.exec(`
+      CREATE TRIGGER fail_keypair_allocation
+      BEFORE UPDATE ON coco_cashu_keypair_derivation_allocations
+      BEGIN
+        SELECT RAISE(ABORT, 'forced allocation failure');
+      END;
+    `);
+
+    const repository = new SqliteKeyRingRepository(db);
+    await expect(repository.reserveNextDerivationIndex('p2pk')).rejects.toThrow(
+      'forced allocation failure',
+    );
+    expect(
+      await db.get(
+        `SELECT purpose FROM coco_cashu_keypair_derivation_allocations WHERE purpose = 'p2pk'`,
+      ),
+    ).toBeUndefined();
+
+    await db.exec('DROP TRIGGER fail_keypair_allocation');
+    await expect(repository.reserveNextDerivationIndex('p2pk')).resolves.toBe(0);
   });
 
   itWithDatabase(

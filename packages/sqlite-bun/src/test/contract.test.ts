@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import {
   runRepositoryTransactionContract,
+  runKeyRingAllocationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -28,6 +33,29 @@ async function createRepositories() {
   };
 }
 
+async function createSharedRepositories() {
+  const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite-bun-keyring-'));
+  const filename = join(directory, 'wallet.sqlite');
+  const firstDatabase = new Database(filename);
+  const secondDatabase = new Database(filename);
+  const first = new Repositories({ database: firstDatabase });
+  const second = new Repositories({ database: secondDatabase });
+  await first.init();
+  await second.init();
+  firstDatabase.exec('PRAGMA busy_timeout = 10');
+  secondDatabase.exec('PRAGMA busy_timeout = 10');
+
+  return {
+    first,
+    second,
+    dispose: async () => {
+      firstDatabase.close();
+      secondDatabase.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 runSqlDatabaseContract(
   {
     createDatabase() {
@@ -50,6 +78,61 @@ runRepositoryTransactionContract(
   },
   { describe, it, expect },
 );
+
+runKeyRingAllocationRepositoryContract(
+  { createRepositories, createSharedRepositories },
+  { describe, it, expect },
+);
+
+function runAllocationWorker(filename: string, count: number): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./keyringAllocation.worker.ts', import.meta.url), {
+      workerData: { filename, count },
+    });
+    worker.once('message', (message: { indexes?: number[]; error?: string }) => {
+      if (message.error) reject(new Error(message.error));
+      else resolve(message.indexes ?? []);
+    });
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error(`Allocation worker exited with code ${code}`));
+    });
+  });
+}
+
+describe('keyring allocation process boundary', () => {
+  it('coordinates worker connections through the SQLite file', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite-bun-worker-'));
+    const filename = join(directory, 'wallet.sqlite');
+    const database = new Database(filename);
+    const repositories = new Repositories({ database });
+    await repositories.init();
+    database.close();
+
+    try {
+      const [first, second] = await Promise.all([
+        runAllocationWorker(filename, 50),
+        runAllocationWorker(filename, 50),
+      ]);
+      const indexes = [...first, ...second].sort((left, right) => left - right);
+      expect(indexes).toEqual(Array.from({ length: 100 }, (_, index) => index));
+      expect(new Set(indexes).size).toBe(100);
+
+      const reopenedDatabase = new Database(filename);
+      const reopened = new Repositories({ database: reopenedDatabase });
+      await reopened.init();
+      try {
+        await expect(
+          reopened.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+        ).resolves.toBe(100);
+      } finally {
+        reopenedDatabase.close();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 runAuthSessionRepositoryContract({ createRepositories }, { describe, it, expect });
 

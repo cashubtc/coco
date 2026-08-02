@@ -1,8 +1,32 @@
-import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
+import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
+import type {
+  KeyRingAllocationRepository,
+  Keypair,
+  KeypairPurpose,
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
+const MAX_DERIVATION_INDEX = 0x7fffffff;
+const MAX_BUSY_RETRIES = 3;
+
+function isSqliteBusy(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return code === 'SQLITE_BUSY' || message.includes('database is locked');
+}
+
+function waitForRetry(attempt: number): Promise<void> {
+  const runtime = globalThis as typeof globalThis & {
+    setTimeout(callback: () => void, milliseconds: number): unknown;
+  };
+  return new Promise((resolve) => runtime.setTimeout(resolve, attempt * 5));
+}
 
 type KeypairRow = {
   publicKey: string;
@@ -20,7 +44,7 @@ function rowToKeypair(row: KeypairRow): Keypair {
   };
 }
 
-export class SqliteKeyRingRepository implements KeyRingRepository {
+export class SqliteKeyRingRepository implements KeyRingAllocationRepository {
   private readonly db: SqlDatabase;
 
   constructor(db: SqlDatabase) {
@@ -110,13 +134,83 @@ export class SqliteKeyRingRepository implements KeyRingRepository {
     }
   }
 
-  async getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number> {
-    const row = await this.db.get<{ derivationIndex: number }>(
-      `SELECT derivationIndex FROM coco_cashu_keypairs
-       WHERE derivationIndex IS NOT NULL ${purpose ? 'AND purpose = ?' : ''}
-       ORDER BY derivationIndex DESC LIMIT 1`,
-      purpose ? [purpose] : [],
-    );
-    return row?.derivationIndex ?? -1;
+  async reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.reserveNextDerivationIndexOnce(purpose);
+      } catch (error) {
+        if (!isSqliteBusy(error) || attempt > MAX_BUSY_RETRIES) throw error;
+        await waitForRetry(attempt);
+      }
+    }
+  }
+
+  private async reserveNextDerivationIndexOnce(purpose: KeypairPurpose): Promise<number> {
+    return this.db.transaction(async (tx) => {
+      await tx.run(
+        `INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
+         VALUES (?, -1)
+         ON CONFLICT(purpose) DO NOTHING`,
+        [purpose],
+      );
+
+      const update = await tx.run(
+        `UPDATE coco_cashu_keypair_derivation_allocations
+         SET lastAllocatedIndex = MAX(
+           lastAllocatedIndex,
+           COALESCE(
+             (SELECT MAX(keypairs.derivationIndex)
+              FROM coco_cashu_keypairs AS keypairs
+              WHERE keypairs.purpose = ?),
+             -1
+           )
+         ) + 1
+         WHERE purpose = ?
+           AND MAX(
+             lastAllocatedIndex,
+             COALESCE(
+               (SELECT MAX(keypairs.derivationIndex)
+                FROM coco_cashu_keypairs AS keypairs
+                WHERE keypairs.purpose = ?),
+               -1
+             )
+           ) < ?`,
+        [purpose, purpose, purpose, MAX_DERIVATION_INDEX],
+      );
+
+      if (update.changes !== 1) {
+        const allocation = await tx.get<{ lastAllocatedIndex: number }>(
+          `SELECT lastAllocatedIndex
+           FROM coco_cashu_keypair_derivation_allocations
+           WHERE purpose = ?`,
+          [purpose],
+        );
+        const greatestStored = await tx.get<{ derivationIndex: number | null }>(
+          `SELECT MAX(derivationIndex) AS derivationIndex
+           FROM coco_cashu_keypairs
+           WHERE purpose = ? AND derivationIndex IS NOT NULL`,
+          [purpose],
+        );
+        const baseIndex = Math.max(
+          allocation?.lastAllocatedIndex ?? -1,
+          greatestStored?.derivationIndex ?? -1,
+        );
+        if (baseIndex >= MAX_DERIVATION_INDEX) {
+          throw new DerivationIndexExhaustedError(purpose);
+        }
+        throw new Error(`Failed to reserve a derivation index for keypair purpose ${purpose}`);
+      }
+
+      const allocation = await tx.get<{ lastAllocatedIndex: number }>(
+        `SELECT lastAllocatedIndex
+         FROM coco_cashu_keypair_derivation_allocations
+         WHERE purpose = ?`,
+        [purpose],
+      );
+      if (!allocation) {
+        throw new Error(`Missing derivation allocation for keypair purpose ${purpose}`);
+      }
+      return allocation.lastAllocatedIndex;
+    });
   }
 }

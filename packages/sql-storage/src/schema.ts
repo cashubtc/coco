@@ -1490,6 +1490,22 @@ const MIGRATIONS: readonly Migration[] = [
           END;
     `,
   },
+  {
+    id: '038_keypair_derivation_allocations',
+    sql: `
+      CREATE TABLE coco_cashu_keypair_derivation_allocations (
+        purpose TEXT PRIMARY KEY,
+        lastAllocatedIndex INTEGER NOT NULL
+          CHECK (lastAllocatedIndex BETWEEN -1 AND 2147483647)
+      );
+
+      INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
+      SELECT purpose, MAX(derivationIndex)
+      FROM coco_cashu_keypairs
+      WHERE derivationIndex IS NOT NULL
+      GROUP BY purpose;
+    `,
+  },
 ];
 
 // Export for testing
@@ -1513,6 +1529,7 @@ export async function ensureSchemaUpTo(db: SqlDatabase, stopBeforeId?: string): 
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
   `);
 
   await db.exec(`

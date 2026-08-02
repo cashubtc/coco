@@ -3,7 +3,7 @@ import type {
   RepositoryTransactionScope,
   MintRepository,
   KeysetRepository,
-  KeyRingRepository,
+  KeyRingAllocationRepository,
   CounterRepository,
   ProofRepository,
   MeltQuoteRepository,
@@ -70,7 +70,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
 
 export class SqlStorageRepositories implements Repositories {
   readonly mintRepository: MintRepository;
-  readonly keyRingRepository: KeyRingRepository;
+  readonly keyRingRepository: KeyRingAllocationRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
@@ -91,7 +91,7 @@ export class SqlStorageRepositories implements Repositories {
     this.database = options.database;
     const repositories = createRepositoryScope(this.database);
     this.mintRepository = repositories.mintRepository;
-    this.keyRingRepository = repositories.keyRingRepository;
+    this.keyRingRepository = new SqliteKeyRingRepository(this.database);
     this.counterRepository = repositories.counterRepository;
     this.keysetRepository = repositories.keysetRepository;
     this.proofRepository = repositories.proofRepository;

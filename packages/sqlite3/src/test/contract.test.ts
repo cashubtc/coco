@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
+  runKeyRingAllocationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -28,6 +32,29 @@ async function createRepositories() {
   };
 }
 
+async function createSharedRepositories() {
+  const directory = await mkdtemp(join(tmpdir(), 'coco-sqlite3-keyring-'));
+  const filename = join(directory, 'wallet.sqlite');
+  const firstDatabase = new Database(filename);
+  const secondDatabase = new Database(filename);
+  const first = new Repositories({ database: firstDatabase });
+  const second = new Repositories({ database: secondDatabase });
+  await first.init();
+  await second.init();
+  firstDatabase.pragma('busy_timeout = 10');
+  secondDatabase.pragma('busy_timeout = 10');
+
+  return {
+    first,
+    second,
+    dispose: async () => {
+      firstDatabase.close();
+      secondDatabase.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 runSqlDatabaseContract(
   {
     createDatabase() {
@@ -48,6 +75,11 @@ runRepositoryTransactionContract(
     createRepositories,
     testConcurrentRootOperationIsolation: true,
   },
+  { describe, it, expect },
+);
+
+runKeyRingAllocationRepositoryContract(
+  { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
 
