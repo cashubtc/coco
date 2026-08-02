@@ -1,3 +1,5 @@
+import type { KeypairPurpose } from './Keypair.ts';
+
 export { HttpResponseError, MintOperationError, NetworkError } from '@cashu/cashu-ts';
 
 export class UnknownMintError extends Error {
@@ -50,6 +52,16 @@ export class MintQuoteKeyError extends Error {
     super(message);
     this.name = 'MintQuoteKeyError';
     (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
+export class DerivationIndexExhaustedError extends Error {
+  readonly purpose: KeypairPurpose;
+
+  constructor(purpose: KeypairPurpose) {
+    super(`No derivation indexes remain for keypair purpose ${purpose}`);
+    this.name = 'DerivationIndexExhaustedError';
+    this.purpose = purpose;
   }
 }
 

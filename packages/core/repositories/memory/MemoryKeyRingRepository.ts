@@ -1,11 +1,14 @@
 import type { Keypair, KeypairPurpose } from '../../models/Keypair';
-import type { KeyRingRepository } from '..';
+import { DerivationIndexExhaustedError } from '../../models/Error.ts';
+import type { KeyRingAllocationRepository } from '..';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
+const MAX_DERIVATION_INDEX = 0x7fffffff;
 
-export class MemoryKeyRingRepository implements KeyRingRepository {
+export class MemoryKeyRingRepository implements KeyRingAllocationRepository {
   private keyPairs: Map<string, Keypair> = new Map();
   private insertionOrder: string[] = [];
+  private lastAllocatedIndexes: Map<KeypairPurpose, number> = new Map();
 
   async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
     const keyPair = this.keyPairs.get(publicKey) ?? null;
@@ -63,14 +66,23 @@ export class MemoryKeyRingRepository implements KeyRingRepository {
     return null;
   }
 
-  async getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number> {
-    let maxIndex = -1;
+  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+    let greatestStoredIndex = -1;
     for (const keypair of this.keyPairs.values()) {
-      if (purpose && (keypair.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) continue;
-      if (keypair.derivationIndex != null && keypair.derivationIndex > maxIndex) {
-        maxIndex = keypair.derivationIndex;
+      if ((keypair.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) continue;
+      if (keypair.derivationIndex != null && keypair.derivationIndex > greatestStoredIndex) {
+        greatestStoredIndex = keypair.derivationIndex;
       }
     }
-    return maxIndex;
+
+    const lastAllocatedIndex = this.lastAllocatedIndexes.get(purpose) ?? -1;
+    const baseIndex = Math.max(lastAllocatedIndex, greatestStoredIndex);
+    if (baseIndex >= MAX_DERIVATION_INDEX) {
+      return Promise.reject(new DerivationIndexExhaustedError(purpose));
+    }
+
+    const nextIndex = baseIndex + 1;
+    this.lastAllocatedIndexes.set(purpose, nextIndex);
+    return Promise.resolve(nextIndex);
   }
 }

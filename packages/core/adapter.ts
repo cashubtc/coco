@@ -3,6 +3,7 @@ export type {
   CounterRepository,
   HistoryProjectionRepository,
   HistoryRepository,
+  KeyRingAllocationRepository,
   KeyRingRepository,
   KeysetRepository,
   LegacyMintQuoteRepository,
@@ -51,6 +52,7 @@ export {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
 } from './models/index.ts';
 export type {

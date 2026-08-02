@@ -206,7 +206,21 @@ export interface KeyRingRepository {
   deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void>;
   getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]>;
   getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null>;
-  getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number>;
+}
+
+/**
+ * Root keyring repository capability for permanently consuming derivation indexes.
+ *
+ * This capability is deliberately absent from {@link RepositoryTransactionScope}: an allocation
+ * must commit independently so that a later caller rollback cannot make its index reusable.
+ */
+export interface KeyRingAllocationRepository extends KeyRingRepository {
+  /**
+   * Permanently consume and return the next derivation index for `purpose`.
+   *
+   * The returned promise must resolve only after the allocation transaction has committed.
+   */
+  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number>;
 }
 
 export interface HistoryProjectionRepository {
@@ -374,6 +388,7 @@ interface RepositoriesBase {
 }
 
 export interface Repositories extends RepositoriesBase {
+  keyRingRepository: KeyRingAllocationRepository;
   init(): Promise<void>;
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }

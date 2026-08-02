@@ -1,6 +1,6 @@
 import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
-import type { KeyRingRepository } from '@core/repositories';
+import type { KeyRingAllocationRepository } from '@core/repositories';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
@@ -15,9 +15,13 @@ export class KeyRingService {
   };
 
   private readonly logger?: Logger;
-  private readonly keyRingRepository: KeyRingRepository;
+  private readonly keyRingRepository: KeyRingAllocationRepository;
   private readonly seedService: SeedService;
-  constructor(keyRingRepository: KeyRingRepository, seedService: SeedService, logger?: Logger) {
+  constructor(
+    keyRingRepository: KeyRingAllocationRepository,
+    seedService: SeedService,
+    logger?: Logger,
+  ) {
     this.keyRingRepository = keyRingRepository;
     this.logger = logger;
     this.seedService = seedService;
@@ -45,8 +49,7 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     this.logger?.debug('Generating new key pair');
-    const lastDerivationIndex = await this.keyRingRepository.getLastDerivationIndex(purpose);
-    const nextDerivationIndex = lastDerivationIndex + 1;
+    const nextDerivationIndex = await this.keyRingRepository.reserveNextDerivationIndex(purpose);
     const seed = await this.seedService.getSeed();
     const hdKey = HDKey.fromMasterSeed(seed);
     const derivationPurpose = KeyRingService.DERIVATION_PURPOSES[purpose];
