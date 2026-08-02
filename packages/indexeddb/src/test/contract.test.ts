@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  runKeyRingAllocationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -22,7 +23,26 @@ async function createRepositories() {
   await repositories.init();
   return {
     repositories,
-    dispose: async () => {},
+    dispose: async () => {
+      repositories.db.close();
+    },
+  };
+}
+
+async function createSharedRepositories() {
+  const dbName = `coco_cashu_shared_allocation_${Date.now()}_${dbCounter++}`;
+  const first = new IndexedDbRepositories({ name: dbName });
+  const second = new IndexedDbRepositories({ name: dbName });
+  await first.init();
+  await second.init();
+
+  return {
+    first,
+    second,
+    dispose: async () => {
+      first.db.close();
+      second.db.close();
+    },
   };
 }
 
@@ -40,6 +60,11 @@ runRepositoryTransactionContract(
   {
     createRepositories,
   },
+  { describe, it, expect },
+);
+
+runKeyRingAllocationRepositoryContract(
+  { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
 
@@ -62,6 +87,106 @@ runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect })
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('indexeddb quote storage constraints', () => {
+  it('rolls back allocation metadata when an IndexedDB transaction aborts', async () => {
+    const { repositories, dispose } = await createRepositories();
+    try {
+      await expectRejects(async () => {
+        await repositories.db.runTransaction(
+          'rw',
+          ['coco_cashu_keypair_derivation_allocations'],
+          async (transaction) => {
+            await transaction.table('coco_cashu_keypair_derivation_allocations').put({
+              purpose: 'p2pk',
+              lastAllocatedIndex: 0,
+            });
+            throw new Error('abort allocation');
+          },
+        );
+      });
+
+      await expect(repositories.keyRingRepository.reserveNextDerivationIndex('p2pk')).resolves.toBe(
+        0,
+      );
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('migrates version-32 keypairs into purpose-scoped allocation state', async () => {
+    const dbName = `coco_cashu_keyring_migration_${Date.now()}_${dbCounter++}`;
+    const legacy = new Dexie(dbName);
+    legacy.version(32).stores({
+      coco_cashu_keypairs: '&publicKey, createdAt, derivationIndex',
+    });
+    await legacy.open();
+    await legacy.table('coco_cashu_keypairs').bulkAdd([
+      {
+        publicKey: 'legacy-p2pk',
+        secretKey: '01'.repeat(32),
+        createdAt: 1,
+        derivationIndex: 4,
+      },
+      {
+        publicKey: 'current-p2pk',
+        secretKey: '02'.repeat(32),
+        createdAt: 2,
+        derivationIndex: 6,
+        purpose: 'p2pk',
+      },
+      {
+        publicKey: 'quote-lock',
+        secretKey: '03'.repeat(32),
+        createdAt: 3,
+        derivationIndex: 3,
+        purpose: 'nut20_mint_quote',
+      },
+      {
+        publicKey: 'imported',
+        secretKey: '04'.repeat(32),
+        createdAt: 4,
+      },
+    ]);
+    legacy.close();
+
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    try {
+      const keypairRows = await repositories.db.table('coco_cashu_keypairs').toArray();
+      expect(keypairRows.find((row) => row.publicKey === 'legacy-p2pk')?.purpose).toBe('p2pk');
+      expect(keypairRows.find((row) => row.publicKey === 'imported')?.purpose).toBe('p2pk');
+      expect(
+        await repositories.db.table('coco_cashu_keypair_derivation_allocations').toArray(),
+      ).toEqual(
+        expect.arrayContaining([
+          { purpose: 'p2pk', lastAllocatedIndex: 6 },
+          { purpose: 'nut20_mint_quote', lastAllocatedIndex: 3 },
+        ]),
+      );
+      expect(
+        repositories.db
+          .table('coco_cashu_keypairs')
+          .schema.indexes.some((index) => index.name === '[purpose+derivationIndex]'),
+      ).toBe(true);
+      await expect(repositories.keyRingRepository.reserveNextDerivationIndex('p2pk')).resolves.toBe(
+        7,
+      );
+      await expect(
+        repositories.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
+      ).resolves.toBe(4);
+    } finally {
+      repositories.db.close();
+    }
+
+    const reopened = new IndexedDbRepositories({ name: dbName });
+    await reopened.init();
+    try {
+      await expect(reopened.keyRingRepository.reserveNextDerivationIndex('p2pk')).resolves.toBe(8);
+    } finally {
+      reopened.db.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
   it('migrates canonical Mint Quote Accounting without inventing remote time', async () => {
     const dbName = `coco_cashu_migration_${Date.now()}_${dbCounter++}`;
     const legacy = new Dexie(dbName);

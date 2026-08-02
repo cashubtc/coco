@@ -1,8 +1,16 @@
-import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
+import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
+import type {
+  KeyRingAllocationRepository,
+  Keypair,
+  KeypairPurpose,
+} from '@cashu/coco-core/adapter';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
+const MAX_DERIVATION_INDEX = 0x7fffffff;
+const KEYPAIR_STORE = 'coco_cashu_keypairs';
+const ALLOCATION_STORE = 'coco_cashu_keypair_derivation_allocations';
 
 interface KeypairRow {
   publicKey: string;
@@ -12,7 +20,12 @@ interface KeypairRow {
   purpose?: KeypairPurpose;
 }
 
-export class IdbKeyRingRepository implements KeyRingRepository {
+interface KeypairDerivationAllocationRow {
+  purpose: KeypairPurpose;
+  lastAllocatedIndex: number;
+}
+
+export class IdbKeyRingRepository implements KeyRingAllocationRepository {
   private readonly db: IdbDb;
 
   constructor(db: IdbDb) {
@@ -20,7 +33,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
   }
 
   async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
-    const table = this.db.table('coco_cashu_keypairs');
+    const table = this.db.table(KEYPAIR_STORE);
     const row = await table.get(publicKey);
     if (!row) return null;
 
@@ -38,7 +51,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
   }
 
   async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
-    const table = this.db.table('coco_cashu_keypairs');
+    const table = this.db.table(KEYPAIR_STORE);
     const secretKeyHex = bytesToHex(keyPair.secretKey);
 
     // Preserve existing derivationIndex if new one is not provided
@@ -61,7 +74,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
   }
 
   async deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void> {
-    const table = this.db.table('coco_cashu_keypairs');
+    const table = this.db.table(KEYPAIR_STORE);
     if (purpose) {
       const existing = (await table.get(publicKey)) as KeypairRow | undefined;
       if (existing && (existing.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) return;
@@ -70,7 +83,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
   }
 
   async getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]> {
-    const table = this.db.table('coco_cashu_keypairs');
+    const table = this.db.table(KEYPAIR_STORE);
     const rows = (await table.toArray()) as KeypairRow[];
 
     return rows
@@ -84,7 +97,7 @@ export class IdbKeyRingRepository implements KeyRingRepository {
   }
 
   async getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null> {
-    const table = this.db.table('coco_cashu_keypairs');
+    const table = this.db.table(KEYPAIR_STORE);
     const rows = (await table.orderBy('createdAt').reverse().toArray()) as KeypairRow[];
     const row = rows.find(
       (candidate) => !purpose || (candidate.purpose ?? DEFAULT_KEYPAIR_PURPOSE) === purpose,
@@ -100,19 +113,29 @@ export class IdbKeyRingRepository implements KeyRingRepository {
     };
   }
 
-  async getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number> {
-    const table = this.db.table('coco_cashu_keypairs');
-    const rows = (await table.orderBy('derivationIndex').reverse().toArray()) as KeypairRow[];
-    const row = rows.find(
-      (candidate) =>
-        candidate.derivationIndex != null &&
-        (!purpose || (candidate.purpose ?? DEFAULT_KEYPAIR_PURPOSE) === purpose),
-    );
+  async reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+    return this.db.runTransaction('rw', [ALLOCATION_STORE, KEYPAIR_STORE], async (transaction) => {
+      const allocationTable = transaction.table(ALLOCATION_STORE);
+      const keypairTable = transaction.table(KEYPAIR_STORE);
+      const allocation = (await allocationTable.get(purpose)) as
+        | KeypairDerivationAllocationRow
+        | undefined;
+      const greatestStoredKeypair = (await keypairTable
+        .where('[purpose+derivationIndex]')
+        .between([purpose, 0], [purpose, MAX_DERIVATION_INDEX], true, true)
+        .last()) as KeypairRow | undefined;
+      const baseIndex = Math.max(
+        allocation?.lastAllocatedIndex ?? -1,
+        greatestStoredKeypair?.derivationIndex ?? -1,
+      );
 
-    if (!row || row.derivationIndex == null) {
-      return -1;
-    }
+      if (baseIndex >= MAX_DERIVATION_INDEX) {
+        throw new DerivationIndexExhaustedError(purpose);
+      }
 
-    return row.derivationIndex;
+      const nextIndex = baseIndex + 1;
+      await allocationTable.put({ purpose, lastAllocatedIndex: nextIndex });
+      return nextIndex;
+    });
   }
 }

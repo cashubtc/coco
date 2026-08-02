@@ -2,7 +2,7 @@ import type {
   Repositories,
   MintRepository,
   KeysetRepository,
-  KeyRingRepository,
+  KeyRingAllocationRepository,
   CounterRepository,
   ProofRepository,
   MeltQuoteRepository,
@@ -42,7 +42,7 @@ export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
 export class IndexedDbRepositories implements Repositories {
   readonly mintRepository: MintRepository;
-  readonly keyRingRepository: KeyRingRepository;
+  readonly keyRingRepository: KeyRingAllocationRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;
