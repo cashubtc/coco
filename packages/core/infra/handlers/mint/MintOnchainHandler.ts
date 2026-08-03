@@ -19,6 +19,7 @@ import {
 } from '../../../models/MintQuote';
 import { mintQuoteObservationFromOnchainResponse } from '../../../models/MintQuoteObservationFactory';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
+import { getReusableMintQuoteValidationError } from './ReusableMintQuoteValidation.ts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -26,7 +27,7 @@ import type {
   MintExecutionResult,
   MintMethodHandler,
   PendingContext,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   PendingMintOperation,
   PrepareContext,
   RecoverExecutingContext,
@@ -256,9 +257,11 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'onchain'>): Promise<PendingMintCheckResult<'onchain'>> {
+  async checkPending(
+    ctx: PendingContext<'onchain'>,
+  ): Promise<PendingMintObservationResult<'onchain'>> {
     const { operation } = ctx;
-    const observedRemoteStateAt = Date.now();
+    const observedAt = Date.now();
     const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       operation.mintUrl,
       'onchain',
@@ -266,53 +269,35 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     );
     const expectedPubkey = operation.pubkey;
 
-    if (!expectedPubkey) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `Onchain mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
     if (validationError) {
       return {
-        observedRemoteStateAt,
-        category: 'terminal',
-        terminalFailure: {
+        observedAt,
+        validationFailure: {
           reason: validationError.message,
           code: 'invalid_quote',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
-    const assessment = assessMintQuoteClaimability(
-      mintQuoteObservationFromOnchainResponse(operation.mintUrl, remoteQuote, {
-        now: observedRemoteStateAt,
-      }),
-      { requestedAmount: operation.amount },
-    );
+    if (!expectedPubkey) {
+      return {
+        observedAt,
+        quoteSnapshot: remoteQuote,
+        validationFailure: {
+          reason: `Onchain mint operation ${operation.id} is missing NUT-20 quote pubkey`,
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt,
+        },
+      };
+    }
+
     return {
-      observedRemoteStateAt,
+      observedAt,
       quoteSnapshot: remoteQuote,
-      category:
-        assessment.status === 'claimable'
-          ? 'ready'
-          : assessment.status === 'complete'
-            ? 'completed'
-            : 'waiting',
     };
   }
 

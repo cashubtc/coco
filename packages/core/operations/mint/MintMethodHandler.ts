@@ -202,6 +202,24 @@ export interface PendingMintCheckResult<M extends MintMethod = MintMethod> {
   terminalFailure?: MintOperationFailure;
 }
 
+/**
+ * Method-specific facts observed while checking a pending mint operation.
+ *
+ * Handlers validate whether remote responses belong to their operation. The durable mint saga
+ * reconciles attributable snapshots and decides the resulting local operation state.
+ */
+export type PendingMintObservationResult<M extends MintMethod = MintMethod> =
+  | {
+      observedAt: number;
+      quoteSnapshot: MintMethodQuoteSnapshot<M>;
+      validationFailure?: never;
+    }
+  | {
+      observedAt: number;
+      quoteSnapshot?: MintMethodQuoteSnapshot<M>;
+      validationFailure: MintOperationFailure;
+    };
+
 export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   createQuote(ctx: CreateMintQuoteContext<M>): Promise<MintQuote<M>>;
   fetchRemoteQuote(ctx: FetchRemoteMintQuoteContext<M>): Promise<MintQuote<M>>;
@@ -209,7 +227,7 @@ export interface MintMethodHandler<M extends MintMethod = MintMethod> {
   prepare(ctx: PrepareContext<M>): Promise<PendingMintOperation<M>>;
   execute(ctx: ExecuteContext<M>): Promise<MintExecutionResult>;
   recoverExecuting(ctx: RecoverExecutingContext<M>): Promise<RecoverExecutingResult>;
-  checkPending(ctx: PendingContext<M>): Promise<PendingMintCheckResult<M>>;
+  checkPending(ctx: PendingContext<M>): Promise<PendingMintObservationResult<M>>;
 }
 
 export type MintMethodHandlerRegistry = {

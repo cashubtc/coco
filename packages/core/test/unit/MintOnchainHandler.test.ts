@@ -489,25 +489,58 @@ describe('MintOnchainHandler', () => {
     expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
-  it('checks pending onchain operations as ready when the quote can cover the amount', async () => {
+  it('reports the validated remote snapshot for a pending operation', async () => {
     const result = await handler.checkPending(buildPendingContext());
 
-    expect(result.category).toBe('ready');
     expect(result.quoteSnapshot).toBe(remoteQuote);
+    expect(result.observedAt).toEqual(expect.any(Number));
   });
 
-  it('keeps a funded onchain quote with no-expiry sentinel claimable', async () => {
+  it('reports an unattributable pending response as a validation failure', async () => {
     (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
-      expiry: 0,
+      request: 'bc1qotheraddress',
     });
 
     const result = await handler.checkPending(buildPendingContext());
 
-    expect(result.category).toBe('ready');
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure).toMatchObject({
+      code: 'invalid_quote',
+      retryable: false,
+    });
+    expect(result.validationFailure?.reason).toContain('conflicts with pending operation identity');
   });
 
-  it('checks pending onchain operations as waiting when the quote cannot cover the amount', async () => {
+  it('does not attribute a mismatched response when the operation pubkey is missing', async () => {
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      quote: 'other-quote',
+    });
+    const baseContext = buildPendingContext();
+
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure?.code).toBe('invalid_quote');
+  });
+
+  it('preserves the missing-pubkey terminal code for an attributable response', async () => {
+    const baseContext = buildPendingContext();
+
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBe(remoteQuote);
+    expect(result.validationFailure?.code).toBe('missing_quote_pubkey');
+  });
+
+  it('preserves remote accounting in the pending observation', async () => {
     (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       amount_paid: Amount.from(8),
@@ -516,21 +549,6 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.checkPending(buildPendingContext());
 
-    expect(result.category).toBe('waiting');
     expect(result.quoteSnapshot?.amount_paid?.equals(Amount.from(8))).toBe(true);
-  });
-
-  it('keeps an unfunded onchain operation waiting after expiry', async () => {
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
-      ...remoteQuote,
-      expiry: Math.floor(Date.now() / 1000) - 1,
-      amount_paid: Amount.from(8),
-      amount_issued: Amount.from(8),
-    });
-
-    const result = await handler.checkPending(buildPendingContext());
-
-    expect(result.category).toBe('waiting');
-    expect(result.terminalFailure).toBeUndefined();
   });
 });

@@ -350,7 +350,7 @@ describe('MintBolt12Handler', () => {
     expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
-  it('marks amountless quotes ready when paid amount covers the operation amount', async () => {
+  it('reports the validated remote snapshot for an amountless quote', async () => {
     const result = await handler.checkPending(
       buildPendingContext(
         quote({
@@ -362,60 +362,50 @@ describe('MintBolt12Handler', () => {
     );
 
     expect(result.quoteSnapshot?.quote).toBe(quoteId);
-    expect(result.category).toBe('ready');
+    expect(result.observedAt).toEqual(expect.any(Number));
   });
 
-  it('keeps a funded quote with no-expiry sentinel claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: 0,
-          amount_paid: Amount.from(10),
-        }),
-      ),
+  it('reports an unattributable pending response as a validation failure', async () => {
+    const context = buildPendingContext(quote());
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
+      quote({ quote: 'other-quote' }),
     );
 
-    expect(result.category).toBe('ready');
+    const result = await handler.checkPending(context);
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure).toMatchObject({
+      code: 'invalid_quote',
+      retryable: false,
+    });
+    expect(result.validationFailure?.reason).toContain('conflicts with pending operation identity');
   });
 
-  it('keeps a funded quote with null expiry claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: null,
-          amount_paid: Amount.from(10),
-        }),
-      ),
+  it('does not attribute a mismatched response when the operation pubkey is missing', async () => {
+    const baseContext = buildPendingContext(quote());
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
+      quote({ request: 'lno1other' }),
     );
 
-    expect(result.category).toBe('ready');
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure?.code).toBe('invalid_quote');
   });
 
-  it('keeps a funded quote with a future positive expiry claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: Math.floor(Date.now() / 1000) + 60,
-          amount_paid: Amount.from(10),
-        }),
-      ),
-    );
+  it('preserves the missing-pubkey terminal code for an attributable response', async () => {
+    const baseContext = buildPendingContext(quote());
 
-    expect(result.category).toBe('ready');
-  });
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
 
-  it('keeps a funded quote claimable after expiry', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: Math.floor(Date.now() / 1000) - 1,
-          amount_paid: Amount.from(10),
-        }),
-      ),
-    );
-
-    expect(result.category).toBe('ready');
-    expect(result.terminalFailure).toBeUndefined();
+    expect(result.quoteSnapshot?.quote).toBe(quoteId);
+    expect(result.validationFailure?.code).toBe('missing_quote_pubkey');
   });
 
   it('mints with the keyring private key and custom outputs', async () => {
