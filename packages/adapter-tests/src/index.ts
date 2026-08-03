@@ -460,6 +460,7 @@ export async function runMintQuoteRepositoryContract(
           amountPaid: Amount.zero(),
           amountIssued: Amount.zero(),
           remoteUpdatedAt: null,
+          updatedAt: 10,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
 

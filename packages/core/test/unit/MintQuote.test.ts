@@ -12,9 +12,6 @@ import {
   getMintQuoteAvailableAmount,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
-  isBolt11MintQuoteIssued,
-  isBolt11MintQuotePaid,
-  isBolt11MintQuoteUnpaid,
   isMintQuotePending,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
@@ -62,7 +59,7 @@ describe('MintQuote model', () => {
     expect(quote.amountIssued.equals(Amount.from(40))).toBe(true);
     expect(quote.remoteUpdatedAt).toBe(55);
     expect(getMintQuoteAvailableAmount(quote).equals(Amount.from(60))).toBe(true);
-    expect(isMintQuotePending(quote)).toBe(true);
+    expect(isMintQuotePending(quote)).toBe(false);
   });
 
   it('rejects contradictory BOLT11 accounting', () => {
@@ -84,7 +81,7 @@ describe('MintQuote model', () => {
     expect(createQuote).toThrow('amount_issued greater than amount_paid');
   });
 
-  it('uses canonical predicates for ready and terminal BOLT11 quotes', () => {
+  it('derives the compatibility state from canonical BOLT11 accounting', () => {
     const paid = mintQuoteFromBolt11Response('https://mint.test', {
       quote: 'quote-paid',
       request: 'lnbc...',
@@ -105,40 +102,10 @@ describe('MintQuote model', () => {
 
     expect(deriveBolt11MintQuoteState(paid.amountPaid, paid.amountIssued)).toBe('PAID');
     expect(getMintQuoteRemoteState({ ...paid, state: 'ISSUED' })).toBe('PAID');
-    expect(isBolt11MintQuoteUnpaid(paid)).toBe(false);
-    expect(isBolt11MintQuotePaid(paid)).toBe(true);
-    expect(isBolt11MintQuoteIssued(paid)).toBe(false);
     expect(mintQuoteToMethodSnapshot<'bolt11'>(paid).state).toBe('PAID');
 
     expect(getMintQuoteRemoteState(issued)).toBe('ISSUED');
-    expect(isBolt11MintQuotePaid(issued)).toBe(false);
-    expect(isBolt11MintQuoteIssued(issued)).toBe(true);
     expect(isMintQuotePending(issued)).toBe(false);
-  });
-
-  it('does not treat partial accounting as ready or terminal', () => {
-    const partiallyPaid = mintQuoteFromBolt11Response('https://mint.test', {
-      quote: 'quote-partially-paid',
-      request: 'lnbc...',
-      method: 'bolt11',
-      amount: Amount.from(100),
-      unit: 'sat',
-      expiry: 123,
-      amount_paid: Amount.from(50),
-      amount_issued: Amount.zero(),
-      updated_at: 44,
-      state: 'PAID',
-    } satisfies MintQuoteBolt11Response);
-    const partiallyIssued = {
-      ...partiallyPaid,
-      amountIssued: Amount.from(50),
-      state: 'ISSUED' as const,
-    };
-
-    expect(isBolt11MintQuotePaid(partiallyPaid)).toBe(false);
-    expect(isMintQuotePending(partiallyPaid)).toBe(true);
-    expect(isBolt11MintQuoteIssued(partiallyIssued)).toBe(false);
-    expect(isMintQuotePending(partiallyIssued)).toBe(true);
   });
 
   it('does not let a legacy state replace ordered or partial accounting', () => {
@@ -163,6 +130,26 @@ describe('MintQuote model', () => {
     expect(orderedResult.remoteUpdatedAt).toBe(44);
     expect(unorderedResult.amountPaid.equals(Amount.from(50))).toBe(true);
     expect(unorderedResult.amountIssued.isZero()).toBe(true);
+
+    const issued = mintQuoteFromBolt11Response('https://mint.test', {
+      quote: 'quote-issued',
+      request: 'lnbc...',
+      method: 'bolt11',
+      amount: Amount.from(100),
+      unit: 'sat',
+      expiry: 123,
+      amount_paid: Amount.from(100),
+      amount_issued: Amount.from(100),
+      updated_at: null,
+      state: 'ISSUED',
+    } satisfies MintQuoteBolt11Response);
+    const staleResult = applyBolt11MintQuoteStateFallback(
+      { ...issued, updatedAt: 50 },
+      'UNPAID',
+      40,
+    );
+    expect(staleResult.state).toBe('ISSUED');
+    expect(staleResult.updatedAt).toBe(50);
   });
 
   it('keeps BOLT12 offer amounts separate from mint operation amounts', () => {

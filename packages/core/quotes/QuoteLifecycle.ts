@@ -11,7 +11,6 @@ import {
   applyBolt11MintQuoteStateFallback,
   deriveBolt11MintQuoteState,
   getMintQuoteAmount,
-  isBolt11MintQuoteIssued,
   mintQuoteFromBolt11Response,
   mintQuoteFromBolt12Response,
   mintQuoteFromOnchainResponse,
@@ -62,6 +61,7 @@ import type {
   MintQuotePollingResult,
 } from './MintQuotePolling.ts';
 import { resolveMintQuoteObservation } from './MintQuoteObservation.ts';
+import { assessMintQuoteClaimability } from '../models/MintQuoteClaimability.ts';
 
 const BUILT_IN_MINT_METHODS = new Set<MintMethod>(['bolt11', 'bolt12', 'onchain']);
 const DEFINITIVE_BATCH_FAILURE_CATEGORIES = new Set<MintQuotePollingFailure['category']>([
@@ -1555,8 +1555,12 @@ export class QuoteLifecycle {
   }
 
   private assertMintQuoteCanPrepare(quote: MintQuote, context: string): void {
-    if (isStatefulMintQuote(quote) && isBolt11MintQuoteIssued(quote)) {
+    const assessment = assessMintQuoteClaimability(quote);
+    if (assessment.status === 'complete') {
       throw new Error(`Cannot prepare ${context}: quote is terminal`);
+    }
+    if (assessment.status === 'invalid') {
+      throw new Error(`Cannot prepare ${context}: quote accounting is invalid`);
     }
   }
 

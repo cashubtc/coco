@@ -162,6 +162,10 @@ describe('MintBolt11Handler', () => {
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
+    localClaimabilityFacts: {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
     mintAdapter,
     proofService,
     proofRepository,
@@ -390,15 +394,30 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('recoverExecuting', () => {
-    it('returns a terminal result when the mint quote expired during execution', async () => {
+    it('returns a terminal result when the mint rejects issuance with quote expired', async () => {
       const result = await handler.recoverExecuting(buildRecoverContext());
 
       expect(result).toEqual({
         status: 'TERMINAL',
         error: `Recovered: quote ${quoteId} expired while executing mint`,
       });
-      expect((wallet.mintProofsBolt11 as Mock<any>).mock.calls.length).toBe(1);
-      expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
+    });
+
+    it('keeps other mint operation errors pending during recovery', async () => {
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(
+        new MintOperationError(20001, 'Unknown quote'),
+      );
+
+      const result = await handler.recoverExecuting(buildRecoverContext());
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: 'Unknown quote',
+      });
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('recovers locked issuance using accounting authority and the persisted key', async () => {
@@ -420,7 +439,33 @@ describe('MintBolt11Handler', () => {
       expect(result).toEqual({ status: 'FINALIZED' });
       const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
       expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      const customOutputs = call?.[3] as
+        | { type: 'custom'; data: Array<{ blindedMessage: { B_: string } }> }
+        | undefined;
+      expect(customOutputs?.data.map(({ blindedMessage }) => blindedMessage.B_)).toEqual([
+        'B_out_1',
+        'B_out_2',
+      ]);
       expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps NUT-20 ownership contradictions pending for ambiguity-preserving recovery', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
+        ...quote,
+        pubkey: `02${'22'.repeat(32)}`,
+      }));
+
+      const result = await handler.recoverExecuting({
+        ...buildRecoverContext(),
+        operation: { ...executingOperation, pubkey: quotePubkey },
+      });
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
+      });
+      expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
+      expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
     });
 
     it('preserves quote context in recovery errors and logs', async () => {
@@ -503,7 +548,7 @@ describe('MintBolt11Handler', () => {
       },
     );
 
-    it('uses canonical accounting when the compatibility state is contradictory', async () => {
+    it('uses canonical accounting when compatibility state disagrees', async () => {
       (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
         ...quote,
         state: 'UNPAID',
@@ -511,12 +556,18 @@ describe('MintBolt11Handler', () => {
 
       const result = await handler.checkPending(buildPendingContext());
 
-      expect(result.observedRemoteState).toBe('PAID');
+      expect(result.observedRemoteState).toBeUndefined();
+      expect(result.quoteSnapshot).toEqual(expect.objectContaining({ state: 'UNPAID' }));
       expect(result.category).toBe('ready');
       expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
-      for (const [, meta] of (logger.info as Mock<any>).mock.calls) {
-        expect(meta).toMatchObject({ mintUrl, quoteId });
-      }
+      expect(logger.info).toHaveBeenCalledWith('Checking pending mint operation', {
+        mintUrl,
+        quoteId,
+      });
+      expect(logger.info).toHaveBeenCalledWith('Pending mint quote claimability assessed', {
+        mintUrl,
+        status: 'claimable',
+      });
     });
   });
 });

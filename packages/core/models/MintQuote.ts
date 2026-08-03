@@ -16,6 +16,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import { assessMintQuoteClaimability } from './MintQuoteClaimability.ts';
 
 export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
@@ -92,25 +93,6 @@ export function deriveBolt11MintQuoteState(
       : 'ISSUED';
 }
 
-/** Returns whether canonical BOLT11 accounting represents an unpaid quote. */
-export function isBolt11MintQuoteUnpaid(quote: MintQuote<'bolt11'>): boolean {
-  return quote.amountPaid.isZero() && quote.amountIssued.isZero();
-}
-
-/** Returns whether canonical BOLT11 accounting can fund the quote's exact mint operation. */
-export function isBolt11MintQuotePaid(quote: MintQuote<'bolt11'>): boolean {
-  return (
-    quote.amountIssued.isZero() &&
-    quote.amountPaid.greaterThanOrEqual(quote.amount) &&
-    getMintQuoteAvailableAmount(quote).greaterThanOrEqual(quote.amount)
-  );
-}
-
-/** Returns whether canonical BOLT11 accounting has issued the quote's full fixed amount. */
-export function isBolt11MintQuoteIssued(quote: MintQuote<'bolt11'>): boolean {
-  return quote.amountIssued.greaterThanOrEqual(quote.amount);
-}
-
 /**
  * Applies a legacy BOLT11 state observation without allowing it to reduce canonical accounting.
  *
@@ -144,14 +126,14 @@ export function applyBolt11MintQuoteStateFallback(
     state: deriveBolt11MintQuoteState(amountPaid, amountIssued),
     amountPaid,
     amountIssued,
-    updatedAt: observedAt,
+    updatedAt: Math.max(quote.updatedAt, observedAt),
   };
 }
 
 /**
  * Returns the deprecated BOLT11 state projection for compatibility consumers.
  *
- * @deprecated Use `amountPaid` and `amountIssued`, or the canonical accounting predicates.
+ * @deprecated Use `amountPaid` and `amountIssued`, or the common Claimability assessment.
  */
 export function getMintQuoteRemoteState(
   quote: MintQuote,
@@ -175,16 +157,14 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   return undefined;
 }
 
+/** Returns mint-reported availability without local issuance or reservation facts. */
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
-  return quote.amountPaid.subtract(quote.amountIssued);
+  return assessMintQuoteClaimability(quote).remoteAvailable;
 }
 
 export function isMintQuotePending(quote: MintQuote): boolean {
-  if (isStatefulMintQuote(quote)) {
-    return !isBolt11MintQuoteIssued(quote);
-  }
-
-  return true;
+  const { status } = assessMintQuoteClaimability(quote);
+  return status === 'waiting' || status === 'claimable';
 }
 
 function assertValidMintQuoteAccounting(

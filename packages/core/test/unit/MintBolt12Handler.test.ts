@@ -6,7 +6,11 @@ import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MintBolt12Handler } from '../../infra/handlers/mint/MintBolt12Handler';
 import type { Logger } from '../../logging/Logger';
-import { MintQuoteKeyError, MintQuoteValidationError } from '../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../models/Error';
 import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
@@ -141,8 +145,14 @@ describe('MintBolt12Handler', () => {
 
   const buildRecoverContext = (
     remoteQuote: MintQuoteBolt12Response,
-  ): RecoverExecutingContext<'bolt12'> =>
-    buildExecuteContext(remoteQuote) as RecoverExecutingContext<'bolt12'>;
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'bolt12'> => ({
+    ...buildExecuteContext(remoteQuote),
+    localClaimabilityFacts,
+  });
 
   beforeEach(() => {
     wallet = {
@@ -427,6 +437,35 @@ describe('MintBolt12Handler', () => {
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
   });
 
+  it('rejects contradictory fresh accounting before mint submission', async () => {
+    await expect(
+      handler.execute(
+        buildExecuteContext(
+          quote({
+            amount_paid: Amount.from(9),
+            amount_issued: Amount.from(10),
+          }),
+        ),
+      ),
+    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} is not claimable: invalid`);
+
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
+    const result = await handler.execute(
+      buildExecuteContext(
+        quote({
+          amount_paid: Amount.from(1),
+          amount_issued: Amount.zero(),
+        }),
+      ),
+    );
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects execution when the remote quote pubkey changes', async () => {
     const changedPubkey = '02' + '22'.repeat(32);
 
@@ -480,5 +519,54 @@ describe('MintBolt12Handler', () => {
     expect(result).toEqual({ status: 'FINALIZED' });
     expect(wallet.mintProofsBolt12).toHaveBeenCalled();
     expect(proofService.saveProofs).toHaveBeenCalled();
+  });
+
+  it('fails recovery when the mint rejects BOLT12 issuance with quote expired', async () => {
+    const expiredQuote = quote({
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      amount_paid: Amount.from(10),
+    });
+    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(20007, 'Quote expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: BOLT12 quote ${quoteId} expired while executing mint`,
+    });
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-protocol expiry errors pending during BOLT12 recovery', async () => {
+    const expiredQuote = quote({
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      amount_paid: Amount.from(10),
+    });
+    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
+      new Error('Authentication session expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
+
+    expect(result).toEqual({
+      status: 'PENDING',
+      error: 'Authentication session expired',
+    });
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('does not retry balance already consumed by finalized local operations', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext(quote({ amount_paid: Amount.from(10) }), {
+        finalizedAmount: Amount.from(10),
+        reservedAmount: Amount.zero(),
+      }),
+    );
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });

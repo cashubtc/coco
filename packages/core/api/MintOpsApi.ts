@@ -58,17 +58,13 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
   }
 
   /**
-   * Executes a pending mint operation and returns the latest operation state.
+   * Executes or resumes a mint operation and returns its latest persisted state.
+   *
+   * Concurrent calls join active local execution, while terminal outcomes are returned as-is.
    */
   async execute(operationOrId: MintOperation | string): Promise<MintOperation> {
-    const operation = await this.resolveOperation(operationOrId);
-    if (operation.state !== 'pending') {
-      throw new Error(
-        `Cannot execute operation in state '${operation.state}'. Expected 'pending'.`,
-      );
-    }
-
-    return this.mintOperationService.execute(operation.id);
+    const operationId = typeof operationOrId === 'string' ? operationOrId : operationOrId.id;
+    return this.mintOperationService.execute(operationId);
   }
 
   /** Returns a mint operation by ID, or `null` when it does not exist. */
@@ -130,14 +126,6 @@ export class MintOpsApi<TSupported extends MintMethod = DefaultSupportedMintMeth
    */
   async finalize(operationId: string): Promise<MintOperation> {
     return this.mintOperationService.finalize(operationId);
-  }
-
-  private async resolveOperation(operationOrId: MintOperation | string): Promise<MintOperation> {
-    if (typeof operationOrId === 'string') {
-      return this.requireOperation(operationOrId);
-    }
-
-    return this.requireOperation(operationOrId.id);
   }
 
   private async requireOperation(operationId: string): Promise<MintOperation> {

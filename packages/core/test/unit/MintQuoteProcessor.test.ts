@@ -66,8 +66,8 @@ describe('MintOperationProcessor', () => {
         claimCalls.push({ mintUrl, method, quoteId });
         return [];
       },
-      async hasLocallyClaimableMintQuoteBalance() {
-        return true;
+      async getMintQuoteClaimability() {
+        return { status: 'claimable' };
       },
       async claimPendingMintQuotes() {
         startupClaimCalls++;
@@ -111,7 +111,7 @@ describe('MintOperationProcessor', () => {
     expect(processor.isRunning()).toBe(false);
   });
 
-  it('processes PAID operations from mint-quote:updated', async () => {
+  it('claims accounting-ready BOLT11 quotes from mint-quote:updated', async () => {
     await processor.start();
 
     await bus.emit('mint-quote:updated', {
@@ -121,31 +121,64 @@ describe('MintOperationProcessor', () => {
       quote: makeBolt11Quote('quote-1', true),
     });
 
-    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
+    await processor.waitForCompletion();
 
-    expect(finalizeCalls).toEqual(['mint-op-1']);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-1' },
+    ]);
+    expect(finalizeCalls).toEqual([]);
   });
 
-  it('processes all pending operations that share a paid quote', async () => {
+  it('advances complete BOLT11 quotes from mint-quote:updated', async () => {
     mockMintOperationService = {
-      async getOperationsForQuote() {
-        return [
-          {
-            id: 'mint-op-a',
-            state: 'pending',
-            mintUrl: 'https://mint.test',
-            method: 'bolt11',
-          },
-          {
-            id: 'mint-op-b',
-            state: 'pending',
-            mintUrl: 'https://mint.test',
-            method: 'bolt11',
-          },
-        ];
+      ...mockMintOperationService,
+      async getMintQuoteClaimability() {
+        return { status: 'complete' };
       },
-      async finalize(operationId: string) {
-        finalizeCalls.push(operationId);
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
+    await processor.start();
+
+    await bus.emit('mint-quote:updated', {
+      mintUrl: 'https://mint.test',
+      method: 'bolt11',
+      quoteId: 'complete-quote',
+      quote: {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'complete-quote',
+      } as any,
+    });
+
+    await processor.waitForCompletion();
+
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'complete-quote' },
+    ]);
+  });
+
+  it('delegates sibling selection to one common quote claim', async () => {
+    mockMintOperationService = {
+      async getMintQuoteClaimability() {
+        return { status: 'claimable' };
+      },
+      async claimMintQuote(mintUrl: string, method: string, quoteId: string) {
+        claimCalls.push({ mintUrl, method, quoteId });
+        return [];
+      },
+      async claimPendingMintQuotes() {
+        return [];
       },
     } as unknown as MintOperationService;
 
@@ -171,12 +204,14 @@ describe('MintOperationProcessor', () => {
       quote: makeBolt11Quote('shared-quote', true),
     });
 
-    await sleep(TEST_PROCESS_INTERVAL * 2 + 50);
+    await processor.waitForCompletion();
 
-    expect(finalizeCalls).toEqual(['mint-op-a', 'mint-op-b']);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'shared-quote' },
+    ]);
   });
 
-  it('claims reusable onchain quotes with locally claimable balance from mint-quote:updated', async () => {
+  it('claims onchain balance quotes with locally claimable value from mint-quote:updated', async () => {
     await processor.start();
 
     await bus.emit('mint-quote:updated', {
@@ -208,11 +243,11 @@ describe('MintOperationProcessor', () => {
     expect(finalizeCalls).toEqual([]);
   });
 
-  it('skips reusable onchain quote claims with no locally claimable balance', async () => {
+  it('skips onchain balance quotes with no locally claimable value', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
-      async hasLocallyClaimableMintQuoteBalance() {
-        return false;
+      async getMintQuoteClaimability() {
+        return { status: 'waiting' };
       },
     } as unknown as MintOperationService;
     processor = new MintOperationProcessor(
@@ -240,10 +275,10 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('logs and skips reusable onchain quote claims when claimability check fails', async () => {
+  it('logs and skips onchain balance quotes when claimability assessment fails', async () => {
     mockMintOperationService = {
       ...mockMintOperationService,
-      async hasLocallyClaimableMintQuoteBalance() {
+      async getMintQuoteClaimability() {
         throw new Error('claimability check failed');
       },
     } as unknown as MintOperationService;
@@ -272,14 +307,14 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('claims pending reusable mint quotes on startup', async () => {
+  it('claims pending mint quotes through the common startup path', async () => {
     await processor.start();
     await processor.waitForCompletion();
 
     expect(startupClaimCalls).toBe(1);
   });
 
-  it('can disable reusable mint quote auto-claiming', async () => {
+  it('can disable automatic mint quote claiming', async () => {
     processor = new MintOperationProcessor(
       mockMintOperationService,
       mockQuoteLifecycle,
@@ -321,7 +356,7 @@ describe('MintOperationProcessor', () => {
     expect(claimCalls).toEqual([]);
   });
 
-  it('processes already-paid pending operations from mint-op:pending', async () => {
+  it('claims an accounting-ready quote from mint-op:pending', async () => {
     await processor.start();
 
     await bus.emit('mint-op:pending', {
@@ -336,30 +371,54 @@ describe('MintOperationProcessor', () => {
       } as any,
     });
 
-    await sleep(TEST_PROCESS_INTERVAL + 20);
+    await processor.waitForCompletion();
 
-    expect(finalizeCalls).toEqual(['mint-op-2']);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-2' },
+    ]);
+    expect(finalizeCalls).toEqual([]);
   });
 
-  it('processes explicit mint-op:requeue events', async () => {
-    await processor.start();
+  it.each(['bolt11', 'bolt12', 'onchain'] as const)(
+    'processes explicit %s mint-op:requeue events through the default handler',
+    async (method) => {
+      await processor.start();
 
-    await bus.emit('mint-op:requeue', {
-      mintUrl: 'https://mint.test',
-      operationId: 'mint-op-3',
-      operation: {
-        id: 'mint-op-3',
+      await bus.emit('mint-op:requeue', {
         mintUrl: 'https://mint.test',
-        method: 'bolt11',
-      } as any,
-    });
+        operationId: `mint-op-${method}`,
+        operation: {
+          id: `mint-op-${method}`,
+          mintUrl: 'https://mint.test',
+          method,
+        } as any,
+      });
 
-    await sleep(TEST_PROCESS_INTERVAL + 20);
+      await sleep(TEST_PROCESS_INTERVAL + 20);
 
-    expect(finalizeCalls).toEqual(['mint-op-3']);
-  });
+      expect(finalizeCalls).toEqual([`mint-op-${method}`]);
+    },
+  );
 
-  it('ignores non-PAID quote updates', async () => {
+  it('skips quote updates with no locally claimable value', async () => {
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async getMintQuoteClaimability() {
+        return { status: 'waiting' };
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
     await processor.start();
 
     await bus.emit('mint-quote:updated', {
@@ -369,12 +428,41 @@ describe('MintOperationProcessor', () => {
       quote: makeBolt11Quote('quote-4', false),
     });
 
-    await sleep(TEST_PROCESS_INTERVAL + 20);
+    await processor.waitForCompletion();
 
+    expect(claimCalls).toEqual([]);
     expect(finalizeCalls).toEqual([]);
   });
 
-  it('deduplicates repeated enqueue requests for the same operation', async () => {
+  it('coalesces quote updates during an active assessment into one follow-up claim', async () => {
+    let releaseAssessment!: () => void;
+    const assessmentGate = new Promise<void>((resolve) => {
+      releaseAssessment = resolve;
+    });
+    let assessmentCalls = 0;
+    mockMintOperationService = {
+      ...mockMintOperationService,
+      async getMintQuoteClaimability() {
+        assessmentCalls++;
+        if (assessmentCalls === 1) {
+          await assessmentGate;
+          return { status: 'waiting' };
+        }
+        return { status: 'claimable' };
+      },
+    } as unknown as MintOperationService;
+    processor = new MintOperationProcessor(
+      mockMintOperationService,
+      mockQuoteLifecycle,
+      bus,
+      undefined,
+      {
+        processIntervalMs: TEST_PROCESS_INTERVAL,
+        baseRetryDelayMs: TEST_RETRY_DELAY,
+        maxRetries: 3,
+        initialEnqueueDelayMs: TEST_INITIAL_DELAY,
+      },
+    );
     await processor.start();
 
     for (let i = 0; i < 3; i++) {
@@ -386,9 +474,14 @@ describe('MintOperationProcessor', () => {
       });
     }
 
-    await sleep(TEST_PROCESS_INTERVAL + 20);
+    releaseAssessment();
+    await processor.waitForCompletion();
 
-    expect(finalizeCalls).toEqual(['mint-op-5']);
+    expect(assessmentCalls).toBe(2);
+    expect(claimCalls).toEqual([
+      { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'quote-5' },
+    ]);
+    expect(finalizeCalls).toEqual([]);
   });
 
   it('retries network errors with exponential backoff', async () => {

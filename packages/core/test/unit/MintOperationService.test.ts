@@ -6,11 +6,13 @@ import {
   type MintQuoteBolt12Response,
   type Proof,
 } from '@cashu/cashu-ts';
+import { MintOpsApi } from '../../api/MintOpsApi';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import { MintOperationService } from '../../operations/mint/MintOperationService';
 import type {
   ExecutingMintOperation,
+  FailedMintOperation,
   FinalizedMintOperation,
   InitMintOperation,
   PendingMintOperation,
@@ -748,16 +750,12 @@ describe('MintOperationService', () => {
     );
 
     const stored = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
-    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
-      mintUrl,
-      'onchain',
-      onchainQuoteId,
-    );
+    const assessment = await service.getMintQuoteClaimability(mintUrl, 'onchain', onchainQuoteId);
 
     expect(stored?.amountPaid.equals(Amount.from(10))).toBe(true);
     expect(stored?.amountIssued.equals(Amount.zero())).toBe(true);
     expect(stored?.remoteUpdatedAt).toBe(11);
-    expect(hasClaimableBalance).toBe(true);
+    expect(assessment?.status).toBe('claimable');
   });
 
   it('refreshMintQuote updates reusable onchain quote data before emitting', async () => {
@@ -1768,6 +1766,98 @@ describe('MintOperationService', () => {
     expect(failedEvents).toHaveLength(0);
   });
 
+  it('claimMintQuote issues atomic accounting even when compatibility state is stale', async () => {
+    await persistQuote();
+    const canonical = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+    if (!canonical || canonical.method !== 'bolt11') {
+      throw new Error('Expected canonical BOLT11 quote');
+    }
+    await quoteRepo.upsertMintQuote({ ...canonical, state: 'UNPAID' });
+    const operation = await service.prepare(canonical, canonical.amount);
+
+    const claimed = await service.claimMintQuote(mintUrl, 'bolt11', quoteId, {
+      autoClaimRemaining: false,
+    });
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.id).toBe(operation.id);
+    expect(claimed[0]?.state).toBe('finalized');
+  });
+
+  it('claimMintQuote advances a pending atomic operation from complete accounting', async () => {
+    await persistQuote();
+    const operation = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    const canonical = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+    if (!canonical || canonical.method !== 'bolt11') {
+      throw new Error('Expected canonical BOLT11 quote');
+    }
+    await quoteRepo.upsertMintQuote({
+      ...canonical,
+      state: 'UNPAID',
+      amountIssued: canonical.amount,
+    });
+    (handler.execute as Mock<typeof handler.execute>).mockResolvedValueOnce({
+      status: 'ALREADY_ISSUED',
+    });
+
+    const claimed = await service.claimMintQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.id).toBe(operation.id);
+    expect(claimed[0]?.state).toBe('finalized');
+  });
+
+  it('does not reclaim an overpaid atomic quote after local finalization', async () => {
+    await quoteRepo.upsertMintQuote(
+      mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1overpaid',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'PAID',
+        amount_paid: Amount.from(11),
+        amount_issued: Amount.zero(),
+      }),
+    );
+    const operation = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+
+    const firstClaim = await service.claimMintQuote(mintUrl, 'bolt11', quoteId);
+    const repeatedClaim = await service.claimMintQuote(mintUrl, 'bolt11', quoteId);
+    const startupClaims = await service.claimPendingMintQuotes();
+
+    expect(firstClaim).toHaveLength(1);
+    expect(firstClaim[0]?.id).toBe(operation.id);
+    expect(firstClaim[0]?.state).toBe('finalized');
+    expect(repeatedClaim).toEqual([]);
+    expect(startupClaims).toEqual([]);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not automatically or explicitly claim a pending quote after its mint is untrusted', async () => {
+    await persistQuote();
+    const operation = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    (mintService.isTrustedMint as Mock<any>).mockResolvedValue(false);
+
+    const automaticClaims = await service.claimPendingMintQuotes();
+
+    expect(automaticClaims).toEqual([]);
+    await expect(service.claimMintQuote(mintUrl, 'bolt11', quoteId)).rejects.toThrow(
+      `Mint ${mintUrl} is not trusted`,
+    );
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect((await operationRepo.getById(operation.id))?.state).toBe('pending');
+  });
+
   it('finalize is idempotent after finalize', async () => {
     await persistQuote();
 
@@ -1780,6 +1870,90 @@ describe('MintOperationService', () => {
 
     const ops = await operationRepo.getByQuoteId(mintUrl, 'bolt11', quoteId);
     expect(ops.length).toBe(1);
+  });
+
+  it('public execute joins a background claim that already moved the operation to executing', async () => {
+    await persistQuote();
+    const pending = await service.prepare({ mintUrl, method: 'bolt11', quoteId }, Amount.from(10));
+    const api = new MintOpsApi(service);
+    const executionStarted = createDeferred();
+    const releaseExecution = createDeferred();
+    (handler.execute as Mock<any>).mockImplementationOnce(async () => {
+      executionStarted.resolve();
+      await releaseExecution.promise;
+      return { status: 'ISSUED', proofs: [makeProof('out-1')] };
+    });
+
+    const backgroundClaim = service.claimMintQuote(mintUrl, 'bolt11', quoteId, {
+      autoClaimRemaining: false,
+    });
+    await executionStarted.promise;
+    const explicitExecution = api.execute(pending.id);
+    releaseExecution.resolve();
+
+    const [claimed, executed] = await Promise.all([backgroundClaim, explicitExecution]);
+
+    expect(claimed).toHaveLength(1);
+    const claimedOperation = claimed[0];
+    if (!claimedOperation) {
+      throw new Error('Expected background claim to return the mint operation');
+    }
+    expect(claimedOperation.state).toBe('finalized');
+    expect(executed.state).toBe('finalized');
+    expect(executed.id).toBe(pending.id);
+    expect(executed).toEqual(claimedOperation);
+    expect(handler.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('execute recovers an orphaned executing operation', async () => {
+    await persistQuote();
+    const executing = makeExecutingOp('orphaned-executing');
+    await operationRepo.create(executing);
+    (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({ status: 'FINALIZED' });
+
+    const result = await service.execute(executing.id);
+
+    expect(result.state).toBe('finalized');
+    expect(handler.recoverExecuting).toHaveBeenCalledTimes(1);
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('execute rejects missing and init operations', async () => {
+    const init = makeInitOp('init-operation');
+    await operationRepo.create(init);
+
+    await expect(service.execute('missing-operation')).rejects.toThrow(
+      'Operation missing-operation not found',
+    );
+    await expect(service.execute(init.id)).rejects.toThrow(
+      "expected state 'pending' but found 'init'",
+    );
+
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
+  });
+
+  it('execute returns persisted terminal outcomes without invoking the handler', async () => {
+    const finalized: FinalizedMintOperation = {
+      ...makePendingOp('finalized-operation'),
+      state: 'finalized',
+    };
+    const failed: FailedMintOperation = {
+      ...makePendingOp('failed-operation'),
+      state: 'failed',
+      error: 'terminal failure',
+      terminalFailure: {
+        reason: 'terminal failure',
+        observedAt: Date.now(),
+      },
+    };
+    await operationRepo.create(finalized);
+    await operationRepo.create(failed);
+
+    expect(await service.execute(finalized.id)).toEqual(finalized);
+    expect(await service.execute(failed.id)).toEqual(failed);
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(handler.recoverExecuting).not.toHaveBeenCalled();
   });
 
   it('finalize leaves underfunded reusable onchain operations pending', async () => {
@@ -2116,14 +2290,10 @@ describe('MintOperationService', () => {
     });
     useAutoClaimOnchainHandler(Amount.from(10));
 
-    const hasClaimableBalance = await service.hasLocallyClaimableMintQuoteBalance(
-      mintUrl,
-      'onchain',
-      onchainQuoteId,
-    );
+    const assessment = await service.getMintQuoteClaimability(mintUrl, 'onchain', onchainQuoteId);
     const claimed = await service.claimMintQuote(mintUrl, 'onchain', onchainQuoteId);
 
-    expect(hasClaimableBalance).toBe(true);
+    expect(assessment?.status).toBe('claimable');
     expect(claimed).toHaveLength(1);
     expect(claimed[0]?.state).toBe('finalized');
   });
@@ -2143,19 +2313,19 @@ describe('MintOperationService', () => {
       expiry,
     });
 
-    const onchainClaimable = await service.hasLocallyClaimableMintQuoteBalance(
+    const onchainAssessment = await service.getMintQuoteClaimability(
       mintUrl,
       'onchain',
       onchainQuoteId,
     );
-    const bolt12Claimable = await service.hasLocallyClaimableMintQuoteBalance(
+    const bolt12Assessment = await service.getMintQuoteClaimability(
       mintUrl,
       'bolt12',
       bolt12QuoteId,
     );
 
-    expect(onchainClaimable).toBe(true);
-    expect(bolt12Claimable).toBe(true);
+    expect(onchainAssessment?.status).toBe('claimable');
+    expect(bolt12Assessment?.status).toBe('claimable');
   });
 
   it('claimMintQuote prepares and issues reusable balance after expiry', async () => {
@@ -2361,10 +2531,11 @@ describe('MintOperationService', () => {
     expect(stored?.state).toBe('pending');
   });
 
-  it('recoverExecutingOperation persists irrecoverable handler failures', async () => {
+  it('recoverExecutingOperation fails expired attempts without re-emitting pending', async () => {
     const op = makeExecutingOp('exec-invalid');
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
     const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     await operationRepo.create(op);
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
@@ -2372,10 +2543,13 @@ describe('MintOperationService', () => {
     eventBus.on('mint-op:failed', (event) => {
       failedEvents.push(event);
     });
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
+    });
 
     (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
       status: 'TERMINAL',
-      error: `Recovered: quote ${quoteId} has invalid accounting`,
+      error: `Recovered: quote ${quoteId} expired while executing mint`,
     });
 
     await service.recoverExecutingOperation(op);
@@ -2383,13 +2557,14 @@ describe('MintOperationService', () => {
     const stored = await operationRepo.getById(op.id);
 
     expect(stored?.state).toBe('failed');
-    expect(stored?.error).toBe(`Recovered: quote ${quoteId} has invalid accounting`);
+    expect(stored?.error).toBe(`Recovered: quote ${quoteId} expired while executing mint`);
     expect(finalizedEvents).toHaveLength(0);
+    expect(pendingEvents).toHaveLength(0);
     expect(failedEvents).toHaveLength(1);
     expect(failedEvents[0]?.operationId).toBe(op.id);
     expect(failedEvents[0]?.operation.state).toBe('failed');
     expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
-      `Recovered: quote ${quoteId} has invalid accounting`,
+      `Recovered: quote ${quoteId} expired while executing mint`,
     );
   });
 
@@ -2496,12 +2671,22 @@ describe('MintOperationService', () => {
     });
 
     (handler.checkPending as Mock<any>).mockResolvedValueOnce({
-      observedRemoteState: 'UNPAID',
       observedRemoteStateAt: observedAt,
+      quoteSnapshot: cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: pendingOp.expiry,
+        state: 'PAID',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: 10,
+      }),
       category: 'terminal',
       terminalFailure: {
-        reason: 'Quote response failed validation',
-        code: 'invalid_quote',
+        reason: 'Mint operation is missing NUT-20 quote pubkey',
+        code: 'missing_quote_pubkey',
         retryable: false,
         observedAt,
       },
@@ -2512,10 +2697,10 @@ describe('MintOperationService', () => {
 
     expect(result.category).toBe('terminal');
     expect(stored?.state).toBe('failed');
-    expect(stored?.error).toBe('Quote response failed validation');
+    expect(stored?.error).toBe('Mint operation is missing NUT-20 quote pubkey');
     expect(stored?.terminalFailure).toMatchObject({
-      reason: 'Quote response failed validation',
-      code: 'invalid_quote',
+      reason: 'Mint operation is missing NUT-20 quote pubkey',
+      code: 'missing_quote_pubkey',
       retryable: false,
       observedAt,
     });
@@ -2524,8 +2709,40 @@ describe('MintOperationService', () => {
     expect(failedEvents[0]?.operationId).toBe(pendingOp.id);
     expect(failedEvents[0]?.operation.state).toBe('failed');
     expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
-      'Quote response failed validation',
+      'Mint operation is missing NUT-20 quote pubkey',
     );
+  });
+
+  it('classifies pending work from the resolved quote after ignoring invalid accounting', async () => {
+    await persistQuote();
+    const pendingOp = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedRemoteStateAt: Date.now(),
+      quoteSnapshot: cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: 'lnbc1contradictory',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: pendingOp.expiry,
+        state: 'ISSUED',
+        amount_paid: Amount.from(9),
+        amount_issued: Amount.from(10),
+        updated_at: 20,
+      }),
+      category: 'waiting',
+    });
+
+    const result = await service.checkPendingOperation(pendingOp.id);
+    const storedOperation = await operationRepo.getById(pendingOp.id);
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(result.category).toBe('ready');
+    expect(storedOperation?.state).toBe('finalized');
+    expect(storedQuote?.amountPaid.equals(Amount.from(10))).toBe(true);
+    expect(storedQuote?.request).not.toBe('lnbc1contradictory');
   });
 
   it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {

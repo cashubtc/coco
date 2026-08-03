@@ -583,7 +583,7 @@ describe('PollingTransport mint quote batching', () => {
 
     transport.on(mintUrl, 'message', () => {});
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'cadence-sub', ['quote-a']);
-    await waitFor(() => startedAt.length === 2);
+    await waitFor(() => startedAt.length === 2, 2_000);
 
     expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(18);
     transport.closeAll();

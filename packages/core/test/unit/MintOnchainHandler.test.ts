@@ -141,9 +141,15 @@ describe('MintOnchainHandler', () => {
     outputData: serializeOutputData({ keep: [output], send: [] }),
   });
 
-  const buildRecoverContext = (): RecoverExecutingContext<'onchain'> => ({
+  const buildRecoverContext = (
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'onchain'> => ({
     ...buildPrepareContext(),
     operation: buildExecutingOperation(),
+    localClaimabilityFacts,
   });
 
   const buildPendingContext = (): PendingContext<'onchain'> => ({
@@ -322,6 +328,47 @@ describe('MintOnchainHandler', () => {
     );
   });
 
+  it('rejects contradictory fresh accounting before mint submission', async () => {
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(9),
+      amount_issued: Amount.from(10),
+    });
+
+    await expect(
+      handler.execute({
+        ...buildPrepareContext(),
+        operation: { ...pending, state: 'executing' },
+      }),
+    ).rejects.toThrow(`Onchain mint quote ${quoteId} is not claimable: invalid`);
+
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(1),
+      amount_issued: Amount.zero(),
+    });
+
+    const result = await handler.execute({
+      ...buildPrepareContext(),
+      operation: { ...pending, state: 'executing' },
+    });
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers signed onchain outputs before retrying the mint', async () => {
     (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([
       {
@@ -367,6 +414,18 @@ describe('MintOnchainHandler', () => {
     expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
   });
 
+  it('subtracts other in-flight reservations before retrying onchain recovery', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext({
+        finalizedAmount: Amount.zero(),
+        reservedAmount: Amount.from(10),
+      }),
+    );
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
   it('attempts restore again after an already-issued retry result', async () => {
     (wallet.mintProofsOnchain as Mock<any>).mockImplementationOnce(async () => {
       throw new MintOperationError(20002, 'already issued');
@@ -399,6 +458,35 @@ describe('MintOnchainHandler', () => {
     expect(result).toEqual({ status: 'FINALIZED' });
     expect(wallet.mintProofsOnchain).toHaveBeenCalled();
     expect(proofService.saveProofs).toHaveBeenCalled();
+  });
+
+  it('fails recovery when the mint rejects onchain issuance with quote expired', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(20007, 'Quote expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: onchain quote ${quoteId} expired while executing mint`,
+    });
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-protocol expiry errors pending during onchain recovery', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new Error('Authentication session expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'PENDING',
+      error: 'Authentication session expired',
+    });
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
   it('checks pending onchain operations as ready when the quote can cover the amount', async () => {
