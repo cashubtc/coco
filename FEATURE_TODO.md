@@ -41,3 +41,9 @@
 - [x] Cover the public race and the authoritative execution state table.
 - [x] Run focused and full core unit tests, typecheck, and build for the follow-up.
 - [x] Re-run Docker-backed core integration tests with the required mint and auth environment.
+
+## PR #403 review fixes
+
+- [x] Treat a remote BOLT11 `20007` rejection as terminal during execution recovery.
+- [x] Verify terminal recovery emits failure without re-emitting pending work.
+- [x] Run focused core tests, typecheck, build, and formatting checks.

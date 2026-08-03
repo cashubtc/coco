@@ -394,15 +394,30 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('recoverExecuting', () => {
-    it('keeps ordinary mint errors pending during recovery', async () => {
+    it('returns a terminal result when the mint rejects issuance with quote expired', async () => {
+      const result = await handler.recoverExecuting(buildRecoverContext());
+
+      expect(result).toEqual({
+        status: 'TERMINAL',
+        error: `Recovered: quote ${quoteId} expired while executing mint`,
+      });
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
+    });
+
+    it('keeps other mint operation errors pending during recovery', async () => {
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(
+        new MintOperationError(20001, 'Unknown quote'),
+      );
+
       const result = await handler.recoverExecuting(buildRecoverContext());
 
       expect(result).toEqual({
         status: 'PENDING',
-        error: 'Quote expired',
+        error: 'Unknown quote',
       });
-      expect((wallet.mintProofsBolt11 as Mock<any>).mock.calls.length).toBe(1);
-      expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
     });
 
     it('recovers locked issuance using accounting authority and the persisted key', async () => {

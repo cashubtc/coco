@@ -225,6 +225,11 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
         if (err instanceof MintOperationError) {
           if (err.code === 20002) {
             // Quote already issued; fall through to proof recovery
+          } else if (err.code === 20007) {
+            return {
+              status: 'TERMINAL',
+              error: `Recovered: quote ${quoteId} expired while executing mint`,
+            };
           } else {
             return {
               status: 'PENDING',

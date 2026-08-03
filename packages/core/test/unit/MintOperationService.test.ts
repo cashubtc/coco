@@ -2531,10 +2531,11 @@ describe('MintOperationService', () => {
     expect(stored?.state).toBe('pending');
   });
 
-  it('recoverExecutingOperation persists irrecoverable handler failures', async () => {
+  it('recoverExecutingOperation fails expired attempts without re-emitting pending', async () => {
     const op = makeExecutingOp('exec-invalid');
     const finalizedEvents: Array<CoreEvents['mint-op:finalized']> = [];
     const failedEvents: Array<CoreEvents['mint-op:failed']> = [];
+    const pendingEvents: Array<CoreEvents['mint-op:pending']> = [];
     await operationRepo.create(op);
     eventBus.on('mint-op:finalized', (event) => {
       finalizedEvents.push(event);
@@ -2542,10 +2543,13 @@ describe('MintOperationService', () => {
     eventBus.on('mint-op:failed', (event) => {
       failedEvents.push(event);
     });
+    eventBus.on('mint-op:pending', (event) => {
+      pendingEvents.push(event);
+    });
 
     (handler.recoverExecuting as Mock<any>).mockResolvedValueOnce({
       status: 'TERMINAL',
-      error: `Recovered: quote ${quoteId} has invalid accounting`,
+      error: `Recovered: quote ${quoteId} expired while executing mint`,
     });
 
     await service.recoverExecutingOperation(op);
@@ -2553,13 +2557,14 @@ describe('MintOperationService', () => {
     const stored = await operationRepo.getById(op.id);
 
     expect(stored?.state).toBe('failed');
-    expect(stored?.error).toBe(`Recovered: quote ${quoteId} has invalid accounting`);
+    expect(stored?.error).toBe(`Recovered: quote ${quoteId} expired while executing mint`);
     expect(finalizedEvents).toHaveLength(0);
+    expect(pendingEvents).toHaveLength(0);
     expect(failedEvents).toHaveLength(1);
     expect(failedEvents[0]?.operationId).toBe(op.id);
     expect(failedEvents[0]?.operation.state).toBe('failed');
     expect(failedEvents[0]?.operation.terminalFailure?.reason).toBe(
-      `Recovered: quote ${quoteId} has invalid accounting`,
+      `Recovered: quote ${quoteId} expired while executing mint`,
     );
   });
 
