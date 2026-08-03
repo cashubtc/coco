@@ -22,7 +22,7 @@ import type {
   MintMethodHandler,
   MintMethodQuoteImportSnapshot,
   MintMethodQuoteSnapshot,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   RecoverExecutingResult,
 } from '../../operations/mint/MintMethodHandler';
 import type { MintHandlerProvider } from '../../infra/handlers/mint';
@@ -146,7 +146,7 @@ describe('MintOperationService', () => {
     amounts: {
       paid?: Amount;
       issued?: Amount;
-      expiry?: number;
+      expiry?: number | null;
       remoteUpdatedAt?: number | null;
     } = {},
   ): Promise<void> => {
@@ -155,7 +155,8 @@ describe('MintOperationService', () => {
         quote,
         request: 'bc1qtest',
         unit: 'sat',
-        expiry: amounts.expiry ?? Math.floor(Date.now() / 1000) + 3600,
+        expiry:
+          amounts.expiry === undefined ? Math.floor(Date.now() / 1000) + 3600 : amounts.expiry,
         pubkey: '02'.padEnd(66, '1'),
         amount_paid: amounts.paid ?? Amount.zero(),
         amount_issued: amounts.issued ?? Amount.zero(),
@@ -227,6 +228,23 @@ describe('MintOperationService', () => {
     return { onchainHandler, executedAmounts };
   };
 
+  const usePendingOnchainHandler = (quoteSnapshot: MintMethodQuoteSnapshot<'onchain'>) => {
+    const checkPending = mock(
+      async (): Promise<PendingMintObservationResult<'onchain'>> => ({
+        observedAt: Date.now(),
+        quoteSnapshot,
+      }),
+    );
+    const onchainHandler = {
+      ...handler,
+      checkPending,
+    } as unknown as MintMethodHandler<'onchain'>;
+    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
+      method === 'onchain' ? onchainHandler : handler,
+    );
+    return checkPending;
+  };
+
   const makePendingOp = (id: string, secret = 'out-1'): PendingMintOperation => ({
     ...makeInitOp(id),
     state: 'pending',
@@ -267,10 +285,19 @@ describe('MintOperationService', () => {
     });
 
     const mockCheckPending = mock(
-      async (): Promise<PendingMintCheckResult<'bolt11'>> => ({
-        observedRemoteState: 'UNPAID',
-        observedRemoteStateAt: Date.now(),
-        category: 'waiting',
+      async (): Promise<PendingMintObservationResult<'bolt11'>> => ({
+        observedAt: Date.now(),
+        quoteSnapshot: cashuNormalizedBolt11Fixture({
+          quote: quoteId,
+          request: 'lnbc1test',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'UNPAID',
+          amount_paid: Amount.zero(),
+          amount_issued: Amount.zero(),
+          updated_at: null,
+        }),
       }),
     );
 
@@ -2627,9 +2654,18 @@ describe('MintOperationService', () => {
     await operationRepo.create(pendingOp);
 
     (handler.checkPending as Mock<any>).mockResolvedValueOnce({
-      observedRemoteState: 'PAID',
-      observedRemoteStateAt: Date.now(),
-      category: 'ready',
+      observedAt: Date.now(),
+      quoteSnapshot: cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: pendingOp.expiry,
+        state: 'PAID',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: null,
+      }),
     });
 
     await service.recoverPendingOperations();
@@ -2649,11 +2685,40 @@ describe('MintOperationService', () => {
     const stored = await operationRepo.getById(pendingOp.id);
 
     expect(result.category).toBe('waiting');
-    expect(result.observedRemoteState).toBe('UNPAID');
+    expect(result.observedRemoteState).toBeUndefined();
+    expect((result.quoteSnapshot as MintQuoteBolt11Response | undefined)?.state).toBe('UNPAID');
     expect(stored?.state).toBe('pending');
     if (!stored || stored.state !== 'pending') {
       throw new Error('Expected pending operation to remain pending after unpaid check');
     }
+  });
+
+  it('classifies a fully issued canonical quote as completed', async () => {
+    await persistQuote();
+    const pendingOp = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedAt: Date.now(),
+      quoteSnapshot: cashuNormalizedBolt11Fixture({
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: pendingOp.expiry,
+        state: 'ISSUED',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.from(10),
+        updated_at: 10,
+      }),
+    });
+
+    const result = await service.checkPendingOperation(pendingOp.id);
+    const stored = await operationRepo.getById(pendingOp.id);
+
+    expect(result.category).toBe('completed');
+    expect(stored?.state).toBe('finalized');
   });
 
   it('checkPendingOperation emits mint-op:failed for terminal pending failures', async () => {
@@ -2671,7 +2736,7 @@ describe('MintOperationService', () => {
     });
 
     (handler.checkPending as Mock<any>).mockResolvedValueOnce({
-      observedRemoteStateAt: observedAt,
+      observedAt,
       quoteSnapshot: cashuNormalizedBolt11Fixture({
         quote: quoteId,
         request: 'lnbc1test',
@@ -2683,8 +2748,7 @@ describe('MintOperationService', () => {
         amount_issued: Amount.zero(),
         updated_at: 10,
       }),
-      category: 'terminal',
-      terminalFailure: {
+      validationFailure: {
         reason: 'Mint operation is missing NUT-20 quote pubkey',
         code: 'missing_quote_pubkey',
         retryable: false,
@@ -2713,14 +2777,48 @@ describe('MintOperationService', () => {
     );
   });
 
+  it('does not persist an unattributable snapshot for a validation failure', async () => {
+    await persistQuote();
+    const pendingOp = await service.prepare(
+      { mintUrl, method: 'bolt11', quoteId },
+      Amount.from(10),
+    );
+    const observedAt = Date.now();
+    (handler.checkPending as Mock<any>).mockResolvedValueOnce({
+      observedAt,
+      validationFailure: {
+        reason: `Polled BOLT11 mint quote other-quote conflicts with pending operation identity`,
+        code: 'invalid_quote',
+        retryable: false,
+        observedAt,
+      },
+    });
+
+    const result = await service.checkPendingOperation(pendingOp.id);
+    const storedOperation = await operationRepo.getById(pendingOp.id);
+    const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+
+    expect(result.category).toBe('terminal');
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(storedOperation?.state).toBe('failed');
+    expect(storedOperation?.terminalFailure?.code).toBe('invalid_quote');
+    expect(storedQuote?.request).toBe('lnbc1test');
+  });
+
   it('classifies pending work from the resolved quote after ignoring invalid accounting', async () => {
     await persistQuote();
     const pendingOp = await service.prepare(
       { mintUrl, method: 'bolt11', quoteId },
       Amount.from(10),
     );
+    const observedAt = Date.now();
+    const paidAmountsDuringFinalization: string[] = [];
+    eventBus.on('mint-op:finalized', async () => {
+      const quote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
+      paidAmountsDuringFinalization.push(quote?.amountPaid.toString() ?? 'missing');
+    });
     (handler.checkPending as Mock<any>).mockResolvedValueOnce({
-      observedRemoteStateAt: Date.now(),
+      observedAt,
       quoteSnapshot: cashuNormalizedBolt11Fixture({
         quote: quoteId,
         request: 'lnbc1contradictory',
@@ -2732,7 +2830,6 @@ describe('MintOperationService', () => {
         amount_issued: Amount.from(10),
         updated_at: 20,
       }),
-      category: 'waiting',
     });
 
     const result = await service.checkPendingOperation(pendingOp.id);
@@ -2740,9 +2837,11 @@ describe('MintOperationService', () => {
     const storedQuote = await quoteRepo.getMintQuote(mintUrl, 'bolt11', quoteId);
 
     expect(result.category).toBe('ready');
+    expect(result.observedRemoteStateAt).toBe(observedAt);
     expect(storedOperation?.state).toBe('finalized');
     expect(storedQuote?.amountPaid.equals(Amount.from(10))).toBe(true);
     expect(storedQuote?.request).not.toBe('lnbc1contradictory');
+    expect(paidAmountsDuringFinalization).toEqual(['10']);
   });
 
   it('checkPendingOperation records onchain quote snapshots without protocol state', async () => {
@@ -2756,29 +2855,19 @@ describe('MintOperationService', () => {
     };
     await operationRepo.create(pendingOp);
 
-    const onchainHandler = {
-      ...handler,
-      checkPending: mock(
-        async (): Promise<PendingMintCheckResult<'onchain'>> => ({
-          observedRemoteStateAt: Date.now(),
-          quoteSnapshot: cashuNormalizedOnchainFixture({
-            quote: onchainQuoteId,
-            request: 'bc1qtest',
-            unit: 'sat',
-            expiry: Math.floor(Date.now() / 1000) + 3600,
-            pubkey: '02'.padEnd(66, '1'),
-            amount_paid: Amount.from(7),
-            amount_issued: Amount.zero(),
-          }),
-          category: 'waiting',
-        }),
-      ),
-    } as unknown as MintMethodHandler<'onchain'>;
-    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
-      method === 'onchain' ? onchainHandler : handler,
+    usePendingOnchainHandler(
+      cashuNormalizedOnchainFixture({
+        quote: onchainQuoteId,
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        pubkey: '02'.padEnd(66, '1'),
+        amount_paid: Amount.from(7),
+        amount_issued: Amount.zero(),
+      }),
     );
 
-    await service.checkPendingOperation(pendingOp.id);
+    const result = await service.checkPendingOperation(pendingOp.id);
 
     const stored = await operationRepo.getById(pendingOp.id);
     const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
@@ -2786,6 +2875,7 @@ describe('MintOperationService', () => {
     expect(stored?.state).toBe('pending');
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(result.category).toBe('waiting');
     expect(quote.amountPaid.equals(Amount.from(7))).toBe(true);
   });
 
@@ -2800,37 +2890,157 @@ describe('MintOperationService', () => {
     };
     await operationRepo.create(pendingOp);
 
-    const onchainHandler = {
-      ...handler,
-      checkPending: mock(
-        async (): Promise<PendingMintCheckResult<'onchain'>> => ({
-          observedRemoteStateAt: Date.now(),
-          quoteSnapshot: cashuNormalizedOnchainFixture({
-            quote: onchainQuoteId,
-            request: 'bc1qtest',
-            unit: 'sat',
-            expiry: Math.floor(Date.now() / 1000) + 3600,
-            pubkey: '02'.padEnd(66, '1'),
-            amount_paid: Amount.from(7),
-            amount_issued: Amount.from(5),
-          }),
-          category: 'waiting',
-        }),
-      ),
-    } as unknown as MintMethodHandler<'onchain'>;
-    (handlerProvider.get as Mock<any>).mockImplementation((method: string) =>
-      method === 'onchain' ? onchainHandler : handler,
+    usePendingOnchainHandler(
+      cashuNormalizedOnchainFixture({
+        quote: onchainQuoteId,
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        pubkey: '02'.padEnd(66, '1'),
+        amount_paid: Amount.from(7),
+        amount_issued: Amount.from(5),
+      }),
     );
 
-    await service.checkPendingOperation(pendingOp.id);
+    const result = await service.checkPendingOperation(pendingOp.id);
 
     const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
 
     expect(quote?.method).toBe('onchain');
     if (quote?.method !== 'onchain') throw new Error('Expected onchain quote');
+    expect(result.category).toBe('waiting');
     expect(quote.amountPaid.equals(Amount.from(10))).toBe(true);
     expect(quote.amountIssued.equals(Amount.from(8))).toBe(true);
   });
+
+  it('classifies conflicting reusable accounting from the canonical quote', async () => {
+    const onchainQuoteId = 'onchain-quote-conflicting-check';
+    const pubkey = '02'.padEnd(66, '1');
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.zero(),
+      remoteUpdatedAt: 20,
+    });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp('onchain-conflicting-check'),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      request: 'bc1qtest',
+      pubkey,
+    };
+    await operationRepo.create(pendingOp);
+    usePendingOnchainHandler(
+      cashuNormalizedOnchainFixture({
+        quote: onchainQuoteId,
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry: pendingOp.expiry,
+        pubkey,
+        amount_paid: Amount.from(8),
+        amount_issued: Amount.zero(),
+        updated_at: 20,
+      }),
+    );
+
+    const result = await service.observePendingOperation(pendingOp.id);
+    const quote = await quoteRepo.getMintQuote(mintUrl, 'onchain', onchainQuoteId);
+
+    expect(result.category).toBe('ready');
+    expect(quote?.amountPaid.equals(Amount.from(10))).toBe(true);
+  });
+
+  it.each([
+    ['zero-expiry sentinel', 0],
+    ['null expiry', null],
+    ['elapsed expiry', Math.floor(Date.now() / 1000) - 1],
+  ] as const)('classifies a funded reusable quote with %s as ready', async (label, expiry) => {
+    const onchainQuoteId = `onchain-quote-${label.replaceAll(' ', '-')}`;
+    const pubkey = '02'.padEnd(66, '1');
+    await persistOnchainQuote(onchainQuoteId, {
+      paid: Amount.from(10),
+      issued: Amount.zero(),
+      expiry,
+    });
+    const pendingOp: PendingMintOperation<'onchain'> = {
+      ...makePendingOp(`onchain-operation-${label.replaceAll(' ', '-')}`),
+      method: 'onchain',
+      quoteId: onchainQuoteId,
+      request: 'bc1qtest',
+      expiry,
+      pubkey,
+    };
+    await operationRepo.create(pendingOp);
+    usePendingOnchainHandler(
+      cashuNormalizedOnchainFixture({
+        quote: onchainQuoteId,
+        request: 'bc1qtest',
+        unit: 'sat',
+        expiry,
+        pubkey,
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+      }),
+    );
+
+    const result = await service.observePendingOperation(pendingOp.id);
+
+    expect(result.category).toBe('ready');
+  });
+
+  it.each([
+    ['subtracting executing sibling reservations', 'executing', 6, 5, 'waiting'],
+    ['accounting for finalized siblings', 'finalized', 4, 6, 'ready'],
+  ] as const)(
+    'classifies reusable pending work after %s',
+    async (label, siblingState, targetAmount, siblingAmount, expectedCategory) => {
+      const scenario = label.replaceAll(' ', '-');
+      const onchainQuoteId = `onchain-quote-${scenario}`;
+      const pubkey = '02'.padEnd(66, '1');
+      await persistOnchainQuote(onchainQuoteId, {
+        paid: Amount.from(10),
+        issued: Amount.zero(),
+      });
+      const pendingOp: PendingMintOperation<'onchain'> = {
+        ...makePendingOp(`onchain-target-${scenario}`),
+        method: 'onchain',
+        quoteId: onchainQuoteId,
+        request: 'bc1qtest',
+        pubkey,
+        amount: Amount.from(targetAmount),
+      };
+      const sibling =
+        siblingState === 'executing'
+          ? ({
+              ...pendingOp,
+              id: `onchain-sibling-${scenario}`,
+              state: 'executing',
+              amount: Amount.from(siblingAmount),
+            } satisfies ExecutingMintOperation<'onchain'>)
+          : ({
+              ...pendingOp,
+              id: `onchain-sibling-${scenario}`,
+              state: 'finalized',
+              amount: Amount.from(siblingAmount),
+            } satisfies FinalizedMintOperation<'onchain'>);
+      await operationRepo.create(pendingOp);
+      await operationRepo.create(sibling);
+      usePendingOnchainHandler(
+        cashuNormalizedOnchainFixture({
+          quote: onchainQuoteId,
+          request: 'bc1qtest',
+          unit: 'sat',
+          expiry: pendingOp.expiry,
+          pubkey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.zero(),
+        }),
+      );
+
+      const result = await service.observePendingOperation(pendingOp.id);
+
+      expect(result.category).toBe(expectedCategory);
+    },
+  );
 
   it('recordQuoteObservation persists the canonical quote before emitting mint-quote:updated', async () => {
     const pendingOp = makePendingOp('pending-quote-event');

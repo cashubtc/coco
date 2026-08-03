@@ -21,7 +21,6 @@ import type {
   MintMethodData,
   MintMethodMeta,
   PendingMintCheckResult,
-  MintMethodQuoteSnapshot,
 } from './MintMethodHandler';
 import type { MintService } from '../../services/MintService';
 import type { WalletService } from '../../services/WalletService';
@@ -1183,30 +1182,33 @@ export class MintOperationService {
     const handler = this.handlerProvider.get(op.method);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
-    let result = await handler.checkPending({
+    const observation = await handler.checkPending({
       ...this.buildDeps(),
       operation: op as PendingMintOperation,
       wallet,
     });
 
     let canonicalQuote: MintQuote | undefined;
-    if (result.quoteSnapshot) {
+    if (observation.quoteSnapshot) {
       canonicalQuote = await this.quoteLifecycle.recordMintQuoteSnapshot(
         op.mintUrl,
         op.method,
-        result.quoteSnapshot as MintMethodQuoteSnapshot,
+        observation.quoteSnapshot,
       );
     }
 
-    if (result.observedRemoteState !== undefined) {
-      canonicalQuote = await this.quoteLifecycle.recordMintQuoteObservation(
-        op,
-        result.observedRemoteState,
-        result.observedRemoteStateAt,
-      );
-    }
-
-    if (canonicalQuote && result.category !== 'terminal') {
+    let result: PendingMintCheckResult;
+    if (observation.validationFailure) {
+      result = {
+        observedRemoteStateAt: observation.observedAt,
+        quoteSnapshot: observation.quoteSnapshot,
+        category: 'terminal',
+        terminalFailure: observation.validationFailure,
+      };
+    } else {
+      if (!canonicalQuote) {
+        throw new Error(`Pending mint observation for operation ${op.id} has no quote snapshot`);
+      }
       const siblings = await this.mintOperationRepository.getByQuoteId(
         op.mintUrl,
         op.method,
@@ -1217,7 +1219,8 @@ export class MintOperationService {
         targetOperationId: op.id,
       });
       result = {
-        ...result,
+        observedRemoteStateAt: observation.observedAt,
+        quoteSnapshot: observation.quoteSnapshot,
         category:
           assessment.status === 'claimable'
             ? 'ready'
@@ -1232,7 +1235,7 @@ export class MintOperationService {
                 reason: `Mint quote ${op.quoteId} has invalid claimability accounting`,
                 code: 'invalid_quote',
                 retryable: false,
-                observedAt: result.observedRemoteStateAt,
+                observedAt: observation.observedAt,
               }
             : undefined,
       };

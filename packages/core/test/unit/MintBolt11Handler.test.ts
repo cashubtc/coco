@@ -537,18 +537,24 @@ describe('MintBolt11Handler', () => {
       ['amount', { amount: Amount.from(11) }],
       ['NUT-20 pubkey', { pubkey: quotePubkey }],
     ] as Array<[string, Partial<MintQuoteBolt11Response>]>)(
-      'rejects a polled snapshot with a mismatched %s',
+      'reports a polled snapshot with a mismatched %s as a validation failure',
       async (_field, override) => {
         (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
           ...quote,
           ...override,
         });
 
-        await expect(handler.checkPending(buildPendingContext())).rejects.toThrow();
+        const result = await handler.checkPending(buildPendingContext());
+
+        expect(result.quoteSnapshot).toBeUndefined();
+        expect(result.validationFailure).toMatchObject({
+          code: 'invalid_quote',
+          retryable: false,
+        });
       },
     );
 
-    it('uses canonical accounting when compatibility state disagrees', async () => {
+    it('reports the validated remote snapshot and observation time', async () => {
       (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
         ...quote,
         state: 'UNPAID',
@@ -556,17 +562,11 @@ describe('MintBolt11Handler', () => {
 
       const result = await handler.checkPending(buildPendingContext());
 
-      expect(result.observedRemoteState).toBeUndefined();
       expect(result.quoteSnapshot).toEqual(expect.objectContaining({ state: 'UNPAID' }));
-      expect(result.category).toBe('ready');
-      expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
+      expect(result.observedAt).toEqual(expect.any(Number));
       expect(logger.info).toHaveBeenCalledWith('Checking pending mint operation', {
         mintUrl,
         quoteId,
-      });
-      expect(logger.info).toHaveBeenCalledWith('Pending mint quote claimability assessed', {
-        mintUrl,
-        status: 'claimable',
       });
     });
   });

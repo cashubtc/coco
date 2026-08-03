@@ -11,6 +11,7 @@ import {
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
 import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
 import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
+import { getReusableMintQuoteValidationError } from './ReusableMintQuoteValidation.ts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -18,7 +19,7 @@ import type {
   MintExecutionResult,
   MintMethodHandler,
   PendingContext,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   PendingMintOperation,
   PrepareContext,
   RecoverExecutingContext,
@@ -268,9 +269,11 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt12'>): Promise<PendingMintCheckResult<'bolt12'>> {
+  async checkPending(
+    ctx: PendingContext<'bolt12'>,
+  ): Promise<PendingMintObservationResult<'bolt12'>> {
     const { operation } = ctx;
-    const observedRemoteStateAt = Date.now();
+    const observedAt = Date.now();
     const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       operation.mintUrl,
       'bolt12',
@@ -278,53 +281,35 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     );
     const expectedPubkey = operation.pubkey;
 
-    if (!expectedPubkey) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
     if (validationError) {
       return {
-        observedRemoteStateAt,
-        category: 'terminal',
-        terminalFailure: {
+        observedAt,
+        validationFailure: {
           reason: validationError.message,
           code: 'invalid_quote',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
-    const assessment = assessMintQuoteClaimability(
-      mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote, {
-        now: observedRemoteStateAt,
-      }),
-      { requestedAmount: operation.amount },
-    );
+    if (!expectedPubkey) {
+      return {
+        observedAt,
+        quoteSnapshot: remoteQuote,
+        validationFailure: {
+          reason: `BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt,
+        },
+      };
+    }
+
     return {
-      observedRemoteStateAt,
+      observedAt,
       quoteSnapshot: remoteQuote,
-      category:
-        assessment.status === 'claimable'
-          ? 'ready'
-          : assessment.status === 'complete'
-            ? 'completed'
-            : 'waiting',
     };
   }
 

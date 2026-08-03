@@ -12,7 +12,7 @@ import type {
   RecoverExecutingResult,
   RecoverExecutingContext,
   PendingContext,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   FetchRemoteMintQuoteContext,
 } from '@core/operations/mint';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
@@ -269,33 +269,31 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt11'>): Promise<PendingMintCheckResult<'bolt11'>> {
+  async checkPending(
+    ctx: PendingContext<'bolt11'>,
+  ): Promise<PendingMintObservationResult<'bolt11'>> {
     const { mintUrl, quoteId } = ctx.operation;
     ctx.logger?.info('Checking pending mint operation', { mintUrl, quoteId });
 
     const quote = await ctx.mintAdapter.checkMintQuote(mintUrl, 'bolt11', quoteId);
-    this.assertPendingQuoteMatchesOperation(quote, ctx.operation);
-    const observedRemoteStateAt = Date.now();
-    const canonicalQuote = mintQuoteObservationFromBolt11Response(mintUrl, quote, {
-      now: observedRemoteStateAt,
-    });
-    const assessment = assessMintQuoteClaimability(canonicalQuote, {
-      requestedAmount: ctx.operation.amount,
-    });
-    ctx.logger?.info('Pending mint quote claimability assessed', {
-      mintUrl,
-      status: assessment.status,
-    });
+    const observedAt = Date.now();
+    try {
+      this.assertPendingQuoteMatchesOperation(quote, ctx.operation);
+    } catch (error) {
+      return {
+        observedAt,
+        validationFailure: {
+          reason: error instanceof Error ? error.message : String(error),
+          code: 'invalid_quote',
+          retryable: false,
+          observedAt,
+        },
+      };
+    }
 
     return {
-      observedRemoteStateAt,
+      observedAt,
       quoteSnapshot: quote,
-      category:
-        assessment.status === 'claimable'
-          ? 'ready'
-          : assessment.status === 'complete'
-            ? 'completed'
-            : 'waiting',
     };
   }
 
