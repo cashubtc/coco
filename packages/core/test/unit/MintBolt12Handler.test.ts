@@ -114,7 +114,6 @@ describe('MintBolt12Handler', () => {
   const buildPendingContext = (remoteQuote: MintQuoteBolt12Response): PendingContext<'bolt12'> => {
     (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
     return {
-      ...buildPrepareContext(),
       operation: {
         ...operation,
         state: 'pending',
@@ -124,6 +123,8 @@ describe('MintBolt12Handler', () => {
         pubkey,
         outputData,
       },
+      mintAdapter,
+      logger,
     };
   };
 

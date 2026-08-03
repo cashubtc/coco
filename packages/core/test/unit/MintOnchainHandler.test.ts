@@ -153,11 +153,12 @@ describe('MintOnchainHandler', () => {
   });
 
   const buildPendingContext = (): PendingContext<'onchain'> => ({
-    ...buildPrepareContext(),
     operation: {
       ...buildExecutingOperation(),
       state: 'pending',
     } satisfies PendingMintOperation<'onchain'>,
+    mintAdapter,
+    logger,
   });
 
   beforeEach(() => {

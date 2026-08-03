@@ -168,9 +168,10 @@ export interface RecoverExecutingContext<
   };
 }
 
-export interface PendingContext<M extends MintMethod = MintMethod> extends BaseHandlerDeps {
+export interface PendingContext<M extends MintMethod = MintMethod> {
   operation: PendingMintOperation<M>;
-  wallet: Wallet;
+  mintAdapter: MintAdapter;
+  logger?: Logger;
 }
 
 export type MintExecutionResult =
