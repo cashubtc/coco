@@ -460,6 +460,35 @@ describe('MintOnchainHandler', () => {
     expect(proofService.saveProofs).toHaveBeenCalled();
   });
 
+  it('fails recovery when the mint rejects onchain issuance with quote expired', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(20007, 'Quote expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: onchain quote ${quoteId} expired while executing mint`,
+    });
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-protocol expiry errors pending during onchain recovery', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new Error('Authentication session expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'PENDING',
+      error: 'Authentication session expired',
+    });
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
   it('checks pending onchain operations as ready when the quote can cover the amount', async () => {
     const result = await handler.checkPending(buildPendingContext());
 

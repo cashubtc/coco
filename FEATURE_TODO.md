@@ -47,3 +47,6 @@
 - [x] Treat a remote BOLT11 `20007` rejection as terminal during execution recovery.
 - [x] Verify terminal recovery emits failure without re-emitting pending work.
 - [x] Run focused core tests, typecheck, build, and formatting checks.
+- [x] Treat remote BOLT12 and on-chain `20007` rejections as terminal during recovery.
+- [x] Preserve retryability for non-protocol errors whose messages contain `expired`.
+- [x] Run focused core tests, typecheck, build, and formatting checks for reusable methods.

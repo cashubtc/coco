@@ -242,6 +242,13 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
         );
       }
 
+      if (error instanceof MintOperationError && error.code === 20007) {
+        return {
+          status: 'TERMINAL',
+          error: `Recovered: onchain quote ${operation.quoteId} expired while executing mint`,
+        };
+      }
+
       return {
         status: 'PENDING',
         error: error instanceof Error ? error.message : String(error),

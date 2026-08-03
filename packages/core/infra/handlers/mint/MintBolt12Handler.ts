@@ -254,6 +254,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         );
       }
 
+      if (error instanceof MintOperationError && error.code === 20007) {
+        return {
+          status: 'TERMINAL',
+          error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
+        };
+      }
+
       return {
         status: 'PENDING',
         error: error instanceof Error ? error.message : String(error),
