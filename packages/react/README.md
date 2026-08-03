@@ -60,7 +60,10 @@ export function App() {
 
 `localStorageSeedGetter()` stores a generated browser seed under
 `COCO_REACT_SEED` by default. Pass `localStorageSeedGetter({ storageKey })` to
-use a different localStorage key.
+use a different localStorage key. The helper requires the Web Locks API so seed
+initialization is serialized across same-origin browser contexts. Call it from a
+secure browser context (HTTPS or localhost), and provide another `seedGetter` in
+environments without `window.navigator.locks`.
 
 If your application already owns the manager lifecycle, pass an initialized
 manager instead:
