@@ -194,13 +194,7 @@ describe('MintBolt11Handler', () => {
       ...executingOperation,
       state: 'pending',
     },
-    wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 

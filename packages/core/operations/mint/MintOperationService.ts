@@ -1180,12 +1180,11 @@ export class MintOperationService {
       );
     }
     const handler = this.handlerProvider.get(op.method);
-    const { wallet } = await this.walletService.getWalletWithActiveKeysetId(op.mintUrl, op.unit);
 
     const observation = await handler.checkPending({
-      ...this.buildDeps(),
       operation: op as PendingMintOperation,
-      wallet,
+      mintAdapter: this.mintAdapter,
+      logger: this.logger,
     });
 
     let canonicalQuote: MintQuote | undefined;

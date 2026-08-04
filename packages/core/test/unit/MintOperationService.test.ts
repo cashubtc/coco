@@ -2677,6 +2677,20 @@ describe('MintOperationService', () => {
     expect(pendingStored?.state).toBe('finalized');
   });
 
+  it('observes pending operations without resolving a wallet instance', async () => {
+    const pendingOp = makePendingOp('pending-without-wallet-instance');
+    const getWalletWithActiveKeysetId = mock(async () => {
+      throw new Error('Wallet instance is unavailable');
+    });
+    walletService.getWalletWithActiveKeysetId = getWalletWithActiveKeysetId;
+    await operationRepo.create(pendingOp);
+
+    const result = await service.observePendingOperation(pendingOp.id);
+
+    expect(result.category).toBe('waiting');
+    expect(getWalletWithActiveKeysetId).not.toHaveBeenCalled();
+  });
+
   it('checkPendingOperation leaves unpaid operations pending', async () => {
     const pendingOp = makePendingOp('pending-3');
     await operationRepo.create(pendingOp);
