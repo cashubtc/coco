@@ -2,7 +2,6 @@ import type { EventBus, CoreEvents } from '@core/events';
 import type { Logger } from '../../logging/Logger.ts';
 import type { MintMethod, MintOperationService } from '@core/operations/mint';
 import { MintOperationError, NetworkError } from '../../models/Error';
-import { getMintQuoteRemoteState } from '../../models/MintQuote.ts';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle.ts';
 
 interface QueueItem {
@@ -17,11 +16,8 @@ interface OperationHandler {
   process(mintUrl: string, operationId: string): Promise<void>;
 }
 
-class Bolt11MintOperationHandler implements OperationHandler {
-  constructor(
-    private mintOperations: MintOperationService,
-    private logger?: Logger,
-  ) {}
+class DefaultMintOperationHandler implements OperationHandler {
+  constructor(private mintOperations: MintOperationService) {}
 
   async process(_mintUrl: string, operationId: string): Promise<void> {
     await this.mintOperations.finalize(operationId);
@@ -51,6 +47,7 @@ export class MintOperationProcessor {
   private offRequeue?: () => void;
   private offUntrusted?: () => void;
   private claimingQuotes = new Set<string>();
+  private quoteClaimsNeedingFollowUp = new Set<string>();
   private claimTasks = new Set<Promise<void>>();
 
   private handlers = new Map<string, OperationHandler>();
@@ -79,8 +76,10 @@ export class MintOperationProcessor {
     this.initialEnqueueDelayMs = options?.initialEnqueueDelayMs ?? 500;
     this.autoClaimMintQuotes = options?.autoClaimMintQuotes ?? true;
 
-    // Register default handler for bolt11 mint operations
-    this.registerHandler('bolt11', new Bolt11MintOperationHandler(mintOperations, this.logger));
+    const defaultHandler = new DefaultMintOperationHandler(mintOperations);
+    for (const method of ['bolt11', 'bolt12', 'onchain']) {
+      this.registerHandler(method, defaultHandler);
+    }
   }
 
   registerHandler(method: string, handler: OperationHandler): void {
@@ -100,31 +99,13 @@ export class MintOperationProcessor {
     // Subscribe to canonical quote updates and resolve all affected local operations.
     this.offQuoteUpdated = this.bus.on(
       'mint-quote:updated',
-      async ({ mintUrl, method, quoteId, quote }) => {
-        if (quote.reusable) {
-          this.scheduleQuoteClaim(mintUrl, method, quoteId);
-          return;
-        }
-
-        if (getMintQuoteRemoteState(quote) !== 'PAID') {
-          return;
-        }
-
-        const operations = await this.mintOperations.getOperationsForQuote(
-          mintUrl,
-          method,
-          quoteId,
-        );
-        for (const operation of operations) {
-          if (operation.state === 'pending') {
-            this.enqueue(mintUrl, operation.id, operation.method);
-          }
-        }
+      async ({ mintUrl, method, quoteId }) => {
+        this.scheduleQuoteClaim(mintUrl, method, quoteId);
       },
     );
 
-    // Subscribe to pending operations so operations created after a PAID quote enqueue immediately
-    this.offPending = this.bus.on('mint-op:pending', async ({ mintUrl, operation }) => {
+    // Subscribe to pending operations so newly created operations reassess their canonical quote.
+    this.offPending = this.bus.on('mint-op:pending', async ({ operation }) => {
       if (operation.state !== 'pending') {
         return;
       }
@@ -134,13 +115,8 @@ export class MintOperationProcessor {
         operation.method,
         operation.quoteId,
       );
-      if (quote?.reusable) {
+      if (quote) {
         this.scheduleQuoteClaim(operation.mintUrl, operation.method, operation.quoteId);
-        return;
-      }
-
-      if (quote && getMintQuoteRemoteState(quote) === 'PAID') {
-        this.enqueue(mintUrl, operation.id, operation.method);
       }
     });
 
@@ -304,7 +280,8 @@ export class MintOperationProcessor {
 
     const key = `${mintUrl}::${method}::${quoteId}`;
     if (this.claimingQuotes.has(key)) {
-      this.logger?.debug('Reusable mint quote claim already in progress', {
+      this.quoteClaimsNeedingFollowUp.add(key);
+      this.logger?.debug('Mint quote claim already in progress', {
         mintUrl,
         method,
         quoteId,
@@ -315,13 +292,13 @@ export class MintOperationProcessor {
     this.claimingQuotes.add(key);
     const task = (async () => {
       try {
-        const hasClaimableBalance = await this.mintOperations.hasLocallyClaimableMintQuoteBalance(
+        const assessment = await this.mintOperations.getMintQuoteClaimability(
           mintUrl,
           method,
           quoteId,
         );
-        if (!hasClaimableBalance) {
-          this.logger?.debug('Reusable mint quote has no locally claimable balance', {
+        if (assessment?.status !== 'claimable' && assessment?.status !== 'complete') {
+          this.logger?.debug('Mint quote has no locally claimable value', {
             mintUrl,
             method,
             quoteId,
@@ -333,7 +310,7 @@ export class MintOperationProcessor {
           autoClaimRemaining: true,
         });
       } catch (error) {
-        this.logger?.warn('Failed to check or claim reusable mint quote', {
+        this.logger?.warn('Failed to check or claim mint quote', {
           mintUrl,
           method,
           quoteId,
@@ -341,6 +318,10 @@ export class MintOperationProcessor {
         });
       } finally {
         this.claimingQuotes.delete(key);
+        const needsFollowUp = this.quoteClaimsNeedingFollowUp.delete(key);
+        if (needsFollowUp && this.running) {
+          this.scheduleQuoteClaim(mintUrl, method, quoteId);
+        }
       }
     })();
 
@@ -355,7 +336,7 @@ export class MintOperationProcessor {
       try {
         await this.mintOperations.claimPendingMintQuotes({ autoClaimRemaining: true });
       } catch (error) {
-        this.logger?.warn('Failed to claim pending reusable mint quotes on startup', {
+        this.logger?.warn('Failed to claim pending mint quotes on startup', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -438,11 +419,6 @@ export class MintOperationProcessor {
     const { mintUrl, operationId } = item;
 
     if (err instanceof MintOperationError) {
-      if (err.code === 20007) {
-        this.logger?.warn('Mint operation quote expired', { mintUrl, operationId });
-        return;
-      }
-
       if (err.code === 20002) {
         this.logger?.info('Mint operation quote already issued', { mintUrl, operationId });
         return;

@@ -4,7 +4,7 @@ import {
   type MintQuoteBolt12Response,
   type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
-import { ProofValidationError } from './Error';
+import { MintQuoteValidationError } from './Error';
 import {
   mintQuoteObservationFromBolt11Response,
   mintQuoteObservationFromBolt12Response,
@@ -16,6 +16,7 @@ import type {
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import { assessMintQuoteClaimability } from './MintQuoteClaimability.ts';
 
 export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
@@ -80,10 +81,66 @@ export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt1
   return quote.method === 'bolt11';
 }
 
+/** Derives the deprecated BOLT11 state projection from canonical quote accounting. */
+export function deriveBolt11MintQuoteState(
+  amountPaid: Amount,
+  amountIssued: Amount,
+): MintMethodRemoteState<'bolt11'> {
+  return amountPaid.isZero() && amountIssued.isZero()
+    ? 'UNPAID'
+    : amountPaid.greaterThan(amountIssued)
+      ? 'PAID'
+      : 'ISSUED';
+}
+
+/**
+ * Applies a legacy BOLT11 state observation without allowing it to reduce canonical accounting.
+ *
+ * @deprecated Legacy state is a fallback for snapshots that do not carry Mint Quote Accounting.
+ */
+export function applyBolt11MintQuoteStateFallback(
+  quote: MintQuote<'bolt11'>,
+  state: MintMethodRemoteState<'bolt11'>,
+  observedAt = Date.now(),
+): MintQuote<'bolt11'> {
+  const hasLegacyProjectionShape =
+    (quote.amountPaid.isZero() && quote.amountIssued.isZero()) ||
+    (quote.amountPaid.equals(quote.amount) && quote.amountIssued.isZero()) ||
+    (quote.amountPaid.equals(quote.amount) && quote.amountIssued.equals(quote.amount));
+  if (quote.remoteUpdatedAt !== null || !hasLegacyProjectionShape) {
+    return {
+      ...quote,
+      state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
+    };
+  }
+
+  const paidFallback = state === 'UNPAID' ? Amount.zero() : quote.amount;
+  const issuedFallback = state === 'ISSUED' ? quote.amount : Amount.zero();
+  const amountPaid = quote.amountPaid.greaterThan(paidFallback) ? quote.amountPaid : paidFallback;
+  const amountIssued = quote.amountIssued.greaterThan(issuedFallback)
+    ? quote.amountIssued
+    : issuedFallback;
+
+  return {
+    ...quote,
+    state: deriveBolt11MintQuoteState(amountPaid, amountIssued),
+    amountPaid,
+    amountIssued,
+    updatedAt: Math.max(quote.updatedAt, observedAt),
+  };
+}
+
+/**
+ * Returns the deprecated BOLT11 state projection for compatibility consumers.
+ *
+ * @deprecated Use `amountPaid` and `amountIssued`, or the common Claimability assessment.
+ */
 export function getMintQuoteRemoteState(
   quote: MintQuote,
 ): MintMethodRemoteState<'bolt11'> | undefined {
-  return isStatefulMintQuote(quote) ? quote.state : undefined;
+  return isStatefulMintQuote(quote)
+    ? deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued)
+    : undefined;
 }
 
 /**
@@ -100,20 +157,14 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   return undefined;
 }
 
+/** Returns mint-reported availability without local issuance or reservation facts. */
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
-  if (quote.reusable) {
-    return quote.amountPaid.subtract(quote.amountIssued);
-  }
-
-  return quote.state === 'PAID' ? quote.amount : Amount.zero();
+  return assessMintQuoteClaimability(quote).remoteAvailable;
 }
 
 export function isMintQuotePending(quote: MintQuote): boolean {
-  if (isStatefulMintQuote(quote)) {
-    return quote.state !== 'ISSUED';
-  }
-
-  return true;
+  const { status } = assessMintQuoteClaimability(quote);
+  return status === 'waiting' || status === 'claimable';
 }
 
 function assertValidMintQuoteAccounting(
@@ -122,7 +173,7 @@ function assertValidMintQuoteAccounting(
   amountIssued: Amount,
 ): void {
   if (amountIssued.greaterThan(amountPaid)) {
-    throw new ProofValidationError(
+    throw new MintQuoteValidationError(
       `Mint quote ${quoteId} has amount_issued greater than amount_paid`,
     );
   }
@@ -133,7 +184,11 @@ export function mintQuoteFromBolt11Response(
   quote: MintQuoteBolt11Response,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
-  const canonicalQuote = mintQuoteObservationFromBolt11Response(mintUrl, quote, options);
+  const observation = mintQuoteObservationFromBolt11Response(mintUrl, quote, options);
+  const canonicalQuote: MintQuote<'bolt11'> = {
+    ...observation,
+    state: deriveBolt11MintQuoteState(observation.amountPaid, observation.amountIssued),
+  };
   assertValidMintQuoteAccounting(
     canonicalQuote.quoteId,
     canonicalQuote.amountPaid,
@@ -182,7 +237,7 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      state: quote.state,
+      state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
       amount_paid: quote.amountPaid,
       amount_issued: quote.amountIssued,
       updated_at: quote.remoteUpdatedAt,

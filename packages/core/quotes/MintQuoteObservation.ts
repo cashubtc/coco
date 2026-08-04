@@ -1,10 +1,8 @@
-import { isStatefulMintQuote, type MintQuote } from '../models/MintQuote';
-
-const MINT_QUOTE_STATE_RANK = {
-  UNPAID: 0,
-  PAID: 1,
-  ISSUED: 2,
-} as const;
+import {
+  deriveBolt11MintQuoteState,
+  isStatefulMintQuote,
+  type MintQuote,
+} from '../models/MintQuote';
 
 export type MintQuoteObservationDisposition =
   | 'accepted-meaningful-change'
@@ -19,12 +17,12 @@ export interface MintQuoteObservationResolution {
   disposition: MintQuoteObservationDisposition;
 }
 
-function isMintQuoteStateDowngrade(existing: MintQuote, incoming: MintQuote): boolean {
-  return (
-    isStatefulMintQuote(existing) &&
-    isStatefulMintQuote(incoming) &&
-    MINT_QUOTE_STATE_RANK[incoming.state] < MINT_QUOTE_STATE_RANK[existing.state]
-  );
+function withCanonicalCompatibilityProjection(quote: MintQuote): MintQuote {
+  if (!isStatefulMintQuote(quote)) return quote;
+  return {
+    ...quote,
+    state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
+  };
 }
 
 function hasAccountingComponentDecrease(existing: MintQuote, incoming: MintQuote): boolean {
@@ -51,8 +49,7 @@ function hasMeaningfulChange(existing: MintQuote | null, incoming: MintQuote): b
   }
 
   if (isStatefulMintQuote(existing) && isStatefulMintQuote(incoming)) {
-    // Until #387, non-terminal BOLT11 state changes still alter canonical claimability.
-    return !existing.amount.equals(incoming.amount) || existing.state !== incoming.state;
+    return !existing.amount.equals(incoming.amount);
   }
 
   if (existing.method === 'bolt12' && incoming.method === 'bolt12') {
@@ -72,13 +69,19 @@ export function resolveMintQuoteObservation(
 ): MintQuoteObservationResolution {
   if (incoming.amountIssued.greaterThan(incoming.amountPaid)) {
     return {
-      resolvedQuote: existing ?? incoming,
+      resolvedQuote: existing ?? withCanonicalCompatibilityProjection(incoming),
       disposition: 'ignored-invalid-background',
     };
   }
 
+  if (!existing || existing.method !== incoming.method || existing.quoteId !== incoming.quoteId) {
+    return {
+      resolvedQuote: withCanonicalCompatibilityProjection(incoming),
+      disposition: 'accepted-meaningful-change',
+    };
+  }
+
   if (
-    existing &&
     existing.remoteUpdatedAt !== null &&
     incoming.remoteUpdatedAt !== null &&
     incoming.remoteUpdatedAt < existing.remoteUpdatedAt
@@ -90,7 +93,6 @@ export function resolveMintQuoteObservation(
   }
 
   if (
-    existing &&
     existing.remoteUpdatedAt !== null &&
     incoming.remoteUpdatedAt !== null &&
     incoming.remoteUpdatedAt === existing.remoteUpdatedAt &&
@@ -103,10 +105,13 @@ export function resolveMintQuoteObservation(
     };
   }
 
+  // Once BOLT11 accounting has remote ordering, an unversioned compatibility observation
+  // must not replace it. Legacy `state` remains a projection rather than an authority.
   if (
-    existing &&
-    (hasAccountingComponentDecrease(existing, incoming) ||
-      isMintQuoteStateDowngrade(existing, incoming))
+    isStatefulMintQuote(existing) &&
+    isStatefulMintQuote(incoming) &&
+    existing.remoteUpdatedAt !== null &&
+    incoming.remoteUpdatedAt === null
   ) {
     return {
       resolvedQuote: existing,
@@ -114,7 +119,14 @@ export function resolveMintQuoteObservation(
     };
   }
 
-  if (existing && (existing.remoteUpdatedAt === null || incoming.remoteUpdatedAt === null)) {
+  if (hasAccountingComponentDecrease(existing, incoming)) {
+    return {
+      resolvedQuote: existing,
+      disposition: 'ignored-stale',
+    };
+  }
+
+  if (existing.remoteUpdatedAt === null || incoming.remoteUpdatedAt === null) {
     const hasNewerAccounting = incoming.amountPaid
       .add(incoming.amountIssued)
       .greaterThan(existing.amountPaid.add(existing.amountIssued));
@@ -126,14 +138,15 @@ export function resolveMintQuoteObservation(
     }
   }
 
-  const resolvedQuote =
-    existing && existing.remoteUpdatedAt !== null && incoming.remoteUpdatedAt === null
+  const resolvedQuote = withCanonicalCompatibilityProjection(
+    existing.remoteUpdatedAt !== null && incoming.remoteUpdatedAt === null
       ? { ...incoming, remoteUpdatedAt: existing.remoteUpdatedAt }
-      : incoming;
+      : incoming,
+  );
   if (hasMeaningfulChange(existing, resolvedQuote)) {
     return { resolvedQuote, disposition: 'accepted-meaningful-change' };
   }
-  if (existing?.remoteUpdatedAt === resolvedQuote.remoteUpdatedAt) {
+  if (existing.remoteUpdatedAt === resolvedQuote.remoteUpdatedAt) {
     return { resolvedQuote: existing, disposition: 'ignored-unchanged' };
   }
   return { resolvedQuote, disposition: 'accepted-freshness-only' };

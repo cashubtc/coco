@@ -12,7 +12,8 @@ Guidance for agentic coding in this repo.
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues for `cashubtc/coco`. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues for `cashubtc/coco`. External pull requests are not a
+triage request surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

@@ -6,6 +6,11 @@ import type { CoreEvents } from '../../events/types';
 import type { MintAdapter } from '../../infra';
 import { MintBolt12Handler } from '../../infra/handlers/mint/MintBolt12Handler';
 import type { Logger } from '../../logging/Logger';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../models/Error';
 import { mintQuoteFromBolt12Response } from '../../models/MintQuote';
 import type { ProofRepository } from '../../repositories';
 import type { KeyRingService } from '../../services/KeyRingService';
@@ -109,7 +114,6 @@ describe('MintBolt12Handler', () => {
   const buildPendingContext = (remoteQuote: MintQuoteBolt12Response): PendingContext<'bolt12'> => {
     (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => remoteQuote);
     return {
-      ...buildPrepareContext(),
       operation: {
         ...operation,
         state: 'pending',
@@ -119,6 +123,8 @@ describe('MintBolt12Handler', () => {
         pubkey,
         outputData,
       },
+      mintAdapter,
+      logger,
     };
   };
 
@@ -140,8 +146,14 @@ describe('MintBolt12Handler', () => {
 
   const buildRecoverContext = (
     remoteQuote: MintQuoteBolt12Response,
-  ): RecoverExecutingContext<'bolt12'> =>
-    buildExecuteContext(remoteQuote) as RecoverExecutingContext<'bolt12'>;
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'bolt12'> => ({
+    ...buildExecuteContext(remoteQuote),
+    localClaimabilityFacts,
+  });
 
   beforeEach(() => {
     wallet = {
@@ -209,16 +221,19 @@ describe('MintBolt12Handler', () => {
       quote({ amount: undefined }),
     );
 
-    await expect(
-      handler.createQuote({
+    const error = await handler
+      .createQuote({
         ...buildPrepareContext(),
         mintUrl,
         createQuoteData: {
           unit: 'sat',
           amount: { amount: Amount.from(10), unit: 'sat' },
         },
-      }),
-    ).rejects.toThrow('does not match requested amount');
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('does not match requested amount');
   });
 
   it('rejects fixed-amount quotes when the mint returns a null response amount', async () => {
@@ -328,12 +343,15 @@ describe('MintBolt12Handler', () => {
   it('requires the imported quote pubkey to exist in the keyring', async () => {
     (keyRingService.getMintQuoteKeyPair as Mock<any>).mockImplementation(async () => null);
 
-    await expect(handler.prepare(buildPrepareContext({ importedQuote: quote() }))).rejects.toThrow(
-      'Missing NUT-20 mint quote key',
-    );
+    const error = await handler
+      .prepare(buildPrepareContext({ importedQuote: quote() }))
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteKeyError);
+    expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
-  it('marks amountless quotes ready when paid amount covers the operation amount', async () => {
+  it('reports the validated remote snapshot for an amountless quote', async () => {
     const result = await handler.checkPending(
       buildPendingContext(
         quote({
@@ -345,60 +363,50 @@ describe('MintBolt12Handler', () => {
     );
 
     expect(result.quoteSnapshot?.quote).toBe(quoteId);
-    expect(result.category).toBe('ready');
+    expect(result.observedAt).toEqual(expect.any(Number));
   });
 
-  it('keeps a funded quote with no-expiry sentinel claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: 0,
-          amount_paid: Amount.from(10),
-        }),
-      ),
+  it('reports an unattributable pending response as a validation failure', async () => {
+    const context = buildPendingContext(quote());
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
+      quote({ quote: 'other-quote' }),
     );
 
-    expect(result.category).toBe('ready');
+    const result = await handler.checkPending(context);
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure).toMatchObject({
+      code: 'invalid_quote',
+      retryable: false,
+    });
+    expect(result.validationFailure?.reason).toContain('conflicts with pending operation identity');
   });
 
-  it('keeps a funded quote with null expiry claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: null,
-          amount_paid: Amount.from(10),
-        }),
-      ),
+  it('does not attribute a mismatched response when the operation pubkey is missing', async () => {
+    const baseContext = buildPendingContext(quote());
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce(
+      quote({ request: 'lno1other' }),
     );
 
-    expect(result.category).toBe('ready');
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure?.code).toBe('invalid_quote');
   });
 
-  it('keeps a funded quote with a future positive expiry claimable', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: Math.floor(Date.now() / 1000) + 60,
-          amount_paid: Amount.from(10),
-        }),
-      ),
-    );
+  it('preserves the missing-pubkey terminal code for an attributable response', async () => {
+    const baseContext = buildPendingContext(quote());
 
-    expect(result.category).toBe('ready');
-  });
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
 
-  it('keeps a funded quote claimable after expiry', async () => {
-    const result = await handler.checkPending(
-      buildPendingContext(
-        quote({
-          expiry: Math.floor(Date.now() / 1000) - 1,
-          amount_paid: Amount.from(10),
-        }),
-      ),
-    );
-
-    expect(result.category).toBe('ready');
-    expect(result.terminalFailure).toBeUndefined();
+    expect(result.quoteSnapshot?.quote).toBe(quoteId);
+    expect(result.validationFailure?.code).toBe('missing_quote_pubkey');
   });
 
   it('mints with the keyring private key and custom outputs', async () => {
@@ -420,19 +428,53 @@ describe('MintBolt12Handler', () => {
     expect(call[4].data[0].blindedMessage.B_).toBe('B_out_1');
   });
 
+  it('rejects contradictory fresh accounting before mint submission', async () => {
+    await expect(
+      handler.execute(
+        buildExecuteContext(
+          quote({
+            amount_paid: Amount.from(9),
+            amount_issued: Amount.from(10),
+          }),
+        ),
+      ),
+    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} is not claimable: invalid`);
+
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
+    const result = await handler.execute(
+      buildExecuteContext(
+        quote({
+          amount_paid: Amount.from(1),
+          amount_issued: Amount.zero(),
+        }),
+      ),
+    );
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects execution when the remote quote pubkey changes', async () => {
     const changedPubkey = '02' + '22'.repeat(32);
 
-    await expect(
-      handler.execute(
+    const error = await handler
+      .execute(
         buildExecuteContext(
           quote({
             amount_paid: Amount.from(10),
             pubkey: changedPubkey,
           }),
         ),
-      ),
-    ).rejects.toThrow(`BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`);
+      )
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain(
+      `BOLT12 mint quote ${quoteId} returned pubkey ${changedPubkey}`,
+    );
 
     expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
@@ -468,5 +510,54 @@ describe('MintBolt12Handler', () => {
     expect(result).toEqual({ status: 'FINALIZED' });
     expect(wallet.mintProofsBolt12).toHaveBeenCalled();
     expect(proofService.saveProofs).toHaveBeenCalled();
+  });
+
+  it('fails recovery when the mint rejects BOLT12 issuance with quote expired', async () => {
+    const expiredQuote = quote({
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      amount_paid: Amount.from(10),
+    });
+    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(20007, 'Quote expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: BOLT12 quote ${quoteId} expired while executing mint`,
+    });
+    expect(wallet.mintProofsBolt12).toHaveBeenCalledTimes(1);
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-protocol expiry errors pending during BOLT12 recovery', async () => {
+    const expiredQuote = quote({
+      expiry: Math.floor(Date.now() / 1000) - 1,
+      amount_paid: Amount.from(10),
+    });
+    (wallet.mintProofsBolt12 as Mock<any>).mockRejectedValueOnce(
+      new Error('Authentication session expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext(expiredQuote));
+
+    expect(result).toEqual({
+      status: 'PENDING',
+      error: 'Authentication session expired',
+    });
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('does not retry balance already consumed by finalized local operations', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext(quote({ amount_paid: Amount.from(10) }), {
+        finalizedAmount: Amount.from(10),
+        reservedAmount: Amount.zero(),
+      }),
+    );
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsBolt12).not.toHaveBeenCalled();
   });
 });

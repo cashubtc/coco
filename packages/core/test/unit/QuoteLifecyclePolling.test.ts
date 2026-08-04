@@ -7,7 +7,12 @@ import { PollingTransport } from '../../infra/PollingTransport.ts';
 import type { MeltHandlerProvider } from '../../infra/handlers/melt/index.ts';
 import type { MintHandlerProvider } from '../../infra/handlers/mint/index.ts';
 import { NullLogger } from '../../logging/NullLogger.ts';
-import { HttpResponseError, MintOperationError, NetworkError } from '../../models/Error.ts';
+import {
+  HttpResponseError,
+  MintOperationError,
+  MintQuoteValidationError,
+  NetworkError,
+} from '../../models/Error.ts';
 import { type MintQuote } from '../../models/MintQuote.ts';
 import {
   cashuNormalizedBolt11Fixture,
@@ -778,6 +783,10 @@ describe('QuoteLifecycle mint quote polling', () => {
         outcome.status === 'failed' ? outcome.failure.category : outcome.status,
       ),
     ).toEqual(['malformed-response', 'malformed-response']);
+    for (const outcome of result.outcomes) {
+      if (outcome.status !== 'failed') throw new Error('Expected a failed polling outcome');
+      expect(outcome.failure.error).toBeInstanceOf(MintQuoteValidationError);
+    }
     expect(result.responseFailures).toEqual([]);
   });
 

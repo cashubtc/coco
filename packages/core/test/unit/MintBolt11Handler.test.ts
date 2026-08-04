@@ -1,12 +1,18 @@
 import { Amount } from '@cashu/cashu-ts';
+import { bytesToHex } from '@noble/curves/utils.js';
 import { describe, it, beforeEach, expect, mock, type Mock } from 'bun:test';
 import { OutputData, type MintQuoteBolt11Response, type Wallet } from '@cashu/cashu-ts';
 import { MintBolt11Handler } from '../../infra/handlers/mint/MintBolt11Handler';
-import { MintOperationError } from '../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../models/Error';
 import { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type {
   CreateMintQuoteContext,
+  ExecuteContext,
   PendingContext,
   PrepareContext,
   RecoverExecutingContext,
@@ -19,11 +25,14 @@ import type { MintService } from '../../services/MintService';
 import type { MintAdapter } from '../../infra';
 import type { ProofRepository } from '../../repositories';
 import type { Logger } from '../../logging/Logger';
+import type { KeyRingService } from '../../services/KeyRingService';
 
 describe('MintBolt11Handler', () => {
   const mintUrl = 'https://mint.test';
   const quoteId = 'quote-1';
   const keysetId = 'keyset-1';
+  const quotePubkey = `02${'11'.repeat(32)}`;
+  const quoteSecretKey = new Uint8Array(32).fill(7);
 
   let handler: MintBolt11Handler;
   let wallet: Wallet;
@@ -34,17 +43,27 @@ describe('MintBolt11Handler', () => {
   let mintService: MintService;
   let eventBus: EventBus<CoreEvents>;
   let logger: Logger;
+  let keyRingService: KeyRingService;
 
   const outputData = serializeOutputData({
     keep: [
       new OutputData(
         {
-          amount: Amount.from(10),
+          amount: Amount.from(6),
           id: keysetId,
           B_: 'B_out_1',
         },
         BigInt(1),
         new TextEncoder().encode('out-1'),
+      ),
+      new OutputData(
+        {
+          amount: Amount.from(4),
+          id: keysetId,
+          B_: 'B_out_2',
+        },
+        BigInt(2),
+        new TextEncoder().encode('out-2'),
       ),
     ],
     send: [],
@@ -143,6 +162,24 @@ describe('MintBolt11Handler', () => {
   const buildRecoverContext = (): RecoverExecutingContext<'bolt11'> => ({
     operation: executingOperation,
     wallet,
+    localClaimabilityFacts: {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+    mintAdapter,
+    proofService,
+    proofRepository,
+    walletService,
+    mintService,
+    eventBus,
+    logger,
+  });
+
+  const buildExecuteContext = (
+    operationOverride: ExecuteContext<'bolt11'>['operation'] = executingOperation,
+  ): ExecuteContext<'bolt11'> => ({
+    operation: operationOverride,
+    wallet,
     mintAdapter,
     proofService,
     proofRepository,
@@ -157,21 +194,28 @@ describe('MintBolt11Handler', () => {
       ...executingOperation,
       state: 'pending',
     },
-    wallet,
     mintAdapter,
-    proofService,
-    proofRepository,
-    walletService,
-    mintService,
-    eventBus,
     logger,
   });
 
   beforeEach(() => {
-    handler = new MintBolt11Handler();
+    keyRingService = {
+      generateMintQuoteKeyPair: mock(async () => ({
+        publicKeyHex: quotePubkey,
+        secretKey: quoteSecretKey,
+        purpose: 'nut20_mint_quote' as const,
+      })),
+      getMintQuoteKeyPair: mock(async () => ({
+        publicKeyHex: quotePubkey,
+        secretKey: quoteSecretKey,
+        purpose: 'nut20_mint_quote' as const,
+      })),
+    } as unknown as KeyRingService;
+    handler = new MintBolt11Handler(keyRingService);
 
     wallet = {
       createMintQuoteBolt11: mock(async () => quote),
+      createLockedMintQuote: mock(async () => ({ ...quote, pubkey: quotePubkey })),
       mintProofsBolt11: mock(async () => {
         throw new MintOperationError(20007, 'Quote expired');
       }),
@@ -189,9 +233,14 @@ describe('MintBolt11Handler', () => {
 
     proofRepository = {} as ProofRepository;
     walletService = {} as WalletService;
-    mintService = {} as MintService;
+    mintService = {
+      assertNutSupported: mock(async () => {}),
+    } as unknown as MintService;
     eventBus = new EventBus<CoreEvents>();
-    logger = { info: mock(() => {}) } as unknown as Logger;
+    logger = {
+      info: mock(() => {}),
+      warn: mock(() => {}),
+    } as unknown as Logger;
   });
 
   describe('quotes', () => {
@@ -210,25 +259,233 @@ describe('MintBolt11Handler', () => {
       expect(result.quoteId).toBe(quoteId);
       expect(result.method).toBe('bolt11');
     });
+
+    it('creates an opt-in locked BOLT11 quote with a fresh persisted key', async () => {
+      const result = await handler.createQuote({
+        ...buildCreateQuoteContext(),
+        createQuoteData: {
+          amount: { amount: Amount.from(10), unit: 'sat' },
+          locked: true,
+        },
+      });
+
+      expect(mintService.assertNutSupported).toHaveBeenCalledWith(
+        mintUrl,
+        20,
+        'locked BOLT11 mint quote',
+      );
+      expect(keyRingService.generateMintQuoteKeyPair).toHaveBeenCalledTimes(1);
+      expect(wallet.createLockedMintQuote).toHaveBeenCalledWith(Amount.from(10), quotePubkey);
+      expect(result.pubkey).toBe(quotePubkey);
+      expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
+    });
+
+    it('rejects an owned locking key before remote creation when it is not persisted', async () => {
+      (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
+
+      const error = await handler
+        .createQuote({
+          ...buildCreateQuoteContext(),
+          createQuoteData: {
+            amount: { amount: Amount.from(10), unit: 'sat' },
+            ownedPubkey: quotePubkey,
+          },
+        })
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(MintQuoteKeyError);
+      expect(error.message).toContain('Missing NUT-20 mint quote key');
+
+      expect(mintService.assertNutSupported).toHaveBeenCalledWith(
+        mintUrl,
+        20,
+        'locked BOLT11 mint quote',
+      );
+      expect(wallet.createLockedMintQuote).not.toHaveBeenCalled();
+    });
+
+    it('rejects a locked quote whose returned public key does not match the persisted key', async () => {
+      (wallet.createLockedMintQuote as Mock<any>).mockResolvedValueOnce({
+        ...quote,
+        pubkey: `03${'22'.repeat(32)}`,
+      });
+
+      const error = await handler
+        .createQuote({
+          ...buildCreateQuoteContext(),
+          createQuoteData: {
+            amount: { amount: Amount.from(10), unit: 'sat' },
+            locked: true,
+          },
+        })
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(MintQuoteValidationError);
+      expect(error.message).toBe(
+        'Mint returned a BOLT11 quote with an unexpected NUT-20 public key',
+      );
+    });
+  });
+
+  describe('execute', () => {
+    it('signs locked BOLT11 issuance with the persisted NUT-20 key', async () => {
+      (wallet.mintProofsBolt11 as Mock<any>).mockImplementation(async () => []);
+
+      await handler.execute(buildExecuteContext({ ...executingOperation, pubkey: quotePubkey }));
+
+      expect(keyRingService.getMintQuoteKeyPair).toHaveBeenCalledWith(quotePubkey);
+      const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
+      expect(call?.[0]).toEqual(Amount.from(10));
+      expect(call?.[1]).toBe(quoteId);
+      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      const customOutputs = call?.[3] as
+        | { type: string; data: Array<{ blindedMessage: { B_: string } }> }
+        | undefined;
+      expect(customOutputs?.type).toBe('custom');
+      expect(customOutputs?.data.map(({ blindedMessage }) => blindedMessage.B_)).toEqual([
+        'B_out_1',
+        'B_out_2',
+      ]);
+    });
+
+    it('rethrows mint operation errors unchanged', async () => {
+      const originalError = new MintOperationError(20007, `Quote ${quoteId} expired`);
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(originalError);
+
+      const error = await handler
+        .execute(buildExecuteContext({ ...executingOperation, pubkey: quotePubkey }))
+        .catch((caught) => caught);
+
+      expect(error).toBe(originalError);
+      expect(error.code).toBe(20007);
+      expect(error.message).toBe(`Quote ${quoteId} expired`);
+    });
+
+    it('reports a missing locked-quote signing key as a domain validation error', async () => {
+      (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
+
+      const error = await handler
+        .execute(buildExecuteContext({ ...executingOperation, pubkey: quotePubkey }))
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(MintQuoteKeyError);
+      expect(error.message).toContain('Missing NUT-20 mint quote key');
+      expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
+    });
+
+    it('preserves non-protocol locked issuance errors as the cause', async () => {
+      const originalError = new Error('Transport disconnected');
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(originalError);
+
+      const error = await handler
+        .execute(buildExecuteContext({ ...executingOperation, pubkey: quotePubkey }))
+        .catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toBe('Locked BOLT11 mint failed: Transport disconnected');
+      expect(error.cause).toBe(originalError);
+    });
   });
 
   describe('recoverExecuting', () => {
-    it('returns a terminal result when the mint quote expired during execution', async () => {
+    it('returns a terminal result when the mint rejects issuance with quote expired', async () => {
       const result = await handler.recoverExecuting(buildRecoverContext());
 
       expect(result).toEqual({
         status: 'TERMINAL',
         error: `Recovered: quote ${quoteId} expired while executing mint`,
       });
-      expect((wallet.mintProofsBolt11 as Mock<any>).mock.calls.length).toBe(1);
-      expect((proofService.saveProofs as Mock<any>).mock.calls.length).toBe(0);
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
+    });
+
+    it('keeps other mint operation errors pending during recovery', async () => {
+      (wallet.mintProofsBolt11 as Mock<any>).mockRejectedValueOnce(
+        new MintOperationError(20001, 'Unknown quote'),
+      );
+
+      const result = await handler.recoverExecuting(buildRecoverContext());
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: 'Unknown quote',
+      });
+      expect(wallet.mintProofsBolt11).toHaveBeenCalledTimes(1);
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
+    });
+
+    it('recovers locked issuance using accounting authority and the persisted key', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
+        ...quote,
+        state: 'UNPAID',
+        pubkey: quotePubkey,
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: 10,
+      }));
+      (wallet.mintProofsBolt11 as Mock<any>).mockImplementation(async () => []);
+
+      const result = await handler.recoverExecuting({
+        ...buildRecoverContext(),
+        operation: { ...executingOperation, pubkey: quotePubkey },
+      });
+
+      expect(result).toEqual({ status: 'FINALIZED' });
+      const call = (wallet.mintProofsBolt11 as Mock<any>).mock.calls[0];
+      expect(call?.[2]).toEqual({ privkey: bytesToHex(quoteSecretKey) });
+      const customOutputs = call?.[3] as
+        | { type: 'custom'; data: Array<{ blindedMessage: { B_: string } }> }
+        | undefined;
+      expect(customOutputs?.data.map(({ blindedMessage }) => blindedMessage.B_)).toEqual([
+        'B_out_1',
+        'B_out_2',
+      ]);
+      expect(proofService.saveProofs).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps NUT-20 ownership contradictions pending for ambiguity-preserving recovery', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockImplementation(async () => ({
+        ...quote,
+        pubkey: `02${'22'.repeat(32)}`,
+      }));
+
+      const result = await handler.recoverExecuting({
+        ...buildRecoverContext(),
+        operation: { ...executingOperation, pubkey: quotePubkey },
+      });
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: 'Recovered BOLT11 mint operation has mismatched NUT-20 quote ownership',
+      });
+      expect(wallet.mintProofsBolt11).not.toHaveBeenCalled();
+      expect(proofService.recoverProofsFromOutputData).not.toHaveBeenCalled();
+    });
+
+    it('preserves quote context in recovery errors and logs', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockRejectedValueOnce(
+        new Error(`Quote ${quoteId} is temporarily unavailable`),
+      );
+
+      const result = await handler.recoverExecuting(buildRecoverContext());
+
+      expect(result).toEqual({
+        status: 'PENDING',
+        error: `Quote ${quoteId} is temporarily unavailable`,
+      });
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect((logger.warn as Mock<any>).mock.calls[0]?.[1]).toEqual({
+        mintUrl,
+        quoteId,
+        error: `Quote ${quoteId} is temporarily unavailable`,
+      });
     });
   });
 
   describe('prepare', () => {
     it('requires the service to provide an existing quote snapshot', async () => {
       await expect(handler.prepare(buildPrepareContext())).rejects.toThrow(
-        'Mint quote quote-1 was not provided',
+        `Mint quote ${quoteId} was not provided`,
       );
       expect((wallet.createMintQuoteBolt11 as Mock<any>).mock.calls).toHaveLength(0);
     });
@@ -267,12 +524,44 @@ describe('MintBolt11Handler', () => {
   });
 
   describe('checkPending', () => {
-    it('returns the observed remote state with a normalized ready category', async () => {
+    it.each([
+      ['quote ID', { quote: 'other-quote' }],
+      ['request', { request: 'lnbc1other' }],
+      ['unit', { unit: 'usd' }],
+      ['amount', { amount: Amount.from(11) }],
+      ['NUT-20 pubkey', { pubkey: quotePubkey }],
+    ] as Array<[string, Partial<MintQuoteBolt11Response>]>)(
+      'reports a polled snapshot with a mismatched %s as a validation failure',
+      async (_field, override) => {
+        (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+          ...quote,
+          ...override,
+        });
+
+        const result = await handler.checkPending(buildPendingContext());
+
+        expect(result.quoteSnapshot).toBeUndefined();
+        expect(result.validationFailure).toMatchObject({
+          code: 'invalid_quote',
+          retryable: false,
+        });
+      },
+    );
+
+    it('reports the validated remote snapshot and observation time', async () => {
+      (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+        ...quote,
+        state: 'UNPAID',
+      });
+
       const result = await handler.checkPending(buildPendingContext());
 
-      expect(result.observedRemoteState).toBe('PAID');
-      expect(result.category).toBe('ready');
-      expect(result.observedRemoteStateAt).toEqual(expect.any(Number));
+      expect(result.quoteSnapshot).toEqual(expect.objectContaining({ state: 'UNPAID' }));
+      expect(result.observedAt).toEqual(expect.any(Number));
+      expect(logger.info).toHaveBeenCalledWith('Checking pending mint operation', {
+        mintUrl,
+        quoteId,
+      });
     });
   });
 });

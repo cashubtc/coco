@@ -149,6 +149,22 @@ describe('QuoteApi', () => {
     });
   });
 
+  it('delegates opt-in locked BOLT11 quote creation', async () => {
+    await expect(
+      api.mint.create({
+        mintUrl,
+        method: 'bolt11',
+        amount: Amount.from(10),
+        locked: true,
+      }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
+      amount: { amount: Amount.from(10), unit: 'sat' },
+      locked: true,
+    });
+  });
+
   it('delegates BOLT12 mint quote creation with optional amount data', async () => {
     await expect(
       api.mint.create({

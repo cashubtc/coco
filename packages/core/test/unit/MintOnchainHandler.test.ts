@@ -5,7 +5,11 @@ import type { CoreEvents } from '../../events/types';
 import { MintOnchainHandler } from '../../infra/handlers/mint/MintOnchainHandler';
 import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
-import { MintOperationError } from '../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../models/Error';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -137,17 +141,24 @@ describe('MintOnchainHandler', () => {
     outputData: serializeOutputData({ keep: [output], send: [] }),
   });
 
-  const buildRecoverContext = (): RecoverExecutingContext<'onchain'> => ({
+  const buildRecoverContext = (
+    localClaimabilityFacts = {
+      finalizedAmount: Amount.zero(),
+      reservedAmount: Amount.zero(),
+    },
+  ): RecoverExecutingContext<'onchain'> => ({
     ...buildPrepareContext(),
     operation: buildExecutingOperation(),
+    localClaimabilityFacts,
   });
 
   const buildPendingContext = (): PendingContext<'onchain'> => ({
-    ...buildPrepareContext(),
     operation: {
       ...buildExecutingOperation(),
       state: 'pending',
     } satisfies PendingMintOperation<'onchain'>,
+    mintAdapter,
+    logger,
   });
 
   beforeEach(() => {
@@ -246,9 +257,10 @@ describe('MintOnchainHandler', () => {
       pubkey: '02'.padEnd(66, '2'),
     }));
 
-    await expect(handler.createQuote(buildCreateQuoteContext())).rejects.toThrow(
-      'instead of requested pubkey',
-    );
+    const error = await handler.createQuote(buildCreateQuoteContext()).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteValidationError);
+    expect(error.message).toContain('instead of requested pubkey');
   });
 
   it('fetches the latest onchain quote through the mint adapter', async () => {
@@ -283,9 +295,12 @@ describe('MintOnchainHandler', () => {
   it('fails onchain preparation when the quote key is missing', async () => {
     (keyRingService.getMintQuoteKeyPair as Mock<any>).mockResolvedValueOnce(null);
 
-    await expect(
-      handler.prepare({ ...buildPrepareContext(), importedQuote: remoteQuote }),
-    ).rejects.toThrow('Missing NUT-20 mint quote key');
+    const error = await handler
+      .prepare({ ...buildPrepareContext(), importedQuote: remoteQuote })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(MintQuoteKeyError);
+    expect(error.message).toContain('Missing NUT-20 mint quote key');
   });
 
   it('executes onchain mint proofs with the persisted quote key', async () => {
@@ -312,6 +327,47 @@ describe('MintOnchainHandler', () => {
       undefined,
       { type: 'custom', data: deserializeOutputData(pending.outputData).keep },
     );
+  });
+
+  it('rejects contradictory fresh accounting before mint submission', async () => {
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(9),
+      amount_issued: Amount.from(10),
+    });
+
+    await expect(
+      handler.execute({
+        ...buildPrepareContext(),
+        operation: { ...pending, state: 'executing' },
+      }),
+    ).rejects.toThrow(`Onchain mint quote ${quoteId} is not claimable: invalid`);
+
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale valid fresh balance veto service-authorized execution', async () => {
+    const pending = await handler.prepare({
+      ...buildPrepareContext(),
+      importedQuote: remoteQuote,
+    });
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      amount_paid: Amount.from(1),
+      amount_issued: Amount.zero(),
+    });
+
+    const result = await handler.execute({
+      ...buildPrepareContext(),
+      operation: { ...pending, state: 'executing' },
+    });
+
+    expect(result.status).toBe('ISSUED');
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
   });
 
   it('recovers signed onchain outputs before retrying the mint', async () => {
@@ -359,6 +415,18 @@ describe('MintOnchainHandler', () => {
     expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
   });
 
+  it('subtracts other in-flight reservations before retrying onchain recovery', async () => {
+    const result = await handler.recoverExecuting(
+      buildRecoverContext({
+        finalizedAmount: Amount.zero(),
+        reservedAmount: Amount.from(10),
+      }),
+    );
+
+    expect(result.status).toBe('PENDING');
+    expect(wallet.mintProofsOnchain).not.toHaveBeenCalled();
+  });
+
   it('attempts restore again after an already-issued retry result', async () => {
     (wallet.mintProofsOnchain as Mock<any>).mockImplementationOnce(async () => {
       throw new MintOperationError(20002, 'already issued');
@@ -393,25 +461,87 @@ describe('MintOnchainHandler', () => {
     expect(proofService.saveProofs).toHaveBeenCalled();
   });
 
-  it('checks pending onchain operations as ready when the quote can cover the amount', async () => {
-    const result = await handler.checkPending(buildPendingContext());
+  it('fails recovery when the mint rejects onchain issuance with quote expired', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new MintOperationError(20007, 'Quote expired'),
+    );
 
-    expect(result.category).toBe('ready');
-    expect(result.quoteSnapshot).toBe(remoteQuote);
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'TERMINAL',
+      error: `Recovered: onchain quote ${quoteId} expired while executing mint`,
+    });
+    expect(wallet.mintProofsOnchain).toHaveBeenCalledTimes(1);
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
   });
 
-  it('keeps a funded onchain quote with no-expiry sentinel claimable', async () => {
+  it('keeps non-protocol expiry errors pending during onchain recovery', async () => {
+    (wallet.mintProofsOnchain as Mock<any>).mockRejectedValueOnce(
+      new Error('Authentication session expired'),
+    );
+
+    const result = await handler.recoverExecuting(buildRecoverContext());
+
+    expect(result).toEqual({
+      status: 'PENDING',
+      error: 'Authentication session expired',
+    });
+    expect(proofService.saveProofs).not.toHaveBeenCalled();
+  });
+
+  it('reports the validated remote snapshot for a pending operation', async () => {
+    const result = await handler.checkPending(buildPendingContext());
+
+    expect(result.quoteSnapshot).toBe(remoteQuote);
+    expect(result.observedAt).toEqual(expect.any(Number));
+  });
+
+  it('reports an unattributable pending response as a validation failure', async () => {
     (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
-      expiry: 0,
+      request: 'bc1qotheraddress',
     });
 
     const result = await handler.checkPending(buildPendingContext());
 
-    expect(result.category).toBe('ready');
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure).toMatchObject({
+      code: 'invalid_quote',
+      retryable: false,
+    });
+    expect(result.validationFailure?.reason).toContain('conflicts with pending operation identity');
   });
 
-  it('checks pending onchain operations as waiting when the quote cannot cover the amount', async () => {
+  it('does not attribute a mismatched response when the operation pubkey is missing', async () => {
+    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
+      ...remoteQuote,
+      quote: 'other-quote',
+    });
+    const baseContext = buildPendingContext();
+
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBeUndefined();
+    expect(result.validationFailure?.code).toBe('invalid_quote');
+  });
+
+  it('preserves the missing-pubkey terminal code for an attributable response', async () => {
+    const baseContext = buildPendingContext();
+
+    const result = await handler.checkPending({
+      ...baseContext,
+      operation: { ...baseContext.operation, pubkey: undefined },
+    });
+
+    expect(result.quoteSnapshot).toBe(remoteQuote);
+    expect(result.validationFailure?.code).toBe('missing_quote_pubkey');
+  });
+
+  it('preserves remote accounting in the pending observation', async () => {
     (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
       ...remoteQuote,
       amount_paid: Amount.from(8),
@@ -420,21 +550,6 @@ describe('MintOnchainHandler', () => {
 
     const result = await handler.checkPending(buildPendingContext());
 
-    expect(result.category).toBe('waiting');
     expect(result.quoteSnapshot?.amount_paid?.equals(Amount.from(8))).toBe(true);
-  });
-
-  it('keeps an unfunded onchain operation waiting after expiry', async () => {
-    (mintAdapter.checkMintQuote as Mock<any>).mockResolvedValueOnce({
-      ...remoteQuote,
-      expiry: Math.floor(Date.now() / 1000) - 1,
-      amount_paid: Amount.from(8),
-      amount_issued: Amount.from(8),
-    });
-
-    const result = await handler.checkPending(buildPendingContext());
-
-    expect(result.category).toBe('waiting');
-    expect(result.terminalFailure).toBeUndefined();
   });
 });

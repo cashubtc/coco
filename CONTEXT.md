@@ -78,9 +78,9 @@ older `PENDING` observation.
 _Avoid_: Payment status, melt lifecycle
 
 **Mint Quote Claimability**:
-Whether a mint quote currently has paid value that coco can claim into proofs. BOLT11 mint quotes
-are claimable when their state is `PAID`; reusable mint quotes are claimable when their paid amount
-exceeds their issued amount.
+Whether Mint Quote Accounting leaves paid value that Coco may claim into proofs after accounting
+for completed local issuance and Mint Quote Reservations. Fixed BOLT11 quotes are all-or-nothing;
+BOLT12 and on-chain quotes can remain claimable across partial balance claims.
 _Avoid_: Mint quote paid state, payment status
 
 **Mint Quote Accounting**:

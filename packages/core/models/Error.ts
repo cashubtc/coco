@@ -37,6 +37,22 @@ export class ProofValidationError extends Error {
   }
 }
 
+export class MintQuoteValidationError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'MintQuoteValidationError';
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
+export class MintQuoteKeyError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'MintQuoteKeyError';
+    (this as unknown as { cause?: unknown }).cause = cause;
+  }
+}
+
 export class UnitValidationError extends Error {
   constructor(message: string) {
     super(message);

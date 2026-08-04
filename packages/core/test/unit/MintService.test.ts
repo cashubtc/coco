@@ -334,6 +334,18 @@ describe('MintService', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('checks NUT-20 support through the typed API', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '20': { supported: true },
+        },
+      } as MintInfo);
+
+      await expect(service.assertNutSupported(testMintUrl, 20)).resolves.toBeUndefined();
+    });
+
     it('returns false and rejects when NUT-11 metadata is missing', async () => {
       useMintInfo({
         ...mockMintInfo,
