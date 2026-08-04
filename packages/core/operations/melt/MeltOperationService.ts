@@ -46,7 +46,10 @@ import {
   type MeltQuote,
 } from '../../models/MeltQuote.ts';
 import type { MeltQuoteRef, QuoteIdentity } from '../../models/QuoteIdentity.ts';
-import { assertChildOperationAccess } from '../mintSwap/ChildOperationOwnership.ts';
+import {
+  assertChildOperationAccess,
+  assertParentOwnedMeltOperationInvariant,
+} from '../mintSwap/ChildOperationOwnership.ts';
 
 export interface PrepareOwnedMeltOperationCommand {
   operationId: string;
@@ -373,6 +376,7 @@ export class MeltOperationService {
       parentExecutionPhase: operation.needsSwap ? 'pre_swap_authorized' : 'melt_authorized',
       updatedAt: Date.now(),
     };
+    assertParentOwnedMeltOperationInvariant(executing);
     await repositories.meltOperationRepository.update(executing);
     return executing;
   }
@@ -387,6 +391,7 @@ export class MeltOperationService {
     parentSwapOperationId: string,
   ): Promise<OwnedMeltRemoteResult> {
     assertChildOperationAccess(operation, parentSwapOperationId);
+    assertParentOwnedMeltOperationInvariant(operation);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
       operation.mintUrl,
       operation.unit,
@@ -454,6 +459,7 @@ export class MeltOperationService {
             : applied.failed
         : applied;
     assertChildOperationAccess(next, parentSwapOperationId);
+    assertParentOwnedMeltOperationInvariant(next);
     await repositories.meltOperationRepository.update(next);
     return next as
       | ExecutingMeltOperation

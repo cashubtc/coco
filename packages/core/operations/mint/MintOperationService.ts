@@ -44,6 +44,7 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MintScopedLock } from '../MintScopedLock';
 import { OperationIdLock } from '../OperationIdLock';
 import {
+  deriveBolt11MintQuoteState,
   getMintQuoteAvailableAmount,
   getMintQuoteAmount,
   mintQuoteToMethodSnapshot,
@@ -55,13 +56,17 @@ import {
 } from '../../models/MintQuoteClaimability.ts';
 import type { MintQuoteRef } from '../../models/QuoteIdentity';
 import type { QuoteLifecycle } from '../../quotes/QuoteLifecycle';
-import { assertChildOperationAccess } from '../mintSwap/ChildOperationOwnership.ts';
+import {
+  assertChildOperationAccess,
+  assertParentOwnedMintOperationInvariant,
+} from '../mintSwap/ChildOperationOwnership.ts';
 
 export interface PrepareOwnedMintOperationCommand {
   operationId: string;
   parentSwapOperationId: string;
   quote: MintQuote;
   amount: Amount;
+  destinationNut20PublicKey: string;
   wallet: Wallet;
   repositories: RepositoryTransactionScope;
 }
@@ -280,6 +285,9 @@ export class MintOperationService {
     if (quote.method !== 'bolt11') {
       throw new Error('Mint swaps require a BOLT11 destination quote');
     }
+    if (quote.pubkey !== command.destinationNut20PublicKey) {
+      throw new Error('Destination quote is not locked to the parent NUT-20 key');
+    }
     const amount = Amount.from(command.amount);
     const fixedAmount = getMintQuoteAmount(quote);
     if (!fixedAmount?.equals(amount) || quote.unit !== 'sat') {
@@ -312,6 +320,10 @@ export class MintOperationService {
       state: 'pending',
       updatedAt: Date.now(),
     };
+    if (pendingOperation.pubkey !== command.destinationNut20PublicKey) {
+      throw new Error('Destination mint child lost its parent NUT-20 key binding');
+    }
+    assertParentOwnedMintOperationInvariant(pendingOperation);
     await repositories.mintOperationRepository.create(pendingOperation);
     return pendingOperation;
   }
@@ -329,6 +341,7 @@ export class MintOperationService {
       );
     }
     assertChildOperationAccess(operation, parentSwapOperationId);
+    assertParentOwnedMintOperationInvariant(operation);
     const executing: ExecutingMintOperation = {
       ...operation,
       state: 'executing',
@@ -349,11 +362,16 @@ export class MintOperationService {
     parentSwapOperationId: string,
   ): Promise<import('./MintMethodHandler.ts').MintExecutionResult> {
     assertChildOperationAccess(operation, parentSwapOperationId);
+    assertParentOwnedMintOperationInvariant(operation);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
       operation.mintUrl,
       operation.unit,
     );
-    return this.handlerProvider.get(operation.method).execute({
+    const handler = this.handlerProvider.get(operation.method);
+    if (!handler.executeOwnedRemote) {
+      throw new Error(`Mint method ${operation.method} does not support owned remote execution`);
+    }
+    return handler.executeOwnedRemote({
       operation: operation as never,
       wallet,
       mintAdapter: this.mintAdapter,
@@ -369,6 +387,7 @@ export class MintOperationService {
     repositories: RepositoryTransactionScope,
   ): Promise<FinalizedMintOperation | ExecutingMintOperation> {
     assertChildOperationAccess(operation, parentSwapOperationId);
+    assertParentOwnedMintOperationInvariant(operation);
     const current = await repositories.mintOperationRepository.getById(operation.id);
     if (!current || current.state !== 'executing') {
       throw new Error(
@@ -376,6 +395,7 @@ export class MintOperationService {
       );
     }
     assertChildOperationAccess(current, parentSwapOperationId);
+    assertParentOwnedMintOperationInvariant(current);
 
     if (result.status === 'FAILED') {
       throw new Error(result.error ?? 'Mint execution failed');
@@ -420,13 +440,33 @@ export class MintOperationService {
     }
 
     if (current.method === 'bolt11') {
-      await repositories.mintQuoteRepository.setMintQuoteState(
+      const quote = await repositories.mintQuoteRepository.getMintQuote(
         current.mintUrl,
         current.method,
         current.quoteId,
-        'ISSUED',
-        Date.now(),
       );
+      if (!quote || quote.method !== 'bolt11') {
+        throw new Error(`Canonical mint quote for child ${current.id} was not found`);
+      }
+      if (!quote.amount.equals(current.amount)) {
+        throw new Error(`Canonical mint quote amount does not match child ${current.id}`);
+      }
+      if (current.pubkey === undefined || quote.pubkey !== current.pubkey) {
+        throw new Error(`Canonical mint quote key does not match child ${current.id}`);
+      }
+      const amountPaid = quote.amountPaid.greaterThan(current.amount)
+        ? quote.amountPaid
+        : current.amount;
+      const amountIssued = quote.amountIssued.greaterThan(current.amount)
+        ? quote.amountIssued
+        : current.amount;
+      await repositories.mintQuoteRepository.upsertMintQuote({
+        ...quote,
+        state: deriveBolt11MintQuoteState(amountPaid, amountIssued),
+        amountPaid,
+        amountIssued,
+        updatedAt: Math.max(quote.updatedAt, Date.now()),
+      });
     }
     const finalized: FinalizedMintOperation = {
       ...current,

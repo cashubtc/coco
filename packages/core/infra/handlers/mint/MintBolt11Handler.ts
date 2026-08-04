@@ -8,6 +8,7 @@ import type {
   PrepareContext,
   MintMethodHandler,
   MintExecutionResult,
+  OwnedMintRemoteContext,
   PendingMintOperation,
   RecoverExecutingResult,
   RecoverExecutingContext,
@@ -118,6 +119,14 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
   }
 
   async execute(ctx: ExecuteContext<'bolt11'>): Promise<MintExecutionResult> {
+    return this.executeRemote(ctx);
+  }
+
+  async executeOwnedRemote(ctx: OwnedMintRemoteContext<'bolt11'>): Promise<MintExecutionResult> {
+    return this.executeRemote(ctx);
+  }
+
+  private async executeRemote(ctx: OwnedMintRemoteContext<'bolt11'>): Promise<MintExecutionResult> {
     const outputData = deserializeOutputData(ctx.operation.outputData);
     const signingOptions = await this.getMintQuoteSigningOptions(ctx.operation.pubkey);
 

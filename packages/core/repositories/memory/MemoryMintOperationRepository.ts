@@ -1,10 +1,12 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
+import { assertParentOwnedMintOperationInvariant } from '../../operations/mintSwap/ChildOperationOwnership.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
   private readonly operations = new Map<string, MintOperation>();
 
   async create(operation: MintOperation): Promise<void> {
+    assertParentOwnedMintOperationInvariant(operation);
     if (this.operations.has(operation.id)) {
       throw new Error(`MintOperation with id ${operation.id} already exists`);
     }
@@ -13,6 +15,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   }
 
   async update(operation: MintOperation): Promise<void> {
+    assertParentOwnedMintOperationInvariant(operation);
     const existing = this.operations.get(operation.id);
     if (!existing) {
       throw new Error(`MintOperation with id ${operation.id} not found`);

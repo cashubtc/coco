@@ -1,5 +1,6 @@
 import type { MeltOperationRepository } from '..';
 import type { MeltOperation, MeltOperationState } from '../../operations/melt/MeltOperation';
+import { assertParentOwnedMeltOperationInvariant } from '../../operations/mintSwap/ChildOperationOwnership.ts';
 
 const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
   'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
@@ -8,6 +9,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   private readonly operations = new Map<string, MeltOperation>();
 
   async create(operation: MeltOperation): Promise<void> {
+    assertParentOwnedMeltOperationInvariant(operation);
     if (this.operations.has(operation.id)) {
       throw new Error(`MeltOperation with id ${operation.id} already exists`);
     }
@@ -17,6 +19,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
   }
 
   async update(operation: MeltOperation): Promise<void> {
+    assertParentOwnedMeltOperationInvariant(operation);
     const existing = this.operations.get(operation.id);
     if (!existing) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
