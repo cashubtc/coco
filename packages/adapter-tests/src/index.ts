@@ -1105,6 +1105,7 @@ export async function runMintSwapRepositoryContract(
           id: 'owned-mint',
           quoteId: 'owned-mint-quote',
           parentSwapOperationId: 'mint-parent',
+          pubkey: `02${'ab'.repeat(32)}`,
         });
         await repositories.mintOperationRepository.create(mintChild);
         expect(
@@ -1125,6 +1126,7 @@ export async function runMintSwapRepositoryContract(
                 id: 'second-owned-mint',
                 quoteId: 'second-owned-mint-quote',
                 parentSwapOperationId: 'mint-parent',
+                pubkey: `02${'ab'.repeat(32)}`,
               }),
             ),
           expect,
@@ -1145,6 +1147,14 @@ export async function runMintSwapRepositoryContract(
             repositories.meltOperationRepository.update({
               ...meltChild,
               parentSwapOperationId: 'different-parent',
+            }),
+          expect,
+        );
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.update({
+              ...meltChild,
+              parentExecutionPhase: 'melt_authorized',
             }),
           expect,
         );
@@ -1181,6 +1191,7 @@ export async function runMintSwapRepositoryContract(
                   id: 'rolled-back-child',
                   quoteId: 'rolled-back-child-quote',
                   parentSwapOperationId: 'mint-swap-op',
+                  pubkey: `02${'ab'.repeat(32)}`,
                 }),
               );
               throw new Error('injected rollback');
