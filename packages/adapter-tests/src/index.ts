@@ -79,6 +79,49 @@ export async function runRepositoryTransactionContract(
       }
     });
 
+    it('preserves binary keypair payloads across transaction round trips', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const preExistingSecretKey = new Uint8Array(32);
+        for (let i = 0; i < preExistingSecretKey.length; i++) preExistingSecretKey[i] = i + 1;
+        await repositories.keyRingRepository.setPersistedKeyPair({
+          publicKeyHex: '02contractkeypairbeforetransaction',
+          secretKey: preExistingSecretKey,
+          purpose: 'nut20_mint_quote',
+        });
+
+        const committedSecretKey = new Uint8Array(16);
+        for (let i = 0; i < committedSecretKey.length; i++) committedSecretKey[i] = 255 - i;
+        await repositories.withTransaction(async (tx) => {
+          await tx.keyRingRepository.setPersistedKeyPair({
+            publicKeyHex: '02contractkeypairinsidetransaction',
+            secretKey: committedSecretKey,
+            purpose: 'p2pk',
+          });
+        });
+
+        const preserved = await repositories.keyRingRepository.getPersistedKeyPair(
+          '02contractkeypairbeforetransaction',
+          'nut20_mint_quote',
+        );
+        expect(preserved).toBeDefined();
+        expect(preserved?.secretKey instanceof Uint8Array).toBe(true);
+        expect(preserved?.secretKey).toHaveLength(32);
+        expect(sameBytes(preserved?.secretKey, preExistingSecretKey)).toBe(true);
+
+        const committed = await repositories.keyRingRepository.getPersistedKeyPair(
+          '02contractkeypairinsidetransaction',
+          'p2pk',
+        );
+        expect(committed).toBeDefined();
+        expect(committed?.secretKey instanceof Uint8Array).toBe(true);
+        expect(committed?.secretKey).toHaveLength(16);
+        expect(sameBytes(committed?.secretKey, committedSecretKey)).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     if (options.testConcurrentRootOperationIsolation) {
       it('preserves a concurrent root repository write after transaction commit', async () => {
         const { repositories, dispose } = await options.createRepositories();
@@ -249,6 +292,14 @@ function createDeferred<T = void>() {
 
 async function flushMicrotasks(turns = 10): Promise<void> {
   for (let turn = 0; turn < turns; turn++) await Promise.resolve();
+}
+
+function sameBytes(actual: Uint8Array | undefined, expected: Uint8Array): boolean {
+  if (!actual || actual.length !== expected.length) return false;
+  for (let i = 0; i < expected.length; i++) {
+    if (actual[i] !== expected[i]) return false;
+  }
+  return true;
 }
 
 export function createDummyMint(): Mint {

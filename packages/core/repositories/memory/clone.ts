@@ -23,6 +23,26 @@ export function cloneMemoryValue<T>(value: T, seen = new Map<object, unknown>())
     return result as T;
   }
   if (value instanceof Date) return new Date(value.getTime()) as T;
+  if (value instanceof ArrayBuffer) {
+    const result = value.slice(0);
+    seen.set(value, result);
+    return result as T;
+  }
+  if (ArrayBuffer.isView(value)) {
+    const buffer = cloneMemoryValue(value.buffer as ArrayBuffer, seen);
+    const result =
+      value instanceof DataView
+        ? new DataView(buffer, value.byteOffset, value.byteLength)
+        : new (
+            value.constructor as new (
+              buffer: ArrayBuffer,
+              byteOffset: number,
+              length: number,
+            ) => ArrayBufferView
+          )(buffer, value.byteOffset, (value as unknown as { length: number }).length);
+    seen.set(value, result);
+    return result as T;
+  }
 
   const result = Object.create(Object.getPrototypeOf(value)) as Record<PropertyKey, unknown>;
   seen.set(value, result);
