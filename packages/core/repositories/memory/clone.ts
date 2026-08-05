@@ -33,13 +33,15 @@ export function cloneMemoryValue<T>(value: T, seen = new Map<object, unknown>())
     const result =
       value instanceof DataView
         ? new DataView(buffer, value.byteOffset, value.byteLength)
-        : new (
-            value.constructor as new (
-              buffer: ArrayBuffer,
-              byteOffset: number,
-              length: number,
-            ) => ArrayBufferView
-          )(buffer, value.byteOffset, (value as unknown as { length: number }).length);
+        : new (value.constructor as new (
+            buffer: ArrayBuffer,
+            byteOffset: number,
+            length: number,
+          ) => ArrayBufferView)(
+            buffer,
+            value.byteOffset,
+            (value as unknown as { length: number }).length,
+          );
     seen.set(value, result);
     return result as T;
   }
