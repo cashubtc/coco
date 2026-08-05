@@ -50,6 +50,8 @@ Native via `@cashu/coco-expo-sqlite`.
 - `@cashu/coco-expo-sqlite` — Expo SQLite adapter for React Native and Expo.
 - `@cashu/coco-sqlite-bun` — Bun adapter built on `bun:sqlite`.
 - `@cashu/coco-adapter-tests` — reusable storage adapter contract test helpers.
+- `packages/cocod` — private Cashu wallet CLI and daemon that consumes the
+  workspace core end to end (unpublished).
 - `packages/docs` — VitePress documentation site for the repository.
 
 ## Philosophy

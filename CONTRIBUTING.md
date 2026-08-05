@@ -43,6 +43,8 @@ want to solve and the approach you have in mind.
 - `packages/expo-sqlite` - Expo SQLite adapter for React Native and Expo apps
 - `packages/sqlite3` - `better-sqlite3` adapter for Node.js
 - `packages/sqlite-bun` - Bun SQLite adapter
+- `packages/cocod` - Cashu wallet CLI and daemon built on the workspace packages (private,
+  not published)
 - `packages/docs` - VitePress documentation site
 
 ### Common commands

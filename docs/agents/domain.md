@@ -20,6 +20,7 @@ This is a single-context repository:
 ├── docs/adr/
 └── packages/
     ├── adapter-tests/
+    ├── cocod/
     ├── core/
     ├── docs/
     ├── expo-sqlite/
