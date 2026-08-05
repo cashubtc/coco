@@ -1,0 +1,50 @@
+name: coco-cashu-fault-lab
+
+services:
+  mintd:
+    image: cashubtc/mintd:0.17.3@sha256:39da6a421d0a53a5e7541ea1c7abca3d46265c7dc7980f7fb4c637f089e0b547
+    command: ['cdk-mintd', '--work-dir', '/var/lib/cdk-mintd']
+    environment:
+      CDK_MINTD_CACHE_BACKEND: memory
+      CDK_MINTD_DATABASE: sqlite
+      CDK_MINTD_LISTEN_HOST: 0.0.0.0
+      CDK_MINTD_LISTEN_PORT: 8085
+      CDK_MINTD_LN_BACKEND: fakewallet
+      CDK_MINTD_MNEMONIC: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+      CDK_MINTD_URL: http://mintd:8085
+    healthcheck:
+      test:
+        ['CMD', 'wget', '--quiet', '--output-document=/dev/null', 'http://127.0.0.1:8085/v1/info']
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    volumes:
+      - mintd-state:/var/lib/cdk-mintd
+
+  fault-gateway:
+    image: ghcr.io/gautambytes/cashu-fault-lab-node-wallets:0.2.0@sha256:fd973eef705c6d99c683dc1f6c303e121fcfa222106cdbcb47e7fcb29dce66ea
+    command: ['node', 'apps/http-fault-gateway/dist/bin.js']
+    environment:
+      CFL_HTTP_FAULT_GATEWAY_CONTROL_TOKEN: ${CFL_HTTP_FAULT_GATEWAY_TOKEN:?set CFL_HTTP_FAULT_GATEWAY_TOKEN}
+      CFL_HTTP_FAULT_GATEWAY_DOWNSTREAM: http://mintd:8085
+      CFL_HTTP_FAULT_GATEWAY_HOST: 0.0.0.0
+      CFL_HTTP_FAULT_GATEWAY_PORT: 4300
+    depends_on:
+      mintd:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4300/__faults/v1/evidence',{headers:{authorization:'Bearer '+process.env.CFL_HTTP_FAULT_GATEWAY_CONTROL_TOKEN}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    ports:
+      - '127.0.0.1:${COCO_FAULT_LAB_GATEWAY_PORT:-4300}:4300'
+
+volumes:
+  mintd-state:
