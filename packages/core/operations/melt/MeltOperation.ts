@@ -32,6 +32,7 @@ import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
+import type { MintSwapOperationParent } from '../OperationParent.ts';
 
 // ============================================================================
 // Base and Data Interfaces
@@ -58,6 +59,9 @@ interface MeltOperationBase extends MeltMethodMeta {
 
   /** Error message if the operation failed */
   error?: string;
+
+  /** Parent Mint Swap Operation that owns this operation, when present. */
+  parent?: MintSwapOperationParent;
 }
 
 /**

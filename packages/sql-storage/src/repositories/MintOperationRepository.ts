@@ -1,4 +1,4 @@
-import type { MintOperationRepository } from '@cashu/coco-core/adapter';
+import type { MintOperationRepository, OperationParent } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
@@ -28,6 +28,9 @@ interface MintOperationRow {
   lastObservedRemoteStateAt: number | null;
   terminalFailureJson: string | null;
   outputDataJson: string | null;
+  parentKind: string | null;
+  parentId: string | null;
+  batchingDisabled: number | null;
 }
 
 const persistedStates = ['pending', 'executing', 'finalized', 'failed'] as const;
@@ -50,8 +53,18 @@ const requireQuoteId = (row: MintOperationRow): string => {
   return row.quoteId;
 };
 
+const parseParent = (row: MintOperationRow): OperationParent | undefined => {
+  if (row.parentKind === null && row.parentId === null) return undefined;
+  if (!row.parentId || (row.parentKind !== 'mint-swap' && row.parentKind !== 'mint-batch')) {
+    throw new Error(`MintOperation ${row.id} has invalid parent metadata`);
+  }
+
+  return { kind: row.parentKind, id: row.parentId };
+};
+
 const rowToOperation = (row: MintOperationRow): MintOperation => {
   const quoteId = requireQuoteId(row);
+  const parent = parseParent(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -63,6 +76,8 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
+    ...(parent ? { parent } : {}),
+    ...(row.batchingDisabled === 1 ? { batchingDisabled: true } : {}),
   };
 
   const intent = {
@@ -116,6 +131,9 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
       null,
       operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
       null,
+      operation.parent?.kind ?? null,
+      operation.parent?.id ?? null,
+      operation.batchingDisabled ? 1 : null,
     ];
   }
 
@@ -138,6 +156,9 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
     null,
     operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
     JSON.stringify(operation.outputData),
+    operation.parent?.kind ?? null,
+    operation.parent?.id ?? null,
+    operation.batchingDisabled ? 1 : null,
   ];
 };
 
@@ -160,8 +181,8 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson, parentKind, parentId, batchingDisabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
@@ -175,13 +196,38 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
 
+    await this.updateWhere(operation, 'id = ?', [operation.id]);
+  }
+
+  async updateIfStateAndParentMatch(
+    operation: MintOperation,
+    expected: { state: MintOperationState; parent?: OperationParent },
+  ): Promise<boolean> {
+    const parentCondition = expected.parent
+      ? 'parentKind = ? AND parentId = ?'
+      : 'parentKind IS NULL AND parentId IS NULL';
+    const parentParams = expected.parent ? [expected.parent.kind, expected.parent.id] : [];
+
+    const changes = await this.updateWhere(
+      operation,
+      `id = ? AND state = ? AND ${parentCondition}`,
+      [operation.id, expected.state, ...parentParams],
+    );
+    return changes > 0;
+  }
+
+  private async updateWhere(
+    operation: MintOperation,
+    where: string,
+    whereParams: SqlValue[],
+  ): Promise<number> {
     const updatedAtSeconds = getUnixTimeSeconds();
 
     if (operation.state === 'init') {
-      await this.db.run(
+      const result = await this.db.run(
         `UPDATE coco_cashu_mint_operations
-         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
-         WHERE id = ?`,
+         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?, parentKind = ?, parentId = ?, batchingDisabled = ?
+         WHERE ${where}`,
         [
           operation.quoteId,
           operation.state,
@@ -192,16 +238,19 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
-          operation.id,
+          operation.parent?.kind ?? null,
+          operation.parent?.id ?? null,
+          operation.batchingDisabled ? 1 : null,
+          ...whereParams,
         ],
       );
-      return;
+      return result.changes;
     }
 
-    await this.db.run(
+    const result = await this.db.run(
       `UPDATE coco_cashu_mint_operations
-       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?
-       WHERE id = ?`,
+       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?, parentKind = ?, parentId = ?, batchingDisabled = ?
+       WHERE ${where}`,
       [
         operation.quoteId,
         operation.state,
@@ -218,9 +267,13 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
-        operation.id,
+        operation.parent?.kind ?? null,
+        operation.parent?.id ?? null,
+        operation.batchingDisabled ? 1 : null,
+        ...whereParams,
       ],
     );
+    return result.changes;
   }
 
   async getById(id: string): Promise<MintOperation | null> {

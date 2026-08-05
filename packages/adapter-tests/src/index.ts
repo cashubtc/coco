@@ -292,6 +292,7 @@ function createDummySendOperationsByState(unit: string): SendOperation[] {
 }
 
 type PendingMintOperation = Extract<MintOperation, { state: 'pending' }>;
+type PreparedMeltOperation = Extract<MeltOperation, { state: 'prepared' }>;
 
 export function createDummyMintQuote(
   overrides?: Partial<MintQuote<'bolt11'>>,
@@ -379,6 +380,94 @@ export function createDummyInitMintOperation(
     unit: 'sat',
     ...overrides,
   } satisfies InitMintOperation;
+}
+
+function createDummyMintOperationsByState(): MintOperation[] {
+  const pending = createDummyMintOperation({
+    id: 'mint-op-pending-ownership',
+    quoteId: 'quote-pending-ownership',
+  });
+
+  return [
+    createDummyInitMintOperation({
+      id: 'mint-op-init-ownership',
+      quoteId: 'quote-init-ownership',
+    }),
+    pending,
+    {
+      ...pending,
+      id: 'mint-op-executing-ownership',
+      quoteId: 'quote-executing-ownership',
+      state: 'executing',
+    },
+    {
+      ...pending,
+      id: 'mint-op-finalized-ownership',
+      quoteId: 'quote-finalized-ownership',
+      state: 'finalized',
+    },
+    {
+      ...pending,
+      id: 'mint-op-failed-ownership',
+      quoteId: 'quote-failed-ownership',
+      state: 'failed',
+    },
+  ] satisfies MintOperation[];
+}
+
+function createDummyPersistedMeltOperationsByState(): MeltOperation[] {
+  const init = createDummyMeltOperation({
+    id: 'melt-op-init-ownership',
+    quoteId: 'melt-quote-init-ownership',
+  });
+  const prepared = {
+    ...init,
+    id: 'melt-op-prepared-ownership',
+    quoteId: 'melt-quote-prepared-ownership',
+    state: 'prepared',
+    amount: Amount.from(3),
+    fee_reserve: Amount.from(1),
+    swap_fee: Amount.zero(),
+    needsSwap: false,
+    inputAmount: Amount.from(4),
+    inputProofSecrets: ['melt-input-secret'],
+    changeOutputData: { keep: [], send: [] },
+  } satisfies PreparedMeltOperation;
+
+  return [
+    init,
+    prepared,
+    {
+      ...prepared,
+      id: 'melt-op-executing-ownership',
+      quoteId: 'melt-quote-executing-ownership',
+      state: 'executing',
+    },
+    {
+      ...prepared,
+      id: 'melt-op-pending-ownership',
+      quoteId: 'melt-quote-pending-ownership',
+      state: 'pending',
+    },
+    {
+      ...prepared,
+      id: 'melt-op-finalized-ownership',
+      quoteId: 'melt-quote-finalized-ownership',
+      state: 'finalized',
+    },
+    {
+      ...prepared,
+      id: 'melt-op-rolling-back-ownership',
+      quoteId: 'melt-quote-rolling-back-ownership',
+      state: 'rolling_back',
+    },
+    {
+      ...prepared,
+      id: 'melt-op-rolled-back-ownership',
+      quoteId: 'melt-quote-rolled-back-ownership',
+      state: 'rolled_back',
+    },
+  ] satisfies MeltOperation[];
 }
 
 export function createDummyReceiveOperation(): ReceiveOperation {
@@ -642,6 +731,189 @@ export async function runMintOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MintOperationRepository contract', () => {
+    it('round-trips ownership metadata across mint operation states', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operations = createDummyMintOperationsByState().map((operation, index) => ({
+          ...operation,
+          parent:
+            index % 2 === 0
+              ? { kind: 'mint-swap' as const, id: `mint-swap-${index}` }
+              : { kind: 'mint-batch' as const, id: `mint-batch-${index}` },
+          batchingDisabled: true,
+        })) satisfies MintOperation[];
+
+        for (const operation of operations) {
+          await repositories.mintOperationRepository.create(operation);
+          const stored = await repositories.mintOperationRepository.getById(operation.id);
+
+          expect(stored).toBeDefined();
+          expect(stored!.parent?.kind).toBe(operation.parent?.kind);
+          expect(stored!.parent?.id).toBe(operation.parent?.id);
+          expect(stored!.batchingDisabled).toBe(true);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('loads mint operations without ownership metadata as standalone and batch-eligible', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ id: 'legacy-mint-op' });
+        await repositories.mintOperationRepository.create(operation);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.parent).toBe(undefined);
+        expect(stored!.batchingDisabled).toBe(undefined);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves mint ownership metadata through regular state updates', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = {
+          ...createDummyMintOperation({ id: 'updated-mint-ownership' }),
+          parent: { kind: 'mint-swap' as const, id: 'updating-mint-swap' },
+          batchingDisabled: true,
+        } satisfies MintOperation;
+        await repositories.mintOperationRepository.create(operation);
+
+        await repositories.mintOperationRepository.update({
+          ...operation,
+          state: 'executing',
+        });
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.parent?.kind).toBe('mint-swap');
+        expect(stored?.parent?.id).toBe('updating-mint-swap');
+        expect(stored?.batchingDisabled).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('conditionally updates when both expected state and current parent match', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ id: 'conditional-mint-op' });
+        await repositories.mintOperationRepository.create(operation);
+
+        const parent = { kind: 'mint-batch' as const, id: 'mint-batch-1' };
+        const claimed = { ...operation, parent } satisfies MintOperation;
+        const claimedResult =
+          await repositories.mintOperationRepository.updateIfStateAndParentMatch(claimed, {
+            state: 'pending',
+          });
+
+        expect(claimedResult).toBe(true);
+
+        const released = {
+          ...claimed,
+          state: 'executing' as const,
+          parent: undefined,
+          batchingDisabled: true,
+        } satisfies MintOperation;
+        const releasedResult =
+          await repositories.mintOperationRepository.updateIfStateAndParentMatch(released, {
+            state: 'pending',
+            parent,
+          });
+
+        expect(releasedResult).toBe(true);
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.parent).toBe(undefined);
+        expect(stored?.batchingDisabled).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects conditional updates when state or current parent does not match', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const parent = { kind: 'mint-swap' as const, id: 'mint-swap-1' };
+        const operation = {
+          ...createDummyMintOperation({ id: 'conditional-mismatch-mint-op' }),
+          parent,
+        } satisfies MintOperation;
+        await repositories.mintOperationRepository.create(operation);
+
+        const update = {
+          ...operation,
+          state: 'executing' as const,
+          parent: { kind: 'mint-batch' as const, id: 'mint-batch-2' },
+        } satisfies MintOperation;
+
+        expect(
+          await repositories.mintOperationRepository.updateIfStateAndParentMatch(update, {
+            state: 'executing',
+            parent,
+          }),
+        ).toBe(false);
+        expect(
+          await repositories.mintOperationRepository.updateIfStateAndParentMatch(update, {
+            state: 'pending',
+          }),
+        ).toBe(false);
+        expect(
+          await repositories.mintOperationRepository.updateIfStateAndParentMatch(update, {
+            state: 'pending',
+            parent: { kind: 'mint-batch', id: 'other-parent' },
+          }),
+        ).toBe(false);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        expect(stored?.state).toBe('pending');
+        expect(stored?.parent?.kind).toBe('mint-swap');
+        expect(stored?.parent?.id).toBe('mint-swap-1');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rolls back conditional updates with the surrounding repository transaction', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ id: 'conditional-rollback-mint-op' });
+        await repositories.mintOperationRepository.create(operation);
+
+        await expectThrows(
+          () =>
+            repositories.withTransaction(async (tx) => {
+              const claimed = {
+                ...operation,
+                parent: { kind: 'mint-batch' as const, id: 'rolled-back-batch' },
+              } satisfies MintOperation;
+              const updated = await tx.mintOperationRepository.updateIfStateAndParentMatch(
+                claimed,
+                { state: 'pending' },
+              );
+              expect(updated).toBe(true);
+              await tx.mintRepository.addOrUpdateMint({
+                ...createDummyMint(),
+                mintUrl: 'https://rolled-back-mint.test',
+              });
+              throw new Error('roll back ownership claim');
+            }),
+          expect,
+        );
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        const mints = await repositories.mintRepository.getAllMints();
+        expect(stored?.parent).toBe(undefined);
+        expect(mints).toHaveLength(0);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips init mint operation quote ids', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -1568,6 +1840,71 @@ export async function runMeltOperationRepositoryContract(
   const { describe, it, expect } = runner;
 
   describe('MeltOperationRepository contract', () => {
+    it('round-trips Mint Swap ownership across persisted melt operation states', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operations = createDummyPersistedMeltOperationsByState().map((operation, index) => ({
+          ...operation,
+          parent: { kind: 'mint-swap' as const, id: `mint-swap-${index}` },
+        })) satisfies MeltOperation[];
+
+        for (const operation of operations) {
+          await repositories.meltOperationRepository.create(operation);
+          const stored = await repositories.meltOperationRepository.getById(operation.id);
+
+          expect(stored).toBeDefined();
+          expect(stored!.parent?.kind).toBe('mint-swap');
+          expect(stored!.parent?.id).toBe(operation.parent?.id);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('loads melt operations without ownership metadata as standalone', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMeltOperation({ id: 'legacy-melt-op' });
+        await repositories.meltOperationRepository.create(operation);
+
+        const stored = await repositories.meltOperationRepository.getById(operation.id);
+
+        expect(stored).toBeDefined();
+        expect(stored!.parent).toBe(undefined);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('preserves Mint Swap ownership through regular melt state updates', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const init = {
+          ...createDummyMeltOperation({
+            id: 'updated-melt-ownership',
+            quoteId: 'updated-melt-quote',
+          }),
+          parent: { kind: 'mint-swap' as const, id: 'updating-mint-swap' },
+        } satisfies MeltOperation;
+        const prepared = {
+          ...createDummyPersistedMeltOperationsByState()[1]!,
+          id: init.id,
+          quoteId: 'updated-melt-quote',
+          parent: init.parent,
+        } satisfies MeltOperation;
+        await repositories.meltOperationRepository.create(init);
+
+        await repositories.meltOperationRepository.update(prepared);
+
+        const stored = await repositories.meltOperationRepository.getById(init.id);
+        expect(stored?.state).toBe('prepared');
+        expect(stored?.parent?.kind).toBe('mint-swap');
+        expect(stored?.parent?.id).toBe('updating-mint-swap');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('round-trips custom-unit init melt operations', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {

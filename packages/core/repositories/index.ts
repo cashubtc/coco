@@ -6,6 +6,7 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
+import type { OperationParent } from '@core/operations/OperationParent';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -280,6 +281,15 @@ export interface MintOperationRepository {
 
   /** Update an existing mint operation */
   update(operation: MintOperation): Promise<void>;
+
+  /**
+   * Update only when the stored state and current parent match the expected values.
+   * An omitted expected parent matches only an unparented operation.
+   */
+  updateIfStateAndParentMatch(
+    operation: MintOperation,
+    expected: { state: MintOperationState; parent?: OperationParent },
+  ): Promise<boolean>;
 
   /** Get a mint operation by ID */
   getById(id: string): Promise<MintOperation | null>;
