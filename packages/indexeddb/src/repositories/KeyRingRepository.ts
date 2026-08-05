@@ -1,9 +1,5 @@
 import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
-import type {
-  KeyRingAllocationRepository,
-  Keypair,
-  KeypairPurpose,
-} from '@cashu/coco-core/adapter';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
 import type { IdbDb } from '../lib/db.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
@@ -25,7 +21,7 @@ interface KeypairDerivationAllocationRow {
   lastAllocatedIndex: number;
 }
 
-export class IdbKeyRingRepository implements KeyRingAllocationRepository {
+export class IdbKeyRingRepository implements KeyRingRepository {
   private readonly db: IdbDb;
 
   constructor(db: IdbDb) {
@@ -113,7 +109,10 @@ export class IdbKeyRingRepository implements KeyRingAllocationRepository {
     };
   }
 
-  async reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+  async deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair> {
     return this.db.runTransaction('rw', [ALLOCATION_STORE, KEYPAIR_STORE], async (transaction) => {
       const allocationTable = transaction.table(ALLOCATION_STORE);
       const keypairTable = transaction.table(KEYPAIR_STORE);
@@ -134,8 +133,17 @@ export class IdbKeyRingRepository implements KeyRingAllocationRepository {
       }
 
       const nextIndex = baseIndex + 1;
+      const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
+
+      await keypairTable.put({
+        publicKey: keyPair.publicKeyHex,
+        secretKey: bytesToHex(keyPair.secretKey),
+        createdAt: Date.now(),
+        derivationIndex: nextIndex,
+        purpose,
+      });
       await allocationTable.put({ purpose, lastAllocatedIndex: nextIndex });
-      return nextIndex;
+      return keyPair;
     });
   }
 }

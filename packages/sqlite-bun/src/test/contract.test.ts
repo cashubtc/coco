@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
   runRepositoryTransactionContract,
-  runKeyRingAllocationRepositoryContract,
+  runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -79,7 +79,7 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runKeyRingAllocationRepositoryContract(
+runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
@@ -123,8 +123,16 @@ describe('keyring allocation process boundary', () => {
       await reopened.init();
       try {
         await expect(
-          reopened.keyRingRepository.reserveNextDerivationIndex('nut20_mint_quote'),
-        ).resolves.toBe(100);
+          reopened.keyRingRepository.deriveAndPersistKeyPair(
+            'nut20_mint_quote',
+            (derivationIndex) => ({
+              publicKeyHex: '03' + derivationIndex.toString(16).padStart(64, '0'),
+              secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
+              derivationIndex,
+              purpose: 'nut20_mint_quote',
+            }),
+          ),
+        ).resolves.toMatchObject({ derivationIndex: 100 });
       } finally {
         reopenedDatabase.close();
       }

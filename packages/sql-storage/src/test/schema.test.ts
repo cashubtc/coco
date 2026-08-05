@@ -53,6 +53,16 @@ const EXPECTED_MIGRATION_IDS = [
   '038_keypair_derivation_allocations',
 ] as const;
 
+function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
+  return {
+    publicKeyHex:
+      (purpose === 'p2pk' ? '02' : '03') + derivationIndex.toString(16).padStart(64, '0'),
+    secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
+    derivationIndex,
+    purpose,
+  };
+}
+
 const RECEIVE_OPERATIONS_SQL = `
   CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
     id TEXT PRIMARY KEY,
@@ -225,8 +235,14 @@ describe('shared SQL schema migrations', () => {
     ]);
 
     const repository = new SqliteKeyRingRepository(db);
-    await expect(repository.reserveNextDerivationIndex('p2pk')).resolves.toBe(7);
-    await expect(repository.reserveNextDerivationIndex('nut20_mint_quote')).resolves.toBe(4);
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).resolves.toMatchObject({ derivationIndex: 7 });
+    await expect(
+      repository.deriveAndPersistKeyPair('nut20_mint_quote', (index) =>
+        deriveKeyPair(index, 'nut20_mint_quote'),
+      ),
+    ).resolves.toMatchObject({ derivationIndex: 4 });
   });
 
   itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {
@@ -246,33 +262,40 @@ describe('shared SQL schema migrations', () => {
          WHERE purpose = 'p2pk'`,
       ),
     ).toEqual({ purpose: 'p2pk', lastAllocatedIndex: 12 });
-    await expect(new SqliteKeyRingRepository(db).reserveNextDerivationIndex('p2pk')).resolves.toBe(
-      13,
-    );
+    await expect(
+      new SqliteKeyRingRepository(db).deriveAndPersistKeyPair('p2pk', (index) =>
+        deriveKeyPair(index, 'p2pk'),
+      ),
+    ).resolves.toMatchObject({ derivationIndex: 13 });
   });
 
-  itWithDatabase('does not consume an allocation when its transaction rolls back', async (db) => {
+  itWithDatabase('rolls back a saved keypair when the high-water write fails', async (db) => {
     await ensureSchemaUpTo(db);
     await db.exec(`
-      CREATE TRIGGER fail_keypair_allocation
-      BEFORE UPDATE ON coco_cashu_keypair_derivation_allocations
+      CREATE TRIGGER fail_keypair_high_water
+      BEFORE INSERT ON coco_cashu_keypair_derivation_allocations
+      WHEN NEW.lastAllocatedIndex >= 0
       BEGIN
-        SELECT RAISE(ABORT, 'forced allocation failure');
+        SELECT RAISE(ABORT, 'forced high-water failure');
       END;
     `);
 
     const repository = new SqliteKeyRingRepository(db);
-    await expect(repository.reserveNextDerivationIndex('p2pk')).rejects.toThrow(
-      'forced allocation failure',
-    );
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).rejects.toThrow('forced high-water failure');
     expect(
       await db.get(
         `SELECT purpose FROM coco_cashu_keypair_derivation_allocations WHERE purpose = 'p2pk'`,
       ),
     ).toBeUndefined();
 
-    await db.exec('DROP TRIGGER fail_keypair_allocation');
-    await expect(repository.reserveNextDerivationIndex('p2pk')).resolves.toBe(0);
+    expect(await db.get(`SELECT publicKey FROM coco_cashu_keypairs LIMIT 1`)).toBeUndefined();
+
+    await db.exec('DROP TRIGGER fail_keypair_high_water');
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).resolves.toMatchObject({ derivationIndex: 0 });
   });
 
   itWithDatabase(

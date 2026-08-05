@@ -2,7 +2,7 @@ import type {
   AuthSessionRepository,
   CounterRepository,
   HistoryProjectionRepository,
-  KeyRingAllocationRepository,
+  KeyRingRepository,
   KeysetRepository,
   LegacyMintQuoteRepository,
   MeltQuoteRepository,
@@ -39,7 +39,7 @@ import {
 
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
-  keyRingRepository: KeyRingAllocationRepository;
+  keyRingRepository: KeyRingRepository;
   counterRepository: CounterRepository;
   keysetRepository: KeysetRepository;
   proofRepository: ProofRepository;

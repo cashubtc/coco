@@ -206,21 +206,17 @@ export interface KeyRingRepository {
   deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void>;
   getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]>;
   getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null>;
-}
-
-/**
- * Root keyring repository capability for permanently consuming derivation indexes.
- *
- * This capability is deliberately absent from {@link RepositoryTransactionScope}: an allocation
- * must commit independently so that a later caller rollback cannot make its index reusable.
- */
-export interface KeyRingAllocationRepository extends KeyRingRepository {
   /**
-   * Permanently consume and return the next derivation index for `purpose`.
+   * Derive and persist the next keypair for `purpose` atomically with its durable high-water mark.
    *
-   * The returned promise must resolve only after the allocation transaction has committed.
+   * Implementations invoke `derive` synchronously inside a writer transaction and resolve only
+   * after both the returned keypair and the high-water mark have committed. If derivation,
+   * persistence, or commit fails, neither value may remain persisted.
    */
-  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number>;
+  deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair>;
 }
 
 export interface HistoryProjectionRepository {
@@ -388,11 +384,12 @@ interface RepositoriesBase {
 }
 
 export interface Repositories extends RepositoriesBase {
-  keyRingRepository: KeyRingAllocationRepository;
   init(): Promise<void>;
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
-export type RepositoryTransactionScope = RepositoriesBase;
+export type RepositoryTransactionScope = Omit<RepositoriesBase, 'keyRingRepository'> & {
+  keyRingRepository: Omit<KeyRingRepository, 'deriveAndPersistKeyPair'>;
+};
 
 export * from './memory';

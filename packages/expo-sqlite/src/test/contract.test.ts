@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
-  runKeyRingAllocationRepositoryContract,
+  runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -96,6 +96,12 @@ class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
 class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
   exclusiveTransactionCalls = 0;
   transactionCalls = 0;
+  executedSql: string[] = [];
+
+  override async execAsync(sql: string): Promise<void> {
+    this.executedSql.push(sql);
+    await super.execAsync(sql);
+  }
 
   async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
     this.exclusiveTransactionCalls++;
@@ -190,7 +196,7 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runKeyRingAllocationRepositoryContract(
+runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
@@ -264,6 +270,30 @@ describe('expo-sqlite native transaction compatibility', () => {
       expect(database.exclusiveTransactionCalls).toBe(1);
       expect(database.transactionCalls).toBe(0);
       await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
+    } finally {
+      await database.closeAsync();
+    }
+  });
+
+  it('uses BEGIN IMMEDIATE before reading when immediate mode is requested', async () => {
+    const database = new NativeExpoSqliteDatabaseShim();
+    const wrappedDatabase = new ExpoSqliteDb({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await wrappedDatabase.transaction(
+        async (transaction) => {
+          await expect(transaction.get<{ value: number }>('SELECT 1 AS value')).resolves.toEqual({
+            value: 1,
+          });
+        },
+        { mode: 'immediate' },
+      );
+
+      expect(database.executedSql).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
+      expect(database.exclusiveTransactionCalls).toBe(0);
+      expect(database.transactionCalls).toBe(0);
     } finally {
       await database.closeAsync();
     }

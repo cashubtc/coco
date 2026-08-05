@@ -178,29 +178,32 @@ describe('KeyRingService', () => {
       );
     });
 
-    it('does not consume an index when allocation fails before commit', async () => {
-      class FailBeforeAllocationRepository extends MemoryKeyRingRepository {
-        private failNextAllocation = true;
+    it('does not expose or consume an index when atomic persistence fails', async () => {
+      class FailBeforeCommitRepository extends MemoryKeyRingRepository {
+        private failNextCommit = true;
 
-        override reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
-          if (this.failNextAllocation) {
-            this.failNextAllocation = false;
-            return Promise.reject(new Error('allocation failed'));
+        override deriveAndPersistKeyPair(
+          purpose: KeypairPurpose,
+          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+        ): Promise<Keypair> {
+          if (this.failNextCommit) {
+            this.failNextCommit = false;
+            return Promise.reject(new Error('commit failed'));
           }
-          return super.reserveNextDerivationIndex(purpose);
+          return super.deriveAndPersistKeyPair(purpose, derive);
         }
       }
 
-      const failingRepository = new FailBeforeAllocationRepository();
+      const failingRepository = new FailBeforeCommitRepository();
       const failingService = new KeyRingService(failingRepository, seedService);
 
-      await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('allocation failed');
+      await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('commit failed');
       await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
         derivationIndex: 0,
       });
     });
 
-    it('leaves a permanent gap when seed loading fails after allocation', async () => {
+    it('loads the seed before allocating a derivation index', async () => {
       let failNextSeed = true;
       const failingSeedService = new SeedService(async () => {
         if (failNextSeed) {
@@ -214,36 +217,11 @@ describe('KeyRingService', () => {
       await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('seed unavailable');
       expect(await repo.getAllPersistedKeyPairs('nut20_mint_quote')).toEqual([]);
       await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
-        derivationIndex: 1,
+        derivationIndex: 0,
       });
     });
 
-    it('leaves a permanent gap when key persistence fails after allocation', async () => {
-      class FailFirstPersistenceRepository extends MemoryKeyRingRepository {
-        private failNextPersistence = true;
-
-        override async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
-          if (this.failNextPersistence) {
-            this.failNextPersistence = false;
-            throw new Error('key persistence failed');
-          }
-          await super.setPersistedKeyPair(keyPair);
-        }
-      }
-
-      const failingRepository = new FailFirstPersistenceRepository();
-      const failingService = new KeyRingService(failingRepository, seedService);
-
-      await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow(
-        'key persistence failed',
-      );
-      expect(await failingRepository.getAllPersistedKeyPairs('nut20_mint_quote')).toEqual([]);
-      await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
-        derivationIndex: 1,
-      });
-    });
-
-    it('does not resolve generation before the keypair is persisted', async () => {
+    it('does not return the keypair before the repository commit completes', async () => {
       let releasePersistence!: () => void;
       let reportPersistenceStarted!: () => void;
       const persistenceGate = new Promise<void>((resolve) => {
@@ -254,10 +232,14 @@ describe('KeyRingService', () => {
       });
 
       class BlockingPersistenceRepository extends MemoryKeyRingRepository {
-        override async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
+        override async deriveAndPersistKeyPair(
+          purpose: KeypairPurpose,
+          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+        ): Promise<Keypair> {
+          const keyPair = await super.deriveAndPersistKeyPair(purpose, derive);
           reportPersistenceStarted();
           await persistenceGate;
-          await super.setPersistedKeyPair(keyPair);
+          return keyPair;
         }
       }
 
@@ -288,9 +270,12 @@ describe('KeyRingService', () => {
         purpose: 'nut20_mint_quote',
       });
 
-      const allocation = repo.reserveNextDerivationIndex('nut20_mint_quote');
-      await expect(allocation).rejects.toBeInstanceOf(DerivationIndexExhaustedError);
-      await expect(repo.reserveNextDerivationIndex('p2pk')).resolves.toBe(0);
+      await expect(service.generateMintQuoteKeyPair()).rejects.toBeInstanceOf(
+        DerivationIndexExhaustedError,
+      );
+      await expect(service.generateNewKeyPair({ dumpSecretKey: true })).resolves.toMatchObject({
+        derivationIndex: 0,
+      });
     });
 
     it('keeps mint quote keys out of user-facing key queries and removal', async () => {

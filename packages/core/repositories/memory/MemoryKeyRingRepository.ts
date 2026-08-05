@@ -1,14 +1,14 @@
 import type { Keypair, KeypairPurpose } from '../../models/Keypair';
 import { DerivationIndexExhaustedError } from '../../models/Error.ts';
-import type { KeyRingAllocationRepository } from '..';
+import type { KeyRingRepository } from '..';
 
 const DEFAULT_KEYPAIR_PURPOSE: KeypairPurpose = 'p2pk';
 const MAX_DERIVATION_INDEX = 0x7fffffff;
 
-export class MemoryKeyRingRepository implements KeyRingAllocationRepository {
+export class MemoryKeyRingRepository implements KeyRingRepository {
   private keyPairs: Map<string, Keypair> = new Map();
   private insertionOrder: string[] = [];
-  private lastAllocatedIndexes: Map<KeypairPurpose, number> = new Map();
+  private highWaterMarks: Map<KeypairPurpose, number> = new Map();
 
   async getPersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<Keypair | null> {
     const keyPair = this.keyPairs.get(publicKey) ?? null;
@@ -17,6 +17,10 @@ export class MemoryKeyRingRepository implements KeyRingAllocationRepository {
   }
 
   async setPersistedKeyPair(keyPair: Keypair): Promise<void> {
+    this.persistKeyPair(keyPair);
+  }
+
+  private persistKeyPair(keyPair: Keypair): void {
     if (!this.keyPairs.has(keyPair.publicKeyHex)) {
       this.insertionOrder.push(keyPair.publicKeyHex);
     }
@@ -66,7 +70,10 @@ export class MemoryKeyRingRepository implements KeyRingAllocationRepository {
     return null;
   }
 
-  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+  async deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair> {
     let greatestStoredIndex = -1;
     for (const keypair of this.keyPairs.values()) {
       if ((keypair.purpose ?? DEFAULT_KEYPAIR_PURPOSE) !== purpose) continue;
@@ -75,14 +82,17 @@ export class MemoryKeyRingRepository implements KeyRingAllocationRepository {
       }
     }
 
-    const lastAllocatedIndex = this.lastAllocatedIndexes.get(purpose) ?? -1;
-    const baseIndex = Math.max(lastAllocatedIndex, greatestStoredIndex);
+    const highWaterMark = this.highWaterMarks.get(purpose) ?? -1;
+    const baseIndex = Math.max(highWaterMark, greatestStoredIndex);
     if (baseIndex >= MAX_DERIVATION_INDEX) {
-      return Promise.reject(new DerivationIndexExhaustedError(purpose));
+      throw new DerivationIndexExhaustedError(purpose);
     }
 
     const nextIndex = baseIndex + 1;
-    this.lastAllocatedIndexes.set(purpose, nextIndex);
-    return Promise.resolve(nextIndex);
+    const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
+
+    this.persistKeyPair(keyPair);
+    this.highWaterMarks.set(purpose, nextIndex);
+    return keyPair;
   }
 }

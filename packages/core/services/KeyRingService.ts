@@ -1,6 +1,6 @@
 import type { Proof } from '@cashu/cashu-ts';
 import type { Logger } from '@core/logging';
-import type { KeyRingAllocationRepository } from '@core/repositories';
+import type { KeyRingRepository } from '@core/repositories';
 import type { Keypair, KeypairPurpose } from '@core/models/Keypair';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex } from '@noble/curves/utils.js';
@@ -15,13 +15,9 @@ export class KeyRingService {
   };
 
   private readonly logger?: Logger;
-  private readonly keyRingRepository: KeyRingAllocationRepository;
+  private readonly keyRingRepository: KeyRingRepository;
   private readonly seedService: SeedService;
-  constructor(
-    keyRingRepository: KeyRingAllocationRepository,
-    seedService: SeedService,
-    logger?: Logger,
-  ) {
+  constructor(keyRingRepository: KeyRingRepository, seedService: SeedService, logger?: Logger) {
     this.keyRingRepository = keyRingRepository;
     this.logger = logger;
     this.seedService = seedService;
@@ -49,30 +45,29 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     this.logger?.debug('Generating new key pair');
-    const nextDerivationIndex = await this.keyRingRepository.reserveNextDerivationIndex(purpose);
     const seed = await this.seedService.getSeed();
     const hdKey = HDKey.fromMasterSeed(seed);
     const derivationPurpose = KeyRingService.DERIVATION_PURPOSES[purpose];
-    const derivationPath = `m/129373'/${derivationPurpose}'/0'/0'/${nextDerivationIndex}`;
-    const { privateKey: secretKey } = hdKey.derive(derivationPath);
-    if (!secretKey) {
-      throw new Error('Failed to derive secret key');
-    }
-    const publicKeyHex =
-      purpose === 'nut20_mint_quote'
-        ? this.getCompressedPublicKeyHex(secretKey)
-        : this.getPublicKeyHex(secretKey);
-    await this.keyRingRepository.setPersistedKeyPair({
-      publicKeyHex,
-      secretKey,
-      derivationIndex: nextDerivationIndex,
+    const keyPair = await this.keyRingRepository.deriveAndPersistKeyPair(
       purpose,
-    });
-    this.logger?.debug('New key pair generated', { publicKeyHex });
+      (derivationIndex) => {
+        const derivationPath = `m/129373'/${derivationPurpose}'/0'/0'/${derivationIndex}`;
+        const { privateKey: secretKey } = hdKey.derive(derivationPath);
+        if (!secretKey) {
+          throw new Error('Failed to derive secret key');
+        }
+        const publicKeyHex =
+          purpose === 'nut20_mint_quote'
+            ? this.getCompressedPublicKeyHex(secretKey)
+            : this.getPublicKeyHex(secretKey);
+        return { publicKeyHex, secretKey };
+      },
+    );
+    this.logger?.debug('New key pair generated', { publicKeyHex: keyPair.publicKeyHex });
     if (options?.dumpSecretKey) {
-      return { publicKeyHex, secretKey, derivationIndex: nextDerivationIndex, purpose };
+      return keyPair;
     }
-    return { publicKeyHex };
+    return { publicKeyHex: keyPair.publicKeyHex };
   }
 
   async addKeyPair(secretKey: Uint8Array): Promise<Keypair> {

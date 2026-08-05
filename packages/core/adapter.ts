@@ -3,7 +3,6 @@ export type {
   CounterRepository,
   HistoryProjectionRepository,
   HistoryRepository,
-  KeyRingAllocationRepository,
   KeyRingRepository,
   KeysetRepository,
   LegacyMintQuoteRepository,

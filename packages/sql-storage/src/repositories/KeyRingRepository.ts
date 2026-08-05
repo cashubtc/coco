@@ -1,9 +1,5 @@
 import { DerivationIndexExhaustedError } from '@cashu/coco-core/adapter';
-import type {
-  KeyRingAllocationRepository,
-  Keypair,
-  KeypairPurpose,
-} from '@cashu/coco-core/adapter';
+import type { KeyRingRepository, Keypair, KeypairPurpose } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from '../index.ts';
 import { hexToBytes, bytesToHex } from '../utils.ts';
 
@@ -44,7 +40,7 @@ function rowToKeypair(row: KeypairRow): Keypair {
   };
 }
 
-export class SqliteKeyRingRepository implements KeyRingAllocationRepository {
+export class SqliteKeyRingRepository implements KeyRingRepository {
   private readonly db: SqlDatabase;
 
   constructor(db: SqlDatabase) {
@@ -134,10 +130,13 @@ export class SqliteKeyRingRepository implements KeyRingAllocationRepository {
     }
   }
 
-  async reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number> {
+  async deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair> {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.reserveNextDerivationIndexOnce(purpose);
+        return await this.deriveAndPersistKeyPairOnce(purpose, derive);
       } catch (error) {
         if (!isSqliteBusy(error) || attempt > MAX_BUSY_RETRIES) throw error;
         await waitForRetry(attempt);
@@ -145,50 +144,22 @@ export class SqliteKeyRingRepository implements KeyRingAllocationRepository {
     }
   }
 
-  private async reserveNextDerivationIndexOnce(purpose: KeypairPurpose): Promise<number> {
-    return this.db.transaction(async (tx) => {
-      await tx.run(
-        `INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
-         VALUES (?, -1)
-         ON CONFLICT(purpose) DO NOTHING`,
-        [purpose],
-      );
-
-      const update = await tx.run(
-        `UPDATE coco_cashu_keypair_derivation_allocations
-         SET lastAllocatedIndex = MAX(
-           lastAllocatedIndex,
-           COALESCE(
-             (SELECT MAX(keypairs.derivationIndex)
-              FROM coco_cashu_keypairs AS keypairs
-              WHERE keypairs.purpose = ?),
-             -1
-           )
-         ) + 1
-         WHERE purpose = ?
-           AND MAX(
-             lastAllocatedIndex,
-             COALESCE(
-               (SELECT MAX(keypairs.derivationIndex)
-                FROM coco_cashu_keypairs AS keypairs
-                WHERE keypairs.purpose = ?),
-               -1
-             )
-           ) < ?`,
-        [purpose, purpose, purpose, MAX_DERIVATION_INDEX],
-      );
-
-      if (update.changes !== 1) {
+  private async deriveAndPersistKeyPairOnce(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair> {
+    return this.db.transaction(
+      async (tx) => {
         const allocation = await tx.get<{ lastAllocatedIndex: number }>(
           `SELECT lastAllocatedIndex
-           FROM coco_cashu_keypair_derivation_allocations
-           WHERE purpose = ?`,
+         FROM coco_cashu_keypair_derivation_allocations
+         WHERE purpose = ?`,
           [purpose],
         );
         const greatestStored = await tx.get<{ derivationIndex: number | null }>(
           `SELECT MAX(derivationIndex) AS derivationIndex
-           FROM coco_cashu_keypairs
-           WHERE purpose = ? AND derivationIndex IS NOT NULL`,
+         FROM coco_cashu_keypairs
+         WHERE purpose = ? AND derivationIndex IS NOT NULL`,
           [purpose],
         );
         const baseIndex = Math.max(
@@ -198,19 +169,20 @@ export class SqliteKeyRingRepository implements KeyRingAllocationRepository {
         if (baseIndex >= MAX_DERIVATION_INDEX) {
           throw new DerivationIndexExhaustedError(purpose);
         }
-        throw new Error(`Failed to reserve a derivation index for keypair purpose ${purpose}`);
-      }
 
-      const allocation = await tx.get<{ lastAllocatedIndex: number }>(
-        `SELECT lastAllocatedIndex
-         FROM coco_cashu_keypair_derivation_allocations
-         WHERE purpose = ?`,
-        [purpose],
-      );
-      if (!allocation) {
-        throw new Error(`Missing derivation allocation for keypair purpose ${purpose}`);
-      }
-      return allocation.lastAllocatedIndex;
-    });
+        const nextIndex = baseIndex + 1;
+        const keyPair = { ...derive(nextIndex), derivationIndex: nextIndex, purpose };
+
+        await new SqliteKeyRingRepository(tx).setPersistedKeyPair(keyPair);
+        await tx.run(
+          `INSERT INTO coco_cashu_keypair_derivation_allocations (purpose, lastAllocatedIndex)
+         VALUES (?, ?)
+         ON CONFLICT(purpose) DO UPDATE SET lastAllocatedIndex=excluded.lastAllocatedIndex`,
+          [purpose, nextIndex],
+        );
+        return keyPair;
+      },
+      { mode: 'immediate' },
+    );
   }
 }

@@ -3,7 +3,7 @@ import type {
   RepositoryTransactionScope,
   MintRepository,
   KeysetRepository,
-  KeyRingAllocationRepository,
+  KeyRingRepository,
   CounterRepository,
   ProofRepository,
   MeltQuoteRepository,
@@ -70,7 +70,7 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
 
 export class SqlStorageRepositories implements Repositories {
   readonly mintRepository: MintRepository;
-  readonly keyRingRepository: KeyRingAllocationRepository;
+  readonly keyRingRepository: KeyRingRepository;
   readonly counterRepository: CounterRepository;
   readonly keysetRepository: KeysetRepository;
   readonly proofRepository: ProofRepository;

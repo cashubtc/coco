@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
-  runKeyRingAllocationRepositoryContract,
+  runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -78,7 +78,7 @@ runRepositoryTransactionContract(
   { describe, it, expect },
 );
 
-runKeyRingAllocationRepositoryContract(
+runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );

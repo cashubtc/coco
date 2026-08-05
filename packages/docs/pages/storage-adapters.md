@@ -30,32 +30,38 @@ Concrete core services, operation service classes, handler providers, transport
 internals, and individual memory repository classes are not part of the
 app-facing root API.
 
-## Atomic key derivation allocation
+## Atomic key derivation persistence
 
-The root `Repositories.keyRingRepository` implements `KeyRingAllocationRepository`:
+`KeyRingRepository` owns the transaction boundary for generated keys:
 
 ```ts
-interface KeyRingAllocationRepository extends KeyRingRepository {
-  reserveNextDerivationIndex(purpose: KeypairPurpose): Promise<number>;
+interface KeyRingRepository {
+  deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair>;
 }
 ```
 
-This method must atomically select and persist an index greater than both the purpose's durable
-high-water mark and every stored keypair index for that purpose. Its promise resolves only after
-that allocation commits. A committed index is permanent even when later seed access, key
-derivation, or key persistence fails, so gaps are expected and must not be recycled.
+The caller loads the seed before invoking this method. The repository then starts a writer
+transaction, selects an index greater than both the purpose's durable high-water mark and every
+stored keypair index, synchronously derives the key, and commits the keypair and high-water mark
+together. The promise resolves with the keypair only after commit.
 
-Allocation is deliberately unavailable on `RepositoryTransactionScope`. Implement it as an
-independent top-level storage transaction; nesting it in a caller transaction would allow a later
-rollback to reuse an index. A process-local mutex or optional read/increment/write fallback does
-not satisfy the contract because it cannot coordinate independent processes, database connections,
-or browser tabs.
+If derivation, persistence, or commit fails, neither the keypair nor the high-water mark may remain
+persisted. Reusing that index is safe because the key was never returned. Once a keypair commits,
+deleting it must not lower the high-water mark or make its index reusable. A process-local mutex
+alone does not satisfy the contract because it cannot coordinate independent processes, database
+connections, or browser tabs.
+
+Call this root repository method directly; it is omitted from `RepositoryTransactionScope` so its
+result cannot be exposed before a surrounding caller transaction commits.
 
 The Memory adapter guarantees this behavior only for callers sharing one repository object. SQL
-adapters use a native writer transaction, and IndexedDB uses one `readwrite` transaction covering
-the keypair and allocation stores. Adapter authors can run
-`runKeyRingAllocationRepositoryContract` from `@cashu/coco-adapter-tests` to verify the required
-sequences, gaps, bounds, and shared-storage behavior.
+adapters use an immediate/exclusive writer transaction, and IndexedDB uses one `readwrite`
+transaction covering the keypair and allocation stores. Adapter authors can run
+`runKeyRingDerivationRepositoryContract` from `@cashu/coco-adapter-tests` to verify rollback,
+purpose isolation, bounds, deletion behavior, and shared-storage coordination.
 
 ## Security
 
@@ -68,7 +74,7 @@ encryption at rest should use an encrypted database, encrypted filesystem or pla
 a custom `Repositories` implementation that provides the required protection. Ensure that the
 chosen protection also covers database journals and backups.
 
-Back up and restore keypairs and key-derivation allocation metadata together. A full database
+Back up and restore keypairs and key-derivation high-water metadata together. A full database
 deletion intentionally starts a new local allocation namespace. Restoring a historical snapshot can
 reproduce deterministic keys created after that snapshot when the same Wallet Seed is reused;
 applications must avoid exposing post-snapshot quote keys or rotate to a new seed/allocation

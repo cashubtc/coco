@@ -8,10 +8,10 @@
 '@cashu/coco-indexeddb': patch
 ---
 
-Atomically reserve purpose-scoped key derivation indexes before key generation so concurrent P2PK
-and NUT-20 mint-quote calls cannot reuse deterministic keys. Add durable SQL and IndexedDB
-high-water migrations, permanent gap semantics, cross-instance adapter contracts, and explicit
+Atomically derive and persist purpose-scoped keypairs with their durable high-water marks so
+concurrent P2PK and NUT-20 mint-quote calls cannot reuse deterministic keys. Add SQL and IndexedDB
+high-water migrations, rollback-safe cross-instance adapter contracts, and explicit
 derivation-index exhaustion errors.
 
-Custom repository adapters must replace `getLastDerivationIndex` with the required root-only
-`KeyRingAllocationRepository.reserveNextDerivationIndex` capability.
+Custom repository adapters must replace `getLastDerivationIndex` with the required
+`KeyRingRepository.deriveAndPersistKeyPair` transaction boundary.

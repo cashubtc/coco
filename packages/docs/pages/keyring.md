@@ -36,14 +36,15 @@ The secret key is sensitive cryptographic material. When setting `dumpSecretKey:
 
 #### Atomic derivation allocation
 
-Coco reserves each derivation index in storage before loading the seed and deriving the key. The
-allocation sequence is independent for P2PK keys and NUT-20 mint-quote keys, and built-in durable
-adapters coordinate sessions that share the same database. Concurrent generation therefore cannot
-select the same index or deterministic key.
+Coco loads the seed first, then asks the storage adapter to derive and persist the next key inside
+one writer transaction. The transaction commits the generated keypair and its purpose-scoped
+high-water mark together, and the key is returned only after commit. Built-in durable adapters
+coordinate sessions that share the same database, so concurrent generation cannot select the same
+index or deterministic key.
 
-An index remains consumed if seed access, derivation, or key persistence fails after reservation.
-This can leave intentional gaps in the sequence; gaps are safe and are never filled later. Removing
-a generated keypair also does not make its index reusable.
+If seed access, derivation, persistence, or commit fails, no key is exposed and the transaction does
+not consume the index. Removing a successfully generated keypair does not lower the durable
+high-water mark, so its committed index is never reused.
 
 ### Importing Existing Keypairs
 
@@ -176,8 +177,8 @@ private keys and NUT-20 mint-quote private keys.
 See [Storage Adapters](./storage-adapters.md#security) for the storage security model and guidance
 on protecting wallet data.
 
-Derivation allocation metadata and keypairs form one backup unit. Restoring only keypairs without
-the allocation metadata is unsupported. Deleting the complete database or restoring an old
+Derivation high-water metadata and keypairs form one backup unit. Restoring only keypairs without
+the high-water metadata is unsupported. Deleting the complete database or restoring an old
 snapshot resets allocation history to that state and can reproduce keys derived after the snapshot
 when the same seed is reused.
 
