@@ -272,6 +272,7 @@ class CocoLifecycleAdapter {
       method: 'bolt11',
       unit: input.unit,
     });
+    await this.#waitForMintQuotePayment(quote.mintUrl, quote.quoteId, input.amount);
     const operation = await manager.ops.mint.prepare({
       quote: { mintUrl: quote.mintUrl, method: 'bolt11', quoteId: quote.quoteId },
       amount: Amount.from(input.amount),
@@ -317,10 +318,25 @@ class CocoLifecycleAdapter {
     try {
       const operation = await manager.ops.mint.execute(row.coco_operation_id);
       return this.#recordCocoOutcome(row.operation_id, operation, fallbackPhase);
-    } catch {
+    } catch (error) {
       const operation = await manager.ops.mint.get(row.coco_operation_id);
+      console.warn('Coco Fault Lab mint execution requires recovery', {
+        operationId: row.operation_id,
+        state: operation?.state ?? 'missing',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return this.#recordCocoOutcome(row.operation_id, operation, fallbackPhase);
     }
+  }
+
+  async #waitForMintQuotePayment(mintUrl: string, quoteId: string, amount: number): Promise<void> {
+    const required = Amount.from(amount);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const quote = await this.#requiredManager().quotes.mint.refresh({ mintUrl, quoteId });
+      if (quote.amountPaid.greaterThanOrEqual(required)) return;
+      await Bun.sleep(250);
+    }
+    throw new Error(`Mint quote ${quoteId} was not paid by the test fixture`);
   }
 
   #recordCocoOutcome(
