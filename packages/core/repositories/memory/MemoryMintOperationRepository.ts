@@ -16,21 +16,32 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   }
 
   async update(operation: MintOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const current = this.operations.get(operation.id);
+    if (!current) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, {
+      ...operation,
+      parent: current.parent,
+      batchingDisabled: current.batchingDisabled,
+      updatedAt: Date.now(),
+    });
   }
 
   async updateIfStateAndParentMatch(
     operation: MintOperation,
-    expected: { state: MintOperationState; parent?: OperationParent },
+    expected: {
+      state: MintOperationState;
+      parent?: OperationParent;
+      batchingDisabled?: boolean;
+    },
   ): Promise<boolean> {
     const current = this.operations.get(operation.id);
     if (
       !current ||
       current.state !== expected.state ||
-      !parentsEqual(current.parent, expected.parent)
+      !parentsEqual(current.parent, expected.parent) ||
+      Boolean(current.batchingDisabled) !== Boolean(expected.batchingDisabled)
     ) {
       return false;
     }

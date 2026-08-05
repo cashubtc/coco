@@ -164,6 +164,10 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       }
 
       const row = operationToRow(operation);
+      if (existing.parent) row.parent = existing.parent;
+      else delete row.parent;
+      if (existing.batchingDisabled === 1) row.batchingDisabled = 1;
+      else delete row.batchingDisabled;
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
     });
@@ -171,7 +175,11 @@ export class IdbMintOperationRepository implements MintOperationRepository {
 
   async updateIfStateAndParentMatch(
     operation: MintOperation,
-    expected: { state: MintOperationState; parent?: OperationParent },
+    expected: {
+      state: MintOperationState;
+      parent?: OperationParent;
+      batchingDisabled?: boolean;
+    },
   ): Promise<boolean> {
     return this.db.runTransaction('rw', ['coco_cashu_mint_operations'], async (tx) => {
       const table = tx.table('coco_cashu_mint_operations');
@@ -179,7 +187,8 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       if (
         !existing ||
         existing.state !== expected.state ||
-        !parentsEqual(parseParent(existing), expected.parent)
+        !parentsEqual(parseParent(existing), expected.parent) ||
+        (existing.batchingDisabled === 1) !== Boolean(expected.batchingDisabled)
       ) {
         return false;
       }

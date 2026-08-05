@@ -279,16 +279,21 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation while preserving its stored ownership metadata. */
   update(operation: MintOperation): Promise<void>;
 
   /**
-   * Update only when the stored state and current parent match the expected values.
-   * An omitted expected parent matches only an unparented operation.
+   * Update only when the stored state, current parent, and batching eligibility match.
+   * An omitted parent matches only an unparented operation. An omitted batching-disabled marker
+   * matches only a batch-eligible operation.
    */
   updateIfStateAndParentMatch(
     operation: MintOperation,
-    expected: { state: MintOperationState; parent?: OperationParent },
+    expected: {
+      state: MintOperationState;
+      parent?: OperationParent;
+      batchingDisabled?: boolean;
+    },
   ): Promise<boolean>;
 
   /** Get a mint operation by ID */

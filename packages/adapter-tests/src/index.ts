@@ -798,6 +798,34 @@ export async function runMintOperationRepositoryContract(
       }
     });
 
+    it('preserves a concurrent ownership claim through a stale regular update', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const staleOperation = createDummyMintOperation({ id: 'stale-mint-ownership' });
+        await repositories.mintOperationRepository.create(staleOperation);
+
+        const parent = { kind: 'mint-batch' as const, id: 'concurrent-mint-batch' };
+        const claimed = await repositories.mintOperationRepository.updateIfStateAndParentMatch(
+          { ...staleOperation, parent, batchingDisabled: true },
+          { state: 'pending' },
+        );
+        expect(claimed).toBe(true);
+
+        await repositories.mintOperationRepository.update({
+          ...staleOperation,
+          state: 'executing',
+        });
+
+        const stored = await repositories.mintOperationRepository.getById(staleOperation.id);
+        expect(stored?.state).toBe('executing');
+        expect(stored?.parent?.kind).toBe(parent.kind);
+        expect(stored?.parent?.id).toBe(parent.id);
+        expect(stored?.batchingDisabled).toBe(true);
+      } finally {
+        await dispose();
+      }
+    });
+
     it('conditionally updates when both expected state and current parent match', async () => {
       const { repositories, dispose } = await options.createRepositories();
       try {
@@ -873,6 +901,35 @@ export async function runMintOperationRepositoryContract(
         expect(stored?.state).toBe('pending');
         expect(stored?.parent?.kind).toBe('mint-swap');
         expect(stored?.parent?.id).toBe('mint-swap-1');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('rejects a stale batch claim after batching is disabled', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const operation = createDummyMintOperation({ id: 'disabled-stale-batch-claim' });
+        await repositories.mintOperationRepository.create(operation);
+
+        const disabled = await repositories.mintOperationRepository.updateIfStateAndParentMatch(
+          { ...operation, batchingDisabled: true },
+          { state: 'pending' },
+        );
+        expect(disabled).toBe(true);
+
+        const claimed = await repositories.mintOperationRepository.updateIfStateAndParentMatch(
+          {
+            ...operation,
+            parent: { kind: 'mint-batch', id: 'stale-batch' },
+          },
+          { state: 'pending' },
+        );
+        expect(claimed).toBe(false);
+
+        const stored = await repositories.mintOperationRepository.getById(operation.id);
+        expect(stored?.parent).toBe(undefined);
+        expect(stored?.batchingDisabled).toBe(true);
       } finally {
         await dispose();
       }

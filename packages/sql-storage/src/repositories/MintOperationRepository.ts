@@ -196,22 +196,30 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
 
-    await this.updateWhere(operation, 'id = ?', [operation.id]);
+    await this.updateWhere(operation, 'id = ?', [operation.id], false);
   }
 
   async updateIfStateAndParentMatch(
     operation: MintOperation,
-    expected: { state: MintOperationState; parent?: OperationParent },
+    expected: {
+      state: MintOperationState;
+      parent?: OperationParent;
+      batchingDisabled?: boolean;
+    },
   ): Promise<boolean> {
     const parentCondition = expected.parent
       ? 'parentKind = ? AND parentId = ?'
       : 'parentKind IS NULL AND parentId IS NULL';
     const parentParams = expected.parent ? [expected.parent.kind, expected.parent.id] : [];
+    const batchingCondition = expected.batchingDisabled
+      ? 'batchingDisabled = 1'
+      : 'batchingDisabled IS NULL';
 
     const changes = await this.updateWhere(
       operation,
-      `id = ? AND state = ? AND ${parentCondition}`,
+      `id = ? AND state = ? AND ${parentCondition} AND ${batchingCondition}`,
       [operation.id, expected.state, ...parentParams],
+      true,
     );
     return changes > 0;
   }
@@ -220,13 +228,24 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     operation: MintOperation,
     where: string,
     whereParams: SqlValue[],
+    updateOwnership: boolean,
   ): Promise<number> {
     const updatedAtSeconds = getUnixTimeSeconds();
+    const ownershipAssignments = updateOwnership
+      ? ', parentKind = ?, parentId = ?, batchingDisabled = ?'
+      : '';
+    const ownershipParams = updateOwnership
+      ? [
+          operation.parent?.kind ?? null,
+          operation.parent?.id ?? null,
+          operation.batchingDisabled ? 1 : null,
+        ]
+      : [];
 
     if (operation.state === 'init') {
       const result = await this.db.run(
         `UPDATE coco_cashu_mint_operations
-         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?, parentKind = ?, parentId = ?, batchingDisabled = ?
+         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?${ownershipAssignments}
          WHERE ${where}`,
         [
           operation.quoteId,
@@ -238,9 +257,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
-          operation.parent?.kind ?? null,
-          operation.parent?.id ?? null,
-          operation.batchingDisabled ? 1 : null,
+          ...ownershipParams,
           ...whereParams,
         ],
       );
@@ -249,7 +266,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
 
     const result = await this.db.run(
       `UPDATE coco_cashu_mint_operations
-       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?, parentKind = ?, parentId = ?, batchingDisabled = ?
+       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?${ownershipAssignments}
        WHERE ${where}`,
       [
         operation.quoteId,
@@ -267,9 +284,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
-        operation.parent?.kind ?? null,
-        operation.parent?.id ?? null,
-        operation.batchingDisabled ? 1 : null,
+        ...ownershipParams,
         ...whereParams,
       ],
     );
