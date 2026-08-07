@@ -1,4 +1,8 @@
-import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/adapter';
+import type {
+  MeltMethodInputData,
+  MeltOperationRepository,
+  MintSwapOperationParent,
+} from '@cashu/coco-core/adapter';
 import {
   deserializeAmount,
   normalizeMeltMethodData,
@@ -36,7 +40,17 @@ const isPreparedState = (state: MeltOperationState) => preparedStates.includes(s
 const parseMethodData = (row: MeltOperationRow): MeltMethodData =>
   normalizeMeltMethodData(JSON.parse(row.methodDataJson) as MeltMethodInputData);
 
+const parseParent = (row: MeltOperationRow): MintSwapOperationParent | undefined => {
+  if (!row.parent) return undefined;
+  if (row.parent.kind !== 'mint-swap' || !row.parent.id) {
+    throw new Error(`MeltOperation ${row.id} has invalid parent metadata`);
+  }
+
+  return row.parent;
+};
+
 const rowToOperation = (row: MeltOperationRow): MeltOperation => {
+  const parent = parseParent(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -46,6 +60,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    ...(parent ? { parent } : {}),
   };
 
   if (!isPreparedState(row.state)) {
@@ -124,6 +139,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       changeOutputDataJson: null,
       swapOutputDataJson: null,
       finalizedDataJson: null,
+      ...(operation.parent ? { parent: operation.parent } : {}),
     };
   }
 
@@ -160,6 +176,7 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       operation.state === 'finalized' && settlement.finalizedData !== undefined
         ? JSON.stringify(settlement.finalizedData)
         : null,
+    ...(operation.parent ? { parent: operation.parent } : {}),
   };
 };
 

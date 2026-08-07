@@ -6,6 +6,7 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
+import type { OperationParent } from '@core/operations/OperationParent';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -278,8 +279,22 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation while preserving its stored ownership metadata. */
   update(operation: MintOperation): Promise<void>;
+
+  /**
+   * Update only when the stored state, current parent, and batching eligibility match.
+   * An omitted parent matches only an unparented operation. An omitted batching-disabled marker
+   * matches only a batch-eligible operation.
+   */
+  updateIfStateAndParentMatch(
+    operation: MintOperation,
+    expected: {
+      state: MintOperationState;
+      parent?: OperationParent;
+      batchingDisabled?: boolean;
+    },
+  ): Promise<boolean>;
 
   /** Get a mint operation by ID */
   getById(id: string): Promise<MintOperation | null>;

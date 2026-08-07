@@ -83,6 +83,11 @@ export type {
   TerminalMeltOperation,
 } from './operations/melt/MeltOperation.ts';
 export type {
+  MintBatchOperationParent,
+  MintSwapOperationParent,
+  OperationParent,
+} from './operations/OperationParent.ts';
+export type {
   ReceiveOperationSource,
   InitReceiveOperation,
   PreparedReceiveOperation,
