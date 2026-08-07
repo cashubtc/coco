@@ -45,31 +45,29 @@ export class KeyRingService {
     },
   ): Promise<{ publicKeyHex: string } | Keypair> {
     this.logger?.debug('Generating new key pair');
-    const lastDerivationIndex = await this.keyRingRepository.getLastDerivationIndex(purpose);
-    const nextDerivationIndex = lastDerivationIndex + 1;
     const seed = await this.seedService.getSeed();
     const hdKey = HDKey.fromMasterSeed(seed);
     const derivationPurpose = KeyRingService.DERIVATION_PURPOSES[purpose];
-    const derivationPath = `m/129373'/${derivationPurpose}'/0'/0'/${nextDerivationIndex}`;
-    const { privateKey: secretKey } = hdKey.derive(derivationPath);
-    if (!secretKey) {
-      throw new Error('Failed to derive secret key');
-    }
-    const publicKeyHex =
-      purpose === 'nut20_mint_quote'
-        ? this.getCompressedPublicKeyHex(secretKey)
-        : this.getPublicKeyHex(secretKey);
-    await this.keyRingRepository.setPersistedKeyPair({
-      publicKeyHex,
-      secretKey,
-      derivationIndex: nextDerivationIndex,
+    const keyPair = await this.keyRingRepository.deriveAndPersistKeyPair(
       purpose,
-    });
-    this.logger?.debug('New key pair generated', { publicKeyHex });
+      (derivationIndex) => {
+        const derivationPath = `m/129373'/${derivationPurpose}'/0'/0'/${derivationIndex}`;
+        const { privateKey: secretKey } = hdKey.derive(derivationPath);
+        if (!secretKey) {
+          throw new Error('Failed to derive secret key');
+        }
+        const publicKeyHex =
+          purpose === 'nut20_mint_quote'
+            ? this.getCompressedPublicKeyHex(secretKey)
+            : this.getPublicKeyHex(secretKey);
+        return { publicKeyHex, secretKey };
+      },
+    );
+    this.logger?.debug('New key pair generated', { publicKeyHex: keyPair.publicKeyHex });
     if (options?.dumpSecretKey) {
-      return { publicKeyHex, secretKey, derivationIndex: nextDerivationIndex, purpose };
+      return keyPair;
     }
-    return { publicKeyHex };
+    return { publicKeyHex: keyPair.publicKeyHex };
   }
 
   async addKeyPair(secretKey: Uint8Array): Promise<Keypair> {

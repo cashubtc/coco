@@ -206,7 +206,17 @@ export interface KeyRingRepository {
   deletePersistedKeyPair(publicKey: string, purpose?: KeypairPurpose): Promise<void>;
   getAllPersistedKeyPairs(purpose?: KeypairPurpose): Promise<Keypair[]>;
   getLatestKeyPair(purpose?: KeypairPurpose): Promise<Keypair | null>;
-  getLastDerivationIndex(purpose?: KeypairPurpose): Promise<number>;
+  /**
+   * Derive and persist the next keypair for `purpose` atomically with its durable high-water mark.
+   *
+   * Implementations invoke `derive` synchronously inside a writer transaction and resolve only
+   * after both the returned keypair and the high-water mark have committed. If derivation,
+   * persistence, or commit fails, neither value may remain persisted.
+   */
+  deriveAndPersistKeyPair(
+    purpose: KeypairPurpose,
+    derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+  ): Promise<Keypair>;
 }
 
 export interface HistoryProjectionRepository {
@@ -378,6 +388,8 @@ export interface Repositories extends RepositoriesBase {
   withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T>;
 }
 
-export type RepositoryTransactionScope = RepositoriesBase;
+export type RepositoryTransactionScope = Omit<RepositoriesBase, 'keyRingRepository'> & {
+  keyRingRepository: Omit<KeyRingRepository, 'deriveAndPersistKeyPair'>;
+};
 
 export * from './memory';

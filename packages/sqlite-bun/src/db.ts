@@ -1,5 +1,10 @@
 import type { Database, Statement } from 'bun:sqlite';
-import type { SqlDatabase, SqlParams, SqlRunResult } from '@cashu/coco-sql-storage';
+import type {
+  SqlDatabase,
+  SqlParams,
+  SqlRunResult,
+  SqlTransactionOptions,
+} from '@cashu/coco-sql-storage';
 
 type SqliteRunResult = SqlRunResult & {
   readonly lastID: number;
@@ -195,7 +200,10 @@ export class SqliteDb implements SqlDatabase {
    * @returns Promise that resolves with the return value of fn
    * @throws Re-throws any error from fn after rolling back the transaction
    */
-  async transaction<T>(fn: (tx: SqliteDb) => Promise<T>): Promise<T> {
+  async transaction<T>(
+    fn: (tx: SqliteDb) => Promise<T>,
+    options?: SqlTransactionOptions,
+  ): Promise<T> {
     const { root } = this;
 
     // NESTED TRANSACTION DETECTION:
@@ -241,7 +249,7 @@ export class SqliteDb implements SqlDatabase {
       // Mark this scope as active and issue BEGIN
       root.currentScope = scopeToken;
       root.scopeDepth = 1;
-      await scopedDb.exec('BEGIN');
+      await scopedDb.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
 
       try {
         // Execute user code within the transaction

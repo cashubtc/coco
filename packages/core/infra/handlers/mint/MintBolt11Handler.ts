@@ -35,8 +35,6 @@ export class MintBolt11Handler implements MintMethodHandler<'bolt11'> {
     if (shouldLock) {
       await ctx.mintService.assertNutSupported(ctx.mintUrl, 20, 'locked BOLT11 mint quote');
     }
-    // TODO: Reserve mint-quote derivation indexes atomically in the upstream key service;
-    // concurrent quote creation can otherwise reuse the same derived key.
     const lockPubkey =
       shouldLock && !ownedPubkey
         ? (await this.keyRingService.generateMintQuoteKeyPair()).publicKeyHex

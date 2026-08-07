@@ -48,6 +48,7 @@ export {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  DerivationIndexExhaustedError,
   QuoteIdentityConflictError,
 } from './models/index.ts';
 export type {

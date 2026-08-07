@@ -3,9 +3,11 @@ import { describe, it, beforeEach, expect } from 'bun:test';
 import { KeyRingService } from '../../services/KeyRingService.ts';
 import { SeedService } from '../../services/SeedService.ts';
 import { MemoryKeyRingRepository } from '../../repositories/memory/MemoryKeyRingRepository.ts';
+import { DerivationIndexExhaustedError } from '../../models/Error.ts';
 import { bytesToHex } from '@noble/curves/utils.js';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import type { Proof } from '@cashu/cashu-ts';
+import type { Keypair, KeypairPurpose } from '../../models/Keypair.ts';
 
 // Mock seed for deterministic testing
 const MOCK_SEED = new Uint8Array(64);
@@ -126,6 +128,154 @@ describe('KeyRingService', () => {
       expect(quoteKey.publicKeyHex).toBe(
         bytesToHex(secp256k1.getPublicKey(quoteKey.secretKey, true)),
       );
+    });
+
+    it('atomically generates distinct mint quote keys for concurrent calls', async () => {
+      const keyPairs = await Promise.all(
+        Array.from({ length: 32 }, () => service.generateMintQuoteKeyPair()),
+      );
+
+      expect(new Set(keyPairs.map((keyPair) => keyPair.derivationIndex)).size).toBe(32);
+      expect(new Set(keyPairs.map((keyPair) => keyPair.publicKeyHex)).size).toBe(32);
+      expect(new Set(keyPairs.map((keyPair) => bytesToHex(keyPair.secretKey))).size).toBe(32);
+      expect(keyPairs.map((keyPair) => keyPair.derivationIndex).sort((a, b) => a! - b!)).toEqual(
+        Array.from({ length: 32 }, (_, index) => index),
+      );
+      expect(await repo.getAllPersistedKeyPairs('nut20_mint_quote')).toHaveLength(32);
+    });
+
+    it('coordinates concurrent services sharing one repository', async () => {
+      const secondService = new KeyRingService(repo, new SeedService(async () => MOCK_SEED));
+      const keyPairs = await Promise.all([
+        ...Array.from({ length: 16 }, () => service.generateMintQuoteKeyPair()),
+        ...Array.from({ length: 16 }, () => secondService.generateMintQuoteKeyPair()),
+      ]);
+
+      expect(new Set(keyPairs.map((keyPair) => keyPair.derivationIndex)).size).toBe(32);
+      expect(new Set(keyPairs.map((keyPair) => keyPair.publicKeyHex)).size).toBe(32);
+      expect(keyPairs.map((keyPair) => keyPair.derivationIndex).sort((a, b) => a! - b!)).toEqual(
+        Array.from({ length: 32 }, (_, index) => index),
+      );
+    });
+
+    it('keeps concurrent P2PK and mint quote allocation sequences independent', async () => {
+      const [p2pkKeys, quoteKeys] = await Promise.all([
+        Promise.all(
+          Array.from({ length: 16 }, () => service.generateNewKeyPair({ dumpSecretKey: true })),
+        ),
+        Promise.all(Array.from({ length: 16 }, () => service.generateMintQuoteKeyPair())),
+      ]);
+
+      const expectedIndexes = Array.from({ length: 16 }, (_, index) => index);
+      expect(p2pkKeys.map((key) => key.derivationIndex).sort((a, b) => a! - b!)).toEqual(
+        expectedIndexes,
+      );
+      expect(quoteKeys.map((key) => key.derivationIndex).sort((a, b) => a! - b!)).toEqual(
+        expectedIndexes,
+      );
+      expect(new Set([...p2pkKeys, ...quoteKeys].map((keyPair) => keyPair.publicKeyHex)).size).toBe(
+        32,
+      );
+    });
+
+    it('does not expose or consume an index when atomic persistence fails', async () => {
+      class FailBeforeCommitRepository extends MemoryKeyRingRepository {
+        private failNextCommit = true;
+
+        override deriveAndPersistKeyPair(
+          purpose: KeypairPurpose,
+          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+        ): Promise<Keypair> {
+          if (this.failNextCommit) {
+            this.failNextCommit = false;
+            return Promise.reject(new Error('commit failed'));
+          }
+          return super.deriveAndPersistKeyPair(purpose, derive);
+        }
+      }
+
+      const failingRepository = new FailBeforeCommitRepository();
+      const failingService = new KeyRingService(failingRepository, seedService);
+
+      await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('commit failed');
+      await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
+        derivationIndex: 0,
+      });
+    });
+
+    it('loads the seed before allocating a derivation index', async () => {
+      let failNextSeed = true;
+      const failingSeedService = new SeedService(async () => {
+        if (failNextSeed) {
+          failNextSeed = false;
+          throw new Error('seed unavailable');
+        }
+        return MOCK_SEED;
+      });
+      const failingService = new KeyRingService(repo, failingSeedService);
+
+      await expect(failingService.generateMintQuoteKeyPair()).rejects.toThrow('seed unavailable');
+      expect(await repo.getAllPersistedKeyPairs('nut20_mint_quote')).toEqual([]);
+      await expect(failingService.generateMintQuoteKeyPair()).resolves.toMatchObject({
+        derivationIndex: 0,
+      });
+    });
+
+    it('does not return the keypair before the repository commit completes', async () => {
+      let releasePersistence!: () => void;
+      let reportPersistenceStarted!: () => void;
+      const persistenceGate = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      const persistenceStarted = new Promise<void>((resolve) => {
+        reportPersistenceStarted = resolve;
+      });
+
+      class BlockingPersistenceRepository extends MemoryKeyRingRepository {
+        override async deriveAndPersistKeyPair(
+          purpose: KeypairPurpose,
+          derive: (derivationIndex: number) => Pick<Keypair, 'publicKeyHex' | 'secretKey'>,
+        ): Promise<Keypair> {
+          const keyPair = await super.deriveAndPersistKeyPair(purpose, derive);
+          reportPersistenceStarted();
+          await persistenceGate;
+          return keyPair;
+        }
+      }
+
+      const blockingRepository = new BlockingPersistenceRepository();
+      const blockingService = new KeyRingService(blockingRepository, seedService);
+      let generationSettled = false;
+      const generation = blockingService.generateMintQuoteKeyPair().then((keyPair) => {
+        generationSettled = true;
+        return keyPair;
+      });
+
+      await persistenceStarted;
+      await Promise.resolve();
+      expect(generationSettled).toBe(false);
+
+      releasePersistence();
+      const keyPair = await generation;
+      expect(
+        await blockingRepository.getPersistedKeyPair(keyPair.publicKeyHex, 'nut20_mint_quote'),
+      ).not.toBeNull();
+    });
+
+    it('fails explicitly when the derivation index space is exhausted', async () => {
+      await repo.setPersistedKeyPair({
+        publicKeyHex: '02' + '01'.repeat(32),
+        secretKey: new Uint8Array(32).fill(1),
+        derivationIndex: 0x7fffffff,
+        purpose: 'nut20_mint_quote',
+      });
+
+      await expect(service.generateMintQuoteKeyPair()).rejects.toBeInstanceOf(
+        DerivationIndexExhaustedError,
+      );
+      await expect(service.generateNewKeyPair({ dumpSecretKey: true })).resolves.toMatchObject({
+        derivationIndex: 0,
+      });
     });
 
     it('keeps mint quote keys out of user-facing key queries and removal', async () => {
@@ -318,6 +468,9 @@ describe('KeyRingService', () => {
 
       const latest = await service.getLatestKeyPair();
       expect(latest).toBeNull();
+
+      const next = await service.generateNewKeyPair({ dumpSecretKey: true });
+      expect(next.derivationIndex).toBe(1);
     });
   });
 

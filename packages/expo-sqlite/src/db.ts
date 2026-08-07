@@ -1,7 +1,12 @@
 // Minimal promise-based wrapper for expo-sqlite's async API
 // Consumers pass an already opened database instance
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { SqlDatabase, SqlParams, SqlRunResult } from '@cashu/coco-sql-storage';
+import type {
+  SqlDatabase,
+  SqlParams,
+  SqlRunResult,
+  SqlTransactionOptions,
+} from '@cashu/coco-sql-storage';
 
 type ExpoSqliteRunResult = SqlRunResult & {
   readonly lastID: number;
@@ -156,7 +161,10 @@ export class ExpoSqliteDb implements SqlDatabase {
    * @returns Promise that resolves with the return value of fn
    * @throws Re-throws any error from fn after rolling back the transaction
    */
-  async transaction<T>(fn: (tx: ExpoSqliteDb) => Promise<T>): Promise<T> {
+  async transaction<T>(
+    fn: (tx: ExpoSqliteDb) => Promise<T>,
+    options?: SqlTransactionOptions,
+  ): Promise<T> {
     const { root } = this;
 
     // NESTED TRANSACTION DETECTION:
@@ -197,6 +205,29 @@ export class ExpoSqliteDb implements SqlDatabase {
       root.currentScope = scopeToken;
       root.scopeDepth = 1;
 
+      const runManualTransaction = async (beginStatement: string): Promise<T> => {
+        const scopedDb = new ExpoSqliteDb(root, scopeToken);
+        await dbAny.execAsync(beginStatement);
+        try {
+          const result = await fn(scopedDb);
+          await dbAny.execAsync('COMMIT');
+          return result;
+        } catch (error) {
+          try {
+            await dbAny.execAsync('ROLLBACK');
+          } catch {
+            // Ignore rollback errors so the original transaction error is preserved.
+          }
+          throw error;
+        }
+      };
+
+      // Expo's transaction helpers always issue deferred BEGIN statements. Use the underlying
+      // connection directly when the caller needs the writer lock before its first read.
+      if (options?.mode === 'immediate') {
+        return await runManualTransaction('BEGIN IMMEDIATE');
+      }
+
       // Prefer exclusive transactions when available. Expo documents withTransactionAsync as
       // interruptible by other async queries, so transaction-scoped operations must use txn.
       if (typeof dbAny.withExclusiveTransactionAsync === 'function' && !isWebRuntime()) {
@@ -216,24 +247,8 @@ export class ExpoSqliteDb implements SqlDatabase {
         return result;
       }
 
-      // Fallback to manual BEGIN/COMMIT for older versions
-      const scopedDb = new ExpoSqliteDb(root, scopeToken);
-      await dbAny.execAsync('BEGIN');
-      try {
-        // Execute user code within the transaction
-        const res = await fn(scopedDb);
-        // Success - commit the transaction
-        await dbAny.execAsync('COMMIT');
-        return res;
-      } catch (error) {
-        // Error - rollback the transaction
-        try {
-          await dbAny.execAsync('ROLLBACK');
-        } catch {
-          // Ignore rollback errors (e.g., if transaction already rolled back)
-        }
-        throw error;
-      }
+      // Fallback for older Expo versions without transaction helpers.
+      return await runManualTransaction('BEGIN');
     } finally {
       // CLEANUP: Always clear the current scope and release the queue
       // This allows the next queued transaction to proceed
