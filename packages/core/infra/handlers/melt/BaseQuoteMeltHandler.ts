@@ -35,6 +35,7 @@ import type {
   RollbackContext,
 } from '@core/operations/melt';
 import {
+  assertProofsMatchSerializedOutputs,
   computeYHexForSecrets,
   deserializeOutputData,
   getSecretsFromSerializedOutputData,
@@ -366,9 +367,6 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
 
     const blankOutputs = await this.createChangeOutputs(amount, sendAmount, ctx);
 
-    // FIXME: This relies on the 10% swap threshold buffer to cover the future melt input fee.
-    // Pathological fee/output combinations can still make the fee-inflated send side exceed
-    // the amount validated above.
     const swapOutputData = await ctx.proofService.createOutputsAndIncrementCounters(
       mintUrl,
       {
@@ -494,6 +492,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
       return {
         operationId: operation.id,
         phase: 'pre_swap',
+        observedAt: Date.now(),
         sendProofs: send,
         keepProofs: keep,
       };
@@ -509,7 +508,7 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
       changeOutputData.keep,
       operation.quoteId,
     );
-    return { operationId: operation.id, phase: 'melt', response };
+    return { operationId: operation.id, phase: 'melt', observedAt: Date.now(), response };
   }
 
   /** Apply one remote result using transaction-scoped proof services supplied by the parent. */
@@ -527,8 +526,16 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
         throw new Error(`Melt child ${operation.id} is not awaiting a pre-swap result`);
       }
       const expected = getSecretsFromSerializedOutputData(operation.swapOutputData);
-      this.assertProofSecrets(expected.sendSecrets, result.sendProofs, 'pre-swap send');
-      this.assertProofSecrets(expected.keepSecrets, result.keepProofs, 'pre-swap keep');
+      assertProofsMatchSerializedOutputs(
+        result.sendProofs,
+        operation.swapOutputData.send,
+        'Melt pre-swap send',
+      );
+      assertProofsMatchSerializedOutputs(
+        result.keepProofs,
+        operation.swapOutputData.keep,
+        'Melt pre-swap keep',
+      );
 
       await ctx.proofService.setProofState(operation.mintUrl, operation.inputProofSecrets, 'spent');
       const newProofs = [
@@ -556,7 +563,14 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
           return (
             proof.createdByOperationId !== operation.id ||
             proof.state !== expectedState ||
-            proof.unit !== operation.unit
+            proof.unit !== operation.unit ||
+            ![...result.keepProofs, ...result.sendProofs].some(
+              (remote) =>
+                remote.secret === proof.secret &&
+                remote.id === proof.id &&
+                Amount.from(remote.amount).equals(proof.amount) &&
+                remote.C === proof.C,
+            )
           );
         })
       ) {
@@ -580,7 +594,51 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
           operation.amount,
           result.response.change,
         );
-        await this.finalizeOperation(ctx, result.response.change);
+        const changeSignatures = result.response.change ?? [];
+        const changeProofs = result.changeProofs ?? [];
+        assertProofsMatchSerializedOutputs(
+          changeProofs,
+          operation.changeOutputData.keep.slice(0, changeSignatures.length),
+          `Melt child ${operation.id} change`,
+        );
+        if (!sumProofs(changeProofs).equals(changeAmount)) {
+          throw new Error(`Melt child ${operation.id} change proofs do not reconcile`);
+        }
+        const meltInputSecrets = this.getMeltInputSecrets(operation);
+        await ctx.proofService.setProofState(operation.mintUrl, meltInputSecrets, 'spent');
+        if (changeProofs.length > 0) {
+          const expectedSecrets = changeProofs.map(({ secret }) => secret);
+          const existing = await ctx.proofRepository.getProofsBySecrets(
+            operation.mintUrl,
+            expectedSecrets,
+          );
+          if (existing.length === 0) {
+            await ctx.proofService.saveProofs(
+              operation.mintUrl,
+              mapProofToCoreProof(operation.mintUrl, 'ready', changeProofs, {
+                unit: operation.unit,
+                createdByOperationId: operation.id,
+              }),
+            );
+          } else if (
+            existing.length !== changeProofs.length ||
+            existing.some(
+              (proof) =>
+                proof.createdByOperationId !== operation.id ||
+                proof.state !== 'ready' ||
+                proof.unit !== operation.unit ||
+                !changeProofs.some(
+                  (remote) =>
+                    remote.secret === proof.secret &&
+                    remote.id === proof.id &&
+                    Amount.from(remote.amount).equals(proof.amount) &&
+                    remote.C === proof.C,
+                ),
+            )
+          ) {
+            throw new Error(`Melt child ${operation.id} has an invalid change proof set`);
+          }
+        }
         return buildPaidResult(operation, {
           changeAmount,
           effectiveFee,
@@ -596,17 +654,6 @@ export abstract class BaseQuoteMeltHandler<M extends MeltMethod> implements Melt
         throw new Error(
           `Unexpected melt response state ${String(result.response.state)} for ${operation.id}`,
         );
-    }
-  }
-
-  private assertProofSecrets(expected: string[], proofs: Proof[], label: string): void {
-    const expectedSorted = [...expected].sort();
-    const actualSorted = proofs.map(({ secret }) => secret).sort();
-    if (
-      expectedSorted.length !== actualSorted.length ||
-      expectedSorted.some((secret, index) => secret !== actualSorted[index])
-    ) {
-      throw new Error(`Melt ${label} proofs do not match deterministic outputs`);
     }
   }
 

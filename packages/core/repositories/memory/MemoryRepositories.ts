@@ -37,7 +37,11 @@ import {
   MemoryPaymentRequestReceiveAttemptRepository,
   MemoryPaymentRequestReceiveOperationRepository,
 } from './MemoryPaymentRequestReceiveRepository';
-import { copyMemoryRepositoryState } from './clone';
+import {
+  applyMemoryRepositoryState,
+  copyMemoryRepositoryState,
+  snapshotMemoryRepositoryState,
+} from './clone';
 import { MemoryRepositoryCoordinator } from './MemoryRepositoryCoordinator';
 import { MemoryMintSwapOperationRepository } from './MemoryMintSwapOperationRepository';
 import { MemoryOperationEventOutboxRepository } from './MemoryOperationEventOutboxRepository';
@@ -107,9 +111,24 @@ export class MemoryRepositories implements Repositories {
       const staged = createMemoryRepositoryScope();
       copyRepositoryScope(this.rawScope, staged);
       const result = await fn(staged);
-      copyRepositoryScope(staged, this.rawScope);
+      commitRepositoryScope(staged, this.rawScope);
       return result;
     });
+  }
+}
+
+function commitRepositoryScope(
+  source: RepositoryTransactionScope,
+  target: RepositoryTransactionScope,
+): void {
+  const entries = getRepositoryStateEntries(source, target);
+  // Clone every repository first. A cloning failure cannot leave a partially committed scope.
+  const prepared = entries.map(({ sourceRepository, targetRepository, excludedKeys }) => ({
+    targetRepository,
+    snapshot: snapshotMemoryRepositoryState(sourceRepository, excludedKeys),
+  }));
+  for (const { targetRepository, snapshot } of prepared) {
+    applyMemoryRepositoryState(targetRepository, snapshot);
   }
 }
 
@@ -162,6 +181,18 @@ function copyRepositoryScope(
   source: RepositoryTransactionScope,
   target: RepositoryTransactionScope,
 ): void {
+  for (const { sourceRepository, targetRepository, excludedKeys } of getRepositoryStateEntries(
+    source,
+    target,
+  )) {
+    copyMemoryRepositoryState(sourceRepository, targetRepository, excludedKeys);
+  }
+}
+
+function getRepositoryStateEntries(
+  source: RepositoryTransactionScope,
+  target: RepositoryTransactionScope,
+): Array<{ sourceRepository: object; targetRepository: object; excludedKeys: readonly string[] }> {
   const repositoryKeys: Array<Exclude<keyof RepositoryTransactionScope, 'mintSwap'>> = [
     'mintRepository',
     'keyRingRepository',
@@ -180,22 +211,24 @@ function copyRepositoryScope(
     'paymentRequestReceiveOperationRepository',
     'paymentRequestReceiveAttemptRepository',
   ];
-  for (const key of repositoryKeys) {
-    copyMemoryRepositoryState(
-      source[key],
-      target[key],
-      key === 'historyRepository' ? ['operationRepositories'] : [],
-    );
-  }
   if (!source.mintSwap || !target.mintSwap) {
     throw new Error('Memory Mint Swap repository capability is missing');
   }
-  copyMemoryRepositoryState(
-    source.mintSwap.mintSwapOperationRepository,
-    target.mintSwap.mintSwapOperationRepository,
-  );
-  copyMemoryRepositoryState(
-    source.mintSwap.operationEventOutboxRepository,
-    target.mintSwap.operationEventOutboxRepository,
-  );
+  return [
+    ...repositoryKeys.map((key) => ({
+      sourceRepository: source[key],
+      targetRepository: target[key],
+      excludedKeys: key === 'historyRepository' ? ['operationRepositories'] : [],
+    })),
+    {
+      sourceRepository: source.mintSwap.mintSwapOperationRepository,
+      targetRepository: target.mintSwap.mintSwapOperationRepository,
+      excludedKeys: [],
+    },
+    {
+      sourceRepository: source.mintSwap.operationEventOutboxRepository,
+      targetRepository: target.mintSwap.operationEventOutboxRepository,
+      excludedKeys: [],
+    },
+  ];
 }

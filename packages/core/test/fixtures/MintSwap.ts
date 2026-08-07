@@ -68,9 +68,33 @@ export function makePreparedMintSwapOperation(
     destinationAmount,
     unit: 'sat',
     sourceInputProofSecrets: ['source-proof-a', 'source-proof-b'],
-    destinationOutputData: { keep: [{ amount: '1000', secret: 'destination-output' }] },
-    sourceOutputData: { keep: [], send: [{ amount: '1025', secret: 'source-output' }] },
+    destinationOutputData: {
+      keep: [
+        {
+          blindedMessage: { amount: '1000', id: 'destination-keyset', B_: 'destination-B' },
+          blindingFactor: '01',
+          secret: '64657374696e6174696f6e2d6f7574707574',
+        },
+      ],
+      send: [],
+    },
+    sourceOutputData: {
+      keep: [],
+      send: [
+        {
+          blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
+          blindingFactor: '02',
+          secret: '736f757263652d6f7574707574',
+        },
+      ],
+    },
+    sourceMeltAmount: destinationAmount,
+    sourceFeeReserve,
+    sourcePreparationFee,
+    sourceMeltInputFee,
+    minimumSourceDebit,
     maximumSourceDebit,
+    reservedSourceAmount,
     dispatchDeadlineSeconds: Math.floor(MINT_SWAP_TEST_NOW / 1_000) + 120,
     requiredDispatchWindowSeconds: 120,
   });

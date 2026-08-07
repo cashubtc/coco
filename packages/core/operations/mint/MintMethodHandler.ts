@@ -193,6 +193,8 @@ export type MintExecutionResult =
       error?: string;
     };
 
+export type OwnedMintExecutionResult = MintExecutionResult & { operationId: string };
+
 export type RecoverExecutingResult =
   | { status: 'FINALIZED' }
   | { status: 'TERMINAL'; error: string }

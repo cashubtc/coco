@@ -161,12 +161,16 @@ export type OwnedMeltRemoteResult<M extends MeltMethod = MeltMethod> =
   | {
       operationId: string;
       phase: 'pre_swap';
+      observedAt?: number;
       sendProofs: Proof[];
       keepProofs: Proof[];
     }
   | {
       operationId: string;
       phase: 'melt';
+      observedAt?: number;
+      /** Fully unblinded outside the transaction; persisted only while applying the result. */
+      changeProofs?: Proof[];
       response: {
         state: MeltMethodRemoteState<M>;
         change?: SerializedBlindedSignature[];
@@ -175,10 +179,14 @@ export type OwnedMeltRemoteResult<M extends MeltMethod = MeltMethod> =
       };
     };
 
-export interface ApplyOwnedMeltRemoteContext<
-  M extends MeltMethod = MeltMethod,
-> extends BaseHandlerDeps {
+export interface ApplyOwnedMeltRemoteContext<M extends MeltMethod = MeltMethod> {
   operation: ExecutingMeltOperation & MeltMethodMeta<M>;
+  proofRepository: ProofRepository;
+  proofService: Pick<
+    ProofService,
+    'setProofState' | 'restoreProofsToReady' | 'saveProofs' | 'releaseProofs'
+  >;
+  logger?: Logger;
 }
 
 export interface PendingContext<M extends MeltMethod = MeltMethod> extends BaseHandlerDeps {

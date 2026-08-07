@@ -3,6 +3,7 @@ import { bytesToHex } from '@noble/curves/utils.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import { normalizeMintUrl } from '../../utils';
+import type { SerializedOutputData } from '../../utils';
 
 export type MintSwapOperationState =
   | 'preparing'
@@ -137,6 +138,8 @@ export interface MintSwapOperation {
   preparedPlan?: MintSwapPreparedPlan;
   settlement?: MintSwapSettlement;
   sourceDispatchAuthorizedAt?: number;
+  /** Durable evidence that authorized source inputs were reclaimed before value-neutral exit. */
+  sourceReclaimedAt?: number;
   destinationIssueAuthorizedAt?: number;
   cancellationRequestedAt?: number;
   cancelledAt?: number;
@@ -157,9 +160,15 @@ export interface MintSwapPreparedPlanFingerprintInput {
   destinationAmount: Amount;
   unit: 'sat';
   sourceInputProofSecrets: readonly string[];
-  destinationOutputData: unknown;
-  sourceOutputData: unknown;
+  destinationOutputData: SerializedOutputData;
+  sourceOutputData: SerializedOutputData;
+  sourceMeltAmount: Amount;
+  sourceFeeReserve: Amount;
+  sourcePreparationFee: Amount;
+  sourceMeltInputFee: Amount;
+  minimumSourceDebit: Amount;
   maximumSourceDebit: Amount;
+  reservedSourceAmount: Amount;
   dispatchDeadlineSeconds: number;
   requiredDispatchWindowSeconds: number;
 }
@@ -217,7 +226,8 @@ const TRANSITIONS: Record<MintSwapOperationState, ReadonlySet<MintSwapOperationS
   completed: new Set(),
   cancelled: new Set(),
   failed: new Set(),
-  needs_attention: new Set(['destination_funded', 'issuing', 'completed', 'cancelled', 'failed']),
+  // S2 deliberately makes attention quiescent. S4 may add explicit, audited repair commands.
+  needs_attention: new Set(),
 };
 
 export function isTerminalMintSwapState(state: MintSwapOperationState): boolean {
@@ -403,6 +413,20 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
 
   validateNut20Key(operation.destinationNut20Key);
   validateRetry(operation.retry);
+  if (operation.retry.lastAttemptAt !== undefined) {
+    assertOperationTimestampOrder(
+      operation,
+      operation.retry.lastAttemptAt,
+      'Mint swap retry last attempt',
+    );
+  }
+  if (operation.retry.lastSuccessfulObservationAt !== undefined) {
+    assertOperationTimestampOrder(
+      operation,
+      operation.retry.lastSuccessfulObservationAt,
+      'Mint swap retry last successful observation',
+    );
+  }
   validateQuoteRef(operation.destinationQuoteRef, destinationMintUrl, 'destination');
   validateQuoteRef(operation.sourceQuoteRef, sourceMintUrl, 'source');
   validateAttachmentOrder(operation);
@@ -420,6 +444,7 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
     requirePreparedFields(operation);
   }
 
+  const progressState = getMintSwapProgressState(operation);
   if (operation.sourceDispatchAuthorizedAt !== undefined) {
     assertTimestamp(
       operation.sourceDispatchAuthorizedAt,
@@ -430,12 +455,15 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
       operation.sourceDispatchAuthorizedAt,
       'Mint swap source dispatch authorization',
     );
+    if (progressState === 'preparing' || progressState === 'prepared') {
+      throw new Error(`Mint swap state ${operation.state} cannot authorize source dispatch`);
+    }
   }
   if (
-    operation.state === 'source_inflight' ||
-    operation.state === 'destination_funded' ||
-    operation.state === 'issuing' ||
-    operation.state === 'completed'
+    progressState === 'source_inflight' ||
+    progressState === 'destination_funded' ||
+    progressState === 'issuing' ||
+    progressState === 'completed'
   ) {
     assertTimestamp(
       operation.sourceDispatchAuthorizedAt,
@@ -453,8 +481,37 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
       operation.destinationIssueAuthorizedAt,
       'Mint swap destination issue authorization',
     );
+    if (progressState !== 'issuing' && progressState !== 'completed') {
+      throw new Error(`Mint swap state ${operation.state} cannot authorize destination issuance`);
+    }
+    if (
+      operation.sourceDispatchAuthorizedAt === undefined ||
+      operation.destinationIssueAuthorizedAt < operation.sourceDispatchAuthorizedAt
+    ) {
+      throw new Error('Mint swap destination issuance authorization must follow source dispatch');
+    }
   }
-  if (operation.state === 'issuing' || operation.state === 'completed') {
+
+  if (operation.sourceReclaimedAt !== undefined) {
+    assertTimestamp(operation.sourceReclaimedAt, 'Mint swap source reclamation');
+    assertOperationTimestampOrder(
+      operation,
+      operation.sourceReclaimedAt,
+      'Mint swap source reclamation',
+    );
+    if (operation.state !== 'failed' && operation.state !== 'cancelled') {
+      throw new Error(
+        'Source reclamation evidence is valid only for value-neutral terminal states',
+      );
+    }
+    if (
+      operation.sourceDispatchAuthorizedAt === undefined ||
+      operation.sourceReclaimedAt < operation.sourceDispatchAuthorizedAt
+    ) {
+      throw new Error('Mint swap source reclamation must follow source dispatch authorization');
+    }
+  }
+  if (progressState === 'issuing' || progressState === 'completed') {
     assertTimestamp(
       operation.destinationIssueAuthorizedAt,
       'Mint swap destination issue authorization',
@@ -462,9 +519,9 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
   }
 
   if (
-    operation.state === 'destination_funded' ||
-    operation.state === 'issuing' ||
-    operation.state === 'completed'
+    progressState === 'destination_funded' ||
+    progressState === 'issuing' ||
+    progressState === 'completed'
   ) {
     validateMintSwapAccounting(operation);
   } else if (operation.settlement) {
@@ -493,6 +550,9 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
   if (operation.state === 'cancelled') {
     assertTimestamp(operation.cancellationRequestedAt, 'Mint swap cancellation request');
     assertTimestamp(operation.cancelledAt, 'Mint swap cancellation completion');
+    if (operation.cancelledAt! < operation.cancellationRequestedAt!) {
+      throw new Error('Mint swap cancellation completion must follow its request');
+    }
   }
 
   if (operation.completedAt !== undefined) {
@@ -504,6 +564,9 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
   }
   if (operation.state === 'completed') {
     assertTimestamp(operation.completedAt, 'Mint swap completion time');
+    if (operation.completedAt! < operation.destinationIssueAuthorizedAt!) {
+      throw new Error('Mint swap completion must follow destination issuance authorization');
+    }
   }
 
   if (operation.state === 'failed' && !operation.terminalFailure) {
@@ -519,12 +582,21 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
       operation.terminalFailure.at,
       'Mint swap terminal failure time',
     );
+    if (
+      operation.sourceReclaimedAt !== undefined &&
+      operation.terminalFailure.at < operation.sourceReclaimedAt
+    ) {
+      throw new Error('Mint swap terminal failure must follow source reclamation');
+    }
   }
 
   if (operation.state === 'needs_attention' && !operation.attention) {
     throw new Error('Mint swap needing attention requires structured evidence');
   }
   if (operation.attention) {
+    if (operation.state !== 'needs_attention') {
+      throw new Error('Only a mint swap needing attention may contain attention evidence');
+    }
     validateAttention(operation.attention);
     assertOperationTimestampOrder(operation, operation.attention.at, 'Mint swap attention time');
   }
@@ -533,6 +605,13 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
     throw new Error(
       `Mint swap state ${operation.state} cannot contain transferred-value settlement`,
     );
+  }
+  if (
+    (operation.state === 'failed' || operation.state === 'cancelled') &&
+    operation.sourceDispatchAuthorizedAt !== undefined &&
+    operation.sourceReclaimedAt === undefined
+  ) {
+    throw new Error('Value-neutral terminal mint swap requires source reclamation evidence');
   }
   if (
     (operation.state === 'failed' || operation.state === 'cancelled') &&
@@ -569,6 +648,8 @@ export function assertMintSwapOperationUpdate(
   assertSettlementImmutable(current, next);
   assertPreparedMintSwapImmutable(current, next);
   assertPreparationLeaseUpdate(current, next);
+  assertRetryUpdate(current, next);
+  assertCancellationRequestUpdate(current, next);
 }
 
 export function assertPreparedMintSwapImmutable(
@@ -720,7 +801,9 @@ function requirePreparedFields(operation: MintSwapOperation): void {
   assertNonEmpty(operation.destinationMintOperationId, 'Mint swap destination child id');
   assertNonEmpty(operation.sourceMeltOperationId, 'Mint swap source child id');
   const plan = operation.preparedPlan;
-  assertNonEmpty(plan.fingerprint, 'Mint swap prepared fingerprint');
+  if (!/^[0-9a-f]{64}$/.test(plan.fingerprint)) {
+    throw new Error('Mint swap prepared fingerprint must be canonical SHA-256 hex');
+  }
   assertUnixSeconds(plan.dispatchDeadlineSeconds, 'Mint swap dispatch deadline');
   if (plan.dispatchDeadlineSeconds < Math.floor(operation.createdAt / 1_000)) {
     throw new Error('Mint swap dispatch deadline cannot precede operation creation');
@@ -730,6 +813,13 @@ function requirePreparedFields(operation: MintSwapOperation): void {
     plan.requiredDispatchWindowSeconds < 30
   ) {
     throw new Error('Mint swap required dispatch window must be at least 30 seconds');
+  }
+  if (
+    operation.state === 'prepared' &&
+    plan.dispatchDeadlineSeconds <
+      Math.floor(operation.updatedAt / 1_000) + plan.requiredDispatchWindowSeconds
+  ) {
+    throw new Error('Prepared mint swap does not retain its required dispatch safety window');
   }
   for (const [name, amount] of Object.entries({
     sourceMeltAmount: plan.sourceMeltAmount,
@@ -860,6 +950,7 @@ function validateTerminalFailure(failure: MintSwapTerminalFailure): void {
 
 function assertAlwaysImmutable(current: MintSwapOperation, next: MintSwapOperation): void {
   const fields: Array<[unknown, unknown, string]> = [
+    [current.createdAt, next.createdAt, 'createdAt'],
     [current.sourceMintUrl, next.sourceMintUrl, 'source mint URL'],
     [current.destinationMintUrl, next.destinationMintUrl, 'destination mint URL'],
     [current.unit, next.unit, 'unit'],
@@ -877,6 +968,45 @@ function assertAlwaysImmutable(current: MintSwapOperation, next: MintSwapOperati
   ];
   const changed = fields.find(([left, right]) => left !== right);
   if (changed) throw new Error(`Mint swap ${changed[2]} is immutable`);
+}
+
+function assertRetryUpdate(current: MintSwapOperation, next: MintSwapOperation): void {
+  if (next.retry.attemptCount < current.retry.attemptCount) {
+    throw new Error('Mint swap retry attempt count cannot regress');
+  }
+  for (const [currentValue, nextValue, name] of [
+    [current.retry.lastAttemptAt, next.retry.lastAttemptAt, 'last attempt'],
+    [
+      current.retry.lastSuccessfulObservationAt,
+      next.retry.lastSuccessfulObservationAt,
+      'last successful observation',
+    ],
+  ] as const) {
+    if (currentValue !== undefined && (nextValue === undefined || nextValue < currentValue)) {
+      throw new Error(`Mint swap retry ${name} cannot regress`);
+    }
+  }
+}
+
+function assertCancellationRequestUpdate(
+  current: MintSwapOperation,
+  next: MintSwapOperation,
+): void {
+  if (
+    current.cancellationRequestedAt === undefined &&
+    next.cancellationRequestedAt !== undefined &&
+    current.state !== 'preparing' &&
+    current.state !== 'prepared' &&
+    current.state !== 'source_inflight'
+  ) {
+    throw new Error(`Cannot newly request cancellation from mint swap state ${current.state}`);
+  }
+}
+
+function getMintSwapProgressState(operation: MintSwapOperation): MintSwapOperationState {
+  return operation.state === 'needs_attention'
+    ? (operation.attention?.lastSafeState ?? operation.state)
+    : operation.state;
 }
 
 function assertAttachedReferencesImmutable(
@@ -914,6 +1044,7 @@ function assertAuthorizationImmutable(current: MintSwapOperation, next: MintSwap
       'destination issue authorization',
     ],
     [current.cancellationRequestedAt, next.cancellationRequestedAt, 'cancellation request'],
+    [current.sourceReclaimedAt, next.sourceReclaimedAt, 'source reclamation evidence'],
   ] as const) {
     if (currentValue !== undefined && currentValue !== nextValue) {
       throw new Error(`Mint swap ${name} is immutable`);
@@ -1017,8 +1148,12 @@ function canonicalizeForFingerprint(value: unknown, seen = new Set<object>()): s
     if (Array.isArray(value)) {
       return `[${value.map((item) => canonicalizeForFingerprint(item, seen)).join(',')}]`;
     }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error('Mint swap fingerprint input must contain only plain objects and arrays');
+    }
     const entries = Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, item]) => `${JSON.stringify(key)}:${canonicalizeForFingerprint(item, seen)}`);
     return `{${entries.join(',')}}`;
   } finally {

@@ -25,6 +25,11 @@ export class MemoryOperationEventOutboxRepository implements OperationEventOutbo
     this.events.set(event.id, cloneMemoryValue(event));
   }
 
+  async getById(id: string): Promise<OperationEventOutboxRecord | null> {
+    const event = this.events.get(id);
+    return event ? cloneMemoryValue(event) : null;
+  }
+
   async getUnpublished(limit: number, now = Date.now()): Promise<OperationEventOutboxRecord[]> {
     assertNonNegativeSafeInteger(limit, 'Outbox limit');
     assertNonNegativeSafeInteger(now, 'Outbox due time');
@@ -46,6 +51,7 @@ export class MemoryOperationEventOutboxRepository implements OperationEventOutbo
     const published = {
       ...event,
       publishedAt,
+      publishAttempts: event.publishAttempts + 1,
       lastError: undefined,
       nextAttemptAt: undefined,
     };

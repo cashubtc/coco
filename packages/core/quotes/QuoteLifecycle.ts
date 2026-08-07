@@ -325,7 +325,7 @@ function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote):
     lastObservedRemoteState: incoming.lastObservedRemoteState ?? existing.lastObservedRemoteState,
     lastObservedRemoteStateAt:
       incoming.lastObservedRemoteStateAt ?? existing.lastObservedRemoteStateAt,
-    updatedAt: incoming.updatedAt,
+    updatedAt: Math.max(existing.updatedAt, incoming.updatedAt),
   } as MeltQuote;
 
   if (!Array.isArray(existing.change) && Array.isArray(incoming.change)) {
@@ -346,6 +346,53 @@ function mergePaidMeltQuoteSettlement(existing: MeltQuote, incoming: MeltQuote):
   }
 
   return changed ? merged : null;
+}
+
+/**
+ * Persist one attributable melt observation without emitting events or performing remote I/O.
+ * This is the transaction-safe canonicalization seam used by parent-owned melt commands.
+ */
+export async function resolveAndPersistMeltQuoteObservation(
+  repository: MeltQuoteRepository,
+  canonicalQuote: MeltQuote,
+): Promise<{ quote: MeltQuote; remoteQuoteChanged: boolean }> {
+  const existing = await repository.getMeltQuote(
+    canonicalQuote.mintUrl,
+    canonicalQuote.method,
+    canonicalQuote.quoteId,
+  );
+
+  const existingObservedAt = existing?.lastObservedRemoteStateAt;
+  const incomingObservedAt = canonicalQuote.lastObservedRemoteStateAt;
+  if (
+    existing &&
+    existingObservedAt !== undefined &&
+    incomingObservedAt !== undefined &&
+    incomingObservedAt < existingObservedAt
+  ) {
+    return { quote: existing, remoteQuoteChanged: false };
+  }
+
+  if (existing?.state === 'PAID') {
+    const enrichedQuote = mergePaidMeltQuoteSettlement(existing, canonicalQuote);
+    if (!enrichedQuote) return { quote: existing, remoteQuoteChanged: false };
+    const persisted = await persistCanonicalMeltQuote(repository, enrichedQuote);
+    return { quote: persisted, remoteQuoteChanged: true };
+  }
+
+  const remoteQuoteChanged = getMeltQuoteChange(existing, canonicalQuote);
+  if (!remoteQuoteChanged && existing) {
+    return { quote: existing, remoteQuoteChanged: false };
+  }
+  const persisted = await persistCanonicalMeltQuote(repository, canonicalQuote);
+  return { quote: persisted, remoteQuoteChanged };
+}
+
+async function persistCanonicalMeltQuote(
+  repository: MeltQuoteRepository,
+  canonicalQuote: MeltQuote,
+): Promise<MeltQuote> {
+  return repository.upsertMeltQuote(canonicalQuote);
 }
 
 export interface QuoteLifecycleDeps {
@@ -1460,38 +1507,7 @@ export class QuoteLifecycle {
   private async resolveAndPersistMeltQuoteObservation(
     canonicalQuote: MeltQuote,
   ): Promise<{ quote: MeltQuote; remoteQuoteChanged: boolean }> {
-    const existing = await this.meltQuoteRepository.getMeltQuote(
-      canonicalQuote.mintUrl,
-      canonicalQuote.method,
-      canonicalQuote.quoteId,
-    );
-
-    if (existing?.state === 'PAID') {
-      const enrichedQuote = mergePaidMeltQuoteSettlement(existing, canonicalQuote);
-      if (enrichedQuote) {
-        const persisted = await this.persistCanonicalMeltQuote(enrichedQuote);
-        return {
-          quote: persisted,
-          remoteQuoteChanged: true,
-        };
-      }
-
-      return {
-        quote: existing,
-        remoteQuoteChanged: false,
-      };
-    }
-
-    const remoteQuoteChanged = getMeltQuoteChange(existing, canonicalQuote);
-    if (!remoteQuoteChanged && existing) {
-      return {
-        quote: existing,
-        remoteQuoteChanged: false,
-      };
-    }
-
-    const persisted = await this.persistCanonicalMeltQuote(canonicalQuote);
-    return { quote: persisted, remoteQuoteChanged };
+    return resolveAndPersistMeltQuoteObservation(this.meltQuoteRepository, canonicalQuote);
   }
 
   private async persistCanonicalMintQuote(
@@ -1522,10 +1538,6 @@ export class QuoteLifecycle {
       quoteId: quote.quoteId,
       quote,
     });
-  }
-
-  private async persistCanonicalMeltQuote(canonicalQuote: MeltQuote): Promise<MeltQuote> {
-    return this.meltQuoteRepository.upsertMeltQuote(canonicalQuote);
   }
 
   private async emitMeltQuoteUpdatedIfNeeded(

@@ -296,6 +296,103 @@ describe('MintSwapOperation', () => {
     ).toThrow('maximum source debit is immutable');
   });
 
+  it('rejects impossible authorization projections and unaudited attention recovery', () => {
+    expect(() =>
+      validateMintSwapOperation(
+        makePreparedMintSwapOperation({ sourceDispatchAuthorizedAt: now + 1 }),
+      ),
+    ).toThrow('cannot authorize source dispatch');
+    expect(() =>
+      validateMintSwapOperation(
+        makePreparingMintSwapOperation({ destinationIssueAuthorizedAt: now }),
+      ),
+    ).toThrow('cannot authorize destination issuance');
+    expect(() =>
+      validateMintSwapOperation(
+        makeSettledMintSwapOperation({
+          state: 'issuing',
+          destinationIssueAuthorizedAt: now + 1,
+        }),
+      ),
+    ).toThrow('must follow source dispatch');
+    expect(() =>
+      validateMintSwapOperation(
+        makePreparedMintSwapOperation({
+          state: 'cancelled',
+          cancellationRequestedAt: now + 2,
+          cancelledAt: now + 1,
+          updatedAt: now + 2,
+        }),
+      ),
+    ).toThrow('cancellation completion must follow its request');
+
+    const attention = makePreparedMintSwapOperation({
+      state: 'needs_attention',
+      attention: {
+        reason: 'accounting_mismatch',
+        message: 'Issuing evidence is incomplete',
+        lastSafeState: 'issuing',
+        violatedInvariant: 'issuance requires durable authorization',
+        evidence: {},
+        at: now + 2,
+      },
+      updatedAt: now + 2,
+    });
+    expect(() => validateMintSwapOperation(attention)).toThrow('source dispatch authorization');
+    expect(canTransitionMintSwap('needs_attention', 'completed')).toBe(false);
+
+    const sourceInflight = makePreparedMintSwapOperation({
+      state: 'source_inflight',
+      sourceDispatchAuthorizedAt: now + 2,
+      updatedAt: now + 2,
+    });
+    expect(() =>
+      validateMintSwapOperation({
+        ...sourceInflight,
+        state: 'failed',
+        terminalFailure: { code: 'UNPAID', reason: 'Source returned unpaid', at: now + 3 },
+        updatedAt: now + 3,
+      }),
+    ).toThrow('requires source reclamation evidence');
+    expect(() =>
+      validateMintSwapOperation({
+        ...sourceInflight,
+        state: 'failed',
+        sourceReclaimedAt: now + 3,
+        terminalFailure: { code: 'UNPAID', reason: 'Source returned unpaid', at: now + 3 },
+        updatedAt: now + 3,
+      }),
+    ).not.toThrow();
+  });
+
+  it('keeps creation and retry evidence monotonic across CAS updates', () => {
+    const current = makePreparingMintSwapOperation({
+      createdAt: now - 10,
+      retry: { attemptCount: 2, lastAttemptAt: now, lastSuccessfulObservationAt: now },
+    });
+    const next = {
+      ...current,
+      revision: current.revision + 1,
+      preparationLease: { ...current.preparationLease!, expiresAt: now + 60_000 },
+      updatedAt: now + 1,
+    };
+    expect(() =>
+      assertMintSwapOperationUpdate(current, { ...next, createdAt: current.createdAt - 1 }),
+    ).toThrow('createdAt is immutable');
+    expect(() =>
+      assertMintSwapOperationUpdate(current, {
+        ...next,
+        retry: { attemptCount: 1, lastAttemptAt: now, lastSuccessfulObservationAt: now },
+      }),
+    ).toThrow('attempt count cannot regress');
+    expect(() =>
+      assertMintSwapOperationUpdate(current, {
+        ...next,
+        retry: { attemptCount: 2, lastAttemptAt: now - 1, lastSuccessfulObservationAt: now },
+      }),
+    ).toThrow('last attempt cannot regress');
+  });
+
   it('fingerprints canonical object keys while remaining sensitive to ordered plans and keys', () => {
     const prepared = makePreparedMintSwapOperation();
     const common = {
@@ -307,38 +404,71 @@ describe('MintSwapOperation', () => {
       destinationAmount: prepared.destinationAmount,
       unit: 'sat' as const,
       sourceInputProofSecrets: ['a', 'b'],
-      sourceOutputData: { keep: [], send: [{ amount: '1025' }] },
+      sourceOutputData: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
+            blindingFactor: '02',
+            secret: '62',
+          },
+        ],
+      },
+      sourceMeltAmount: prepared.preparedPlan!.sourceMeltAmount,
+      sourceFeeReserve: prepared.preparedPlan!.sourceFeeReserve,
+      sourcePreparationFee: prepared.preparedPlan!.sourcePreparationFee,
+      sourceMeltInputFee: prepared.preparedPlan!.sourceMeltInputFee,
+      minimumSourceDebit: prepared.preparedPlan!.minimumSourceDebit,
       maximumSourceDebit: prepared.preparedPlan!.maximumSourceDebit,
+      reservedSourceAmount: prepared.preparedPlan!.reservedSourceAmount,
       dispatchDeadlineSeconds: prepared.preparedPlan!.dispatchDeadlineSeconds,
       requiredDispatchWindowSeconds: prepared.preparedPlan!.requiredDispatchWindowSeconds,
     };
     const first = createMintSwapPreparedPlanFingerprint({
       ...common,
-      destinationOutputData: { z: 1, a: { second: 2, first: 1 } },
+      destinationOutputData: {
+        keep: [
+          {
+            blindedMessage: { amount: '1000', id: 'destination-keyset', B_: 'destination-B' },
+            blindingFactor: '01',
+            secret: '61',
+          },
+        ],
+        send: [],
+      },
     });
     const reordered = createMintSwapPreparedPlanFingerprint({
       ...common,
-      destinationOutputData: { a: { first: 1, second: 2 }, z: 1 },
+      destinationOutputData: {
+        send: [],
+        keep: [
+          {
+            secret: '61',
+            blindingFactor: '01',
+            blindedMessage: { B_: 'destination-B', id: 'destination-keyset', amount: '1000' },
+          },
+        ],
+      },
     });
     const changedKey = createMintSwapPreparedPlanFingerprint({
       ...common,
       destinationNut20Key: { ...prepared.destinationNut20Key, derivationIndex: 8 },
-      destinationOutputData: { z: 1, a: { second: 2, first: 1 } },
+      destinationOutputData: firstOutputData(),
     });
     const changedOrder = createMintSwapPreparedPlanFingerprint({
       ...common,
       sourceInputProofSecrets: ['b', 'a'],
-      destinationOutputData: { z: 1, a: { second: 2, first: 1 } },
+      destinationOutputData: firstOutputData(),
     });
     const changedDeadline = createMintSwapPreparedPlanFingerprint({
       ...common,
       dispatchDeadlineSeconds: common.dispatchDeadlineSeconds + 1,
-      destinationOutputData: { z: 1, a: { second: 2, first: 1 } },
+      destinationOutputData: firstOutputData(),
     });
     const changedWindow = createMintSwapPreparedPlanFingerprint({
       ...common,
       requiredDispatchWindowSeconds: common.requiredDispatchWindowSeconds + 1,
-      destinationOutputData: { z: 1, a: { second: 2, first: 1 } },
+      destinationOutputData: firstOutputData(),
     });
 
     expect(first).toBe(reordered);
@@ -346,8 +476,34 @@ describe('MintSwapOperation', () => {
     expect(changedOrder).not.toBe(first);
     expect(changedDeadline).not.toBe(first);
     expect(changedWindow).not.toBe(first);
+    expect(
+      createMintSwapPreparedPlanFingerprint({
+        ...common,
+        sourceFeeReserve: common.sourceFeeReserve.add(1),
+        destinationOutputData: firstOutputData(),
+      }),
+    ).not.toBe(first);
+    expect(() =>
+      createMintSwapPreparedPlanFingerprint({
+        ...common,
+        destinationOutputData: new Map() as never,
+      }),
+    ).toThrow('plain objects');
   });
 });
+
+function firstOutputData() {
+  return {
+    keep: [
+      {
+        blindedMessage: { amount: '1000', id: 'destination-keyset', B_: 'destination-B' },
+        blindingFactor: '01',
+        secret: '61',
+      },
+    ],
+    send: [],
+  };
+}
 
 describe('OperationEventOutbox', () => {
   it('validates a sanitized logical event and derives its unique key', () => {
@@ -378,5 +534,19 @@ describe('OperationEventOutbox', () => {
         nextAttemptAt: now + 3,
       }),
     ).toThrow('cannot retain retry scheduling');
+    expect(() =>
+      validateOperationEventOutboxRecord({
+        ...event,
+        eventType: 'mint-swap-op:delayed',
+        payload: { ...event.payload, state: 'completed', reasonCode: 'RETRY_EXHAUSTED' },
+      }),
+    ).toThrow('automatic operation state');
+    expect(() =>
+      validateOperationEventOutboxRecord({
+        ...event,
+        eventType: 'mint-swap-op:delayed',
+        payload: { ...event.payload, state: 'source_inflight' },
+      }),
+    ).toThrow('requires a reason code');
   });
 });
