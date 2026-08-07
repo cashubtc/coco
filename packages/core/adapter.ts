@@ -11,6 +11,9 @@ export type {
   MintOperationRepository,
   MintQuoteRepository,
   MintRepository,
+  MintSwapOperationRepository,
+  MintSwapRepositoryCapability,
+  OperationEventOutboxRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
   ProofRepository,
@@ -20,6 +23,7 @@ export type {
   RepositoryTransactionScope,
   SendOperationRepository,
 } from './repositories/index.ts';
+export { requireMintSwapRepositoryCapability } from './repositories/index.ts';
 export type {
   AuthSession,
   Counter,
@@ -37,6 +41,10 @@ export type {
   MintQuoteRef,
   QuoteIdentity,
 } from './models/index.ts';
+export type {
+  MintSwapEventPayload,
+  OperationEventOutboxRecord,
+} from './models/OperationEventOutbox.ts';
 export {
   applyBolt11MintQuoteStateFallback,
   compareHistoryEntries,
@@ -73,6 +81,36 @@ export type {
   SendOperation,
   SendOperationState,
 } from './operations/index.ts';
+export type {
+  MintSwapAttentionReason,
+  MintSwapAttentionRecord,
+  MintSwapEventType,
+  MintSwapNut20KeyRef,
+  MintSwapOperation,
+  MintSwapOperationState,
+  MintSwapPreparationLease,
+  MintSwapPreparationStage,
+  MintSwapPreparedPlan,
+  MintSwapQuoteRef,
+  MintSwapRetry,
+  MintSwapSettlement,
+  MintSwapTerminalFailure,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  assertMintSwapOperationUpdate,
+  createMintSwapPreparedPlanFingerprint,
+  validateMintSwapOperation,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  assertParentOwnedMeltOperationInvariant,
+  assertParentOwnedMeltOperationUpdate,
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+} from './operations/mintSwap/ChildOperationOwnership.ts';
+export {
+  operationEventLogicalKey,
+  validateOperationEventOutboxRecord,
+} from './models/OperationEventOutbox.ts';
 export type { MeltMethodRemoteState } from './operations/melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './operations/index.ts';
 export type { BalanceQuery, CoreProof, ProofState } from './types.ts';
