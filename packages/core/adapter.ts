@@ -23,6 +23,7 @@ export type {
   RepositoryTransactionScope,
   SendOperationRepository,
 } from './repositories/index.ts';
+export { requireMintSwapRepositoryCapability } from './repositories/index.ts';
 export type {
   AuthSession,
   Counter,
@@ -96,6 +97,21 @@ export type {
   MintSwapSettlement,
   MintSwapTerminalFailure,
 } from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  assertMintSwapOperationUpdate,
+  createMintSwapPreparedPlanFingerprint,
+  validateMintSwapOperation,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export {
+  assertParentOwnedMeltOperationInvariant,
+  assertParentOwnedMeltOperationUpdate,
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+} from './operations/mintSwap/ChildOperationOwnership.ts';
+export {
+  operationEventLogicalKey,
+  validateOperationEventOutboxRecord,
+} from './models/OperationEventOutbox.ts';
 export type { MeltMethodRemoteState } from './operations/melt/MeltMethodHandler.ts';
 export { normalizeMeltMethodData } from './operations/index.ts';
 export type { BalanceQuery, CoreProof, ProofState } from './types.ts';

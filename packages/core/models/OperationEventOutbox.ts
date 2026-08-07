@@ -55,6 +55,17 @@ const OPERATION_STATES = new Set<MintSwapOperationState>([
   'failed',
   'needs_attention',
 ]);
+const DELAYED_STATES = new Set<MintSwapOperationState>([
+  'preparing',
+  'source_inflight',
+  'destination_funded',
+  'issuing',
+]);
+const REASON_REQUIRED_EVENTS = new Set<MintSwapEventType>([
+  'mint-swap-op:failed',
+  'mint-swap-op:needs-attention',
+  'mint-swap-op:delayed',
+]);
 
 export function operationEventLogicalKey(
   record: Pick<OperationEventOutboxRecord, 'operationId' | 'revision' | 'eventType'>,
@@ -102,6 +113,9 @@ export function validateOperationEventOutboxRecord(
   if (expectedState !== undefined && record.payload.state !== expectedState) {
     throw new Error(`Outbox ${record.eventType} payload must contain state ${expectedState}`);
   }
+  if (record.eventType === 'mint-swap-op:delayed' && !DELAYED_STATES.has(record.payload.state)) {
+    throw new Error('Delayed mint swap events require an automatic operation state');
+  }
 
   if (record.payload.unit !== 'sat') throw new Error('Outbox mint swap unit must be sat');
   const destinationAmount = Amount.from(record.payload.destinationAmount);
@@ -128,6 +142,9 @@ export function validateOperationEventOutboxRecord(
   if (record.payload.reasonCode !== undefined) {
     assertNonEmpty(record.payload.reasonCode, 'Outbox reason code');
   }
+  if (REASON_REQUIRED_EVENTS.has(record.eventType) && record.payload.reasonCode === undefined) {
+    throw new Error(`Outbox ${record.eventType} requires a reason code`);
+  }
   if (record.lastError !== undefined) assertNonEmpty(record.lastError, 'Outbox last error');
 
   if (record.nextAttemptAt !== undefined) {
@@ -143,6 +160,9 @@ export function validateOperationEventOutboxRecord(
     }
     if (record.nextAttemptAt !== undefined || record.lastError !== undefined) {
       throw new Error('Published outbox records cannot retain retry scheduling');
+    }
+    if (record.publishAttempts === 0) {
+      throw new Error('Published outbox records must record at least one publish attempt');
     }
   } else if (record.publishAttempts === 0) {
     if (record.nextAttemptAt !== undefined || record.lastError !== undefined) {

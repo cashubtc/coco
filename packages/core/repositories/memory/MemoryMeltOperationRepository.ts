@@ -1,6 +1,10 @@
 import type { MeltOperationRepository } from '..';
 import type { MeltOperation, MeltOperationState } from '../../operations/melt/MeltOperation';
-import { assertParentOwnedMeltOperationInvariant } from '../../operations/mintSwap/ChildOperationOwnership.ts';
+import {
+  assertParentOwnedMeltOperationInvariant,
+  assertParentOwnedMeltOperationUpdate,
+} from '../../operations/mintSwap/ChildOperationOwnership.ts';
+import { cloneMemoryValue } from './clone.ts';
 
 const getOperationQuoteId = (operation: MeltOperation): string | undefined =>
   'quoteId' in operation && operation.quoteId ? operation.quoteId : undefined;
@@ -15,7 +19,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     }
     this.assertNoDuplicateQuoteOperation(operation);
     this.assertUniqueParentOwnership(operation);
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async update(operation: MeltOperation): Promise<void> {
@@ -24,24 +28,22 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     if (!existing) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
     }
-    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
-      throw new Error(`Cannot change parent ownership of MeltOperation ${operation.id}`);
-    }
+    assertParentOwnedMeltOperationUpdate(existing, operation);
     this.assertNoDuplicateQuoteOperation(operation);
     this.assertUniqueParentOwnership(operation);
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async getById(id: string): Promise<MeltOperation | null> {
     const operation = this.operations.get(id);
-    return operation ? { ...operation } : null;
+    return operation ? cloneMemoryValue(operation) : null;
   }
 
   async getByState(state: MeltOperationState): Promise<MeltOperation[]> {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === state) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -51,7 +53,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === 'executing' || operation.state === 'pending') {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -61,7 +63,7 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
     const results: MeltOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.mintUrl === mintUrl) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -75,14 +77,14 @@ export class MemoryMeltOperationRepository implements MeltOperationRepository {
         'quoteId' in operation &&
         operation.quoteId === quoteId
       ) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
   }
 
   async getAll(): Promise<MeltOperation[]> {
-    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+    return Array.from(this.operations.values(), (operation) => cloneMemoryValue(operation));
   }
 
   async delete(id: string): Promise<void> {

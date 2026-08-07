@@ -4,6 +4,7 @@ import type {
   ProofRepository,
   RepositoryTransactionScope,
 } from '../../repositories';
+import { requireMintSwapRepositoryCapability } from '../../repositories';
 import type {
   ExecutingMintOperation,
   FailedMintOperation,
@@ -32,7 +33,12 @@ import type { ProofService } from '../../services/ProofService';
 import type { EventBus } from '../../events/EventBus';
 import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
-import { generateSubId, mapProofToCoreProof, normalizeMintUrl } from '../../utils';
+import {
+  assertProofsMatchSerializedOutputs,
+  generateSubId,
+  mapProofToCoreProof,
+  normalizeMintUrl,
+} from '../../utils';
 import {
   OperationInProgressError,
   ProofValidationError,
@@ -67,9 +73,14 @@ export interface PrepareOwnedMintOperationCommand {
   quote: MintQuote;
   amount: Amount;
   destinationNut20PublicKey: string;
-  wallet: Wallet;
+  preparedOperation: PendingMintOperation;
   repositories: RepositoryTransactionScope;
 }
+
+export type PlanOwnedMintOperationCommand = Omit<
+  PrepareOwnedMintOperationCommand,
+  'preparedOperation' | 'repositories'
+> & { wallet: Wallet };
 
 export interface ClaimMintQuoteOptions {
   autoClaimRemaining?: boolean;
@@ -278,10 +289,10 @@ export class MintOperationService {
    *
    * @internal
    */
-  async prepareOwnedInTransaction(
-    command: PrepareOwnedMintOperationCommand,
+  async planOwnedPreparation(
+    command: PlanOwnedMintOperationCommand,
   ): Promise<PendingMintOperation> {
-    const { quote, repositories, parentSwapOperationId, operationId, wallet } = command;
+    const { quote, parentSwapOperationId, operationId, wallet } = command;
     if (quote.method !== 'bolt11') {
       throw new Error('Mint swaps require a BOLT11 destination quote');
     }
@@ -308,7 +319,7 @@ export class MintOperationService {
       { quoteId: quote.quoteId, parentSwapOperationId },
     );
     const pending = await handler.prepare({
-      ...this.buildDeps(repositories),
+      ...this.buildDeps(),
       operation: initOperation,
       wallet,
       importedQuote: mintQuoteToMethodSnapshot<'bolt11'>(quote as MintQuote<'bolt11'>),
@@ -324,8 +335,47 @@ export class MintOperationService {
       throw new Error('Destination mint child lost its parent NUT-20 key binding');
     }
     assertParentOwnedMintOperationInvariant(pendingOperation);
-    await repositories.mintOperationRepository.create(pendingOperation);
     return pendingOperation;
+  }
+
+  /** Persist a preflighted destination plan using transaction-scoped local writes only. */
+  async prepareOwnedInTransaction(
+    command: PrepareOwnedMintOperationCommand,
+  ): Promise<PendingMintOperation> {
+    const {
+      quote,
+      repositories,
+      parentSwapOperationId,
+      operationId,
+      preparedOperation,
+      destinationNut20PublicKey,
+    } = command;
+    requireMintSwapRepositoryCapability(repositories);
+    if (
+      quote.method !== 'bolt11' ||
+      quote.unit !== 'sat' ||
+      quote.pubkey !== destinationNut20PublicKey ||
+      !quote.amount.equals(command.amount)
+    ) {
+      throw new Error('Destination quote does not match the mint swap intent');
+    }
+    if (
+      preparedOperation.id !== operationId ||
+      preparedOperation.parentSwapOperationId !== parentSwapOperationId ||
+      preparedOperation.mintUrl !== quote.mintUrl ||
+      preparedOperation.method !== 'bolt11' ||
+      preparedOperation.quoteId !== quote.quoteId ||
+      preparedOperation.unit !== 'sat' ||
+      !preparedOperation.amount.equals(command.amount) ||
+      preparedOperation.pubkey !== destinationNut20PublicKey ||
+      preparedOperation.request !== quote.request ||
+      preparedOperation.expiry !== quote.expiry
+    ) {
+      throw new Error('Preflighted destination child does not match its owned command');
+    }
+    assertParentOwnedMintOperationInvariant(preparedOperation);
+    await repositories.mintOperationRepository.create(preparedOperation);
+    return preparedOperation;
   }
 
   /** Persist destination issuance authorization before the remote mint request. */
@@ -334,6 +384,7 @@ export class MintOperationService {
     parentSwapOperationId: string,
     repositories: RepositoryTransactionScope,
   ): Promise<ExecutingMintOperation> {
+    requireMintSwapRepositoryCapability(repositories);
     const operation = await repositories.mintOperationRepository.getById(operationId);
     if (!operation || operation.state !== 'pending') {
       throw new Error(
@@ -358,9 +409,16 @@ export class MintOperationService {
    * This command receives no transaction scope and performs no repository writes.
    */
   async executeOwnedRemote(
-    operation: ExecutingMintOperation,
+    operationOrId: string | ExecutingMintOperation,
     parentSwapOperationId: string,
-  ): Promise<import('./MintMethodHandler.ts').MintExecutionResult> {
+  ): Promise<import('./MintMethodHandler.ts').OwnedMintExecutionResult> {
+    const operationId = typeof operationOrId === 'string' ? operationOrId : operationOrId.id;
+    const operation = await this.mintOperationRepository.getById(operationId);
+    if (!operation || operation.state !== 'executing') {
+      throw new Error(
+        `Cannot execute mint child ${operationId} from ${operation?.state ?? 'missing'}`,
+      );
+    }
     assertChildOperationAccess(operation, parentSwapOperationId);
     assertParentOwnedMintOperationInvariant(operation);
     const { wallet } = await this.walletService.getWalletWithActiveKeysetId(
@@ -371,28 +429,49 @@ export class MintOperationService {
     if (!handler.executeOwnedRemote) {
       throw new Error(`Mint method ${operation.method} does not support owned remote execution`);
     }
-    return handler.executeOwnedRemote({
+    const result = await handler.executeOwnedRemote({
       operation: operation as never,
       wallet,
       mintAdapter: this.mintAdapter,
       logger: this.logger,
     });
+    if (result.status === 'ALREADY_ISSUED') {
+      const recovered = await this.proofService.recoverProofsFromOutputData(
+        operation.mintUrl,
+        operation.outputData,
+        {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+          persistRecoveredProofs: false,
+        },
+      );
+      if (recovered.length > 0) {
+        assertProofsMatchSerializedOutputs(
+          recovered,
+          [...operation.outputData.keep, ...operation.outputData.send],
+          `Recovered mint child ${operation.id}`,
+        );
+        return { operationId: operation.id, status: 'ISSUED', proofs: recovered };
+      }
+    }
+    return { ...result, operationId: operation.id };
   }
 
   /** Apply a remote issuance result atomically with the composing parent transition. */
   async applyOwnedExecutionInTransaction(
-    operation: ExecutingMintOperation,
+    operationOrId: string | ExecutingMintOperation,
     parentSwapOperationId: string,
-    result: import('./MintMethodHandler.ts').MintExecutionResult,
+    result: import('./MintMethodHandler.ts').OwnedMintExecutionResult,
     repositories: RepositoryTransactionScope,
   ): Promise<FinalizedMintOperation | ExecutingMintOperation> {
-    assertChildOperationAccess(operation, parentSwapOperationId);
-    assertParentOwnedMintOperationInvariant(operation);
-    const current = await repositories.mintOperationRepository.getById(operation.id);
+    const operationId = typeof operationOrId === 'string' ? operationOrId : operationOrId.id;
+    requireMintSwapRepositoryCapability(repositories);
+    if (result.operationId !== operationId) {
+      throw new Error(`Mint result operation ${result.operationId} does not match ${operationId}`);
+    }
+    const current = await repositories.mintOperationRepository.getById(operationId);
     if (!current || current.state !== 'executing') {
-      throw new Error(
-        `Cannot apply mint child ${operation.id} from ${current?.state ?? 'missing'}`,
-      );
+      throw new Error(`Cannot apply mint child ${operationId} from ${current?.state ?? 'missing'}`);
     }
     assertChildOperationAccess(current, parentSwapOperationId);
     assertParentOwnedMintOperationInvariant(current);
@@ -404,14 +483,12 @@ export class MintOperationService {
       return current;
     }
 
+    assertProofsMatchSerializedOutputs(
+      result.proofs,
+      [...current.outputData.keep, ...current.outputData.send],
+      `Mint child ${current.id}`,
+    );
     const expectedSecrets = [...getOutputProofSecrets(current)].sort();
-    const receivedSecrets = result.proofs.map(({ secret }) => secret).sort();
-    if (
-      expectedSecrets.length !== receivedSecrets.length ||
-      expectedSecrets.some((secret, index) => secret !== receivedSecrets[index])
-    ) {
-      throw new Error(`Mint result does not match deterministic outputs for ${operation.id}`);
-    }
 
     const scopedProofService = this.proofService.forTransaction(repositories);
     const existing = await repositories.proofRepository.getProofsBySecrets(
@@ -433,7 +510,14 @@ export class MintOperationService {
         (proof) =>
           proof.createdByOperationId !== current.id ||
           proof.state !== 'ready' ||
-          proof.unit !== current.unit,
+          proof.unit !== current.unit ||
+          !result.proofs.some(
+            (remote) =>
+              remote.secret === proof.secret &&
+              remote.id === proof.id &&
+              Amount.from(remote.amount).equals(proof.amount) &&
+              remote.C === proof.C,
+          ),
       )
     ) {
       throw new Error(`Mint child ${current.id} has an invalid deterministic output set`);
@@ -672,7 +756,6 @@ export class MintOperationService {
             }
             return await this.finalizeIssuedOperation(executing);
           case 'ALREADY_ISSUED': {
-            //CODEX: Where does recovery actually happen?
             const proofsRecovered = await this.ensureOutputsSaved(executing);
             const error = proofsRecovered
               ? undefined

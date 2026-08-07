@@ -62,10 +62,26 @@ export function copyMemoryRepositoryState(
   target: object,
   excludedKeys: readonly string[] = [],
 ): void {
+  applyMemoryRepositoryState(target, snapshotMemoryRepositoryState(source, excludedKeys));
+}
+
+export function snapshotMemoryRepositoryState(
+  source: object,
+  excludedKeys: readonly string[] = [],
+): Record<string, unknown> {
   const excluded = new Set(excludedKeys);
   const sourceRecord = source as Record<string, unknown>;
-  const targetRecord = target as Record<string, unknown>;
+  const snapshot: Record<string, unknown> = {};
   for (const key of Object.keys(sourceRecord)) {
-    if (!excluded.has(key)) targetRecord[key] = cloneMemoryValue(sourceRecord[key]);
+    if (!excluded.has(key)) snapshot[key] = cloneMemoryValue(sourceRecord[key]);
   }
+  return snapshot;
+}
+
+export function applyMemoryRepositoryState(
+  target: object,
+  snapshot: Readonly<Record<string, unknown>>,
+): void {
+  const targetRecord = target as Record<string, unknown>;
+  for (const [key, value] of Object.entries(snapshot)) targetRecord[key] = value;
 }

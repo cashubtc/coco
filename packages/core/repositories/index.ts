@@ -382,6 +382,7 @@ export interface MintSwapOperationRepository {
 
 export interface OperationEventOutboxRepository {
   enqueue(event: OperationEventOutboxRecord): Promise<void>;
+  getById(id: string): Promise<OperationEventOutboxRecord | null>;
   getUnpublished(limit: number, now?: number): Promise<OperationEventOutboxRecord[]>;
   markPublished(id: string, publishedAt: number): Promise<void>;
   recordPublishFailure(id: string, nextAttemptAt: number, lastError: string): Promise<void>;
@@ -396,6 +397,16 @@ export interface OperationEventOutboxRepository {
 export interface MintSwapRepositoryCapability {
   mintSwapOperationRepository: MintSwapOperationRepository;
   operationEventOutboxRepository: OperationEventOutboxRepository;
+}
+
+/** Fail a Mint Swap command before it can reserve value or perform remote I/O. */
+export function requireMintSwapRepositoryCapability(
+  repositories: Pick<RepositoryTransactionScope, 'mintSwap'>,
+): MintSwapRepositoryCapability {
+  if (!repositories.mintSwap) {
+    throw new Error('Mint Swap requires the optional durable repository capability');
+  }
+  return repositories.mintSwap;
 }
 
 interface RepositoriesBase {

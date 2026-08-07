@@ -1,6 +1,10 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
-import { assertParentOwnedMintOperationInvariant } from '../../operations/mintSwap/ChildOperationOwnership.ts';
+import {
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+} from '../../operations/mintSwap/ChildOperationOwnership.ts';
+import { cloneMemoryValue } from './clone.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
   private readonly operations = new Map<string, MintOperation>();
@@ -11,7 +15,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
       throw new Error(`MintOperation with id ${operation.id} already exists`);
     }
     this.assertUniqueParentOwnership(operation);
-    this.operations.set(operation.id, { ...operation });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async update(operation: MintOperation): Promise<void> {
@@ -20,23 +24,21 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     if (!existing) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
-    if (existing.parentSwapOperationId !== operation.parentSwapOperationId) {
-      throw new Error(`Cannot change parent ownership of MintOperation ${operation.id}`);
-    }
+    assertParentOwnedMintOperationUpdate(existing, operation);
     this.assertUniqueParentOwnership(operation);
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, cloneMemoryValue(operation));
   }
 
   async getById(id: string): Promise<MintOperation | null> {
     const operation = this.operations.get(id);
-    return operation ? { ...operation } : null;
+    return operation ? cloneMemoryValue(operation) : null;
   }
 
   async getByState(state: MintOperationState): Promise<MintOperation[]> {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === state) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -46,7 +48,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.state === 'pending' || operation.state === 'executing') {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -56,7 +58,7 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     const results: MintOperation[] = [];
     for (const operation of this.operations.values()) {
       if (operation.mintUrl === mintUrl) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results;
@@ -71,14 +73,14 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
         'quoteId' in operation &&
         operation.quoteId === quoteId
       ) {
-        results.push({ ...operation });
+        results.push(cloneMemoryValue(operation));
       }
     }
     return results.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
   async getAll(): Promise<MintOperation[]> {
-    return Array.from(this.operations.values(), (operation) => ({ ...operation }));
+    return Array.from(this.operations.values(), (operation) => cloneMemoryValue(operation));
   }
 
   async delete(id: string): Promise<void> {

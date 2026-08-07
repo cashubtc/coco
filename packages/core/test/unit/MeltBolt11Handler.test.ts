@@ -1493,6 +1493,10 @@ describe('MeltBolt11Handler', () => {
         inputProofSecrets: ['input-1'],
         swapOutputData: createMockOutputData(['keep-1'], ['send-1']),
       });
+      (mockWallet.send as Mock<any>).mockResolvedValueOnce({
+        keep: [makeProof('keep-1', 10)],
+        send: [makeProof('send-1', 10)],
+      });
 
       const remoteResult = await handler.executeOwnedRemote!({
         operation,
@@ -1516,10 +1520,6 @@ describe('MeltBolt11Handler', () => {
           operation,
           proofRepository,
           proofService,
-          walletService,
-          mintService,
-          mintAdapter,
-          eventBus,
           logger,
         },
         remoteResult,

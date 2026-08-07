@@ -1016,7 +1016,7 @@ export function createDummyMintSwapOperation(
     },
     sourceMeltOperationId: 'source-melt-op',
     preparedPlan: {
-      fingerprint: 'adapter-contract-fingerprint',
+      fingerprint: 'ab'.repeat(32),
       dispatchDeadlineSeconds: Math.floor(now / 1_000) + 600,
       requiredDispatchWindowSeconds: 120,
       sourceMeltAmount: destinationAmount,
@@ -1151,17 +1151,74 @@ export async function runMintSwapRepositoryContract(
             ),
           expect,
         );
-
+        const standaloneMint = createDummyMintOperation({
+          id: 'standalone-mint',
+          quoteId: 'standalone-mint-quote',
+        });
+        await repositories.mintOperationRepository.create(standaloneMint);
+        await expectThrows(
+          () =>
+            repositories.mintOperationRepository.update({
+              ...standaloneMint,
+              parentSwapOperationId: 'late-mint-parent',
+            }),
+          expect,
+        );
+        const standaloneMelt = createDummyMeltOperation({
+          id: 'standalone-melt',
+          quoteId: 'standalone-melt-quote',
+        });
+        await repositories.meltOperationRepository.create(standaloneMelt);
+        await expectThrows(
+          () =>
+            repositories.meltOperationRepository.update({
+              ...standaloneMelt,
+              parentSwapOperationId: 'late-melt-parent',
+            }),
+          expect,
+        );
         const mintChild = createDummyMintOperation({
           id: 'owned-mint',
           quoteId: 'owned-mint-quote',
           parentSwapOperationId: 'mint-parent',
           pubkey: `02${'ab'.repeat(32)}`,
+          outputData: {
+            keep: [
+              {
+                blindedMessage: { amount: 3, id: 'owned-keyset', B_: 'owned-B' },
+                blindingFactor: '01',
+                secret: '6f776e65642d6f7574707574',
+              },
+            ],
+            send: [],
+          },
         });
         await repositories.mintOperationRepository.create(mintChild);
         expect(
           (await repositories.mintOperationRepository.getById(mintChild.id))?.parentSwapOperationId,
         ).toBe('mint-parent');
+        await expectThrows(
+          () =>
+            repositories.mintOperationRepository.update({
+              ...mintChild,
+              amount: mintChild.amount.add(1),
+            }),
+          expect,
+        );
+        const fetchedMintChild = await repositories.mintOperationRepository.getById(mintChild.id);
+        if (!fetchedMintChild || fetchedMintChild.state === 'init') {
+          throw new Error('Expected a persisted pending mint child');
+        }
+        fetchedMintChild.outputData.keep.push({
+          blindedMessage: { amount: 1, id: 'mutated-keyset', B_: 'mutated-B' },
+          blindingFactor: '01',
+          secret: '61',
+        });
+        const refetchedMintChild = await repositories.mintOperationRepository.getById(mintChild.id);
+        if (!refetchedMintChild || refetchedMintChild.state === 'init') {
+          throw new Error('Expected a persisted pending mint child');
+        }
+        expect(refetchedMintChild.outputData.keep.length).toBe(1);
         await expectThrows(
           () =>
             repositories.mintOperationRepository.update({
@@ -1178,6 +1235,16 @@ export async function runMintSwapRepositoryContract(
                 quoteId: 'second-owned-mint-quote',
                 parentSwapOperationId: 'mint-parent',
                 pubkey: `02${'ab'.repeat(32)}`,
+                outputData: {
+                  keep: [
+                    {
+                      blindedMessage: { amount: 3, id: 'owned-keyset', B_: 'owned-B-2' },
+                      blindingFactor: '02',
+                      secret: '7365636f6e642d6f7574707574',
+                    },
+                  ],
+                  send: [],
+                },
               }),
             ),
           expect,
@@ -1285,6 +1352,18 @@ export async function runMintSwapRepositoryContract(
           1_700_000_000_011,
         );
         expect(await capability.operationEventOutboxRepository.getUnpublished(10)).toHaveLength(0);
+        const published =
+          await capability.operationEventOutboxRepository.getById('mint-swap-event');
+        expect(published?.publishedAt).toBe(1_700_000_000_011);
+        expect(published?.publishAttempts).toBe(2);
+        expect(published?.lastError).toBe(undefined);
+        await expectThrows(
+          () =>
+            capability.operationEventOutboxRepository.enqueue(
+              createDummyOperationEventOutboxRecord({ id: 'published-logical-event' }),
+            ),
+          expect,
+        );
       } finally {
         await dispose();
       }

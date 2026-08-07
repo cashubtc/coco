@@ -353,7 +353,9 @@ describe('MintOperationService', () => {
         if (!options?.createdByOperationId) {
           return [];
         }
-        await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
+        if (options.persistRecoveredProofs !== false) {
+          await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
+        }
         return [makeProof('out-1')];
       }),
     } as unknown as ProofService;
@@ -3268,6 +3270,14 @@ describe('MintOperationService', () => {
         }),
       );
 
+      const planned = await service.planOwnedPreparation({
+        operationId: 'owned-locked-destination',
+        parentSwapOperationId,
+        quote,
+        amount: Amount.from(10),
+        destinationNut20PublicKey,
+        wallet,
+      });
       const prepared = await repositories.withTransaction((transaction) =>
         service.prepareOwnedInTransaction({
           operationId: 'owned-locked-destination',
@@ -3275,7 +3285,7 @@ describe('MintOperationService', () => {
           quote,
           amount: Amount.from(10),
           destinationNut20PublicKey,
-          wallet,
+          preparedOperation: planned,
           repositories: transaction,
         }),
       );
@@ -3298,17 +3308,14 @@ describe('MintOperationService', () => {
       const { wallet } = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
 
       await expect(
-        repositories.withTransaction((transaction) =>
-          service.prepareOwnedInTransaction({
-            operationId: 'owned-wrong-destination-key',
-            parentSwapOperationId,
-            quote,
-            amount: Amount.from(10),
-            destinationNut20PublicKey,
-            wallet,
-            repositories: transaction,
-          }),
-        ),
+        service.planOwnedPreparation({
+          operationId: 'owned-wrong-destination-key',
+          parentSwapOperationId,
+          quote,
+          amount: Amount.from(10),
+          destinationNut20PublicKey,
+          wallet,
+        }),
       ).rejects.toThrow('not locked to the parent NUT-20 key');
       expect(handler.prepare).not.toHaveBeenCalled();
     });
@@ -3326,6 +3333,25 @@ describe('MintOperationService', () => {
       expect((await operationRepo.getById(operation.id))?.state).toBe('pending');
       expect(handler.execute).not.toHaveBeenCalled();
       expect(executingEvents).toHaveLength(0);
+    });
+
+    it('rejects owned commands before mutation when the durable capability is absent', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = makeOwnedPending('owned-capability-gate');
+      await repositories.mintOperationRepository.create(operation);
+
+      await expect(
+        repositories.withTransaction((transaction) =>
+          service.authorizeOwnedExecutionInTransaction(operation.id, parentSwapOperationId, {
+            ...transaction,
+            mintSwap: undefined,
+          }),
+        ),
+      ).rejects.toThrow('optional durable repository capability');
+      expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+        'pending',
+      );
+      expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
     });
 
     it('commits authorization before network execution and gives the remote phase no repositories', async () => {
@@ -3346,6 +3372,7 @@ describe('MintOperationService', () => {
       const persistedAuthorization = await repositories.mintOperationRepository.getById(
         operation.id,
       );
+      await operationRepo.create(authorized);
       expect(persistedAuthorization?.state).toBe('executing');
       expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
 
@@ -3382,12 +3409,46 @@ describe('MintOperationService', () => {
           return { status: 'ISSUED', proofs: [makeProof('owned-custom-output')] };
         }),
       };
+      await operationRepo.create(operation);
       (handlerProvider.get as Mock<any>).mockReturnValueOnce(customHandler);
 
       await expect(service.executeOwnedRemote(operation, parentSwapOperationId)).rejects.toThrow(
         'does not support owned remote execution',
       );
       expect(customHandler.execute).not.toHaveBeenCalled();
+    });
+
+    it('restores already-issued deterministic outputs outside the transaction without saving', async () => {
+      const operation = {
+        ...makeExecutingOp('owned-restore-issued', 'restored-output'),
+        parentSwapOperationId,
+        pubkey: destinationNut20PublicKey,
+      };
+      await operationRepo.create(operation);
+      (handler.executeOwnedRemote as Mock<any>).mockResolvedValueOnce({
+        status: 'ALREADY_ISSUED',
+      });
+      (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([
+        makeProof('restored-output'),
+      ]);
+
+      const result = await service.executeOwnedRemote(operation.id, parentSwapOperationId);
+
+      expect(result).toEqual({
+        operationId: operation.id,
+        status: 'ISSUED',
+        proofs: [makeProof('restored-output')],
+      });
+      expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
+        operation.mintUrl,
+        operation.outputData,
+        {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+          persistRecoveredProofs: false,
+        },
+      );
+      expect(await proofRepo.getProofBySecret(mintUrl, 'restored-output')).toBeNull();
     });
 
     it('atomically rolls back local result application when its composing transaction fails', async () => {
@@ -3418,7 +3479,11 @@ describe('MintOperationService', () => {
           await service.applyOwnedExecutionInTransaction(
             operation,
             parentSwapOperationId,
-            { status: 'ISSUED', proofs: [makeProof('atomic-output')] },
+            {
+              operationId: operation.id,
+              status: 'ISSUED',
+              proofs: [makeProof('atomic-output')],
+            },
             transaction,
           );
           throw new Error('rollback composing parent transition');
@@ -3470,7 +3535,11 @@ describe('MintOperationService', () => {
         service.applyOwnedExecutionInTransaction(
           operation,
           parentSwapOperationId,
-          { status: 'ISSUED', proofs: [makeProof('existing-output')] },
+          {
+            operationId: operation.id,
+            status: 'ISSUED',
+            proofs: [makeProof('existing-output')],
+          },
           transaction,
         ),
       );
