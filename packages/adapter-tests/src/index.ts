@@ -32,6 +32,14 @@ type ContractOptions<TRepositories extends Repositories = Repositories> = {
   testConcurrentRootOperationIsolation?: boolean;
 };
 
+type RepositoryPairOptions<TRepositories extends Repositories = Repositories> = {
+  createRepositoryPair(): Promise<{
+    first: TRepositories;
+    second: TRepositories;
+    dispose(): Promise<void>;
+  }>;
+};
+
 export async function runRepositoryTransactionContract(
   options: ContractOptions,
   runner: ContractRunner,
@@ -251,6 +259,7 @@ type Expectation = {
 
 type ExpectApi = {
   toBe(value: unknown): void;
+  toEqual(value: unknown): void;
   toHaveLength(len: number): void;
   toBeGreaterThan(value: number): void;
   toBeDefined(): void;
@@ -866,6 +875,9 @@ export async function runMintSwapRepositoryContract(
       const { repositories, dispose } = await options.createRepositories();
       try {
         const capability = requireMintSwapCapability(repositories.mintSwap);
+        await repositories.withTransaction(async (tx) => {
+          expect(tx.mintSwap).toBeDefined();
+        });
         const operation = createDummyMintSwapOperation();
         await capability.mintSwapOperationRepository.create(operation);
         const stored = await capability.mintSwapOperationRepository.getById(operation.id);
@@ -880,6 +892,52 @@ export async function runMintSwapRepositoryContract(
         expect(stored?.preparedPlan?.maximumSourceDebit.toString()).toBe('9007199254741006');
         expect(byDestination?.id).toBe(operation.id);
         expect(bySource?.id).toBe(operation.id);
+        expect(
+          (await capability.mintSwapOperationRepository.getByState('prepared')).map(({ id }) => id),
+        ).toEqual([operation.id]);
+        expect(
+          (await capability.mintSwapOperationRepository.getActive()).map(({ id }) => id),
+        ).toEqual([operation.id]);
+        if (!stored) throw new Error('Expected persisted mint swap operation');
+        stored.retry.attemptCount = 99;
+        expect(
+          (await capability.mintSwapOperationRepository.getById(operation.id))?.retry.attemptCount,
+        ).toBe(0);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips completed settlement amounts without numeric coercion', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const capability = requireMintSwapCapability(repositories.mintSwap);
+        const prepared = createDummyMintSwapOperation();
+        const completed = {
+          ...prepared,
+          state: 'completed',
+          revision: 0,
+          sourceDispatchAuthorizedAt: prepared.updatedAt + 1,
+          destinationIssueAuthorizedAt: prepared.updatedAt + 2,
+          settlement: {
+            sourcePaymentFee: Amount.from(5),
+            totalSourceFee: Amount.from(8),
+            sourceMeltChangeAmount: Amount.from(3),
+            sourceKeepAmount: Amount.from(2),
+            sourceReturnedAmount: Amount.from(5),
+            finalSourceDebit: prepared.destinationAmount.add(Amount.from(8)),
+            destinationAmountIssued: prepared.destinationAmount,
+          },
+          completedAt: prepared.updatedAt + 3,
+          updatedAt: prepared.updatedAt + 3,
+        } satisfies MintSwapOperation;
+
+        await capability.mintSwapOperationRepository.create(completed);
+        const stored = await capability.mintSwapOperationRepository.getById(completed.id);
+
+        expect(stored?.settlement?.finalSourceDebit.toString()).toBe('9007199254741001');
+        expect(stored?.settlement?.destinationAmountIssued?.toString()).toBe('9007199254740993');
+        expect(await capability.mintSwapOperationRepository.getActive()).toHaveLength(0);
       } finally {
         await dispose();
       }
@@ -946,6 +1004,16 @@ export async function runMintSwapRepositoryContract(
           () =>
             capability.mintSwapOperationRepository.create(
               createDummyMintSwapOperation({ id: 'other-mint-swap-op' }),
+            ),
+          expect,
+        );
+        await expectThrows(
+          () =>
+            capability.mintSwapOperationRepository.create(
+              createDummyMintSwapOperation({
+                id: 'source-conflict-mint-swap-op',
+                destinationMintOperationId: 'other-destination-mint-op',
+              }),
             ),
           expect,
         );
@@ -1049,6 +1117,28 @@ export async function runMintSwapRepositoryContract(
         );
         await expectThrows(() => repositories.mintOperationRepository.delete(mintChild.id), expect);
 
+        const executingMeltChild = {
+          ...createDummyMeltOperation({
+            id: 'executing-owned-melt',
+            parentSwapOperationId: 'executing-melt-parent',
+          }),
+          state: 'executing',
+          quoteId: 'executing-owned-melt-quote',
+          amount: Amount.from(3),
+          fee_reserve: Amount.from(1),
+          swap_fee: Amount.zero(),
+          needsSwap: false,
+          inputAmount: Amount.from(4),
+          inputProofSecrets: ['executing-owned-input'],
+          changeOutputData: { keep: [], send: [] },
+          parentExecutionPhase: 'melt_authorized',
+        } satisfies MeltOperation;
+        await repositories.meltOperationRepository.create(executingMeltChild);
+        expect(
+          (await repositories.meltOperationRepository.getById(executingMeltChild.id))
+            ?.parentExecutionPhase,
+        ).toBe('melt_authorized');
+
         const meltChild = createDummyMeltOperation({
           id: 'owned-melt',
           quoteId: 'owned-melt-quote',
@@ -1110,6 +1200,18 @@ export async function runMintSwapRepositoryContract(
                   pubkey: `02${'ab'.repeat(32)}`,
                 }),
               );
+              await tx.meltOperationRepository.create(
+                createDummyMeltOperation({
+                  id: 'rolled-back-source-child',
+                  quoteId: 'rolled-back-source-child-quote',
+                  parentSwapOperationId: 'mint-swap-op',
+                }),
+              );
+              await tx.mintRepository.addOrUpdateMint(createDummyMint());
+              await tx.keysetRepository.addKeyset(createDummyKeyset());
+              await tx.counterRepository.setCounter('https://mint.test', 'keyset-id', 7);
+              await tx.proofRepository.saveProofs('https://mint.test', [createDummyProof()]);
+              await tx.mintQuoteRepository.upsertMintQuote(createDummyMintQuote());
               throw new Error('injected rollback');
             }),
           expect,
@@ -1118,6 +1220,21 @@ export async function runMintSwapRepositoryContract(
         expect(await capability.mintSwapOperationRepository.getById('mint-swap-op')).toBe(null);
         expect(await capability.operationEventOutboxRepository.getUnpublished(10)).toHaveLength(0);
         expect(await repositories.mintOperationRepository.getById('rolled-back-child')).toBe(null);
+        expect(await repositories.meltOperationRepository.getById('rolled-back-source-child')).toBe(
+          null,
+        );
+        expect(await repositories.mintRepository.getAllMints()).toHaveLength(0);
+        expect(
+          await repositories.counterRepository.getCounter('https://mint.test', 'keyset-id'),
+        ).toBe(null);
+        expect(await repositories.proofRepository.getAllReadyProofs()).toHaveLength(0);
+        expect(
+          await repositories.mintQuoteRepository.getMintQuote(
+            'https://mint.test',
+            'bolt11',
+            'quote-id',
+          ),
+        ).toBe(null);
       } finally {
         await dispose();
       }
@@ -1166,6 +1283,152 @@ export async function runMintSwapRepositoryContract(
         await dispose();
       }
     });
+
+    it('returns unpublished outbox work in durable retry order', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const outbox = requireMintSwapCapability(
+          repositories.mintSwap,
+        ).operationEventOutboxRepository;
+        await outbox.enqueue(
+          createDummyOperationEventOutboxRecord({
+            id: 'outbox-due-later',
+            operationId: 'mint-swap-later',
+            payload: {
+              ...createDummyOperationEventOutboxRecord().payload,
+              operationId: 'mint-swap-later',
+            },
+            publishAttempts: 1,
+            nextAttemptAt: 1_700_000_000_020,
+            lastError: 'retry later',
+          }),
+        );
+        await outbox.enqueue(
+          createDummyOperationEventOutboxRecord({
+            id: 'outbox-due-first',
+            operationId: 'mint-swap-first',
+            payload: {
+              ...createDummyOperationEventOutboxRecord().payload,
+              operationId: 'mint-swap-first',
+            },
+            publishAttempts: 1,
+            nextAttemptAt: 1_700_000_000_010,
+            lastError: 'retry first',
+          }),
+        );
+        await outbox.enqueue(
+          createDummyOperationEventOutboxRecord({
+            id: 'outbox-future',
+            operationId: 'mint-swap-future',
+            payload: {
+              ...createDummyOperationEventOutboxRecord().payload,
+              operationId: 'mint-swap-future',
+            },
+            publishAttempts: 1,
+            nextAttemptAt: 1_700_000_000_021,
+            lastError: 'retry future',
+          }),
+        );
+
+        const due = await outbox.getUnpublished(10, 1_700_000_000_020);
+        expect(due.map(({ id }) => id)).toEqual(['outbox-due-first', 'outbox-due-later']);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+}
+
+export async function runMintSwapRepositoryConcurrencyContract(
+  options: RepositoryPairOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('Mint Swap persistent multi-root contract', () => {
+    it('allows one CAS winner across repository roots', async () => {
+      const { first, second, dispose } = await options.createRepositoryPair();
+      try {
+        const firstCapability = requireMintSwapCapability(first.mintSwap);
+        const secondCapability = requireMintSwapCapability(second.mintSwap);
+        const operation = createDummyPreparingMintSwapOperation();
+        await firstCapability.mintSwapOperationRepository.create(operation);
+        const next = {
+          ...operation,
+          revision: 1,
+          retry: { attemptCount: 1 },
+          updatedAt: operation.updatedAt + 1,
+        } satisfies MintSwapOperation;
+
+        const results = await Promise.all([
+          firstCapability.mintSwapOperationRepository.compareAndSet(next, 0),
+          secondCapability.mintSwapOperationRepository.compareAndSet(next, 0),
+        ]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+        expect(
+          (await secondCapability.mintSwapOperationRepository.getById(operation.id))?.revision,
+        ).toBe(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('enforces one destination child per parent across repository roots', async () => {
+      const { first, second, dispose } = await options.createRepositoryPair();
+      try {
+        const makeChild = (id: string, quoteId: string): MintOperation =>
+          createDummyMintOperation({
+            id,
+            quoteId,
+            parentSwapOperationId: 'shared-parent',
+            pubkey: `02${'ab'.repeat(32)}`,
+            outputData: {
+              keep: [
+                {
+                  blindedMessage: { amount: 3, id: 'owned-keyset', B_: `owned-${id}` },
+                  blindingFactor: '01',
+                  secret: id === 'first-child' ? '6669727374' : '7365636f6e64',
+                },
+              ],
+              send: [],
+            },
+          });
+
+        const results = await Promise.all([
+          resolves(() => first.mintOperationRepository.create(makeChild('first-child', 'quote-a'))),
+          resolves(() =>
+            second.mintOperationRepository.create(makeChild('second-child', 'quote-b')),
+          ),
+        ]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('enforces one source child per parent across repository roots', async () => {
+      const { first, second, dispose } = await options.createRepositoryPair();
+      try {
+        const makeChild = (id: string, quoteId: string): MeltOperation =>
+          createDummyMeltOperation({
+            id,
+            quoteId,
+            parentSwapOperationId: 'shared-source-parent',
+          });
+
+        const results = await Promise.allSettled([
+          first.meltOperationRepository.create(makeChild('source-child-a', 'source-quote-a')),
+          second.meltOperationRepository.create(makeChild('source-child-b', 'source-quote-b')),
+        ]);
+
+        expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+        expect(results.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+      } finally {
+        await dispose();
+      }
+    });
   });
 }
 
@@ -1174,6 +1437,15 @@ function requireMintSwapCapability(
 ): MintSwapRepositoryCapability {
   if (!capability) throw new Error('Mint Swap repository capability is required by this contract');
   return capability;
+}
+
+async function resolves(fn: () => Promise<void>): Promise<boolean> {
+  try {
+    await fn();
+    return true;
+  } catch {
+    return false;
+  }
 }
 export async function runMintOperationRepositoryContract(
   options: ContractOptions,
