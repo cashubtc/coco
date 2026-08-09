@@ -63,6 +63,42 @@ export class IdbMintSwapOperationRepository implements MintSwapOperationReposito
     return this.getByChild('sourceMeltOperationId', id);
   }
 
+  async getPaginated(
+    limit: number,
+    offset: number,
+    mintUrl?: string,
+  ): Promise<MintSwapOperation[]> {
+    const rows = await this.table()
+      .orderBy('createdAt')
+      .reverse()
+      .filter(
+        (row) => !mintUrl || row.sourceMintUrl === mintUrl || row.destinationMintUrl === mintUrl,
+      )
+      .offset(offset)
+      .limit(limit)
+      .toArray();
+    return rows
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
+      .map(fromRow);
+  }
+
+  async getByChildOperationIds(ids: readonly string[]): Promise<MintSwapOperation[]> {
+    if (ids.length === 0) return [];
+    const [destinationRows, sourceRows] = await Promise.all([
+      this.table()
+        .where('destinationMintOperationId')
+        .anyOf([...ids])
+        .toArray(),
+      this.table()
+        .where('sourceMeltOperationId')
+        .anyOf([...ids])
+        .toArray(),
+    ]);
+    return Array.from(
+      new Map([...destinationRows, ...sourceRows].map((row) => [row.id, row])).values(),
+    ).map(fromRow);
+  }
+
   async compareAndSet(operation: MintSwapOperation, expectedRevision: number): Promise<boolean> {
     assertNonNegativeSafeInteger(expectedRevision, 'Expected revision');
     return this.db.runTransaction('rw', [STORE], async () => {

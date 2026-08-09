@@ -28,12 +28,15 @@ export type {
   AuthSession,
   Counter,
   HistoryEntry,
+  HistoryFilter,
   HistoryType,
   Keypair,
   KeypairPurpose,
   Keyset,
   LegacyHistoryEntry,
   LegacyHistoryRowInput,
+  MintSwapHistoryEntry,
+  OrdinaryHistoryType,
   MeltQuote,
   MeltQuoteRef,
   Mint,
@@ -56,6 +59,7 @@ export {
   operationHistoryId,
   parseHistoryEntryId,
   projectLegacyHistoryRow,
+  projectMintSwapOperation,
   QuoteIdentityConflictError,
 } from './models/index.ts';
 export type {

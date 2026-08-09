@@ -367,6 +367,8 @@ export interface MintSwapOperationRepository {
   getDue(now: number, limit: number): Promise<MintSwapOperation[]>;
   getByDestinationMintOperationId(id: string): Promise<MintSwapOperation | null>;
   getBySourceMeltOperationId(id: string): Promise<MintSwapOperation | null>;
+  getPaginated(limit: number, offset: number, mintUrl?: string): Promise<MintSwapOperation[]>;
+  getByChildOperationIds(ids: readonly string[]): Promise<MintSwapOperation[]>;
   compareAndSet(operation: MintSwapOperation, expectedRevision: number): Promise<boolean>;
 }
 

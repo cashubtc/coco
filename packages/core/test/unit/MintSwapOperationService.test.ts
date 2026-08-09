@@ -16,6 +16,7 @@ import type {
   PendingMintOperation,
 } from '../../operations/mint/MintOperation.ts';
 import { MintSwapOperationService } from '../../operations/mintSwap/MintSwapOperationService.ts';
+import { makePreparingMintSwapOperation } from '../fixtures/MintSwap.ts';
 
 describe('MintSwapOperationService', () => {
   const sourceMintUrl = 'https://source.mint.test';
@@ -425,5 +426,51 @@ describe('MintSwapOperationService', () => {
     expect(
       (await repositories.proofRepository.getProofBySecret(sourceMintUrl, 'source-input'))?.state,
     ).toBe('ready');
+  });
+
+  it('records processor failure and its delayed event atomically', async () => {
+    const operation = makePreparingMintSwapOperation({
+      id: 'processor-failure',
+      preparationLease: {
+        ownerId: 'processor-worker',
+        token: 'processor-lease',
+        stage: 'destination_quote',
+        acquiredAt: clock,
+        expiresAt: clock + 30_000,
+      },
+      createdAt: clock,
+      updatedAt: clock,
+    });
+    await repositories.mintSwap!.mintSwapOperationRepository.create(operation);
+
+    expect(await service.recordProcessorFailure(operation.id, clock + 5_000)).toBe(true);
+
+    const stored = await service.get(operation.id);
+    expect(stored?.retry).toMatchObject({
+      attemptCount: 1,
+      lastAttemptAt: clock,
+      nextAttemptAt: clock + 5_000,
+      lastError: 'Mint swap reconciliation failed; retry is scheduled',
+    });
+    expect(
+      await repositories.mintSwap!.operationEventOutboxRepository.getById(
+        `${operation.id}:1:mint-swap-op:delayed`,
+      ),
+    ).not.toBeNull();
+  });
+
+  it('does not add processor retry bookkeeping after terminal settlement', async () => {
+    const operation = makePreparingMintSwapOperation({
+      id: 'processor-terminal',
+      state: 'failed',
+      preparationLease: undefined,
+      terminalFailure: { code: 'test', reason: 'Terminal test state', at: clock },
+      createdAt: clock,
+      updatedAt: clock,
+    });
+    await repositories.mintSwap!.mintSwapOperationRepository.create(operation);
+
+    expect(await service.recordProcessorFailure(operation.id, clock + 5_000)).toBe(false);
+    expect((await service.get(operation.id))?.revision).toBe(0);
   });
 });

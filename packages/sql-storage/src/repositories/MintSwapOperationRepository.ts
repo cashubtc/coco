@@ -92,6 +92,36 @@ export class SqliteMintSwapOperationRepository implements MintSwapOperationRepos
     return this.getByChild('sourceMeltOperationId', id);
   }
 
+  async getPaginated(
+    limit: number,
+    offset: number,
+    mintUrl?: string,
+  ): Promise<MintSwapOperation[]> {
+    return this.query(
+      `SELECT ${SELECT_COLUMNS} FROM coco_cashu_mint_swap_operations
+       ${mintUrl ? 'WHERE sourceMintUrl = ? OR destinationMintUrl = ?' : ''}
+       ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`,
+      mintUrl ? [mintUrl, mintUrl, limit, offset] : [limit, offset],
+    );
+  }
+
+  async getByChildOperationIds(ids: readonly string[]): Promise<MintSwapOperation[]> {
+    if (ids.length === 0) return [];
+    const operations = new Map<string, MintSwapOperation>();
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const matches = await this.query(
+        `SELECT ${SELECT_COLUMNS} FROM coco_cashu_mint_swap_operations
+         WHERE destinationMintOperationId IN (${placeholders})
+            OR sourceMeltOperationId IN (${placeholders})`,
+        [...chunk, ...chunk],
+      );
+      for (const operation of matches) operations.set(operation.id, operation);
+    }
+    return [...operations.values()];
+  }
+
   async compareAndSet(operation: MintSwapOperation, expectedRevision: number): Promise<boolean> {
     assertNonNegativeSafeInteger(expectedRevision, 'Expected revision');
     const current = await this.getById(operation.id);

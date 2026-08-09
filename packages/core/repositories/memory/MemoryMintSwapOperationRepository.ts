@@ -52,6 +52,36 @@ export class MemoryMintSwapOperationRepository implements MintSwapOperationRepos
     return this.findByChild('sourceMeltOperationId', id);
   }
 
+  async getPaginated(
+    limit: number,
+    offset: number,
+    mintUrl?: string,
+  ): Promise<MintSwapOperation[]> {
+    return Array.from(this.operations.values())
+      .filter(
+        (operation) =>
+          !mintUrl ||
+          operation.sourceMintUrl === mintUrl ||
+          operation.destinationMintUrl === mintUrl,
+      )
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
+      .slice(offset, offset + limit)
+      .map((operation) => cloneMemoryValue(operation));
+  }
+
+  async getByChildOperationIds(ids: readonly string[]): Promise<MintSwapOperation[]> {
+    const candidates = new Set(ids);
+    return Array.from(this.operations.values())
+      .filter(
+        (operation) =>
+          (operation.destinationMintOperationId !== undefined &&
+            candidates.has(operation.destinationMintOperationId)) ||
+          (operation.sourceMeltOperationId !== undefined &&
+            candidates.has(operation.sourceMeltOperationId)),
+      )
+      .map((operation) => cloneMemoryValue(operation));
+  }
+
   async compareAndSet(operation: MintSwapOperation, expectedRevision: number): Promise<boolean> {
     assertNonNegativeSafeInteger(expectedRevision, 'Expected revision');
     const current = this.operations.get(operation.id);

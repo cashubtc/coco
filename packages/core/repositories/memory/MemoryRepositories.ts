@@ -145,12 +145,14 @@ function createMemoryRepositoryScope(): RepositoryTransactionScope {
   const mintQuoteRepository = new MemoryMintQuoteRepository();
   const legacyMintQuoteRepository = new MemoryLegacyMintQuoteRepository();
   const meltQuoteRepository = new MemoryMeltQuoteRepository();
+  const mintSwapOperationRepository = new MemoryMintSwapOperationRepository();
   const historyRepository = new MemoryHistoryRepository({
     sendOperationRepository,
     meltOperationRepository,
     mintOperationRepository,
     mintQuoteRepository,
     receiveOperationRepository,
+    mintSwapOperationRepository,
   });
 
   return {
@@ -171,7 +173,7 @@ function createMemoryRepositoryScope(): RepositoryTransactionScope {
     paymentRequestReceiveOperationRepository: new MemoryPaymentRequestReceiveOperationRepository(),
     paymentRequestReceiveAttemptRepository: new MemoryPaymentRequestReceiveAttemptRepository(),
     mintSwap: {
-      mintSwapOperationRepository: new MemoryMintSwapOperationRepository(),
+      mintSwapOperationRepository,
       operationEventOutboxRepository: new MemoryOperationEventOutboxRepository(),
     },
   };

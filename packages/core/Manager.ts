@@ -1030,6 +1030,7 @@ export class Manager {
       repositories.historyRepository,
       this.eventBus,
       historyLogger,
+      repositories.mintSwap?.mintSwapOperationRepository,
     );
 
     const legacyMintQuoteRepository = repositories.legacyMintQuoteRepository;

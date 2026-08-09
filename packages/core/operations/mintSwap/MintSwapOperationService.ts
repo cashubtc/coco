@@ -28,6 +28,7 @@ import type {
 import {
   assertMintSwapPreparationLeaseOwner,
   createMintSwapPreparedPlanFingerprint,
+  isAutomaticMintSwapState,
   isMintSwapPreparationLeaseActive,
   isTerminalMintSwapState,
   validateMintSwapAccounting,
@@ -568,7 +569,6 @@ export class MintSwapOperationService {
       const result = await this.meltOperationService.executeOwnedRemoteStep(child.id, parent.id);
       return this.applySourceResult(parent.id, result);
     } catch (error) {
-      await this.recordRetry(parent.id, error);
       throw error;
     }
   }
@@ -789,7 +789,6 @@ export class MintSwapOperationService {
         return this.completeDestinationInScope(scope, current, finalized);
       });
     } catch (error) {
-      await this.recordRetry(parent.id, error);
       throw error;
     }
   }
@@ -1170,45 +1169,47 @@ export class MintSwapOperationService {
     });
   }
 
-  private async recordRetry(operationId: string, error: unknown): Promise<void> {
-    try {
-      await this.repositories.withTransaction(async (scope) => {
-        const operation = await this.requireOperationInScope(scope, operationId);
-        if (
-          operation.state !== 'preparing' &&
-          operation.state !== 'source_inflight' &&
-          operation.state !== 'destination_funded' &&
-          operation.state !== 'issuing'
-        ) {
-          return;
-        }
-        const now = this.now();
-        const attemptCount = operation.retry.attemptCount + 1;
-        const delay = Math.min(60_000, 1_000 * 2 ** Math.min(attemptCount - 1, 6));
-        await this.replaceInScope(
-          scope,
-          operation,
-          {
-            ...operation,
-            retry: {
-              ...operation.retry,
-              attemptCount,
-              lastAttemptAt: now,
-              nextAttemptAt: now + delay,
-              lastError: 'Mint swap reconciliation failed; retry is scheduled',
-            },
+  async recordProcessorFailure(operationId: string, nextAttemptAt: number): Promise<boolean> {
+    return this.repositories.withTransaction(async (scope) => {
+      const operation = await this.requireOperationInScope(scope, operationId);
+      if (!isAutomaticMintSwapState(operation.state)) return false;
+      const now = this.now();
+      const attemptCount = operation.retry.attemptCount + 1;
+      await this.replaceInScope(
+        scope,
+        operation,
+        {
+          ...operation,
+          retry: {
+            ...operation.retry,
+            attemptCount,
+            lastAttemptAt: now,
+            nextAttemptAt: Math.max(now, nextAttemptAt),
+            lastError: 'Mint swap reconciliation failed; retry is scheduled',
           },
-          'mint-swap-op:delayed',
-          'retry_scheduled',
-        );
+        },
+        'mint-swap-op:delayed',
+        'retry_scheduled',
+      );
+      return true;
+    });
+  }
+
+  async recordProcessorSuccess(operationId: string): Promise<boolean> {
+    return this.repositories.withTransaction(async (scope) => {
+      const operation = await this.requireOperationInScope(scope, operationId);
+      if (!isAutomaticMintSwapState(operation.state) || !operation.retry.lastError) return false;
+      await this.replaceInScope(scope, operation, {
+        ...operation,
+        retry: {
+          ...operation.retry,
+          attemptCount: 0,
+          lastError: undefined,
+          lastSuccessfulObservationAt: this.now(),
+        },
       });
-    } catch (retryError) {
-      this.logger?.warn('Mint swap retry state could not be recorded', {
-        operationId,
-        error: retryError instanceof Error ? retryError.message : String(retryError),
-      });
-    }
-    void error;
+      return true;
+    });
   }
 
   private async replaceInScope(

@@ -895,6 +895,23 @@ export async function runMintSwapRepositoryContract(
         expect(byDestination?.id).toBe(operation.id);
         expect(bySource?.id).toBe(operation.id);
         expect(
+          (
+            await capability.mintSwapOperationRepository.getPaginated(
+              1,
+              0,
+              operation.destinationMintUrl,
+            )
+          ).map(({ id }) => id),
+        ).toEqual([operation.id]);
+        expect(
+          (
+            await capability.mintSwapOperationRepository.getByChildOperationIds([
+              'destination-mint-op',
+              ...Array.from({ length: 1_000 }, (_, index) => `unowned-child-${index}`),
+            ])
+          ).map(({ id }) => id),
+        ).toEqual([operation.id]);
+        expect(
           (await capability.mintSwapOperationRepository.getByState('prepared')).map(({ id }) => id),
         ).toEqual([operation.id]);
         expect(
