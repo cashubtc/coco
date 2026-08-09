@@ -11,6 +11,8 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapRepositoryContract,
+  runMintSwapRepositoryConcurrencyContract,
 } from '@cashu/coco-adapter-tests';
 import { IndexedDbRepositories } from '../index.ts';
 
@@ -23,6 +25,23 @@ async function createRepositories() {
   return {
     repositories,
     dispose: async () => {},
+  };
+}
+
+async function createRepositoryPair() {
+  const dbName = `coco_cashu_pair_${Date.now()}_${dbCounter++}`;
+  const first = new IndexedDbRepositories({ name: dbName });
+  const second = new IndexedDbRepositories({ name: dbName });
+  await first.init();
+  await second.init();
+  return {
+    first,
+    second,
+    dispose: async () => {
+      first.db.close();
+      second.db.close();
+      await Dexie.delete(dbName);
+    },
   };
 }
 
@@ -60,6 +79,10 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryConcurrencyContract({ createRepositoryPair }, { describe, it, expect });
 
 describe('indexeddb quote storage constraints', () => {
   it('migrates canonical Mint Quote Accounting without inventing remote time', async () => {

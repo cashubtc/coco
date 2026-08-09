@@ -16,6 +16,7 @@ import type {
   PaymentRequestReceiveOperationRepository,
   ReceiveOperationRepository,
   RepositoryTransactionScope,
+  MintSwapRepositoryCapability,
 } from '@cashu/coco-core/adapter';
 import { IdbDb, type IdbDbOptions } from './lib/db.ts';
 import { ensureSchema } from './lib/schema.ts';
@@ -37,6 +38,8 @@ import {
   IdbPaymentRequestReceiveAttemptRepository,
   IdbPaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { IdbMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
+import { IdbOperationEventOutboxRepository } from './repositories/OperationEventOutboxRepository.ts';
 
 export interface IndexedDbRepositoriesOptions extends IdbDbOptions {}
 
@@ -57,6 +60,7 @@ export class IndexedDbRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  readonly mintSwap: MintSwapRepositoryCapability;
   readonly db: IdbDb;
   private initialized = false;
 
@@ -82,6 +86,7 @@ export class IndexedDbRepositories implements Repositories {
     this.paymentRequestReceiveAttemptRepository = new IdbPaymentRequestReceiveAttemptRepository(
       this.db,
     );
+    this.mintSwap = createMintSwapCapability(this.db);
   }
 
   async init(): Promise<void> {
@@ -119,6 +124,7 @@ export class IndexedDbRepositories implements Repositories {
         paymentRequestReceiveAttemptRepository: new IdbPaymentRequestReceiveAttemptRepository(
           scopedDb,
         ),
+        mintSwap: createMintSwapCapability(scopedDb),
       };
       return fn(scopedRepositories);
     });
@@ -144,4 +150,13 @@ export {
   IdbReceiveOperationRepository,
   IdbPaymentRequestReceiveOperationRepository,
   IdbPaymentRequestReceiveAttemptRepository,
+  IdbMintSwapOperationRepository,
+  IdbOperationEventOutboxRepository,
 };
+
+function createMintSwapCapability(db: IdbDb): MintSwapRepositoryCapability {
+  return {
+    mintSwapOperationRepository: new IdbMintSwapOperationRepository(db),
+    operationEventOutboxRepository: new IdbOperationEventOutboxRepository(db),
+  };
+}
