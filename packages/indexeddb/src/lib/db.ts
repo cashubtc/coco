@@ -277,6 +277,7 @@ export interface MeltOperationRow {
     | 'prepared'
     | 'executing'
     | 'pending'
+    | 'failed'
     | 'finalized'
     | 'rolling_back'
     | 'rolled_back';

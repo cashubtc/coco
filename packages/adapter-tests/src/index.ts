@@ -1138,6 +1138,16 @@ export async function runMintSwapRepositoryContract(
           (await repositories.meltOperationRepository.getById(executingMeltChild.id))
             ?.parentExecutionPhase,
         ).toBe('melt_authorized');
+        const failedMeltChild = {
+          ...executingMeltChild,
+          state: 'failed',
+          error: 'Canonical source quote is unpaid',
+          updatedAt: executingMeltChild.updatedAt + 1,
+        } satisfies MeltOperation;
+        await repositories.meltOperationRepository.update(failedMeltChild);
+        expect(
+          (await repositories.meltOperationRepository.getById(executingMeltChild.id))?.state,
+        ).toBe('failed');
 
         const meltChild = createDummyMeltOperation({
           id: 'owned-melt',

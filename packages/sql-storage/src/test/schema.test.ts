@@ -51,6 +51,7 @@ const EXPECTED_MIGRATION_IDS = [
   '037_mint_quote_accounting',
   '038_mint_swap_operations_and_outbox',
   '039_mint_swap_child_ownership',
+  '040_parent_owned_melt_failure_state',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `

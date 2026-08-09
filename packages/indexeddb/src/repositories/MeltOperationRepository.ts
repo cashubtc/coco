@@ -28,6 +28,7 @@ const preparedStates: MeltOperationState[] = [
   'prepared',
   'executing',
   'pending',
+  'failed',
   'finalized',
   'rolling_back',
   'rolled_back',
@@ -99,10 +100,6 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 };
 
 const operationToRow = (operation: MeltOperation): MeltOperationRow => {
-  if (operation.state === 'failed') {
-    throw new Error('Cannot persist failed melt operation');
-  }
-
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
   const methodDataJson = stringifyJson(operation.methodData);

@@ -54,6 +54,7 @@ const preparedStates: MeltOperationState[] = [
   'prepared',
   'executing',
   'pending',
+  'failed',
   'finalized',
   'rolling_back',
   'rolled_back',
@@ -200,9 +201,6 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
   }
 
   async create(operation: MeltOperation): Promise<void> {
-    if (operation.state === 'failed') {
-      throw new Error('Cannot persist failed melt operation');
-    }
     assertParentOwnedMeltOperationInvariant(operation);
 
     const exists = await this.db.get<{ id: string }>(
@@ -225,10 +223,6 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
   }
 
   async update(operation: MeltOperation): Promise<void> {
-    if (operation.state === 'failed') {
-      throw new Error('Cannot persist failed melt operation');
-    }
-
     const current = await this.getById(operation.id);
     if (!current) {
       throw new Error(`MeltOperation with id ${operation.id} not found`);
