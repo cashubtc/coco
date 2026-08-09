@@ -50,14 +50,16 @@ export function assertParentOwnedMeltOperationInvariant(operation: MeltOperation
     if (phase === undefined) {
       throw new Error(`Parent-owned executing melt operation ${operation.id} requires a phase`);
     }
-  } else if (
-    operation.state === 'pending' ||
-    operation.state === 'failed' ||
-    operation.state === 'finalized'
-  ) {
+  } else if (operation.state === 'pending' || operation.state === 'finalized') {
     if (phase !== 'melt_authorized') {
       throw new Error(
         `Parent-owned settled melt operation ${operation.id} requires melt authorization`,
+      );
+    }
+  } else if (operation.state === 'failed') {
+    if (phase !== 'pre_swap_authorized' && phase !== 'melt_authorized') {
+      throw new Error(
+        `Parent-owned failed melt operation ${operation.id} requires source authorization`,
       );
     }
   } else if (phase !== undefined) {
@@ -68,7 +70,7 @@ export function assertParentOwnedMeltOperationInvariant(operation: MeltOperation
 
   if (phase === 'pre_swap_authorized') {
     if (
-      operation.state !== 'executing' ||
+      (operation.state !== 'executing' && operation.state !== 'failed') ||
       !operation.needsSwap ||
       operation.swapOutputData === undefined
     ) {

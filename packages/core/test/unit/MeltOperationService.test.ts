@@ -312,6 +312,7 @@ describe('MeltOperationService', () => {
         }),
         restoreProofsToReady: mock(async (proofMintUrl: string, secrets: string[]) => {
           await repositories.proofRepository.setProofState(proofMintUrl, secrets, 'ready');
+          await repositories.proofRepository.releaseProofs(proofMintUrl, secrets);
         }),
         reserveProofs: mock(
           async (proofMintUrl: string, secrets: string[], operationId: string) => {
@@ -828,6 +829,74 @@ describe('MeltOperationService', () => {
       expect((await repositories.meltOperationRepository.getById(operation.id))?.state).toBe(
         'executing',
       );
+    });
+
+    it('observes an unspent authorized pre-swap and reclaims it transactionally', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makePreparedOp('owned-unspent-pre-swap', {
+          parentSwapOperationId,
+          needsSwap: true,
+          inputProofSecrets: ['owned-unspent-input'],
+          swapOutputData: {
+            keep: [],
+            send: [
+              {
+                blindedMessage: { amount: 101, id: keysetId, B_: 'owned-recovery-B' },
+                blindingFactor: '01',
+                secret: '6f776e65642d7265636f76657279',
+              },
+            ],
+          },
+        }),
+        state: 'executing' as const,
+        parentExecutionPhase: 'pre_swap_authorized' as const,
+      };
+      await repositories.proofRepository.saveProofs(mintUrl, [
+        makeProof('owned-unspent-input', {
+          amount: Amount.from(101),
+          state: 'inflight',
+          usedByOperationId: operation.id,
+        }),
+      ]);
+      await repositories.meltOperationRepository.create(operation);
+      const recoveryAdapter = {
+        checkProofStates: mock(async () => [{ state: 'UNSPENT' }]),
+      } as unknown as MintAdapter;
+      const ownedService = new MeltOperationService(
+        handlerProvider,
+        repositories.meltOperationRepository,
+        quoteLifecycle,
+        repositories.proofRepository,
+        proofService,
+        mintService,
+        walletService,
+        recoveryAdapter,
+        eventBus,
+        logger,
+      );
+
+      const observation = await ownedService.observeOwnedRecovery(
+        operation.id,
+        parentSwapOperationId,
+      );
+      expect(observation.status).toBe('ORIGINAL_INPUTS_RECLAIMABLE');
+
+      await repositories.withTransaction((transaction) =>
+        ownedService.reclaimOwnedPreSwapInTransaction(
+          operation.id,
+          parentSwapOperationId,
+          transaction,
+        ),
+      );
+
+      const stored = await repositories.meltOperationRepository.getById(operation.id);
+      expect(stored?.state).toBe('failed');
+      expect(stored?.parentExecutionPhase).toBe('pre_swap_authorized');
+      expect(
+        (await repositories.proofRepository.getProofBySecret(mintUrl, 'owned-unspent-input'))
+          ?.state,
+      ).toBe('ready');
     });
   });
 

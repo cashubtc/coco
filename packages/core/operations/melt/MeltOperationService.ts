@@ -34,6 +34,7 @@ import type { CoreEvents } from '../../events/types';
 import type { Logger } from '../../logging/Logger';
 import {
   assertProofsMatchSerializedOutputs,
+  computeYHexForSecrets,
   deserializeOutputData,
   generateSubId,
   getSecretsFromSerializedOutputData,
@@ -71,6 +72,10 @@ export type PlanOwnedMeltOperationCommand = Omit<
   PrepareOwnedMeltOperationCommand,
   'preparedOperation' | 'repositories'
 > & { wallet: Wallet };
+
+export type OwnedMeltRecoveryObservation =
+  | { status: 'REMOTE_RESULT'; result: OwnedMeltRemoteResult }
+  | { status: 'ORIGINAL_INPUTS_RECLAIMABLE'; observedAt: number };
 
 /**
  * MeltOperationService orchestrates melt sagas while delegating
@@ -527,6 +532,148 @@ export class MeltOperationService {
     return result;
   }
 
+  /**
+   * Observe an authorized owned source effect after restart without writing repositories.
+   *
+   * The composing parent applies the returned observation in its own transaction. This keeps
+   * canonical parent, child, proof, and outbox state on one durability boundary.
+   */
+  async observeOwnedRecovery(
+    operationId: string,
+    parentSwapOperationId: string,
+  ): Promise<OwnedMeltRecoveryObservation> {
+    const operation = await this.meltOperationRepository.getById(operationId);
+    if (!operation || (operation.state !== 'executing' && operation.state !== 'pending')) {
+      throw new Error(
+        `Cannot recover melt child ${operationId} from ${operation?.state ?? 'missing'}`,
+      );
+    }
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    assertParentOwnedMeltOperationInvariant(operation);
+
+    if (operation.parentExecutionPhase === 'pre_swap_authorized') {
+      const proofStates = await this.mintAdapter.checkProofStates(
+        operation.mintUrl,
+        computeYHexForSecrets(operation.inputProofSecrets),
+      );
+      const spentCount = proofStates.filter(({ state }) => state === 'SPENT').length;
+      if (spentCount === 0) {
+        return { status: 'ORIGINAL_INPUTS_RECLAIMABLE', observedAt: Date.now() };
+      }
+      if (spentCount !== operation.inputProofSecrets.length || !operation.swapOutputData) {
+        throw new Error(`Melt child ${operation.id} has an ambiguous pre-swap proof state`);
+      }
+
+      const recovered = await this.proofService.recoverProofsFromOutputData(
+        operation.mintUrl,
+        operation.swapOutputData,
+        {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+          persistRecoveredProofs: false,
+        },
+      );
+      assertProofsMatchSerializedOutputs(
+        recovered,
+        [...operation.swapOutputData.keep, ...operation.swapOutputData.send],
+        `Recovered melt child ${operation.id} pre-swap`,
+      );
+      const sendSecrets = new Set(
+        getSecretsFromSerializedOutputData(operation.swapOutputData).sendSecrets,
+      );
+      return {
+        status: 'REMOTE_RESULT',
+        result: {
+          operationId: operation.id,
+          phase: 'pre_swap',
+          observedAt: Date.now(),
+          sendProofs: recovered.filter(({ secret }) => sendSecrets.has(secret)),
+          keepProofs: recovered.filter(({ secret }) => !sendSecrets.has(secret)),
+        },
+      };
+    }
+
+    if (operation.parentExecutionPhase !== 'melt_authorized') {
+      throw new Error(`Melt child ${operation.id} has no authorized recovery phase`);
+    }
+    const quote = await this.quoteLifecycle.refreshMeltQuote(
+      operation.mintUrl,
+      operation.method,
+      operation.quoteId,
+    );
+    if (quote.method !== operation.method || quote.unit !== operation.unit) {
+      throw new Error(`Recovered quote does not match melt child ${operation.id}`);
+    }
+    const response = {
+      state: quote.state,
+      change: quote.change,
+      payment_preimage: quote.method === 'onchain' ? undefined : quote.payment_preimage,
+      outpoint: quote.method === 'onchain' ? quote.outpoint : undefined,
+    } as Extract<OwnedMeltRemoteResult, { phase: 'melt' }>['response'];
+    let changeProofs;
+    if (response.state === 'PAID' && response.change?.length) {
+      changeProofs = await this.proofService.unblindChangeProofs(
+        operation.mintUrl,
+        deserializeOutputData(operation.changeOutputData).keep,
+        response.change,
+        { unit: operation.unit, createdByOperationId: operation.id },
+      );
+    }
+    return {
+      status: 'REMOTE_RESULT',
+      result: {
+        operationId: operation.id,
+        phase: 'melt',
+        observedAt: Date.now(),
+        response,
+        changeProofs,
+      },
+    };
+  }
+
+  /** Reclaim an authorized pre-swap whose original proofs remain unspent. */
+  async reclaimOwnedPreSwapInTransaction(
+    operationId: string,
+    parentSwapOperationId: string,
+    repositories: RepositoryTransactionScope,
+    reason = 'Authorized pre-swap was not executed',
+  ): Promise<FailedMeltOperation> {
+    requireMintSwapRepositoryCapability(repositories);
+    const operation = await repositories.meltOperationRepository.getById(operationId);
+    if (
+      !operation ||
+      operation.state !== 'executing' ||
+      operation.parentExecutionPhase !== 'pre_swap_authorized'
+    ) {
+      throw new Error(
+        `Cannot reclaim pre-swap ${operationId} from ${operation?.state ?? 'missing'}`,
+      );
+    }
+    assertChildOperationAccess(operation, parentSwapOperationId);
+    const proofs = await repositories.proofRepository.getProofsBySecrets(
+      operation.mintUrl,
+      operation.inputProofSecrets,
+    );
+    if (
+      proofs.length !== operation.inputProofSecrets.length ||
+      proofs.some((proof) => proof.state !== 'inflight' || proof.usedByOperationId !== operation.id)
+    ) {
+      throw new Error(`Melt child ${operation.id} cannot reclaim its original inputs`);
+    }
+    await this.proofService
+      .forTransaction(repositories)
+      .restoreProofsToReady(operation.mintUrl, operation.inputProofSecrets);
+    const failed: FailedMeltOperation = {
+      ...operation,
+      state: 'failed',
+      updatedAt: Date.now(),
+      error: reason,
+    };
+    assertParentOwnedMeltOperationInvariant(failed);
+    await repositories.meltOperationRepository.update(failed);
+    return failed;
+  }
+
   /** Apply one remote source result atomically with the composing parent transition. */
   async applyOwnedRemoteStepInTransaction(
     operationOrId: string | ExecutingMeltOperation,
@@ -542,8 +689,11 @@ export class MeltOperationService {
       throw new Error(`Melt result operation ${result.operationId} does not match ${operationId}`);
     }
     const current = await repositories.meltOperationRepository.getById(operationId);
-    if (!current || current.state !== 'executing') {
+    if (!current || (current.state !== 'executing' && current.state !== 'pending')) {
       throw new Error(`Cannot apply melt child ${operationId} from ${current?.state ?? 'missing'}`);
+    }
+    if (current.state === 'pending' && result.phase !== 'melt') {
+      throw new Error(`Pending melt child ${operationId} can only apply a melt observation`);
     }
     assertChildOperationAccess(current, parentSwapOperationId);
     const expectedResultPhase =

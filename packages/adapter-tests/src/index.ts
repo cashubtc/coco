@@ -779,6 +779,7 @@ export function createDummyPreparingMintSwapOperation(
     destinationMintUrl: 'https://destination-mint.test',
     unit: 'sat',
     destinationAmount: Amount.from(100),
+    requiredDispatchWindowSeconds: 120,
     destinationNut20Key: { publicKey: `02${'ab'.repeat(32)}`, derivationIndex: 42 },
     preparationLease: {
       ownerId: 'adapter-contract-worker',
@@ -809,6 +810,7 @@ export function createDummyMintSwapOperation(
     destinationMintUrl: 'https://destination-mint.test',
     unit: 'sat',
     destinationAmount,
+    requiredDispatchWindowSeconds: 120,
     destinationNut20Key: { publicKey: `02${'ab'.repeat(32)}`, derivationIndex: 42 },
     destinationQuoteRef: {
       mintUrl: 'https://destination-mint.test',

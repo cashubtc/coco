@@ -24,6 +24,7 @@ export function makePreparingMintSwapOperation(
     destinationMintUrl: 'https://destination.mint.test',
     unit: 'sat',
     destinationAmount: Amount.from(1_000),
+    requiredDispatchWindowSeconds: 120,
     destinationNut20Key: { ...destinationNut20Key },
     preparationLease: {
       ownerId: 'worker-a',
@@ -79,14 +80,17 @@ export function makePreparedMintSwapOperation(
       send: [],
     },
     sourceOutputData: {
-      keep: [],
-      send: [
-        {
-          blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
-          blindingFactor: '02',
-          secret: '736f757263652d6f7574707574',
-        },
-      ],
+      change: { keep: [], send: [] },
+      swap: {
+        keep: [],
+        send: [
+          {
+            blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
+            blindingFactor: '02',
+            secret: '736f757263652d6f7574707574',
+          },
+        ],
+      },
     },
     sourceMeltAmount: destinationAmount,
     sourceFeeReserve,
@@ -107,6 +111,7 @@ export function makePreparedMintSwapOperation(
     destinationMintUrl: 'https://destination.mint.test',
     unit: 'sat',
     destinationAmount,
+    requiredDispatchWindowSeconds: 120,
     destinationNut20Key: { ...destinationNut20Key },
     destinationQuoteRef,
     destinationMintOperationId: 'destination-mint-op',

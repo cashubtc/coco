@@ -125,6 +125,8 @@ export interface MintSwapOperation {
   destinationMintUrl: string;
   unit: 'sat';
   destinationAmount: Amount;
+  /** Caller-selected safety window persisted before any remote preparation I/O. */
+  requiredDispatchWindowSeconds: number;
   /**
    * Reference to the fresh NUT-20 key persisted before destination quote I/O.
    * The private key remains in the keyring and is never copied into this model.
@@ -161,7 +163,10 @@ export interface MintSwapPreparedPlanFingerprintInput {
   unit: 'sat';
   sourceInputProofSecrets: readonly string[];
   destinationOutputData: SerializedOutputData;
-  sourceOutputData: SerializedOutputData;
+  sourceOutputData: {
+    change: SerializedOutputData;
+    swap?: SerializedOutputData;
+  };
   sourceMeltAmount: Amount;
   sourceFeeReserve: Amount;
   sourcePreparationFee: Amount;
@@ -409,6 +414,12 @@ export function validateMintSwapOperation(operation: MintSwapOperation): MintSwa
   assertNonNegativeAmount(operation.destinationAmount, 'Mint swap destination amount');
   if (operation.destinationAmount.isZero()) {
     throw new Error('Mint swap destination amount must be positive');
+  }
+  if (
+    !Number.isSafeInteger(operation.requiredDispatchWindowSeconds) ||
+    operation.requiredDispatchWindowSeconds < 30
+  ) {
+    throw new Error('Mint swap required dispatch window must be at least 30 seconds');
   }
 
   validateNut20Key(operation.destinationNut20Key);
@@ -814,6 +825,9 @@ function requirePreparedFields(operation: MintSwapOperation): void {
   ) {
     throw new Error('Mint swap required dispatch window must be at least 30 seconds');
   }
+  if (plan.requiredDispatchWindowSeconds !== operation.requiredDispatchWindowSeconds) {
+    throw new Error('Prepared mint swap dispatch window must match its preparation policy');
+  }
   if (
     operation.state === 'prepared' &&
     plan.dispatchDeadlineSeconds <
@@ -955,6 +969,11 @@ function assertAlwaysImmutable(current: MintSwapOperation, next: MintSwapOperati
     [current.destinationMintUrl, next.destinationMintUrl, 'destination mint URL'],
     [current.unit, next.unit, 'unit'],
     [current.destinationAmount.toString(), next.destinationAmount.toString(), 'destination amount'],
+    [
+      current.requiredDispatchWindowSeconds,
+      next.requiredDispatchWindowSeconds,
+      'required dispatch window',
+    ],
     [
       current.destinationNut20Key.publicKey,
       next.destinationNut20Key.publicKey,

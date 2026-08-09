@@ -405,14 +405,17 @@ describe('MintSwapOperation', () => {
       unit: 'sat' as const,
       sourceInputProofSecrets: ['a', 'b'],
       sourceOutputData: {
-        keep: [],
-        send: [
-          {
-            blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
-            blindingFactor: '02',
-            secret: '62',
-          },
-        ],
+        change: { keep: [], send: [] },
+        swap: {
+          keep: [],
+          send: [
+            {
+              blindedMessage: { amount: '1025', id: 'source-keyset', B_: 'source-B' },
+              blindingFactor: '02',
+              secret: '62',
+            },
+          ],
+        },
       },
       sourceMeltAmount: prepared.preparedPlan!.sourceMeltAmount,
       sourceFeeReserve: prepared.preparedPlan!.sourceFeeReserve,
