@@ -99,6 +99,9 @@ export type {
 export {
   assertMintSwapOperationUpdate,
   createMintSwapPreparedPlanFingerprint,
+  getMintSwapOperationDueAt,
+  isMintSwapOperationDue,
+  isTerminalMintSwapState,
   validateMintSwapOperation,
 } from './operations/mintSwap/MintSwapOperation.ts';
 export {
