@@ -111,6 +111,8 @@ export {
   assertParentOwnedMintOperationUpdate,
 } from './operations/mintSwap/ChildOperationOwnership.ts';
 export {
+  isOperationEventDue,
+  isOperationEventPublished,
   operationEventLogicalKey,
   validateOperationEventOutboxRecord,
 } from './models/OperationEventOutbox.ts';
