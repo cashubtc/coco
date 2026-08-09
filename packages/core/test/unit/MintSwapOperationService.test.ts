@@ -30,6 +30,7 @@ describe('MintSwapOperationService', () => {
   let remoteSourceCalls: number;
   let remoteDestinationCalls: number;
   let sourceRemoteState: 'PAID' | 'PENDING' | 'UNPAID';
+  let loseDestinationResponseOnce: boolean;
 
   beforeEach(async () => {
     repositories = new MemoryRepositories();
@@ -47,6 +48,7 @@ describe('MintSwapOperationService', () => {
     remoteSourceCalls = 0;
     remoteDestinationCalls = 0;
     sourceRemoteState = 'PAID';
+    loseDestinationResponseOnce = false;
     clock = now;
 
     const destinationQuote = mintQuoteFromBolt11Response(destinationMintUrl, {
@@ -131,6 +133,10 @@ describe('MintSwapOperationService', () => {
       },
       executeOwnedRemote: async (id: string) => {
         remoteDestinationCalls++;
+        if (loseDestinationResponseOnce) {
+          loseDestinationResponseOnce = false;
+          throw new Error('destination response lost');
+        }
         return {
           operationId: id,
           status: 'ISSUED' as const,
@@ -426,6 +432,38 @@ describe('MintSwapOperationService', () => {
     expect(
       (await repositories.proofRepository.getProofBySecret(sourceMintUrl, 'source-input'))?.state,
     ).toBe('ready');
+  });
+
+  it('reconstructs source recovery from shared persistence after a pending response', async () => {
+    sourceRemoteState = 'PENDING';
+    const prepared = await service.prepare({ sourceMintUrl, destinationMintUrl, amount: 100 });
+    expect((await service.execute(prepared.id)).state).toBe('source_inflight');
+
+    sourceRemoteState = 'PAID';
+    clock += 2_000;
+    const completed = await secondService.reconcile(prepared.id);
+
+    expect(completed.state).toBe('completed');
+    expect(completed.settlement?.destinationAmountIssued?.toString()).toBe('100');
+    expect(remoteSourceCalls).toBe(1);
+  });
+
+  it('retries the same durable destination child after an issuance response is lost', async () => {
+    loseDestinationResponseOnce = true;
+    const prepared = await service.prepare({ sourceMintUrl, destinationMintUrl, amount: 100 });
+
+    await expect(service.execute(prepared.id)).rejects.toThrow('destination response lost');
+    const interrupted = await service.get(prepared.id);
+    expect(interrupted?.state).toBe('issuing');
+    const destinationChildId = interrupted?.destinationMintOperationId;
+
+    clock += 60_001;
+    const completed = await secondService.reconcile(prepared.id);
+
+    expect(completed.state).toBe('completed');
+    expect(completed.destinationMintOperationId).toBe(destinationChildId);
+    expect(completed.settlement?.destinationAmountIssued?.toString()).toBe('100');
+    expect(remoteDestinationCalls).toBe(2);
   });
 
   it('records processor failure and its delayed event atomically', async () => {

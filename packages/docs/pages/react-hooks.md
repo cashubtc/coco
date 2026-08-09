@@ -34,6 +34,9 @@ For state-machine details, see [Send Operations](./send-operations.md),
 [Receive Operations](./receive-operations.md), [Mint Operations](./mint-operations.md),
 and [Melt Operations](./melt-operations.md).
 
+Mint Swaps use `reconcile()` instead of the common `refresh()` action. See
+[Mint Swaps](./mint-swaps.md) for their cross-mint state machine.
+
 ## useSendOperation
 
 Use this for the full send lifecycle, including resume, reclaim, and finalize
@@ -155,6 +158,27 @@ if (preparedMelt.state === 'prepared') {
   await execute();
 }
 ```
+
+## useMintSwapOperation
+
+Use this for a durable exact-receive transfer between two mints. Check adapter capability before
+showing the action in your UI.
+
+```tsx
+import { useManager, useMintSwapOperation } from '@cashu/coco-react';
+
+const manager = useManager();
+const { prepare, execute, reconcile, cancel, currentOperation } = useMintSwapOperation();
+
+if (manager.ops.mintSwap.diagnostics.isAvailable()) {
+  await prepare({ sourceMintUrl, destinationMintUrl, amount: 100 });
+  await execute();
+}
+```
+
+The hook subscribes to revisioned Mint Swap events and will not replace newer state with a stale
+action result. Bind a recovery view with `useMintSwapOperation(operationOrId)`. Use `reconcile()`
+for an explicit recovery attempt; this hook intentionally has no `refresh()` alias.
 
 ## Derived-data Hooks
 

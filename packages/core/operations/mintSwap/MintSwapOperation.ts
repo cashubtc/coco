@@ -991,7 +991,13 @@ function assertAlwaysImmutable(current: MintSwapOperation, next: MintSwapOperati
 
 function assertRetryUpdate(current: MintSwapOperation, next: MintSwapOperation): void {
   if (next.retry.attemptCount < current.retry.attemptCount) {
-    throw new Error('Mint swap retry attempt count cannot regress');
+    const isSuccessfulReset =
+      next.retry.attemptCount === 0 &&
+      next.retry.lastError === undefined &&
+      next.retry.lastSuccessfulObservationAt !== undefined &&
+      (current.retry.lastAttemptAt === undefined ||
+        next.retry.lastSuccessfulObservationAt >= current.retry.lastAttemptAt);
+    if (!isSuccessfulReset) throw new Error('Mint swap retry attempt count cannot regress');
   }
   for (const [currentValue, nextValue, name] of [
     [current.retry.lastAttemptAt, next.retry.lastAttemptAt, 'last attempt'],

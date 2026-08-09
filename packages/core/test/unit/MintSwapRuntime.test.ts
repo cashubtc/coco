@@ -102,4 +102,36 @@ describe('Mint Swap runtime', () => {
     });
     expect(observed).toBe(2);
   });
+
+  it('continues publishing the outbox when parent reconciliation is disabled', async () => {
+    const repositories = new MemoryRepositories();
+    const operation = makePreparingMintSwapOperation();
+    const record = makeMintSwapOutboxRecord();
+    await repositories.mintSwap!.mintSwapOperationRepository.create(operation);
+    await repositories.mintSwap!.operationEventOutboxRepository.enqueue(record);
+    const bus = new EventBus<CoreEvents>();
+    const observed = mock(() => undefined);
+    bus.on(record.eventType, observed);
+    const reconcile = mock(async () => operation);
+    const service = {
+      reconcile,
+      recordProcessorSuccess: mock(async () => false),
+      recordProcessorFailure: mock(async () => false),
+      get: mock(async () => operation),
+    } as unknown as MintSwapOperationService;
+    const processor = new MintSwapOperationProcessor(service, repositories, bus, undefined, {
+      now: () => MINT_SWAP_TEST_NOW + 30_001,
+      sweepIntervalMs: 60_000,
+      reconciliationDisabled: true,
+    });
+
+    await processor.start();
+    await processor.stop();
+
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(
+      await repositories.mintSwap!.operationEventOutboxRepository.getById(record.id),
+    ).toHaveProperty('publishedAt', MINT_SWAP_TEST_NOW + 30_001);
+  });
 });

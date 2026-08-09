@@ -179,6 +179,10 @@ export class MintSwapOperationService {
     );
   }
 
+  async listActive(): Promise<MintSwapOperation[]> {
+    return this.parentRepository().getActive();
+  }
+
   async execute(operationId: string): Promise<MintSwapOperation> {
     const current = await this.requireOperation(operationId);
     if (current.state !== 'prepared') return this.reconcile(operationId);
@@ -215,7 +219,9 @@ export class MintSwapOperationService {
           state: 'source_inflight',
           sourceDispatchAuthorizedAt: now,
           retry: {
+            ...operation.retry,
             attemptCount: 0,
+            lastError: undefined,
             lastSuccessfulObservationAt: now,
             nextAttemptAt: now + this.leaseDurationMs,
           },
@@ -487,7 +493,13 @@ export class MintSwapOperationService {
           preparationLease: undefined,
           sourceMeltOperationId: operationId,
           preparedPlan,
-          retry: { attemptCount: 0, lastSuccessfulObservationAt: this.now() },
+          retry: {
+            ...current.retry,
+            attemptCount: 0,
+            nextAttemptAt: undefined,
+            lastError: undefined,
+            lastSuccessfulObservationAt: this.now(),
+          },
         },
         'mint-swap-op:prepared',
       );
@@ -649,7 +661,13 @@ export class MintSwapOperationService {
       ...parent,
       state: 'destination_funded',
       settlement,
-      retry: { attemptCount: 0, lastSuccessfulObservationAt: this.now() },
+      retry: {
+        ...parent.retry,
+        attemptCount: 0,
+        nextAttemptAt: undefined,
+        lastError: undefined,
+        lastSuccessfulObservationAt: this.now(),
+      },
     };
     validateMintSwapAccounting({
       ...candidate,
@@ -720,7 +738,9 @@ export class MintSwapOperationService {
           state: 'issuing',
           destinationIssueAuthorizedAt: now,
           retry: {
+            ...parent.retry,
             attemptCount: 0,
+            lastError: undefined,
             lastSuccessfulObservationAt: now,
             nextAttemptAt: now + this.leaseDurationMs,
           },
@@ -830,7 +850,13 @@ export class MintSwapOperationService {
           destinationAmountIssued: child.amount,
         },
         completedAt,
-        retry: { attemptCount: 0, lastSuccessfulObservationAt: completedAt },
+        retry: {
+          ...parent.retry,
+          attemptCount: 0,
+          nextAttemptAt: undefined,
+          lastError: undefined,
+          lastSuccessfulObservationAt: completedAt,
+        },
       },
       'mint-swap-op:completed',
     );

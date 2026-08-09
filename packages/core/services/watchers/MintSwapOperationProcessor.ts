@@ -8,6 +8,8 @@ import { OperationEventOutboxPublisher } from '../OperationEventOutboxPublisher.
 export interface MintSwapOperationProcessorOptions {
   sweepIntervalMs?: number;
   dueBatchSize?: number;
+  /** Disable parent reconciliation while continuing to drain the durable event outbox. */
+  reconciliationDisabled?: boolean;
   now?: () => number;
   random?: () => number;
 }
@@ -17,6 +19,7 @@ export class MintSwapOperationProcessor {
   private readonly dueBatchSize: number;
   private readonly now: () => number;
   private readonly random: () => number;
+  private readonly reconciliationDisabled: boolean;
   private readonly outbox: OperationEventOutboxPublisher;
   private running = false;
   private sweeping = false;
@@ -36,6 +39,7 @@ export class MintSwapOperationProcessor {
     this.dueBatchSize = options.dueBatchSize ?? 50;
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
+    this.reconciliationDisabled = options.reconciliationDisabled ?? false;
     this.outbox = new OperationEventOutboxPublisher(
       requireMintSwapRepositoryCapability(repositories).operationEventOutboxRepository,
       bus,
@@ -51,7 +55,7 @@ export class MintSwapOperationProcessor {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    this.subscribeWakeups();
+    if (!this.reconciliationDisabled) this.subscribeWakeups();
     await this.sweep();
     this.schedule();
   }
@@ -68,13 +72,15 @@ export class MintSwapOperationProcessor {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
-      const repository = requireMintSwapRepositoryCapability(
-        this.repositories,
-      ).mintSwapOperationRepository;
-      for (const operation of await repository.getDue(now, this.dueBatchSize)) {
-        this.enqueue(operation.id);
+      if (!this.reconciliationDisabled) {
+        const repository = requireMintSwapRepositoryCapability(
+          this.repositories,
+        ).mintSwapOperationRepository;
+        for (const operation of await repository.getDue(now, this.dueBatchSize)) {
+          this.enqueue(operation.id);
+        }
+        await Promise.allSettled([...this.tasks]);
       }
-      await Promise.allSettled([...this.tasks]);
       await this.outbox.publishDue(now);
     } finally {
       this.sweeping = false;

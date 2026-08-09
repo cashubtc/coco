@@ -1,5 +1,7 @@
+import type { Manager, MintSwapOperation } from '@cashu/coco-core';
 import { useCallback, useEffect, useRef } from 'react';
 
+import { useManager } from '../contexts/ManagerContext';
 import type { OperationBinding, OperationHookResult } from './operation-types';
 import {
   getInitialOperationFromBinding,
@@ -12,22 +14,9 @@ import {
   useOperationHookState,
 } from './operationHookUtils';
 
-export type MintSwapOperationView = {
-  id: string;
-  revision: number;
-  updatedAt: number;
-  state: string;
-  [key: string]: unknown;
-};
-
-export interface MintSwapClient<TOperation extends MintSwapOperationView = MintSwapOperationView> {
-  prepare(input: unknown): Promise<TOperation>;
-  execute(operationId: string): Promise<TOperation>;
-  reconcile(operationId: string): Promise<TOperation>;
-  cancel(operationId: string, reason?: string): Promise<TOperation>;
-  get(operationId: string): Promise<TOperation | null>;
-  list(input?: unknown): Promise<TOperation[]>;
-}
+type MintSwapOps = Manager['ops']['mintSwap'];
+export type MintSwapPrepareInput = Parameters<MintSwapOps['prepare']>[0];
+export type MintSwapListInput = Parameters<MintSwapOps['list']>[0];
 
 type MintSwapEvent =
   | 'mint-swap-op:prepared'
@@ -40,21 +29,15 @@ type MintSwapEvent =
   | 'mint-swap-op:needs-attention'
   | 'mint-swap-op:delayed';
 
-export interface MintSwapEventSource {
-  on(
-    event: MintSwapEvent,
-    handler: (payload: { operationId: string; revision: number }) => void | Promise<void>,
-  ): () => void;
-}
-
-export interface UseMintSwapOperationResult<
-  TOperation extends MintSwapOperationView,
-> extends OperationHookResult<TOperation, TOperation> {
-  prepare(input: unknown): Promise<TOperation>;
-  execute(): Promise<TOperation>;
-  reconcile(): Promise<TOperation>;
-  cancel(reason?: string): Promise<TOperation>;
-  list(input?: unknown): Promise<TOperation[]>;
+export interface UseMintSwapOperationResult extends Omit<
+  OperationHookResult<MintSwapOperation, MintSwapOperation>,
+  'refresh'
+> {
+  prepare(input: MintSwapPrepareInput): Promise<MintSwapOperation>;
+  execute(): Promise<MintSwapOperation>;
+  reconcile(): Promise<MintSwapOperation>;
+  cancel(reason?: string): Promise<MintSwapOperation>;
+  list(input?: MintSwapListInput): Promise<MintSwapOperation[]>;
 }
 
 const EVENTS: readonly MintSwapEvent[] = [
@@ -69,11 +52,11 @@ const EVENTS: readonly MintSwapEvent[] = [
   'mint-swap-op:delayed',
 ];
 
-export function useMintSwapOperation<TOperation extends MintSwapOperationView>(
-  client: MintSwapClient<TOperation>,
-  events: MintSwapEventSource,
-  initialBinding?: OperationBinding<TOperation> | null,
-): UseMintSwapOperationResult<TOperation> {
+export function useMintSwapOperation(
+  initialBinding?: OperationBinding<MintSwapOperation> | null,
+): UseMintSwapOperationResult {
+  const manager = useManager();
+  const client = manager.ops.mintSwap;
   const initialBindingRef = useRef(initialBinding);
   const boundIdRef = useRef(getInitialOperationIdFromBinding(initialBindingRef.current));
   const {
@@ -88,12 +71,12 @@ export function useMintSwapOperation<TOperation extends MintSwapOperationView>(
     getCurrentOperation,
     runStatefulAction,
     reset: resetState,
-  } = useOperationHookState<TOperation, TOperation>(
+  } = useOperationHookState<MintSwapOperation, MintSwapOperation>(
     getInitialOperationFromBinding(initialBindingRef.current),
   );
 
   const bind = useCallback(
-    (operation: TOperation | null, clearExecuteResult = false) => {
+    (operation: MintSwapOperation | null, clearExecuteResult = false) => {
       if (!operation) {
         boundIdRef.current = null;
         replaceCurrentOperation(null, { clearExecuteResult });
@@ -131,15 +114,15 @@ export function useMintSwapOperation<TOperation extends MintSwapOperationView>(
       const operation = await client.get(operationId);
       if (active && operation) bind(operation);
     };
-    const offs = EVENTS.map((event) => events.on(event, observe));
+    const offs = EVENTS.map((event) => manager.on(event, observe));
     return () => {
       active = false;
       for (const off of offs) off();
     };
-  }, [bind, client, events, getCurrentOperation]);
+  }, [bind, client, getCurrentOperation, manager]);
 
   const prepare = useCallback(
-    (input: unknown) => {
+    (input: MintSwapPrepareInput) => {
       requireUnboundOperationCreation(boundIdRef.current, 'prepare');
       return runStatefulAction(
         () => client.prepare(input),
@@ -149,7 +132,7 @@ export function useMintSwapOperation<TOperation extends MintSwapOperationView>(
     [bind, client, runStatefulAction],
   );
   const runBound = useCallback(
-    (action: (operationId: string) => Promise<TOperation>) => {
+    (action: (operationId: string) => Promise<MintSwapOperation>) => {
       const id = requireCurrentOperationId(getCurrentOperation(), 'mint swap action');
       return runStatefulAction(
         () => action(id),
@@ -183,9 +166,8 @@ export function useMintSwapOperation<TOperation extends MintSwapOperationView>(
     prepare,
     execute,
     reconcile,
-    refresh: reconcile,
     cancel,
-    list: client.list,
+    list: (input) => client.list(input),
     reset,
   };
 }

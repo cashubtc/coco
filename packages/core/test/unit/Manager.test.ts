@@ -117,6 +117,33 @@ describe('initializeCoco', () => {
     };
   }
 
+  describe('Mint Swap activation', () => {
+    it('exposes capability diagnostics and starts only for capable repositories', async () => {
+      const manager = await initializeCoco({
+        ...baseConfig,
+        ...disabledRuntime,
+        processors: {
+          ...disabledRuntime.processors,
+          mintSwapOperationProcessor: { disabled: true, sweepIntervalMs: 60_000 },
+        },
+      });
+
+      expect(manager.ops.mintSwap.diagnostics.isAvailable()).toBe(true);
+      expect(await manager.enableMintSwapOperationProcessor()).toBe(false);
+      await manager.dispose();
+    });
+
+    it('keeps the API discoverable and fails commands before I/O when capability is absent', () => {
+      (repositories as unknown as { mintSwap?: unknown }).mintSwap = undefined;
+      const manager = new Manager(repositories, seedGetter, new NullLogger());
+
+      expect(manager.ops.mintSwap.diagnostics.isAvailable()).toBe(false);
+      expect(() => manager.ops.mintSwap.get('missing')).toThrow(
+        'Mint Swap requires the optional durable repository capability',
+      );
+    });
+  });
+
   describe('default behavior', () => {
     it('propagates a custom output data creator through initialized services', async () => {
       await seedOutputCreatorMint();
