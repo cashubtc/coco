@@ -583,7 +583,10 @@ describe('PollingTransport mint quote batching', () => {
 
     transport.on(mintUrl, 'message', () => {});
     subscribeToQuotes(transport, mintUrl, 'bolt11', 'cadence-sub', ['quote-a']);
-    await waitFor(() => startedAt.length === 2, 2_000);
+    // The full coverage suite runs many CPU-heavy files concurrently, which can starve this real
+    // timer well beyond its 20 ms interval on CI. Keep the cadence assertion strict while allowing
+    // enough wall-clock time for the second turn to be scheduled under runner contention.
+    await waitFor(() => startedAt.length === 2, 10_000);
 
     expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(18);
     transport.closeAll();

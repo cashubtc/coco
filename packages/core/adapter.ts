@@ -100,6 +100,9 @@ export type {
 export {
   assertMintSwapOperationUpdate,
   createMintSwapPreparedPlanFingerprint,
+  getMintSwapOperationDueAt,
+  isMintSwapOperationDue,
+  isTerminalMintSwapState,
   validateMintSwapOperation,
 } from './operations/mintSwap/MintSwapOperation.ts';
 export {
@@ -109,6 +112,8 @@ export {
   assertParentOwnedMintOperationUpdate,
 } from './operations/mintSwap/ChildOperationOwnership.ts';
 export {
+  isOperationEventDue,
+  isOperationEventPublished,
   operationEventLogicalKey,
   validateOperationEventOutboxRecord,
 } from './models/OperationEventOutbox.ts';
