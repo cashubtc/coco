@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { HybridTransport } from '../../infra/HybridTransport';
 import type { MintAdapter } from '../../infra/MintAdapter';
+import type { TransportMessageEvent } from '../../infra/RealTimeTransport';
 import type { WebSocketLike } from '../../infra/WsConnectionManager';
 import { NullLogger } from '../../logging';
 
@@ -182,6 +183,43 @@ describe('HybridTransport', () => {
   });
 
   describe('message deduplication', () => {
+    it('forwards normalized polling payloads while deduplicating matching WebSocket events', async () => {
+      const normalized = { quote: 'q1', state: 'PAID' as const };
+      const checkMintQuote = mock(async () => normalized);
+      const wsFactory = (_url: string) => mockSocket;
+      const hybrid = new HybridTransport(
+        wsFactory,
+        { checkMintQuote } as unknown as MintAdapter,
+        { slowPollingIntervalMs: 20_000 },
+        new NullLogger(),
+      );
+      const notifications: TransportMessageEvent[] = [];
+      let resolvePolling!: (event: TransportMessageEvent) => void;
+      const pollingEvent = new Promise<TransportMessageEvent>((resolve) => {
+        resolvePolling = resolve;
+      });
+      hybrid.on(mintUrl, 'message', (event: TransportMessageEvent) => {
+        const parsed = JSON.parse(String(event.data));
+        if (parsed.method !== 'subscribe') return;
+        notifications.push(event);
+        if (event.normalizedPayload !== undefined) resolvePolling(event);
+      });
+
+      hybrid.send(mintUrl, {
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { kind: 'bolt11_mint_quote', subId: 'sub1', filters: ['q1'] },
+        id: 1,
+      });
+      const event = await pollingEvent;
+
+      expect(event.normalizedPayload).toBe(normalized);
+      expect(notifications).toHaveLength(1);
+      mockSocket.triggerMessage(String(event.data));
+      expect(notifications).toHaveLength(1);
+      hybrid.closeAll();
+    });
+
     it('should dedupe same state from both transports', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
@@ -302,6 +340,34 @@ describe('HybridTransport', () => {
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
     });
 
+    it('should dedupe no-expiry sentinel and null quote notifications', async () => {
+      const messageHandler = mock(() => {});
+      transport.on(mintUrl, 'message', messageHandler);
+
+      const notificationWithSentinel = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry: 0 },
+        },
+      });
+      const notificationWithNull = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: {
+          subId: 'sub1',
+          payload: { quote: 'q1', amount_paid: 10, amount_issued: 0, expiry: null },
+        },
+      });
+
+      mockSocket.triggerMessage(notificationWithSentinel);
+      const countAfterFirst = messageHandler.mock.calls.length;
+
+      mockSocket.triggerMessage(notificationWithNull);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
+    });
+
     it('should not dedupe changed onchain quote counters', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
@@ -333,15 +399,14 @@ describe('HybridTransport', () => {
       expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
     });
 
-    it('should not dedupe unchanged onchain quote counters when expiry status changes', async () => {
+    it('should dedupe unchanged onchain quote counters when only wall-clock expiry changes', async () => {
       const messageHandler = mock(() => {});
       transport.on(mintUrl, 'message', messageHandler);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      const originalNow = Date.now;
-      const nowSeconds = Math.floor(originalNow() / 1000);
-      const expiry = nowSeconds + 60;
+      const expiryMs = Date.now() + 100;
+      const expiry = expiryMs / 1000;
       const notification = JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
@@ -351,17 +416,12 @@ describe('HybridTransport', () => {
         },
       });
 
-      try {
-        Date.now = () => nowSeconds * 1000;
-        mockSocket.triggerMessage(notification);
-        const countAfterFirst = messageHandler.mock.calls.length;
+      mockSocket.triggerMessage(notification);
+      const countAfterFirst = messageHandler.mock.calls.length;
 
-        Date.now = () => (expiry + 1) * 1000;
-        mockSocket.triggerMessage(notification);
-        expect(messageHandler.mock.calls.length).toBe(countAfterFirst + 1);
-      } finally {
-        Date.now = originalNow;
-      }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiryMs - Date.now() + 1)));
+      mockSocket.triggerMessage(notification);
+      expect(messageHandler.mock.calls.length).toBe(countAfterFirst);
     });
 
     it('should bypass dedupe when no state or complete amount counters are present', async () => {

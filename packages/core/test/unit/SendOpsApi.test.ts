@@ -7,9 +7,17 @@ import type {
   PreparedSendOperation,
   SendOperation,
 } from '../../operations/send/SendOperation.ts';
+import type { P2pkSendOptions } from '../../operations/send/SendMethodHandler.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
 const mintUrl = 'https://mint.test';
+
+const p2pkOptionsRejectHashlock = {
+  pubkey: 'pubkey-1',
+  // @ts-expect-error Hashlocks produce HTLC/NUT-14 data and are out of scope for P2PK sends.
+  hashlock: 'hash',
+} satisfies P2pkSendOptions;
+void p2pkOptionsRejectHashlock;
 
 const makePreparedOperation = (): PreparedSendOperation => ({
   id: 'op-1',
@@ -93,6 +101,32 @@ describe('SendOpsApi', () => {
       {
         method: 'p2pk',
         methodData: { pubkey: 'pubkey-1' },
+      },
+    );
+  });
+
+  it('prepare maps structured p2pk target options to send method options', async () => {
+    const options: P2pkSendOptions = {
+      pubkey: ['pubkey-1', 'pubkey-2'],
+      requiredSignatures: 2,
+      additionalTags: [['memo', 'test']],
+    };
+
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(20),
+      target: { type: 'p2pk', options },
+    });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'p2pk',
+        methodData: { options },
       },
     );
   });

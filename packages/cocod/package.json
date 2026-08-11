@@ -1,0 +1,27 @@
+{
+  "name": "cocod",
+  "version": "0.0.17",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "bin": {
+    "cocod": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "daemon": "bun src/index.ts daemon",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@cashu/coco-core": "workspace:*",
+    "@cashu/coco-sqlite-bun": "workspace:*",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@scure/bip39": "^2.0.1",
+    "coco-cashu-plugin-npc": "3.0.0-rc.20260707.3.1.sha.debd5dd",
+    "commander": "^14.0.2",
+    "nostr-tools": "^2.22.1"
+  }
+}

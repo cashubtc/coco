@@ -19,15 +19,18 @@ const keysets = { keysets: [{ id: 'keyset-1', unit: 'sat', active: true }] };
 const onchainMintQuote = {
   quote: 'mint-quote',
   request: 'bc1ptest',
+  method: 'onchain',
   unit: 'sat',
   expiry,
   pubkey: 'quote-pubkey',
   amount_paid: Amount.from(10),
   amount_issued: Amount.zero(),
+  updated_at: null,
 };
 const bolt11MeltQuote = {
   quote: 'melt-11',
   request: 'lnbc1melt',
+  method: 'bolt11',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,
@@ -38,6 +41,7 @@ const bolt11MeltQuote = {
 const bolt12MeltQuote = {
   quote: 'melt-12',
   request: 'lno1offer',
+  method: 'bolt12',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,
@@ -48,6 +52,7 @@ const bolt12MeltQuote = {
 const onchainMeltQuote = {
   quote: 'melt-onchain',
   request: 'bc1ptest',
+  method: 'onchain',
   amount: Amount.from(10),
   unit: 'sat',
   expiry,
@@ -59,9 +64,11 @@ const onchainMeltQuote = {
 
 type FakeCashuMint = {
   getInfo: ReturnType<typeof mock>;
+  getLazyMintInfo: ReturnType<typeof mock>;
   getKeySets: ReturnType<typeof mock>;
   getKeys: ReturnType<typeof mock>;
   checkMintQuote: ReturnType<typeof mock>;
+  checkMintQuoteBatch: ReturnType<typeof mock>;
   checkMeltQuoteBolt11: ReturnType<typeof mock>;
   checkMeltQuoteBolt12: ReturnType<typeof mock>;
   checkMeltQuoteOnchain: ReturnType<typeof mock>;
@@ -88,9 +95,27 @@ describe('MintAdapter', () => {
     adapter = new MintAdapter(requestProvider);
     fakeMint = {
       getInfo: mock(async () => mintInfo),
+      getLazyMintInfo: mock(async () => ({
+        requiresBlindAuthToken: mock(() => false),
+        requiresClearAuthToken: mock(() => false),
+      })),
       getKeySets: mock(async () => keysets),
       getKeys: mock(async () => ({ keysets: [{ keys: { '1': 'pubkey' } }] })),
       checkMintQuote: mock(async () => onchainMintQuote),
+      checkMintQuoteBatch: mock(async () => [
+        {
+          quote: 'quote-1',
+          request: 'lnbc1quote-1',
+          method: 'bolt11',
+          amount: Amount.from(10),
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.zero(),
+          updated_at: null,
+          unit: 'sat',
+          expiry,
+          state: 'PAID',
+        },
+      ]),
       checkMeltQuoteBolt11: mock(async () => bolt11MeltQuote),
       checkMeltQuoteBolt12: mock(async () => bolt12MeltQuote),
       checkMeltQuoteOnchain: mock(async () => onchainMeltQuote),
@@ -134,6 +159,22 @@ describe('MintAdapter', () => {
 
     expect(fakeMint.getKeys).toHaveBeenCalledWith('keyset-1');
     expect(fakeMint.checkMintQuote).toHaveBeenCalledWith('onchain', 'mint-quote');
+  });
+
+  it('delegates NUT-29 quote normalization to the cached Cashu mint', async () => {
+    await expect(
+      adapter.checkMintQuoteBatch(mintUrl, 'bolt11', ['quote-1']),
+    ).resolves.toMatchObject([
+      {
+        quote: 'quote-1',
+        method: 'bolt11',
+        amount_paid: Amount.from(10),
+        amount_issued: Amount.zero(),
+        updated_at: null,
+      },
+    ]);
+
+    expect(fakeMint.checkMintQuoteBatch).toHaveBeenCalledWith('bolt11', ['quote-1']);
   });
 
   it('rejects key lookups that return anything other than one keyset', async () => {

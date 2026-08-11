@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
+  runMintQuoteRepositoryContract,
   runPaymentRequestReceiveRepositoryContract,
   runReceiveOperationRepositoryContract,
   runSendOperationRepositoryContract,
@@ -47,6 +49,8 @@ runProofRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runMintOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
+runMintQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
+
 runReceiveOperationRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runSendOperationRepositoryContract({ createRepositories }, { describe, it, expect });
@@ -58,6 +62,128 @@ runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect })
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
 
 describe('indexeddb quote storage constraints', () => {
+  it('migrates canonical Mint Quote Accounting without inventing remote time', async () => {
+    const dbName = `coco_cashu_migration_${Date.now()}_${dbCounter++}`;
+    const legacy = new Dexie(dbName);
+    legacy.version(31).stores({
+      coco_cashu_canonical_mint_quotes:
+        '&[mintUrl+method+quoteId], &[mintUrl+quoteId], state, mintUrl, method',
+    });
+    await legacy.open();
+    await legacy.table('coco_cashu_canonical_mint_quotes').bulkAdd([
+      {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'legacy-paid',
+        state: 'PAID',
+        request: 'lnbc1paid',
+        amount: '10',
+        unit: 'sat',
+        expiry: null,
+        pubkey: null,
+        quoteDataJson: '{"amount":"10"}',
+        lastObservedRemoteState: 'PAID',
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        mintUrl: 'https://mint.test',
+        method: 'onchain',
+        quoteId: 'legacy-reusable',
+        state: null,
+        request: 'bc1qdeposit',
+        amount: null,
+        unit: 'sat',
+        expiry: null,
+        pubkey: '02',
+        quoteDataJson: '{"pubkey":"02","amountPaid":"21","amountIssued":"8"}',
+        lastObservedRemoteState: null,
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        mintUrl: 'https://mint.test',
+        method: 'onchain',
+        quoteId: 'legacy-malformed',
+        state: null,
+        request: 'bc1qmalformed',
+        amount: null,
+        unit: 'sat',
+        expiry: null,
+        pubkey: '02',
+        quoteDataJson: '{not-json',
+        lastObservedRemoteState: null,
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        mintUrl: 'https://mint.test',
+        method: 'bolt11',
+        quoteId: 'legacy-bolt11-malformed',
+        state: 'PAID',
+        request: 'lnbc1malformed',
+        amount: '13',
+        unit: 'sat',
+        expiry: null,
+        pubkey: null,
+        quoteDataJson: '{not-json',
+        lastObservedRemoteState: 'PAID',
+        lastObservedRemoteStateAt: 123_000,
+        reusable: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+    legacy.close();
+
+    const repositories = new IndexedDbRepositories({ name: dbName });
+    await repositories.init();
+    try {
+      const paid = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'bolt11',
+        'legacy-paid',
+      );
+      const reusable = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'onchain',
+        'legacy-reusable',
+      );
+      const malformed = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'onchain',
+        'legacy-malformed',
+      );
+      const malformedBolt11 = await repositories.mintQuoteRepository.getMintQuote(
+        'https://mint.test',
+        'bolt11',
+        'legacy-bolt11-malformed',
+      );
+
+      expect(paid?.amountPaid.toString()).toBe('10');
+      expect(paid?.amountIssued.toString()).toBe('0');
+      expect(paid?.remoteUpdatedAt).toBe(null);
+      expect(reusable?.amountPaid.toString()).toBe('21');
+      expect(reusable?.amountIssued.toString()).toBe('8');
+      expect(reusable?.remoteUpdatedAt).toBe(null);
+      expect(malformed?.amountPaid.toString()).toBe('0');
+      expect(malformed?.amountIssued.toString()).toBe('0');
+      expect(malformed?.remoteUpdatedAt).toBe(null);
+      expect(malformedBolt11?.amountPaid.toString()).toBe('13');
+      expect(malformedBolt11?.amountIssued.toString()).toBe('0');
+      expect(malformedBolt11?.remoteUpdatedAt).toBe(null);
+    } finally {
+      repositories.db.close();
+      await Dexie.delete(dbName);
+    }
+  });
+
   it('rejects persisted mint quote method siblings for one identity', async () => {
     const { repositories, dispose } = await createRepositories();
     try {

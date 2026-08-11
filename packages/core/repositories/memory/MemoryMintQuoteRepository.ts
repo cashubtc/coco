@@ -1,5 +1,11 @@
 import { QuoteIdentityConflictError } from '@core/models/Error';
-import { isMintQuotePending, isStatefulMintQuote, type MintQuote } from '@core/models/MintQuote';
+import {
+  applyBolt11MintQuoteStateFallback,
+  deriveBolt11MintQuoteState,
+  isMintQuotePending,
+  isStatefulMintQuote,
+  type MintQuote,
+} from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MintMethodRemoteState } from '@core/operations/mint/MintMethodHandler';
 import type { MintQuoteRepository } from '..';
@@ -52,8 +58,14 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     }
     const existing = await this.getMintQuote(normalizedMintUrl, quote.method, quote.quoteId);
     const key = this.makeKey(normalizedMintUrl, quote.method, quote.quoteId);
+    const canonicalQuote = isStatefulMintQuote(quote)
+      ? {
+          ...quote,
+          state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
+        }
+      : quote;
     this.quotes.set(key, {
-      ...quote,
+      ...canonicalQuote,
       mintUrl: normalizedMintUrl,
       quote: quote.quoteId,
       createdAt: existing?.createdAt ?? quote.createdAt,
@@ -72,13 +84,7 @@ export class MemoryMintQuoteRepository implements MintQuoteRepository {
     const existing = this.quotes.get(key);
     if (!existing) return;
     if (!isStatefulMintQuote(existing)) return;
-    this.quotes.set(key, {
-      ...existing,
-      state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
-      updatedAt: observedAt,
-    });
+    this.quotes.set(key, applyBolt11MintQuoteStateFallback(existing, state, observedAt));
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {

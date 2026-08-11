@@ -23,8 +23,8 @@ export class WalletRestoreService {
   private readonly outputDataCreator?: OutputDataCreator;
 
   // Defaults for batch restore behavior
-  private readonly restoreBatchSize = 300;
-  private readonly restoreGapLimit = 100;
+  private readonly restoreGapLimit = 300;
+  private readonly restoreBatchSize = 100;
   private readonly restoreStartCounter = 0;
 
   constructor(
@@ -63,12 +63,13 @@ export class WalletRestoreService {
     });
     await sweepWallet.loadMint();
 
-    const { proofs } = await sweepWallet.batchRestore(
-      this.restoreBatchSize,
-      this.restoreGapLimit,
-      this.restoreStartCounter,
+    const { proofs } = await sweepWallet.batchRestore({
+      gapLimit: this.restoreGapLimit,
+      batchSize: this.restoreBatchSize,
+      counter: this.restoreStartCounter,
       keysetId,
-    );
+      filterSpent: false,
+    });
 
     if (proofs.length === 0) {
       this.logger?.warn('No proofs to sweep', { mintUrl, keysetId });
@@ -196,12 +197,13 @@ export class WalletRestoreService {
       count: oldProofs.length,
     });
 
-    const { proofs, lastCounterWithSignature } = await wallet.batchRestore(
-      this.restoreBatchSize,
-      this.restoreGapLimit,
-      this.restoreStartCounter,
+    const { proofs, lastCounterWithSignature } = await wallet.batchRestore({
+      gapLimit: this.restoreGapLimit,
+      batchSize: this.restoreBatchSize,
+      counter: this.restoreStartCounter,
       keysetId,
-    );
+      filterSpent: false,
+    });
 
     if (proofs.length === 0) {
       this.logger?.warn('No proofs to restore', { mintUrl, keysetId });

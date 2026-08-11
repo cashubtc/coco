@@ -196,6 +196,15 @@ describe('WalletService unit scoping', () => {
     );
   });
 
+  it('does not build a Wallet Instance from v3 keysets', async () => {
+    const v3Keyset = { ...makeKeyset('sat'), id: '0200000000000000' };
+    const { service } = makeService([v3Keyset]);
+
+    await expect(service.getWallet(mintUrl, 'sat')).rejects.toThrow(
+      'No valid keysets found for mint https://mint.test and unit sat',
+    );
+  });
+
   it('can clear one unit cache without clearing other units', async () => {
     const { service, ensureUpdatedMint } = makeService([makeKeyset('sat'), makeKeyset('usd')]);
 

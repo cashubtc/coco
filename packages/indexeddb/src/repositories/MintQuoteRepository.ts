@@ -1,6 +1,8 @@
 import type { MintQuoteRepository } from '@cashu/coco-core/adapter';
 import {
+  applyBolt11MintQuoteStateFallback,
   deserializeAmount,
+  deriveBolt11MintQuoteState,
   getMintQuoteAmount,
   getMintQuoteRemoteState,
   isMintQuotePending,
@@ -18,8 +20,6 @@ import type { IdbDb, MintQuoteRow } from '../lib/db.ts';
 type SerializedQuoteData = {
   amount?: string | number;
   pubkey?: string;
-  amountPaid?: string | number;
-  amountIssued?: string | number;
 };
 
 function parseQuoteData(value: string | null | undefined): SerializedQuoteData {
@@ -48,20 +48,22 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
       expiry: row.expiry,
       pubkey,
       reusable: true,
+      amountPaid: deserializeAmount(row.amountPaid),
+      amountIssued: deserializeAmount(row.amountIssued),
+      remoteUpdatedAt: row.remoteUpdatedAt ?? null,
       quoteData: {
         pubkey,
         ...(amount !== undefined ? { amount } : {}),
-        amountPaid: deserializeAmount(quoteData.amountPaid ?? 0),
-        amountIssued: deserializeAmount(quoteData.amountIssued ?? 0),
       },
-      lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } as MintQuote;
   }
 
   const amount = deserializeAmount(quoteData.amount ?? row.amount ?? 0);
-  const state = (row.state ?? row.lastObservedRemoteState ?? 'UNPAID') as MintMethodRemoteState;
+  const amountPaid = deserializeAmount(row.amountPaid);
+  const amountIssued = deserializeAmount(row.amountIssued);
+  const state = deriveBolt11MintQuoteState(amountPaid, amountIssued);
   return {
     mintUrl: row.mintUrl,
     method: 'bolt11',
@@ -73,9 +75,10 @@ function rowToMintQuote(row: MintQuoteRow): MintQuote {
     unit: row.unit,
     expiry: row.expiry,
     pubkey: row.pubkey ?? undefined,
-    lastObservedRemoteState: (row.lastObservedRemoteState ?? state) as MintMethodRemoteState,
-    lastObservedRemoteStateAt: row.lastObservedRemoteStateAt ?? undefined,
     reusable: false,
+    amountPaid,
+    amountIssued,
+    remoteUpdatedAt: row.remoteUpdatedAt ?? null,
     quoteData: { amount },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -92,15 +95,11 @@ function serializeQuoteData(quote: MintQuote): string {
     return stringifyJson({
       pubkey: quote.quoteData.pubkey,
       ...(amount !== undefined ? { amount: serializeAmount(amount) } : {}),
-      amountPaid: serializeAmount(quote.quoteData.amountPaid),
-      amountIssued: serializeAmount(quote.quoteData.amountIssued),
     });
   }
 
   return stringifyJson({
     pubkey: quote.quoteData.pubkey,
-    amountPaid: serializeAmount(quote.quoteData.amountPaid),
-    amountIssued: serializeAmount(quote.quoteData.amountIssued),
   });
 }
 
@@ -165,8 +164,9 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
       expiry: quote.expiry,
       pubkey: quote.pubkey ?? null,
       quoteDataJson: serializeQuoteData(quote),
-      lastObservedRemoteState: getMintQuoteRemoteState(quote) ?? null,
-      lastObservedRemoteStateAt: quote.lastObservedRemoteStateAt ?? now,
+      amountPaid: serializeAmount(quote.amountPaid),
+      amountIssued: serializeAmount(quote.amountIssued),
+      remoteUpdatedAt: quote.remoteUpdatedAt,
       reusable: quote.reusable ? 1 : 0,
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt || now,
@@ -181,17 +181,23 @@ export class IdbMintQuoteRepository implements MintQuoteRepository {
     state: MintMethodRemoteState,
     observedAt = Date.now(),
   ): Promise<void> {
-    const existing = (await (this.db as any)
-      .table('coco_cashu_canonical_mint_quotes')
-      .get([normalizeMintUrl(mintUrl), method, quoteId])) as MintQuoteRow | undefined;
-    if (!existing) return;
-    await (this.db as any).table('coco_cashu_canonical_mint_quotes').put({
-      ...existing,
-      state,
-      lastObservedRemoteState: state,
-      lastObservedRemoteStateAt: observedAt,
-      updatedAt: observedAt,
-    } as MintQuoteRow);
+    await this.db.runTransaction('rw', ['coco_cashu_canonical_mint_quotes'], async (tx) => {
+      const table = tx.table<MintQuoteRow, [string, string, string]>(
+        'coco_cashu_canonical_mint_quotes',
+      );
+      const existing = await table.get([normalizeMintUrl(mintUrl), method, quoteId]);
+      if (!existing) return;
+      const quote = rowToMintQuote(existing);
+      if (!isStatefulMintQuote(quote)) return;
+      const resolved = applyBolt11MintQuoteStateFallback(quote, state, observedAt);
+      await table.put({
+        ...existing,
+        state: resolved.state,
+        amountPaid: serializeAmount(resolved.amountPaid),
+        amountIssued: serializeAmount(resolved.amountIssued),
+        updatedAt: resolved.updatedAt,
+      });
+    });
   }
 
   async getPendingMintQuotes(method?: string): Promise<MintQuote[]> {

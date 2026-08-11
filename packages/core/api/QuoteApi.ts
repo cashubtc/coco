@@ -1,5 +1,5 @@
 import type { MeltMethodInputData } from '@core/operations/melt';
-import type { MintMethodQuoteSnapshot } from '@core/operations/mint';
+import type { MintMethodQuoteImportSnapshot } from '@core/operations/mint';
 import { DEFAULT_UNIT, normalizeUnit, parseUnitAmount, type UnitAmountLike } from '../amounts.ts';
 import type { MeltQuote } from '../models/MeltQuote';
 import type { MintQuote } from '../models/MintQuote';
@@ -15,6 +15,8 @@ export type CreateMintQuoteInput =
       method: 'bolt11';
       amount: UnitAmountLike;
       unit?: string;
+      /** Create a NUT-20 quote locked to a fresh, persisted wallet key. */
+      locked?: boolean;
     }
   | {
       mintUrl: string;
@@ -33,7 +35,7 @@ export type ImportMintQuoteInput = {
   /** Mint that issued the existing quote. */
   mintUrl: string;
   /** Existing quote snapshot to persist as canonical quote state. */
-  quote: MintMethodQuoteSnapshot<'bolt11'>;
+  quote: MintMethodQuoteImportSnapshot<'bolt11'>;
   /** Mint method for the quote snapshot. */
   method: 'bolt11';
 };
@@ -65,6 +67,7 @@ export class MintQuoteApi {
       const parsed = parseUnitAmount(input.amount, { explicitUnit: input.unit });
       return this.quoteLifecycle.createMintQuote(input.mintUrl, input.method, {
         amount: parsed,
+        ...(input.locked === true ? { locked: true } : {}),
       });
     }
 

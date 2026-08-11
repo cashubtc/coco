@@ -50,8 +50,37 @@ const installLocalStorageMock = () => {
   });
 };
 
+const installWebLocksMock = () => {
+  let lockTail = Promise.resolve();
+  const request = vi.fn(
+    async <T>(name: string, callback: (lock: Lock) => Promise<T> | T): Promise<T> => {
+      const previousLock = lockTail;
+      let releaseLock: () => void = () => undefined;
+      lockTail = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+
+      await previousLock;
+
+      try {
+        return await callback({ name, mode: 'exclusive' } as Lock);
+      } finally {
+        releaseLock();
+      }
+    },
+  );
+
+  Object.defineProperty(window.navigator, 'locks', {
+    configurable: true,
+    value: { request },
+  });
+
+  return request;
+};
+
 beforeEach(() => {
   installLocalStorageMock();
+  installWebLocksMock();
 });
 
 afterEach(() => {
@@ -70,6 +99,44 @@ describe('localStorageSeedGetter', () => {
     expect(getRandomValues).toHaveBeenCalledTimes(1);
   });
 
+  it('converges concurrent initializers on the same persisted seed', async () => {
+    const generatedSeeds = [makeSeed(31), makeSeed(37)];
+    const getRandomValues = vi
+      .spyOn(window.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (!(array instanceof Uint8Array)) {
+          throw new Error('expected Uint8Array');
+        }
+
+        const seed = generatedSeeds.shift();
+        if (!seed) {
+          throw new Error('unexpected random request');
+        }
+
+        array.set(seed);
+        return array;
+      });
+
+    const firstGetter = localStorageSeedGetter();
+    const secondGetter = localStorageSeedGetter();
+    let secondPromise: Promise<Uint8Array> | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementationOnce(() => {
+      secondPromise = secondGetter();
+      return null;
+    });
+
+    const firstSeed = await firstGetter();
+    if (!secondPromise) {
+      throw new Error('second initializer did not run');
+    }
+    const secondSeed = await secondPromise;
+
+    expect(firstSeed).toEqual(secondSeed);
+    expect(window.localStorage.getItem('COCO_REACT_SEED')).toBe(encodeSeed(firstSeed));
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+  });
+
   it('uses a custom storage key', async () => {
     const seed = makeSeed(3);
     mockRandomValues(seed);
@@ -78,6 +145,21 @@ describe('localStorageSeedGetter', () => {
     await expect(seedGetter()).resolves.toEqual(seed);
     expect(window.localStorage.getItem('MY_COCO_SEED')).toBe(encodeSeed(seed));
     expect(window.localStorage.getItem('COCO_REACT_SEED')).toBeNull();
+  });
+
+  it('fails before generating a seed when Web Locks are unavailable', async () => {
+    const getRandomValues = mockRandomValues(makeSeed(5));
+    Object.defineProperty(window.navigator, 'locks', {
+      configurable: true,
+      value: undefined,
+    });
+    const seedGetter = localStorageSeedGetter();
+
+    await expect(seedGetter()).rejects.toThrow(
+      'localStorageSeedGetter requires window.navigator.locks.',
+    );
+    expect(getRandomValues).not.toHaveBeenCalled();
+    expect(window.localStorage.setItem).not.toHaveBeenCalled();
   });
 
   it('reads an existing seed from localStorage', async () => {

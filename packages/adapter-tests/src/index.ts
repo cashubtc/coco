@@ -145,7 +145,7 @@ type ExpectApi = {
   toBeDefined(): void;
 };
 
-async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
+async function expectThrows(fn: () => Promise<unknown>, expect: Expectation) {
   let didThrow = false;
   try {
     await fn();
@@ -156,7 +156,7 @@ async function expectThrows(fn: () => Promise<void>, expect: Expectation) {
 }
 
 async function expectThrowsError(
-  fn: () => Promise<void>,
+  fn: () => Promise<unknown>,
   errorClass: Function,
   expect: Expectation,
 ) {
@@ -307,6 +307,9 @@ export function createDummyMintQuote(
     unit: 'sat',
     expiry: 1_730_000_000,
     reusable: false,
+    amountPaid: Amount.zero(),
+    amountIssued: Amount.zero(),
+    remoteUpdatedAt: null,
     quoteData: {
       amount: Amount.from(3),
     },
@@ -440,6 +443,196 @@ export function createDummyAuthSession(overrides?: Partial<AuthSession>): AuthSe
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
   };
+}
+
+export async function runMintQuoteRepositoryContract(
+  options: ContractOptions,
+  runner: ContractRunner,
+): Promise<void> {
+  const { describe, it, expect } = runner;
+
+  describe('MintQuoteRepository contract', () => {
+    it('applies legacy BOLT11 state updates monotonically', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          state: 'UNPAID',
+          amountPaid: Amount.zero(),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
+          updatedAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'PAID',
+          20,
+        );
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'UNPAID',
+          30,
+        );
+
+        const paid = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        expect(paid?.method).toBe('bolt11');
+        if (paid?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(paid.state).toBe('PAID');
+        expect(paid.amountPaid.equals(quote.amount)).toBe(true);
+        expect(paid.amountIssued.isZero()).toBe(true);
+        expect(paid.remoteUpdatedAt).toBe(null);
+        expect(paid.updatedAt).toBe(30);
+
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'ISSUED',
+          40,
+        );
+
+        const issued = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+        expect(issued?.method).toBe('bolt11');
+        if (issued?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(issued.state).toBe('ISSUED');
+        expect(issued.amountPaid.equals(quote.amount)).toBe(true);
+        expect(issued.amountIssued.equals(quote.amount)).toBe(true);
+        expect(issued.remoteUpdatedAt).toBe(null);
+        expect(issued.updatedAt).toBe(40);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('keeps canonical BOLT11 accounting authoritative over legacy state updates', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const quote = createDummyMintQuote({
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: 10,
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(quote);
+        await repositories.mintQuoteRepository.setMintQuoteState(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+          'UNPAID',
+          20,
+        );
+
+        const stored = await repositories.mintQuoteRepository.getMintQuote(
+          quote.mintUrl,
+          quote.method,
+          quote.quoteId,
+        );
+
+        expect(stored?.method).toBe('bolt11');
+        if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+        expect(stored.state).toBe('PAID');
+        expect(stored.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored.amountIssued.isZero()).toBe(true);
+        expect(stored.remoteUpdatedAt).toBe(10);
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('keeps concurrent legacy state updates from overwriting canonical accounting', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        for (let i = 0; i < 10; i++) {
+          const quote = createDummyMintQuote({
+            quoteId: `concurrent-accounting-${i}`,
+            quote: `concurrent-accounting-${i}`,
+            state: 'UNPAID',
+            amountPaid: Amount.zero(),
+            amountIssued: Amount.zero(),
+            remoteUpdatedAt: null,
+          });
+          const canonical = {
+            ...quote,
+            state: 'PAID' as const,
+            amountPaid: Amount.from(3),
+            amountIssued: Amount.zero(),
+            remoteUpdatedAt: 10,
+            updatedAt: 10,
+          };
+          await repositories.mintQuoteRepository.upsertMintQuote(quote);
+
+          await Promise.all([
+            repositories.mintQuoteRepository.setMintQuoteState(
+              quote.mintUrl,
+              quote.method,
+              quote.quoteId,
+              'ISSUED',
+              20,
+            ),
+            repositories.mintQuoteRepository.upsertMintQuote(canonical),
+          ]);
+
+          const stored = await repositories.mintQuoteRepository.getMintQuote(
+            quote.mintUrl,
+            quote.method,
+            quote.quoteId,
+          );
+
+          expect(stored?.method).toBe('bolt11');
+          if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+          expect(stored.state).toBe('PAID');
+          expect(stored.amountPaid.equals(Amount.from(3))).toBe(true);
+          expect(stored.amountIssued.isZero()).toBe(true);
+          expect(stored.remoteUpdatedAt).toBe(10);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('selects pending BOLT11 quotes from accounting instead of stored state', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const pending = createDummyMintQuote({
+          quoteId: 'accounting-pending',
+          quote: 'accounting-pending',
+          state: 'ISSUED',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.zero(),
+        });
+        const issued = createDummyMintQuote({
+          quoteId: 'accounting-issued',
+          quote: 'accounting-issued',
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
+          amountIssued: Amount.from(3),
+        });
+        await repositories.mintQuoteRepository.upsertMintQuote(pending);
+        await repositories.mintQuoteRepository.upsertMintQuote(issued);
+
+        const storedPending = await repositories.mintQuoteRepository.getPendingMintQuotes('bolt11');
+        const pendingIds = storedPending.map((quote) => quote.quoteId);
+
+        expect(pendingIds.includes('accounting-pending')).toBe(true);
+        expect(pendingIds.includes('accounting-issued')).toBe(false);
+      } finally {
+        await dispose();
+      }
+    });
+  });
 }
 
 export async function runMintOperationRepositoryContract(
@@ -580,15 +773,16 @@ export async function runMintOperationRepositoryContract(
           mintUrl: 'https://mint.test/',
           quoteId: 'canonical-quote',
           quote: 'canonical-quote',
-          lastObservedRemoteState: 'UNPAID',
-          lastObservedRemoteStateAt: 10,
+          state: 'UNPAID',
+          amountPaid: Amount.from(3),
+          remoteUpdatedAt: 10,
         });
         await repositories.mintQuoteRepository.upsertMintQuote(quote);
         await repositories.mintQuoteRepository.setMintQuoteState(
           'https://mint.test',
           'bolt11',
           'canonical-quote',
-          'PAID',
+          'UNPAID',
           20,
         );
 
@@ -608,8 +802,9 @@ export async function runMintOperationRepositoryContract(
         }
         expect(stored!.state).toBe('PAID');
         expect(stored!.quoteData.amount.equals(Amount.from(3))).toBe(true);
-        expect(stored!.lastObservedRemoteState).toBe('PAID');
-        expect(stored!.lastObservedRemoteStateAt).toBe(20);
+        expect(stored!.amountPaid.equals(Amount.from(3))).toBe(true);
+        expect(stored!.amountIssued.equals(Amount.zero())).toBe(true);
+        expect(stored!.remoteUpdatedAt).toBe(10);
       } finally {
         await dispose();
       }
@@ -660,12 +855,12 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '4'),
           reusable: true,
+          amountPaid: Amount.zero(),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: 20,
           quoteData: {
             pubkey: '02'.padEnd(66, '4'),
-            amountPaid: Amount.from(0),
-            amountIssued: Amount.from(0),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         };
@@ -740,12 +935,12 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '1'),
           reusable: true,
+          amountPaid: Amount.from(21),
+          amountIssued: Amount.from(8),
+          remoteUpdatedAt: 20,
           quoteData: {
             pubkey: '02'.padEnd(66, '1'),
-            amountPaid: Amount.from(21),
-            amountIssued: Amount.from(8),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
@@ -766,8 +961,8 @@ export async function runMintOperationRepositoryContract(
         }
         expect(stored.reusable).toBe(true);
         expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '1'));
-        expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
-        expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+        expect(stored.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.amountIssued.equals(Amount.from(8))).toBe(true);
       } finally {
         await dispose();
       }
@@ -787,13 +982,13 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '2'),
           reusable: true,
+          amountPaid: Amount.from(21),
+          amountIssued: Amount.from(8),
+          remoteUpdatedAt: 20,
           quoteData: {
             pubkey: '02'.padEnd(66, '2'),
             amount: Amount.from(12),
-            amountPaid: Amount.from(21),
-            amountIssued: Amount.from(8),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
@@ -807,12 +1002,12 @@ export async function runMintOperationRepositoryContract(
           expiry: 1_730_000_000,
           pubkey: '02'.padEnd(66, '3'),
           reusable: true,
+          amountPaid: Amount.from(5),
+          amountIssued: Amount.zero(),
+          remoteUpdatedAt: null,
           quoteData: {
             pubkey: '02'.padEnd(66, '3'),
-            amountPaid: Amount.from(5),
-            amountIssued: Amount.from(0),
           },
-          lastObservedRemoteStateAt: 20,
           createdAt: 0,
           updatedAt: 0,
         });
@@ -840,8 +1035,8 @@ export async function runMintOperationRepositoryContract(
         expect(stored.amount?.equals(Amount.from(12))).toBe(true);
         expect(stored.quoteData.pubkey).toBe('02'.padEnd(66, '2'));
         expect(stored.quoteData.amount?.equals(Amount.from(12))).toBe(true);
-        expect(stored.quoteData.amountPaid.equals(Amount.from(21))).toBe(true);
-        expect(stored.quoteData.amountIssued.equals(Amount.from(8))).toBe(true);
+        expect(stored.amountPaid.equals(Amount.from(21))).toBe(true);
+        expect(stored.amountIssued.equals(Amount.from(8))).toBe(true);
 
         expect(amountless).toBeDefined();
         if (!amountless) {
@@ -855,8 +1050,8 @@ export async function runMintOperationRepositoryContract(
         expect(amountless.amount).toBe(undefined);
         expect(amountless.quoteData.amount).toBe(undefined);
         expect(amountless.quoteData.pubkey).toBe('02'.padEnd(66, '3'));
-        expect(amountless.quoteData.amountPaid.equals(Amount.from(5))).toBe(true);
-        expect(amountless.quoteData.amountIssued.equals(Amount.from(0))).toBe(true);
+        expect(amountless.amountPaid.equals(Amount.from(5))).toBe(true);
+        expect(amountless.amountIssued.equals(Amount.from(0))).toBe(true);
       } finally {
         await dispose();
       }
@@ -883,7 +1078,7 @@ export async function runMeltQuoteRepositoryContract(
           lastObservedRemoteStateAt: 20,
         });
 
-        await repositories.meltQuoteRepository.upsertMeltQuote(quote);
+        const persisted = await repositories.meltQuoteRepository.upsertMeltQuote(quote);
 
         const stored = await repositories.meltQuoteRepository.getMeltQuote(
           'https://mint.test',
@@ -891,6 +1086,11 @@ export async function runMeltQuoteRepositoryContract(
           'canonical-melt-quote',
         );
 
+        expect(persisted.mintUrl).toBe(stored?.mintUrl);
+        expect(persisted.quote).toBe(stored?.quote);
+        expect(persisted.createdAt).toBe(stored?.createdAt);
+        expect(persisted.updatedAt).toBe(stored?.updatedAt);
+        expect(persisted.amount.equals(stored!.amount)).toBe(true);
         expect(stored).toBeDefined();
         expect(stored!.mintUrl).toBe('https://mint.test');
         expect(stored!.method).toBe('bolt11');
@@ -1299,6 +1499,61 @@ export async function runSendOperationRepositoryContract(
         for (const operation of inFlight) {
           expect(operation.unit).toBe('usd');
         }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips legacy P2PK send operation method data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const publicKey = `02${'11'.repeat(32)}`;
+        const operation = createDummyPreparedSendOperation({
+          id: 'send-p2pk-legacy',
+          method: 'p2pk',
+          methodData: { pubkey: publicKey },
+        });
+
+        await repositories.sendOperationRepository.create(operation);
+
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('p2pk');
+        expect(JSON.stringify(stored!.methodData)).toBe(JSON.stringify({ pubkey: publicKey }));
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('round-trips structured P2PK send operation method data', async () => {
+      const { repositories, dispose } = await options.createRepositories();
+      try {
+        const primaryKey = `02${'22'.repeat(32)}`;
+        const secondKey = `03${'33'.repeat(32)}`;
+        const refundKey = `02${'44'.repeat(32)}`;
+        const methodData = {
+          options: {
+            pubkey: [primaryKey, secondKey],
+            requiredSignatures: 2,
+            locktime: 1_730_000_000,
+            refundKeys: [refundKey],
+            requiredRefundSignatures: 1,
+            sigFlag: 'SIG_ALL',
+            additionalTags: [['memo', 'payment-request']],
+          },
+        };
+        const operation = createDummyPreparedSendOperation({
+          id: 'send-p2pk-structured',
+          method: 'p2pk',
+          methodData: methodData as unknown as PreparedSendOperation['methodData'],
+        });
+
+        await repositories.sendOperationRepository.create(operation);
+
+        const stored = await repositories.sendOperationRepository.getById(operation.id);
+        expect(stored).toBeDefined();
+        expect(stored!.method).toBe('p2pk');
+        expect(JSON.stringify(stored!.methodData)).toBe(JSON.stringify(methodData));
       } finally {
         await dispose();
       }

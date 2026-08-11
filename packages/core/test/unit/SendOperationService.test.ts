@@ -57,6 +57,7 @@ describe('SendOperationService', () => {
 
     mintService = {
       isTrustedMint: mock(async () => true),
+      assertNutSupported: mock(async () => {}),
     } as unknown as MintService;
 
     const wallet = {

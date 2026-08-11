@@ -12,7 +12,8 @@ Guidance for agentic coding in this repo.
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues for `cashubtc/coco`. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues for `cashubtc/coco`. External pull requests are not a
+triage request surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -36,6 +37,7 @@ Use a single-context domain doc layout. See `docs/agents/domain.md`.
 - packages/indexeddb: IndexedDB adapter (bun + vitest browser tests).
 - packages/expo-sqlite: Expo SQLite adapter.
 - packages/adapter-tests: contract test helpers.
+- packages/cocod: Cashu wallet CLI + daemon on the workspace packages (private, bun tests).
 - packages/docs: VitePress docs site.
 
 ## Core package layout
@@ -78,6 +80,7 @@ Use a single-context domain doc layout. See `docs/agents/domain.md`.
 - Expo SQLite: `bun run --filter='@cashu/coco-expo-sqlite' typecheck`
 - SQLite3: `bun run --filter='@cashu/coco-sqlite' typecheck`
 - React (project refs): `bun run --filter='@cashu/coco-react' typecheck`
+- cocod: `bun run --filter='cocod' typecheck` (build the workspace first; it resolves core through dist/)
 
 ## Lint
 
@@ -92,6 +95,7 @@ Use a single-context domain doc layout. See `docs/agents/domain.md`.
 - IndexedDB adapter: `bun run --filter='@cashu/coco-indexeddb' test`
 - IndexedDB browser tests: `bun run --filter='@cashu/coco-indexeddb' test:browser`
 - Expo SQLite tests (no script): `bun --cwd packages/expo-sqlite test`
+- cocod: `bun run --filter='cocod' test` (build the workspace first)
 - React package has no tests yet.
 
 ## Run a single test

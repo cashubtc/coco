@@ -7,13 +7,22 @@ import {
   type MeltQuoteBolt11Response,
   type MeltQuoteBolt12Response,
   type MeltQuoteOnchainResponse,
+  type MintQuoteBolt11Response,
+  type MintQuoteBolt12Response,
+  type MintQuoteOnchainResponse,
   type GetKeysetsResponse,
   type AuthProvider,
 } from '@cashu/cashu-ts';
 import type { MintInfo } from '../types';
 import type { MintRequestProvider } from './MintRequestProvider.ts';
 import type { KeysetKeypairs } from '../models/Keyset.ts';
-import type { MintMethod, MintMethodQuoteSnapshot } from '../operations/mint/MintMethodHandler.ts';
+import type { MintMethod } from '../operations/mint/MintMethodHandler.ts';
+
+type NormalizedMintQuoteSnapshot<M extends MintMethod> = M extends 'bolt11'
+  ? MintQuoteBolt11Response
+  : M extends 'bolt12'
+    ? MintQuoteBolt12Response
+    : MintQuoteOnchainResponse;
 
 /**
  * Adapter for making HTTP requests to Cashu mints.
@@ -79,9 +88,21 @@ export class MintAdapter {
     mintUrl: string,
     method: M,
     quoteId: string,
-  ): Promise<MintMethodQuoteSnapshot<M>> {
+  ): Promise<NormalizedMintQuoteSnapshot<M>> {
     const cashuMint = this.getCashuMint(mintUrl);
-    return (await cashuMint.checkMintQuote(method, quoteId)) as MintMethodQuoteSnapshot<M>;
+    return cashuMint.checkMintQuote<NormalizedMintQuoteSnapshot<M>>(method, quoteId);
+  }
+
+  /** Send one NUT-29 mint-quote batch check through the shared auth and rate-limit boundary. */
+  async checkMintQuoteBatch<M extends MintMethod>(
+    mintUrl: string,
+    method: M,
+    quoteIds: string[],
+  ): Promise<NormalizedMintQuoteSnapshot<M>[]> {
+    return this.getCashuMint(mintUrl).checkMintQuoteBatch<NormalizedMintQuoteSnapshot<M>>(
+      method,
+      quoteIds,
+    );
   }
 
   // Check current state of a bolt11 melt quote (returns full response including change)

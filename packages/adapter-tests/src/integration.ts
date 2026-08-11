@@ -747,8 +747,8 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
           expect(quote.reusable).toBe(true);
           expect(quote.request).toBeDefined();
           expect(quote.quoteData.pubkey).toBeDefined();
-          expectAmountEquals(expect, quote.quoteData.amountPaid, 0);
-          expectAmountEquals(expect, quote.quoteData.amountIssued, 0);
+          expectAmountEquals(expect, quote.amountPaid, 0);
+          expectAmountEquals(expect, quote.amountIssued, 0);
 
           const fundedQuote = await waitForOnchainQuoteAvailable(
             mgr,
@@ -757,7 +757,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
             testAmount(12),
           );
           expect(fundedQuote.quoteId).toBe(quote.quoteId);
-          expectAmountEquals(expect, fundedQuote.quoteData.amountIssued, 0);
+          expectAmountEquals(expect, fundedQuote.amountIssued, 0);
           expect(getMintQuoteAvailableAmount(fundedQuote).greaterThanOrEqual(Amount.from(12))).toBe(
             true,
           );
@@ -2728,7 +2728,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const sendAmount = 50;
         const { send: p2pkProofs } = await senderWallet.ops
           .send(sendAmount, senderProofs)
-          .asP2PK({ pubkey: keypair.publicKeyHex })
+          .asP2PK({ kind: 'P2PK', data: keypair.publicKeyHex })
           .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
@@ -2789,7 +2789,7 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const sendAmount = 50;
         const { send: p2pkProofs } = await senderWallet.ops
           .send(sendAmount, senderProofs)
-          .asP2PK({ pubkey: keypair.publicKeyHex })
+          .asP2PK({ kind: 'P2PK', data: keypair.publicKeyHex })
           .run();
 
         expect(p2pkProofs.length).toBeGreaterThan(0);
@@ -2850,10 +2850,10 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         );
 
         // Lock to a public key we don't have the private key for
-        const fakePublicKey = '02' + '11'.repeat(31);
+        const fakePublicKey = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
         const { send: p2pkProofs } = await senderWallet.ops
           .send(50, senderProofs)
-          .asP2PK({ pubkey: fakePublicKey })
+          .asP2PK({ kind: 'P2PK', data: fakePublicKey })
           .run();
 
         const p2pkToken: Token = {
@@ -3000,8 +3000,16 @@ export async function runIntegrationTests<TRepositories extends Repositories = R
         const senderProofs = await senderWallet.mintProofsBolt11(200, senderQuote.quote);
 
         const outputData = [
-          OutputData.createSingleP2PKData({ pubkey: keypair.publicKeyHex }, 32, keyset.id),
-          OutputData.createSingleP2PKData({ pubkey: keypair2.publicKeyHex }, 32, keyset.id),
+          OutputData.createSingleP2PKData(
+            { kind: 'P2PK', data: keypair.publicKeyHex },
+            32,
+            keyset.id,
+          ),
+          OutputData.createSingleP2PKData(
+            { kind: 'P2PK', data: keypair2.publicKeyHex },
+            32,
+            keyset.id,
+          ),
         ];
 
         const keepFactory: OutputDataFactory = (a, k) => OutputData.createSingleRandomData(a, k.id);

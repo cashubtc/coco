@@ -147,7 +147,9 @@ export interface MintQuoteRepository {
   upsertMintQuote(quote: MintQuote): Promise<void>;
 
   /**
-   * Update state for the exact method-scoped mint quote row.
+   * Update canonical BOLT11 accounting from a legacy state observation.
+   *
+   * @deprecated Persist a canonical quote observation with `amountPaid` and `amountIssued`.
    */
   setMintQuoteState(
     mintUrl: string,
@@ -191,9 +193,10 @@ export interface MeltQuoteRepository {
    *
    * Upserting the same normalized `{ mintUrl, method, quoteId }` updates that quote. Upserting a
    * different method with the same normalized `{ mintUrl, quoteId }` must fail with a quote
-   * identity conflict instead of creating an ambiguous methodless public identity.
+   * identity conflict instead of creating an ambiguous methodless public identity. Returns the
+   * canonical persisted quote after applying repository normalization.
    */
-  upsertMeltQuote(quote: MeltQuote): Promise<void>;
+  upsertMeltQuote(quote: MeltQuote): Promise<MeltQuote>;
   getPendingMeltQuotes(method?: string): Promise<MeltQuote[]>;
 }
 

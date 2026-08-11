@@ -1,17 +1,24 @@
 import {
   Amount,
-  type AmountLike,
   type MintQuoteBolt11Response,
   type MintQuoteBolt12Response,
+  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
 } from '@cashu/cashu-ts';
+import { MintQuoteValidationError } from './Error';
+import {
+  mintQuoteObservationFromBolt11Response,
+  mintQuoteObservationFromBolt12Response,
+  mintQuoteObservationFromOnchainResponse,
+} from './MintQuoteObservationFactory';
 import type {
   MintMethod,
   MintMethodQuoteData,
   MintMethodQuoteSnapshot,
   MintMethodRemoteState,
 } from '../operations/mint/MintMethodHandler';
+import { assessMintQuoteClaimability } from './MintQuoteClaimability.ts';
 
-export type MintQuoteOnchainResponse = MintMethodQuoteSnapshot<'onchain'>;
+export type MintQuoteOnchainResponse = CashuMintQuoteOnchainResponse;
 
 interface MintQuoteBase<M extends MintMethod> {
   mintUrl: string;
@@ -27,6 +34,15 @@ interface MintQuoteBase<M extends MintMethod> {
   expiry: number | null;
   pubkey?: string;
   reusable: boolean;
+  /** Mint-reported cumulative amount paid toward this quote. */
+  amountPaid: Amount;
+  /** Mint-reported cumulative amount issued from this quote. */
+  amountIssued: Amount;
+  /**
+   * Mint-reported Remote Quote Update Time in protocol seconds, or `null` when unavailable.
+   * This is distinct from Coco's local `updatedAt` timestamp in milliseconds.
+   */
+  remoteUpdatedAt: number | null;
   quoteData: MintMethodQuoteData<M>;
   createdAt: number;
   updatedAt: number;
@@ -34,25 +50,22 @@ interface MintQuoteBase<M extends MintMethod> {
 
 export type Bolt11MintQuote = MintQuoteBase<'bolt11'> & {
   amount: Amount;
+  /**
+   * @deprecated Use `amountPaid` and `amountIssued` for Mint Quote Accounting.
+   */
   state: MintMethodRemoteState<'bolt11'>;
-  lastObservedRemoteState?: MintMethodRemoteState<'bolt11'>;
-  lastObservedRemoteStateAt?: number;
   reusable: false;
 };
 
 export type OnchainMintQuote = MintQuoteBase<'onchain'> & {
   amount?: never;
   state?: never;
-  lastObservedRemoteState?: never;
-  lastObservedRemoteStateAt?: number;
   reusable: true;
 };
 
 export type Bolt12MintQuote = MintQuoteBase<'bolt12'> & {
   amount?: Amount;
   state?: never;
-  lastObservedRemoteState?: never;
-  lastObservedRemoteStateAt?: number;
   reusable: true;
 };
 
@@ -68,10 +81,66 @@ export function isStatefulMintQuote(quote: MintQuote): quote is MintQuote<'bolt1
   return quote.method === 'bolt11';
 }
 
+/** Derives the deprecated BOLT11 state projection from canonical quote accounting. */
+export function deriveBolt11MintQuoteState(
+  amountPaid: Amount,
+  amountIssued: Amount,
+): MintMethodRemoteState<'bolt11'> {
+  return amountPaid.isZero() && amountIssued.isZero()
+    ? 'UNPAID'
+    : amountPaid.greaterThan(amountIssued)
+      ? 'PAID'
+      : 'ISSUED';
+}
+
+/**
+ * Applies a legacy BOLT11 state observation without allowing it to reduce canonical accounting.
+ *
+ * @deprecated Legacy state is a fallback for snapshots that do not carry Mint Quote Accounting.
+ */
+export function applyBolt11MintQuoteStateFallback(
+  quote: MintQuote<'bolt11'>,
+  state: MintMethodRemoteState<'bolt11'>,
+  observedAt = Date.now(),
+): MintQuote<'bolt11'> {
+  const hasLegacyProjectionShape =
+    (quote.amountPaid.isZero() && quote.amountIssued.isZero()) ||
+    (quote.amountPaid.equals(quote.amount) && quote.amountIssued.isZero()) ||
+    (quote.amountPaid.equals(quote.amount) && quote.amountIssued.equals(quote.amount));
+  if (quote.remoteUpdatedAt !== null || !hasLegacyProjectionShape) {
+    return {
+      ...quote,
+      state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
+    };
+  }
+
+  const paidFallback = state === 'UNPAID' ? Amount.zero() : quote.amount;
+  const issuedFallback = state === 'ISSUED' ? quote.amount : Amount.zero();
+  const amountPaid = quote.amountPaid.greaterThan(paidFallback) ? quote.amountPaid : paidFallback;
+  const amountIssued = quote.amountIssued.greaterThan(issuedFallback)
+    ? quote.amountIssued
+    : issuedFallback;
+
+  return {
+    ...quote,
+    state: deriveBolt11MintQuoteState(amountPaid, amountIssued),
+    amountPaid,
+    amountIssued,
+    updatedAt: Math.max(quote.updatedAt, observedAt),
+  };
+}
+
+/**
+ * Returns the deprecated BOLT11 state projection for compatibility consumers.
+ *
+ * @deprecated Use `amountPaid` and `amountIssued`, or the common Claimability assessment.
+ */
 export function getMintQuoteRemoteState(
   quote: MintQuote,
 ): MintMethodRemoteState<'bolt11'> | undefined {
-  return isStatefulMintQuote(quote) ? quote.state : undefined;
+  return isStatefulMintQuote(quote)
+    ? deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued)
+    : undefined;
 }
 
 /**
@@ -88,20 +157,26 @@ export function getMintQuoteAmount(quote: MintQuote): Amount | undefined {
   return undefined;
 }
 
+/** Returns mint-reported availability without local issuance or reservation facts. */
 export function getMintQuoteAvailableAmount(quote: MintQuote): Amount {
-  if (quote.reusable) {
-    return quote.quoteData.amountPaid.subtract(quote.quoteData.amountIssued);
-  }
-
-  return quote.state === 'PAID' ? quote.amount : Amount.zero();
+  return assessMintQuoteClaimability(quote).remoteAvailable;
 }
 
 export function isMintQuotePending(quote: MintQuote): boolean {
-  if (isStatefulMintQuote(quote)) {
-    return quote.state !== 'ISSUED';
-  }
+  const { status } = assessMintQuoteClaimability(quote);
+  return status === 'waiting' || status === 'claimable';
+}
 
-  return true;
+function assertValidMintQuoteAccounting(
+  quoteId: string,
+  amountPaid: Amount,
+  amountIssued: Amount,
+): void {
+  if (amountIssued.greaterThan(amountPaid)) {
+    throw new MintQuoteValidationError(
+      `Mint quote ${quoteId} has amount_issued greater than amount_paid`,
+    );
+  }
 }
 
 export function mintQuoteFromBolt11Response(
@@ -109,55 +184,31 @@ export function mintQuoteFromBolt11Response(
   quote: MintQuoteBolt11Response,
   options?: { now?: number },
 ): MintQuote<'bolt11'> {
-  const now = options?.now ?? Date.now();
-  const amount = Amount.from(quote.amount as unknown as AmountLike);
-  return {
-    mintUrl,
-    method: 'bolt11',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    amount,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    state: quote.state,
-    lastObservedRemoteState: quote.state,
-    lastObservedRemoteStateAt: now,
-    reusable: false,
-    quoteData: {
-      amount,
-    },
-    createdAt: now,
-    updatedAt: now,
+  const observation = mintQuoteObservationFromBolt11Response(mintUrl, quote, options);
+  const canonicalQuote: MintQuote<'bolt11'> = {
+    ...observation,
+    state: deriveBolt11MintQuoteState(observation.amountPaid, observation.amountIssued),
   };
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteFromOnchainResponse(
   mintUrl: string,
-  quote: MintQuoteOnchainResponse,
+  quote: CashuMintQuoteOnchainResponse,
   options?: { now?: number },
 ): MintQuote<'onchain'> {
-  const now = options?.now ?? Date.now();
-  return {
-    mintUrl,
-    method: 'onchain',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    reusable: true,
-    quoteData: {
-      pubkey: quote.pubkey,
-      amountPaid: Amount.from(quote.amount_paid),
-      amountIssued: Amount.from(quote.amount_issued),
-    },
-    lastObservedRemoteStateAt: now,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const canonicalQuote = mintQuoteObservationFromOnchainResponse(mintUrl, quote, options);
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteFromBolt12Response(
@@ -165,29 +216,13 @@ export function mintQuoteFromBolt12Response(
   quote: MintQuoteBolt12Response,
   options?: { now?: number },
 ): MintQuote<'bolt12'> {
-  const now = options?.now ?? Date.now();
-  const amount = quote.amount ? Amount.from(quote.amount as unknown as AmountLike) : undefined;
-  return {
-    mintUrl,
-    method: 'bolt12',
-    quoteId: quote.quote,
-    quote: quote.quote,
-    request: quote.request,
-    unit: quote.unit,
-    amount,
-    expiry: quote.expiry,
-    pubkey: quote.pubkey,
-    reusable: true,
-    quoteData: {
-      pubkey: quote.pubkey,
-      amount,
-      amountPaid: Amount.from(quote.amount_paid),
-      amountIssued: Amount.from(quote.amount_issued),
-    },
-    lastObservedRemoteStateAt: now,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const canonicalQuote = mintQuoteObservationFromBolt12Response(mintUrl, quote, options);
+  assertValidMintQuoteAccounting(
+    canonicalQuote.quoteId,
+    canonicalQuote.amountPaid,
+    canonicalQuote.amountIssued,
+  );
+  return canonicalQuote;
 }
 
 export function mintQuoteToMethodSnapshot<M extends MintMethod>(
@@ -197,11 +232,15 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
     return {
       quote: quote.quoteId,
       request: quote.request,
+      method: 'bolt11',
       amount: quote.amount,
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.pubkey,
-      state: quote.state,
+      state: deriveBolt11MintQuoteState(quote.amountPaid, quote.amountIssued),
+      amount_paid: quote.amountPaid,
+      amount_issued: quote.amountIssued,
+      updated_at: quote.remoteUpdatedAt,
     } as MintMethodQuoteSnapshot<M>;
   }
 
@@ -209,22 +248,26 @@ export function mintQuoteToMethodSnapshot<M extends MintMethod>(
     return {
       quote: quote.quoteId,
       request: quote.request,
+      method: 'onchain',
       unit: quote.unit,
       expiry: quote.expiry,
       pubkey: quote.quoteData.pubkey,
-      amount_paid: quote.quoteData.amountPaid,
-      amount_issued: quote.quoteData.amountIssued,
+      amount_paid: quote.amountPaid,
+      amount_issued: quote.amountIssued,
+      updated_at: quote.remoteUpdatedAt,
     } as MintMethodQuoteSnapshot<M>;
   }
 
   return {
     quote: quote.quoteId,
     request: quote.request,
+    method: 'bolt12',
     amount: quote.amount,
     unit: quote.unit,
     expiry: quote.expiry,
     pubkey: quote.quoteData.pubkey,
-    amount_paid: quote.quoteData.amountPaid,
-    amount_issued: quote.quoteData.amountIssued,
+    amount_paid: quote.amountPaid,
+    amount_issued: quote.amountIssued,
+    updated_at: quote.remoteUpdatedAt,
   } as MintMethodQuoteSnapshot<M>;
 }

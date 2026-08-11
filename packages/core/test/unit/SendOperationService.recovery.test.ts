@@ -224,6 +224,7 @@ describe('SendOperationService - recoverPendingOperations', () => {
     // Mock MintService
     mintService = {
       isTrustedMint: mock(() => Promise.resolve(true)),
+      assertNutSupported: mock(() => Promise.resolve()),
     } as unknown as MintService;
 
     // Mock WalletService
@@ -622,6 +623,10 @@ describe('SendOperationService - recoverPendingOperations', () => {
       (proofService.saveProofs as Mock<any>).mockImplementation(
         async (_mintUrl: string, proofs: any[]) => {
           savedProofBatches.push(proofs);
+          await proofRepo.saveProofs(
+            mintUrl,
+            proofs.map((proof) => ({ ...proof, unit: proof.unit ?? 'sat' })),
+          );
         },
       );
 

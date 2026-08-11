@@ -1,4 +1,4 @@
-import { Amount, type AmountLike } from '@cashu/cashu-ts';
+import { Amount, isBlsKeyset, type AmountLike } from '@cashu/cashu-ts';
 import {
   KeysetSyncError,
   MintFetchError,
@@ -17,6 +17,36 @@ import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
 
 const MINT_REFRESH_TTL_S = 60 * 5;
+
+function excludeBlsKeysets<T extends { id: string }>(keysets: T[]): T[] {
+  // TODO: Admit BLS keysets after every proof-state lookup uses curve-aware Y derivation.
+  return keysets.filter((keyset) => !isBlsKeyset(keyset.id));
+}
+
+function supportsNut29MintQuoteCheckFromInfo(mintInfo: MintInfo, method: string): boolean {
+  const nuts = mintInfo.nuts as unknown;
+  if (!nuts || typeof nuts !== 'object') return false;
+
+  const nut29 = (nuts as Record<string, unknown>)['29'];
+  if (!nut29 || typeof nut29 !== 'object') return false;
+  const methods = (nut29 as { methods?: unknown }).methods;
+  if (methods !== undefined) return Array.isArray(methods) && methods.includes(method);
+
+  const nut4 = (nuts as Record<string, unknown>)['4'];
+  if (!nut4 || typeof nut4 !== 'object' || (nut4 as { disabled?: unknown }).disabled === true) {
+    return false;
+  }
+  const mintMethods = (nut4 as { methods?: unknown }).methods;
+  return (
+    Array.isArray(mintMethods) &&
+    mintMethods.some(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        (entry as { method?: unknown }).method === method,
+    )
+  );
+}
 
 export interface MethodUnitCapability {
   supported: boolean;
@@ -79,6 +109,12 @@ type NutMethodSettings = {
   methods?: NutMethodSetting[];
   disabled?: boolean;
 };
+
+type NutSupportSettings = {
+  supported?: unknown;
+};
+
+export type TopLevelNutCapability = 11 | 20;
 
 export class MintService {
   private readonly mintRepo: MintRepository;
@@ -201,7 +237,7 @@ export class MintService {
       return updated;
     }
 
-    const keysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    const keysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
     return { mint, keysets };
   }
 
@@ -219,6 +255,73 @@ export class MintService {
     // ensureUpdatedMint already normalizes, but normalize here for consistency
     const { mint } = await this.ensureUpdatedMint(normalizeMintUrl(mintUrl));
     return mint.mintInfo;
+  }
+
+  /**
+   * Returns whether a mint advertises support for a top-level NUT capability.
+   *
+   * Supports boolean top-level capability metadata used by recovery and security
+   * preflight. Mint information is resolved via
+   * `getMintInfo()`, so stale local records may be refreshed and fetch failures
+   * propagate to the caller. Missing, malformed, or disabled settings return
+   * `false` rather than throwing.
+   */
+  async supportsNut(mintUrl: string, nut: TopLevelNutCapability): Promise<boolean> {
+    this.assertSupportCapabilityNut(nut);
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    const mintInfo = await this.getMintInfo(normalizedMintUrl);
+    const settings = this.getNutSupportSettings(mintInfo, nut);
+    return settings?.supported === true;
+  }
+
+  /**
+   * Returns whether a mint advertises NUT-29 mint quote checks for a payment method.
+   *
+   * When NUT-29 omits its optional method list, enabled NUT-04 method metadata is
+   * used as the source of supported mint methods. Missing or malformed metadata
+   * returns `false`; mint-info refresh failures propagate unchanged.
+   */
+  async supportsNut29MintQuoteCheck(mintUrl: string, method: string): Promise<boolean> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    return supportsNut29MintQuoteCheckFromInfo(mintInfo, method);
+  }
+
+  /**
+   * Returns the bounded NUT-29 mint quote check limit for one polling group.
+   *
+   * Unsupported methods and malformed advertised limits use one quote per polling
+   * opportunity. An omitted limit uses Coco's protocol safety cap of 100.
+   */
+  async getNut29MintQuoteCheckLimit(mintUrl: string, method: string): Promise<number> {
+    const mintInfo = await this.getMintInfo(normalizeMintUrl(mintUrl));
+    if (!supportsNut29MintQuoteCheckFromInfo(mintInfo, method)) return 1;
+
+    const nuts = mintInfo.nuts as unknown as Record<string, unknown>;
+    const maxBatchSize = (nuts['29'] as { max_batch_size?: unknown }).max_batch_size;
+    if (maxBatchSize === undefined) return 100;
+    if (!Number.isSafeInteger(maxBatchSize) || Number(maxBatchSize) < 1) return 1;
+    return Math.min(Number(maxBatchSize), 100);
+  }
+
+  /**
+   * Requires a mint to advertise a top-level NUT capability.
+   *
+   * Returns when support is advertised, throws `ProofValidationError` when
+   * support is absent, and lets mint-info refresh/fetch failures propagate.
+   */
+  async assertNutSupported(
+    mintUrl: string,
+    nut: TopLevelNutCapability,
+    scope?: string,
+  ): Promise<void> {
+    if (await this.supportsNut(mintUrl, nut)) {
+      return;
+    }
+
+    const context = scope ? ` for ${scope}` : '';
+    throw new ProofValidationError(
+      `${this.formatNut(nut)} support is required${context} but is not advertised by mint ${normalizeMintUrl(mintUrl)}`,
+    );
   }
 
   async checkPaymentMethodCapability(
@@ -416,6 +519,18 @@ export class MintService {
     return nuts?.[String(nut)] as NutMethodSettings | undefined;
   }
 
+  private getNutSupportSettings(
+    mintInfo: MintInfo,
+    nut: TopLevelNutCapability,
+  ): NutSupportSettings | undefined {
+    const nuts = mintInfo.nuts as Record<string, unknown> | undefined;
+    const settings = nuts?.[String(nut)];
+    if (!settings || typeof settings !== 'object') {
+      return undefined;
+    }
+    return settings as NutSupportSettings;
+  }
+
   private assertMethodCapabilityNut(nut: number): asserts nut is 4 | 5 {
     if (nut !== 4 && nut !== 5) {
       throw new ProofValidationError(
@@ -424,8 +539,14 @@ export class MintService {
     }
   }
 
-  private formatNut(nut: 4 | 5): string {
-    return `NUT-0${nut}`;
+  private assertSupportCapabilityNut(nut: number): asserts nut is TopLevelNutCapability {
+    if (nut !== 11 && nut !== 20) {
+      throw new ProofValidationError(`NUT-${nut} support capability checks are not implemented`);
+    }
+  }
+
+  private formatNut(nut: number): string {
+    return `NUT-${String(nut).padStart(2, '0')}`;
   }
 
   private assertPaymentMethodCapabilityOperation(
@@ -463,6 +584,7 @@ export class MintService {
     try {
       this.logger?.debug('Fetching keysets', { mintUrl: mint.mintUrl });
       ({ keysets } = await this.mintAdapter.fetchKeysets(mint.mintUrl));
+      keysets = excludeBlsKeysets(keysets);
     } catch (err) {
       this.logger?.error('Failed to fetch keysets', { mintUrl: mint.mintUrl, err });
       throw new MintFetchError(mint.mintUrl, 'Failed to fetch keysets', err);
@@ -506,8 +628,9 @@ export class MintService {
     mint.mintInfo = mintInfo;
     mint.updatedAt = Math.floor(Date.now() / 1000);
     await this.mintRepo.addOrUpdateMint(mint);
+    await this.eventBus?.emit('mint:metadata-refreshed', { mintUrl: mint.mintUrl });
 
-    const repoKeysets = await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl);
+    const repoKeysets = excludeBlsKeysets(await this.keysetRepo.getKeysetsByMintUrl(mint.mintUrl));
     this.logger?.info('Mint updated', { mintUrl: mint.mintUrl, keysets: repoKeysets.length });
     return { mint, keysets: repoKeysets };
   }

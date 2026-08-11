@@ -158,6 +158,9 @@ export interface MintQuoteRow {
   expiry: number | null;
   pubkey?: string | null;
   quoteDataJson?: string | null;
+  amountPaid: string | number;
+  amountIssued: string | number;
+  remoteUpdatedAt?: number | null;
   lastObservedRemoteState?: 'UNPAID' | 'PAID' | 'ISSUED' | null;
   lastObservedRemoteStateAt?: number | null;
   reusable: number;

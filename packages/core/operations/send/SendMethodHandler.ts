@@ -1,4 +1,4 @@
-import type { Wallet, Proof, Token } from '@cashu/cashu-ts';
+import type { Wallet, Proof, Token, P2PKOptions, P2PKTag, SigFlag } from '@cashu/cashu-ts';
 import type { ProofRepository } from '../../repositories';
 import type { ProofService } from '../../services/ProofService';
 import type { WalletService } from '../../services/WalletService';
@@ -16,6 +16,52 @@ import type {
 } from './SendOperation';
 
 /**
+ * Structured P2PK send options accepted by Coco.
+ *
+ * `hashlock` is intentionally unavailable because cashu-ts treats hashlocked
+ * P2PK options as HTLC/NUT-14 data, which this send method does not support.
+ */
+type LegacyP2pkSendOptions = {
+  pubkey: string | string[];
+  locktime?: number;
+  refundKeys?: string[];
+  requiredSignatures?: number;
+  requiredRefundSignatures?: number;
+  additionalTags?: P2PKTag[];
+  blindKeys?: boolean;
+  sigFlag?: SigFlag;
+  /** HTLC/NUT-14 hashlocks are out of scope for P2PK sends. */
+  hashlock?: never;
+};
+
+/**
+ * P2PK options accepted by Coco. The legacy v4 shape remains supported and is converted to the v5
+ * NUT-10 envelope before cashu-ts receives it.
+ */
+export type P2pkSendOptions =
+  | (Omit<P2PKOptions, 'kind'> & { kind: 'P2PK' })
+  | LegacyP2pkSendOptions;
+
+/**
+ * Payload accepted by the P2PK send method.
+ *
+ * `pubkey` is the legacy shorthand for locking outputs to a single public key.
+ * Prefer `options` for full NUT-11 P2PK conditions such as `sigflag`,
+ * multisig tags, locktime, and refund keys.
+ */
+export type P2pkSendMethodData =
+  | {
+      /** Legacy/direct shorthand for sending to one P2PK lock key. */
+      pubkey: string;
+      options?: never;
+    }
+  | {
+      /** Full NUT-11 P2PK options accepted by Coco output builders. */
+      options: P2pkSendOptions;
+      pubkey?: never;
+    };
+
+/**
  * Registry of supported send methods and their payload shapes.
  * Extend via declaration merging if you need to add methods externally.
  *
@@ -24,7 +70,7 @@ import type {
  */
 export interface SendMethodDefinitions {
   default: Record<string, never>;
-  p2pk: { pubkey: string };
+  p2pk: P2pkSendMethodData;
 }
 
 export type SendMethod = keyof SendMethodDefinitions;

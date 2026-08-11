@@ -46,9 +46,10 @@ const makeMintQuote = (): MintQuote<'bolt11'> => ({
   unit: 'sat',
   expiry: Math.floor(Date.now() / 1000) + 3600,
   state: 'UNPAID',
-  lastObservedRemoteState: 'UNPAID',
-  lastObservedRemoteStateAt: Date.now(),
   reusable: false,
+  amountPaid: Amount.zero(),
+  amountIssued: Amount.zero(),
+  remoteUpdatedAt: null,
   quoteData: {
     amount: Amount.from(10),
   },
@@ -145,6 +146,22 @@ describe('QuoteApi', () => {
 
     expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'onchain', {
       unit: 'sat',
+    });
+  });
+
+  it('delegates opt-in locked BOLT11 quote creation', async () => {
+    await expect(
+      api.mint.create({
+        mintUrl,
+        method: 'bolt11',
+        amount: Amount.from(10),
+        locked: true,
+      }),
+    ).resolves.toBe(mintQuote);
+
+    expect(quoteLifecycle.createMintQuote).toHaveBeenCalledWith(mintUrl, 'bolt11', {
+      amount: { amount: Amount.from(10), unit: 'sat' },
+      locked: true,
     });
   });
 

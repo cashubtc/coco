@@ -3,8 +3,15 @@ import { assertSameUnit, normalizeUnitAmount } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { MintOperationError } from '../../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../../models/Error';
 import { mintQuoteFromBolt12Response, type MintQuote } from '../../../models/MintQuote';
+import { mintQuoteObservationFromBolt12Response } from '../../../models/MintQuoteObservationFactory';
+import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
+import { getReusableMintQuoteValidationError } from './ReusableMintQuoteValidation.ts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -12,7 +19,7 @@ import type {
   MintExecutionResult,
   MintMethodHandler,
   PendingContext,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   PendingMintOperation,
   PrepareContext,
   RecoverExecutingContext,
@@ -58,7 +65,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       ctx.quote.quoteData.amount,
     );
 
-    return mintQuoteFromBolt12Response(ctx.quote.mintUrl, remoteQuote);
+    return mintQuoteObservationFromBolt12Response(ctx.quote.mintUrl, remoteQuote);
   }
 
   async validateQuoteForPrepare(quote: MintQuote<'bolt12'>): Promise<void> {
@@ -72,7 +79,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
     }
@@ -107,7 +114,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   async execute(ctx: ExecuteContext<'bolt12'>): Promise<MintExecutionResult> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
     if (!quoteKey) {
-      throw new Error(
+      throw new MintQuoteKeyError(
         `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
       );
     }
@@ -119,6 +126,15 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       ctx.operation.quoteId,
     );
     this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromBolt12Response(ctx.operation.mintUrl, remoteQuote),
+      { requestedAmount: ctx.operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      throw new MintQuoteValidationError(
+        `BOLT12 mint quote ${ctx.operation.quoteId} is not claimable: ${assessment.status}`,
+      );
+    }
 
     try {
       const proofs = await ctx.wallet.mintProofsBolt12(
@@ -185,13 +201,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
-      };
-    }
-
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
     if (!quoteKey) {
       return {
@@ -200,11 +209,20 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
       };
     }
 
-    const available = this.getAvailableAmount(remoteQuote);
-    if (available.lessThan(operation.amount)) {
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromBolt12Response(operation.mintUrl, remoteQuote),
+      { ...ctx.localClaimabilityFacts, requestedAmount: operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      return {
+        status: 'TERMINAL',
+        error: `Recovered: BOLT12 quote ${operation.quoteId} has invalid claimability accounting`,
+      };
+    }
+    if (assessment.status !== 'claimable') {
       return {
         status: 'PENDING',
-        error: `Recovered: BOLT12 quote ${operation.quoteId} has ${available} available, requested ${operation.amount}`,
+        error: `Recovered: BOLT12 quote ${operation.quoteId} has ${assessment.remoteAvailable} remotely available, requested ${operation.amount}`,
       };
     }
 
@@ -237,7 +255,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
         );
       }
 
-      if (this.isExpiredMintError(error)) {
+      if (error instanceof MintOperationError && error.code === 20007) {
         return {
           status: 'TERMINAL',
           error: `Recovered: BOLT12 quote ${operation.quoteId} expired while executing mint`,
@@ -251,9 +269,11 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'bolt12'>): Promise<PendingMintCheckResult<'bolt12'>> {
+  async checkPending(
+    ctx: PendingContext<'bolt12'>,
+  ): Promise<PendingMintObservationResult<'bolt12'>> {
     const { operation } = ctx;
-    const observedRemoteStateAt = Date.now();
+    const observedAt = Date.now();
     const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       operation.mintUrl,
       'bolt12',
@@ -261,58 +281,35 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     );
     const expectedPubkey = operation.pubkey;
 
-    if (!expectedPubkey) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
     if (validationError) {
       return {
-        observedRemoteStateAt,
-        category: 'terminal',
-        terminalFailure: {
+        observedAt,
+        validationFailure: {
           reason: validationError.message,
           code: 'invalid_quote',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
+    if (!expectedPubkey) {
       return {
-        observedRemoteStateAt,
+        observedAt,
         quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `BOLT12 mint quote ${operation.quoteId} expired before operation ${operation.id} could be minted`,
-          code: 'quote_expired',
+        validationFailure: {
+          reason: `BOLT12 mint operation ${operation.id} is missing NUT-20 quote pubkey`,
+          code: 'missing_quote_pubkey',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
     return {
-      observedRemoteStateAt,
+      observedAt,
       quoteSnapshot: remoteQuote,
-      category: this.getAvailableAmount(remoteQuote).greaterThanOrEqual(operation.amount)
-        ? 'ready'
-        : 'waiting',
     };
   }
 
@@ -336,7 +333,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
   private async requireQuoteKey(pubkey: string): Promise<void> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!quoteKey) {
-      throw new Error(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
+      throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
     }
   }
 
@@ -347,19 +344,13 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     expectedAmount?: Amount,
   ): void {
     if (quote.pubkey !== expectedPubkey) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `BOLT12 mint quote ${quote.quote} returned pubkey ${quote.pubkey} instead of requested pubkey ${expectedPubkey}`,
       );
     }
 
     assertSameUnit(quote.unit, expectedUnit, `BOLT12 mint quote ${quote.quote}`);
     this.assertQuoteAmount(quote, expectedAmount);
-
-    if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
-      throw new Error(
-        `BOLT12 mint quote ${quote.quote} has amount_issued greater than amount_paid`,
-      );
-    }
   }
 
   private assertQuoteAmount(quote: MintQuoteBolt12Response, expectedAmount?: Amount): void {
@@ -369,7 +360,7 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     if (!quote.amount || !quote.amount.equals(expectedAmount)) {
       const observedAmount = quote.amount ?? '(missing)';
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} amount ${observedAmount} ` +
           `does not match requested amount ${expectedAmount}`,
       );
@@ -417,14 +408,6 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
     }
   }
 
-  private getAvailableAmount(quote: MintQuoteBolt12Response): Amount {
-    return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
-  }
-
-  private isExpired(quote: MintQuoteBolt12Response): boolean {
-    return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
-  }
-
   private isAlreadyIssuedError(error: unknown): boolean {
     if (error instanceof MintOperationError && (error.code === 20002 || error.code === 11003)) {
       return true;
@@ -432,14 +415,5 @@ export class MintBolt12Handler implements MintMethodHandler<'bolt12'> {
 
     const message = error instanceof Error ? error.message : String(error);
     return /already (issued|signed)|outputs? already/i.test(message);
-  }
-
-  private isExpiredMintError(error: unknown): boolean {
-    if (error instanceof MintOperationError && error.code === 20007) {
-      return true;
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    return /expired/i.test(message);
   }
 }

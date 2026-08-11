@@ -84,6 +84,50 @@ console.log(token.memo); // "Dinner"
 Memos are trimmed before persistence. Whitespace-only memos are treated as
 omitted.
 
+### P2PK Sends
+
+Use a P2PK target when the token should be locked to one or more public keys:
+
+```ts
+const prepared = await coco.ops.send.prepare({
+  mintUrl,
+  amount: 100,
+  target: {
+    type: 'p2pk',
+    pubkey: recipientPublicKey,
+  },
+});
+```
+
+For richer NUT-11 requirements, pass structured P2PK options:
+
+```ts
+const prepared = await coco.ops.send.prepare({
+  mintUrl,
+  amount: 100,
+  target: {
+    type: 'p2pk',
+    options: {
+      pubkey: [primaryPublicKey, backupPublicKey],
+      requiredSignatures: 2,
+      locktime: 1_730_000_000,
+      refundKeys: [refundPublicKey],
+      requiredRefundSignatures: 1,
+      sigFlag: 'SIG_ALL',
+      additionalTags: [['memo', 'escrow-payment']],
+    },
+  },
+});
+```
+
+All P2PK lock, cosigner, and refund keys must be valid compressed secp256k1 public keys: 66
+hexadecimal characters beginning with `02` or `03`. cashu-ts v5 rejects x-only 64-character keys
+and malformed or off-curve keys.
+
+The selected mint must advertise NUT-11 support. P2PK payment requests use this
+same structured send method internally: `paymentRequests.prepare()` converts a
+valid NUT-18 P2PK requirement into a P2PK send operation before funds move.
+
 ### Cancelling a Prepared Send
 
 If the user decides not to proceed after seeing the fee:

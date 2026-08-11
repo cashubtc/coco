@@ -1,14 +1,25 @@
-import { Amount, type Wallet } from '@cashu/cashu-ts';
+import {
+  Amount,
+  type MintQuoteOnchainResponse as CashuMintQuoteOnchainResponse,
+  type Wallet,
+} from '@cashu/cashu-ts';
 import { assertSameUnit } from '@core/amounts';
 import type { KeyRingService } from '@core/services';
 import { deserializeOutputData, mapProofToCoreProof, serializeOutputData } from '@core/utils';
 import { bytesToHex } from '@noble/curves/utils.js';
-import { MintOperationError } from '../../../models/Error';
+import {
+  MintOperationError,
+  MintQuoteKeyError,
+  MintQuoteValidationError,
+} from '../../../models/Error';
 import {
   mintQuoteFromOnchainResponse,
   type MintQuote,
   type MintQuoteOnchainResponse,
 } from '../../../models/MintQuote';
+import { mintQuoteObservationFromOnchainResponse } from '../../../models/MintQuoteObservationFactory';
+import { assessMintQuoteClaimability } from '../../../models/MintQuoteClaimability.ts';
+import { getReusableMintQuoteValidationError } from './ReusableMintQuoteValidation.ts';
 import type {
   CreateMintQuoteContext,
   ExecuteContext,
@@ -16,7 +27,7 @@ import type {
   MintExecutionResult,
   MintMethodHandler,
   PendingContext,
-  PendingMintCheckResult,
+  PendingMintObservationResult,
   PendingMintOperation,
   PrepareContext,
   RecoverExecutingContext,
@@ -49,7 +60,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     this.assertQuoteMatchesRequest(remoteQuote, ctx.quote.quoteData.pubkey, ctx.quote.unit);
 
-    return mintQuoteFromOnchainResponse(ctx.quote.mintUrl, remoteQuote);
+    return mintQuoteObservationFromOnchainResponse(ctx.quote.mintUrl, remoteQuote);
   }
 
   async validateQuoteForPrepare(quote: MintQuote<'onchain'>): Promise<void> {
@@ -63,7 +74,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
 
     if (ctx.operation.quoteId !== quote.quote) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Mint quote ${quote.quote} does not match operation quote ${ctx.operation.quoteId}`,
       );
     }
@@ -98,7 +109,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   async execute(ctx: ExecuteContext<'onchain'>): Promise<MintExecutionResult> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(ctx.operation.pubkey ?? '');
     if (!quoteKey) {
-      throw new Error(
+      throw new MintQuoteKeyError(
         `Missing NUT-20 mint quote key for pubkey ${ctx.operation.pubkey ?? '(missing)'}`,
       );
     }
@@ -110,10 +121,19 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       ctx.operation.quoteId,
     );
     this.assertQuoteMatchesRequest(remoteQuote, ctx.operation.pubkey ?? '', ctx.operation.unit);
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromOnchainResponse(ctx.operation.mintUrl, remoteQuote),
+      { requestedAmount: ctx.operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      throw new MintQuoteValidationError(
+        `Onchain mint quote ${ctx.operation.quoteId} is not claimable: ${assessment.status}`,
+      );
+    }
 
     const proofs = await ctx.wallet.mintProofsOnchain(
       ctx.operation.amount,
-      remoteQuote,
+      remoteQuote as CashuMintQuoteOnchainResponse,
       bytesToHex(quoteKey.secretKey),
       undefined,
       { type: 'custom', data: outputData.keep },
@@ -169,13 +189,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
-      return {
-        status: 'TERMINAL',
-        error: `Recovered: onchain quote ${operation.quoteId} expired while executing mint`,
-      };
-    }
-
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(expectedPubkey);
     if (!quoteKey) {
       return {
@@ -184,11 +197,20 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
       };
     }
 
-    const available = this.getAvailableAmount(remoteQuote);
-    if (available.lessThan(operation.amount)) {
+    const assessment = assessMintQuoteClaimability(
+      mintQuoteObservationFromOnchainResponse(operation.mintUrl, remoteQuote),
+      { ...ctx.localClaimabilityFacts, requestedAmount: operation.amount },
+    );
+    if (assessment.status === 'invalid') {
+      return {
+        status: 'TERMINAL',
+        error: `Recovered: onchain quote ${operation.quoteId} has invalid claimability accounting`,
+      };
+    }
+    if (assessment.status !== 'claimable') {
       return {
         status: 'PENDING',
-        error: `Recovered: onchain quote ${operation.quoteId} has ${available} available, requested ${operation.amount}`,
+        error: `Recovered: onchain quote ${operation.quoteId} has ${assessment.remoteAvailable} remotely available, requested ${operation.amount}`,
       };
     }
 
@@ -196,7 +218,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     try {
       const proofs = await ctx.wallet.mintProofsOnchain(
         operation.amount,
-        remoteQuote,
+        remoteQuote as CashuMintQuoteOnchainResponse,
         bytesToHex(quoteKey.secretKey),
         undefined,
         { type: 'custom', data: outputData.keep },
@@ -221,7 +243,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
         );
       }
 
-      if (this.isExpiredMintError(error)) {
+      if (error instanceof MintOperationError && error.code === 20007) {
         return {
           status: 'TERMINAL',
           error: `Recovered: onchain quote ${operation.quoteId} expired while executing mint`,
@@ -235,9 +257,11 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
   }
 
-  async checkPending(ctx: PendingContext<'onchain'>): Promise<PendingMintCheckResult<'onchain'>> {
+  async checkPending(
+    ctx: PendingContext<'onchain'>,
+  ): Promise<PendingMintObservationResult<'onchain'>> {
     const { operation } = ctx;
-    const observedRemoteStateAt = Date.now();
+    const observedAt = Date.now();
     const remoteQuote = await ctx.mintAdapter.checkMintQuote(
       operation.mintUrl,
       'onchain',
@@ -245,58 +269,35 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     );
     const expectedPubkey = operation.pubkey;
 
-    if (!expectedPubkey) {
-      return {
-        observedRemoteStateAt,
-        quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `Onchain mint operation ${operation.id} is missing NUT-20 quote pubkey`,
-          code: 'missing_quote_pubkey',
-          retryable: false,
-          observedAt: observedRemoteStateAt,
-        },
-      };
-    }
-
-    const validationError = this.getQuoteValidationError(
-      remoteQuote,
-      expectedPubkey,
-      operation.unit,
-    );
+    const validationError = getReusableMintQuoteValidationError(remoteQuote, operation);
     if (validationError) {
       return {
-        observedRemoteStateAt,
-        category: 'terminal',
-        terminalFailure: {
+        observedAt,
+        validationFailure: {
           reason: validationError.message,
           code: 'invalid_quote',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
-    if (this.isExpired(remoteQuote)) {
+    if (!expectedPubkey) {
       return {
-        observedRemoteStateAt,
+        observedAt,
         quoteSnapshot: remoteQuote,
-        category: 'terminal',
-        terminalFailure: {
-          reason: `Onchain mint quote ${operation.quoteId} expired before operation ${operation.id} could be minted`,
-          code: 'quote_expired',
+        validationFailure: {
+          reason: `Onchain mint operation ${operation.id} is missing NUT-20 quote pubkey`,
+          code: 'missing_quote_pubkey',
           retryable: false,
-          observedAt: observedRemoteStateAt,
+          observedAt,
         },
       };
     }
 
     return {
-      observedRemoteStateAt,
+      observedAt,
       quoteSnapshot: remoteQuote,
-      category: this.getAvailableAmount(remoteQuote).greaterThanOrEqual(operation.amount)
-        ? 'ready'
-        : 'waiting',
     };
   }
 
@@ -312,7 +313,7 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
   private async requireQuoteKey(pubkey: string): Promise<void> {
     const quoteKey = await this.keyRingService.getMintQuoteKeyPair(pubkey);
     if (!quoteKey) {
-      throw new Error(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
+      throw new MintQuoteKeyError(`Missing NUT-20 mint quote key for pubkey ${pubkey}`);
     }
   }
 
@@ -322,18 +323,12 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     expectedUnit: string,
   ): void {
     if (quote.pubkey !== expectedPubkey) {
-      throw new Error(
+      throw new MintQuoteValidationError(
         `Onchain mint quote ${quote.quote} returned pubkey ${quote.pubkey} instead of requested pubkey ${expectedPubkey}`,
       );
     }
 
     assertSameUnit(quote.unit, expectedUnit, `Onchain mint quote ${quote.quote}`);
-
-    if (Amount.from(quote.amount_paid).lessThan(Amount.from(quote.amount_issued))) {
-      throw new Error(
-        `Onchain mint quote ${quote.quote} has amount_issued greater than amount_paid`,
-      );
-    }
   }
 
   private async recoverSignedOutputs(
@@ -377,14 +372,6 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
     }
   }
 
-  private getAvailableAmount(quote: MintQuoteOnchainResponse): Amount {
-    return Amount.from(quote.amount_paid).subtract(Amount.from(quote.amount_issued));
-  }
-
-  private isExpired(quote: MintQuoteOnchainResponse): boolean {
-    return quote.expiry !== null && quote.expiry * 1000 <= Date.now();
-  }
-
   private isAlreadyIssuedError(error: unknown): boolean {
     if (error instanceof MintOperationError && (error.code === 20002 || error.code === 11003)) {
       return true;
@@ -392,14 +379,5 @@ export class MintOnchainHandler implements MintMethodHandler<'onchain'> {
 
     const message = error instanceof Error ? error.message : String(error);
     return /already (issued|signed)|outputs? already/i.test(message);
-  }
-
-  private isExpiredMintError(error: unknown): boolean {
-    if (error instanceof MintOperationError && error.code === 20007) {
-      return true;
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    return /expired/i.test(message);
   }
 }

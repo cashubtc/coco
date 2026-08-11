@@ -231,6 +231,41 @@ describe('MintService', () => {
       expect(result.mint.mintUrl).toBe(testMintUrl);
     });
 
+    it('excludes previously persisted v3 keysets from cached mint data', async () => {
+      await service.addMintByUrl(testMintUrl);
+      await keysetRepo.addKeyset({
+        mintUrl: testMintUrl,
+        id: '0200000000000000',
+        unit: 'sat',
+        keypairs: mockKeys,
+        active: true,
+        feePpk: 0,
+      });
+
+      const result = await service.ensureUpdatedMint(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
+    it('excludes previously persisted v3 keysets after refreshing mint data', async () => {
+      await service.addMintByUrl(testMintUrl);
+      await keysetRepo.addKeyset({
+        mintUrl: testMintUrl,
+        id: '0200000000000000',
+        unit: 'sat',
+        keypairs: mockKeys,
+        active: true,
+        feePpk: 0,
+      });
+      const mint = await mintRepo.getMintByUrl(testMintUrl);
+      mint.updatedAt = 0;
+      await mintRepo.updateMint(mint);
+
+      const result = await service.ensureUpdatedMint(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
     it('should preserve trust status when updating', async () => {
       await service.addMintByUrl(testMintUrl);
       await service.trustMint(testMintUrl);
@@ -276,6 +311,194 @@ describe('MintService', () => {
       const mint = await mintRepo.getMintByUrl(testMintUrl);
       expect(mint).toBeDefined();
       expect(mint.trusted).toBe(false);
+    });
+  });
+
+  describe('nut support capabilities', () => {
+    const useMintInfo = (mintInfo: MintInfo) => {
+      mockAdapter.fetchMintInfo = mock(() => Promise.resolve(mintInfo));
+    };
+
+    it('returns true when NUT-11 support is advertised', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: true },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(true);
+      await expect(
+        service.assertNutSupported(testMintUrl, 11, 'P2PK send'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('checks NUT-20 support through the typed API', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '20': { supported: true },
+        },
+      } as MintInfo);
+
+      await expect(service.assertNutSupported(testMintUrl, 20)).resolves.toBeUndefined();
+    });
+
+    it('returns false and rejects when NUT-11 metadata is missing', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [], disabled: false },
+          '5': { methods: [], disabled: false },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+      await expect(
+        service.assertNutSupported(testMintUrl, 11, 'payment request P2PK'),
+      ).rejects.toThrow(ProofValidationError);
+    });
+
+    it('returns false when NUT-11 support is explicitly false', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: false },
+        },
+      } as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('returns false when NUT-11 metadata is malformed', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': true,
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('returns false when NUT-11 supported is not the boolean true', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '11': { supported: 'true' },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut(testMintUrl, 11)).resolves.toBe(false);
+    });
+
+    it('keeps existing NUT-04 and NUT-05 method-unit capability checks unchanged', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+          '5': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: false },
+          '11': { supported: true },
+        },
+      } as unknown as MintInfo);
+
+      const mintCapability = await service.getMintMethodUnitCapability(
+        testMintUrl,
+        4,
+        'bolt11',
+        'sat',
+      );
+      const meltCapability = await service.getMintMethodUnitCapability(
+        testMintUrl,
+        5,
+        'bolt11',
+        'sat',
+      );
+
+      expect(mintCapability.supported).toBe(true);
+      expect(meltCapability.supported).toBe(true);
+    });
+
+    it('reports NUT-29 mint quote checks for explicitly advertised methods', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11', 'onchain'] },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(true);
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt12')).resolves.toBe(false);
+    });
+
+    it('uses enabled NUT-04 methods when NUT-29 omits its method list', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt12', unit: 'sat' }], disabled: false },
+          '5': { methods: [], disabled: false },
+          '29': {},
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt12')).resolves.toBe(true);
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(false);
+    });
+
+    it('rejects malformed NUT-29 metadata and disabled NUT-04 fallback', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          '4': { methods: [{ method: 'bolt11', unit: 'sat' }], disabled: true },
+          '5': { methods: [], disabled: false },
+          '29': true,
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.supportsNut29MintQuoteCheck(testMintUrl, 'bolt11')).resolves.toBe(false);
+    });
+
+    it('bounds the advertised NUT-29 mint quote check limit at 100', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'], max_batch_size: 250 },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(100);
+    });
+
+    it('uses 100 when NUT-29 omits its mint quote check limit', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'] },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(100);
+    });
+
+    it('uses one quote when NUT-29 is unsupported or advertises an invalid limit', async () => {
+      useMintInfo({
+        ...mockMintInfo,
+        nuts: {
+          ...mockMintInfo.nuts,
+          '29': { methods: ['bolt11'], max_batch_size: 0 },
+        },
+      } as unknown as MintInfo);
+
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt11')).resolves.toBe(1);
+      await expect(service.getNut29MintQuoteCheckLimit(testMintUrl, 'bolt12')).resolves.toBe(1);
     });
   });
 
@@ -617,6 +840,45 @@ describe('MintService', () => {
 
       expect(result.keysets.length).toBeGreaterThan(0);
       expect(result.keysets[0]?.id).toBe('keyset-1');
+    });
+
+    it('excludes v3 keysets from the supported mint keysets', async () => {
+      mockAdapter.fetchKeysets = mock(() =>
+        Promise.resolve({
+          keysets: [
+            ...mockKeysets,
+            {
+              id: '0200000000000000',
+              unit: 'sat',
+              active: true,
+              input_fee_ppk: 0,
+            },
+          ],
+        }),
+      );
+
+      const result = await service.addMintByUrl(testMintUrl);
+
+      expect(result.keysets.map((keyset) => keyset.id)).toEqual(['keyset-1']);
+    });
+
+    it('exposes no supported keysets for a v3-only mint', async () => {
+      mockAdapter.fetchKeysets = mock(() =>
+        Promise.resolve({
+          keysets: [
+            {
+              id: '0200000000000000',
+              unit: 'sat',
+              active: true,
+              input_fee_ppk: 0,
+            },
+          ],
+        }),
+      );
+
+      const result = await service.addMintByUrl(testMintUrl);
+
+      expect(result.keysets).toEqual([]);
     });
 
     it('should preserve large denomination keys as strings', async () => {

@@ -79,6 +79,7 @@ import {
   isStatefulMintQuote,
   mintQuoteToMethodSnapshot,
 } from './models/MintQuote.ts';
+import { assessMintQuoteClaimability } from './models/MintQuoteClaimability.ts';
 
 /**
  * Configuration options for initializing the Coco Cashu manager
@@ -317,7 +318,6 @@ export class Manager {
     });
     this.mintAdapter = new MintAdapter(this.mintRequestProvider);
 
-    this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     this.originalWatcherConfig = watchers;
     this.originalProcessorConfig = processors;
     if (plugins && plugins.length > 0) {
@@ -350,6 +350,7 @@ export class Manager {
     this.mintOperationService = core.mintOperationService;
     this.mintOperationRepository = core.mintOperationRepository;
     this.proofRepository = repositories.proofRepository;
+    this.subscriptions = this.createSubscriptionManager(webSocketFactory, subscriptions);
     const apis = this.buildApis();
     this.mint = apis.mint;
     this.wallet = apis.wallet;
@@ -629,7 +630,7 @@ export class Manager {
         continue;
       }
 
-      if (quote.state === 'ISSUED') {
+      if (assessMintQuoteClaimability(quote).status === 'complete') {
         skipped.push(quote.quote);
         continue;
       }
@@ -765,12 +766,18 @@ export class Manager {
     for (const operation of pendingOperations) {
       if (mintUrl && operation.mintUrl !== mintUrl) continue;
 
-      const quote = await this.quoteLifecycle.getMintQuote(
+      const assessment = await this.mintOperationService.getMintQuoteClaimability(
         operation.mintUrl,
         operation.method,
         operation.quoteId,
+        {
+          requestedAmount: operation.amount,
+          targetOperationId: operation.id,
+        },
       );
-      if (!quote || !isStatefulMintQuote(quote) || quote.state !== 'PAID') continue;
+      if (!assessment || (assessment.status !== 'claimable' && assessment.status !== 'complete')) {
+        continue;
+      }
 
       const trusted = await this.mintService.isTrustedMint(operation.mintUrl);
       if (!trusted) {
@@ -820,10 +827,17 @@ export class Manager {
         this.mintAdapter,
         { intervalMs: options.fastPollingIntervalMs },
         wsLogger,
+        this.quoteLifecycle,
       );
       return new SubscriptionManager(polling, this.mintAdapter, wsLogger, options);
     }
-    return new SubscriptionManager(wsFactoryToUse, this.mintAdapter, wsLogger, options);
+    return new SubscriptionManager(
+      wsFactoryToUse,
+      this.mintAdapter,
+      wsLogger,
+      options,
+      this.quoteLifecycle,
+    );
   }
 
   private buildCoreServices(
@@ -962,7 +976,7 @@ export class Manager {
       onchain: new MeltOnchainHandler(),
     });
     const mintHandlerProvider = new MintHandlerProvider({
-      bolt11: new MintBolt11Handler(),
+      bolt11: new MintBolt11Handler(keyRingService),
       onchain: new MintOnchainHandler(keyRingService),
       bolt12: new MintBolt12Handler(keyRingService),
     });
@@ -978,6 +992,8 @@ export class Manager {
       mintAdapter: this.mintAdapter,
       eventBus: this.eventBus,
       logger: quoteLifecycleLogger,
+      withMintQuoteTransaction: (fn) =>
+        repositories.withTransaction(({ mintQuoteRepository }) => fn(mintQuoteRepository)),
     });
     const meltOperationService = new MeltOperationService(
       meltHandlerProvider,
@@ -1022,6 +1038,7 @@ export class Manager {
     const paymentRequestService = new PaymentRequestService(
       sendOperationService,
       proofService,
+      mintService,
       paymentRequestLogger,
     );
     const paymentRequestReceiveLogger = this.getChildLogger('PaymentRequestReceiveService');

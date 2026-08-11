@@ -17,7 +17,18 @@ export type { CoreEvents } from './events/types.ts';
 export type { EventHandler } from './events/EventBus.ts';
 export { type Logger, ConsoleLogger } from './logging/index.ts';
 export { MemoryRepositories } from './repositories/memory/MemoryRepositories.ts';
-export type { SendMethod, SendMethodData } from './operations/send/SendMethodHandler.ts';
+export type {
+  P2pkSendMethodData,
+  P2pkSendOptions,
+  SendMethod,
+  SendMethodData,
+} from './operations/send/SendMethodHandler.ts';
+export type {
+  PaymentRequestMalformedSpendingCondition,
+  PaymentRequestP2pkRequirement,
+  PaymentRequestSpendingConditionRequirement,
+  PaymentRequestUnsupportedSpendingCondition,
+} from './services/PaymentRequestService.ts';
 export type {
   InitSendOperation,
   PreparedSendOperation,
@@ -36,6 +47,7 @@ export type {
   MintMethodCreateQuoteData,
   MintMethodQuoteData,
   MintMethodRemoteState,
+  MintMethodQuoteImportSnapshot,
   MintMethodQuoteSnapshot,
 } from './operations/mint/MintMethodHandler.ts';
 export type {

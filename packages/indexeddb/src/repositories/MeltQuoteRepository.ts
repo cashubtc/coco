@@ -83,7 +83,7 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
     return row ? rowToQuote(row) : null;
   }
 
-  async upsertMeltQuote(quote: MeltQuote): Promise<void> {
+  async upsertMeltQuote(quote: MeltQuote): Promise<MeltQuote> {
     const now = Date.now();
     const normalizedMintUrl = normalizeMintUrl(quote.mintUrl);
     const identityOwner = await this.getMeltQuoteById({
@@ -127,6 +127,7 @@ export class IdbMeltQuoteRepository implements MeltQuoteRepository {
       updatedAt: now,
     };
     await (this.db as any).table('coco_cashu_melt_quotes').put(row);
+    return rowToQuote(row);
   }
 
   async getPendingMeltQuotes(method?: string): Promise<MeltQuote[]> {

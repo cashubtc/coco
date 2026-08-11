@@ -18,9 +18,10 @@ function makeMintQuote(overrides: Partial<MintQuote<'bolt11'>> = {}): MintQuote<
     unit: 'sat',
     expiry: 1_730_000_000,
     state: 'UNPAID',
-    lastObservedRemoteState: 'UNPAID',
-    lastObservedRemoteStateAt: 0,
     reusable: false,
+    amountPaid: Amount.zero(),
+    amountIssued: Amount.zero(),
+    remoteUpdatedAt: null,
     quoteData: { amount: Amount.from(1) },
     createdAt: 0,
     updatedAt: 0,
@@ -83,10 +84,11 @@ describe('memory quote repositories', () => {
       unit: 'sat',
       expiry: 1_730_000_000,
       reusable: true,
+      amountPaid: Amount.zero(),
+      amountIssued: Amount.zero(),
+      remoteUpdatedAt: null,
       quoteData: {
         pubkey: '02'.padEnd(66, '4'),
-        amountPaid: Amount.from(0),
-        amountIssued: Amount.from(0),
       },
       createdAt: 0,
       updatedAt: 0,
@@ -98,6 +100,25 @@ describe('memory quote repositories', () => {
     await expect(repository.getMintQuote('https://mint.test', 'bolt12', 'collision')).resolves.toBe(
       null,
     );
+  });
+
+  it('does not let a legacy BOLT11 state fallback regress canonical accounting', async () => {
+    const repository = new MemoryMintQuoteRepository();
+    const quote = makeMintQuote({
+      state: 'PAID',
+      amountPaid: Amount.from(1),
+      amountIssued: Amount.zero(),
+    });
+    await repository.upsertMintQuote(quote);
+
+    await repository.setMintQuoteState(quote.mintUrl, quote.method, quote.quoteId, 'UNPAID', 10);
+    const stored = await repository.getMintQuote(quote.mintUrl, quote.method, quote.quoteId);
+
+    expect(stored?.method).toBe('bolt11');
+    if (stored?.method !== 'bolt11') throw new Error('Expected BOLT11 quote');
+    expect(stored.amountPaid.equals(Amount.from(1))).toBe(true);
+    expect(stored.amountIssued.isZero()).toBe(true);
+    expect(stored.state).toBe('PAID');
   });
 
   it('looks up melt quotes by canonical identity and rejects method collisions', async () => {

@@ -6,6 +6,7 @@ import type { Logger } from '../logging/Logger.ts';
 import type { MintAdapter } from './MintAdapter.ts';
 import { WsTransport } from './WsTransport.ts';
 import { PollingTransport } from './PollingTransport.ts';
+import type { MintQuotePollingOperation } from '../quotes/MintQuotePolling.ts';
 
 export interface HybridTransportOptions {
   /** Polling interval while WS is connected (default: 20000ms) */
@@ -48,6 +49,7 @@ export class HybridTransport implements RealTimeTransport {
     mintAdapter: MintAdapter,
     options?: HybridTransportOptions,
     logger?: Logger,
+    mintQuotePolling?: MintQuotePollingOperation,
   ) {
     this.logger = logger;
     this.options = {
@@ -63,6 +65,7 @@ export class HybridTransport implements RealTimeTransport {
       mintAdapter,
       { intervalMs: this.options.slowPollingIntervalMs },
       logger,
+      mintQuotePolling,
     );
   }
 
@@ -285,11 +288,10 @@ export class HybridTransport implements RealTimeTransport {
   }
 
   private getExpirySignature(payload: { expiry?: unknown }): string {
-    if (typeof payload.expiry !== 'number') {
+    if (typeof payload.expiry !== 'number' || payload.expiry === 0) {
       return 'no-expiry';
     }
 
-    const status = payload.expiry * 1000 <= Date.now() ? 'expired' : 'active';
-    return `${payload.expiry}:${status}`;
+    return String(payload.expiry);
   }
 }

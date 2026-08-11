@@ -126,7 +126,7 @@ const refreshed = await coco.quotes.mint.refresh({
   quoteId: quote.quoteId,
 });
 
-const claimable = refreshed.quoteData.amountPaid.subtract(refreshed.quoteData.amountIssued);
+const claimable = refreshed.amountPaid.subtract(refreshed.amountIssued);
 
 if (!claimable.isZero()) {
   const pendingOnchainMint = await coco.ops.mint.prepare({
