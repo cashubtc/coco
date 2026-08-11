@@ -1,5 +1,55 @@
 # @cashu/coco-core
 
+## 2.0.0-rc.3
+
+### Major Changes
+
+- ac1925b: Return the canonical persisted melt quote from repository upserts.
+- faa00d7: Expose canonical Mint Quote Accounting through first-class `amountPaid`, `amountIssued`, and
+  nullable `remoteUpdatedAt` fields for every built-in mint method. Keep BOLT11 `state` as a
+  deprecated compatibility projection, derive legacy quote shapes at the lifecycle boundary, and
+  persist the canonical fields across memory, SQL, and IndexedDB repositories with conservative
+  legacy backfills.
+- fbd5d60: Add payer-side NUT-18 P2PK payment request support.
+
+  Core now exposes normalized P2PK payment request requirements, filters payable
+  mints to those advertising NUT-11, and prepares payment request sends through
+  the general P2PK send handler with structured NUT-11 options from cashu-ts.
+  Adapter packages now require cashu-ts 4.6.1, and adapter contract coverage
+  checks that structured send method data remains persisted.
+
+### Minor Changes
+
+- f15b83c: Add canonical BOLT11 accounting predicates and opt-in NUT-20 locked quote handling with readable
+  diagnostics. Keep SQL and IndexedDB quote state projections aligned with the canonical accounting
+  fields.
+
+### Patch Changes
+
+- 766696d: Treat Mint Quote expiry as advisory payment-deadline metadata so Mint Quote Accounting remains
+  observable and elapsed expiry does not block Mint Quote Claimability, issuance, or Operation
+  Recovery.
+- 3d96047: Centralize Mint Quote Claimability on canonical accounting so atomic BOLT11 and balance-based
+  BOLT12/on-chain callers share readiness, reservation, scheduling, and recovery behavior. Make
+  explicit mint execution retry-safe when background processing has already started or completed it.
+- dc28d1f: Upgrade to cashu-ts 5.0.0-rc.4 and consume normalized v5 mint quote snapshots at Coco's quote
+  lifecycle boundary. BLS v3 keysets are temporarily excluded from wallet keysets, and tokens using
+  v3 proofs are rejected until Coco supports curve-aware proof-state handling. P2PK sends now enforce
+  cashu-ts v5's requirement for valid compressed secp256k1 public keys.
+- d2c3b07: Treat `expiry: 0` on mint quotes as no expiry.
+
+  BOLT12 and onchain reusable quotes that use the zero no-expiry sentinel now remain watched and
+  claimable, while positive timestamps in the past continue to expire normally.
+
+- 37dd447: Observe pending mint operations without requiring a wallet instance or active keyset. Narrow
+  payment-method pending contexts to the operation, mint adapter, and optional logger they use.
+- 92e5329: Centralize pending mint operation classification on reconciled canonical quote accounting. Keep
+  payment-method handlers focused on attributable remote observations and validation failures so
+  unattributable responses cannot update canonical quote records.
+- a00bbbc: Prevent stale or invalid Mint Quote Observations from rolling canonical accounting backward, and
+  suppress quote-updated events for ignored or Remote Quote Update Time-only changes.
+- 5aef692: Add batch-aware NUT-29 mint quote checks and deterministic Background Watcher batching.
+
 ## 2.0.0-rc.2
 
 ### Minor Changes

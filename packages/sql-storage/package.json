@@ -1,6 +1,6 @@
 {
   "name": "@cashu/coco-sql-storage",
-  "version": "2.0.0-rc.2",
+  "version": "2.0.0-rc.3",
   "private": true,
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -32,7 +32,7 @@
   },
   "peerDependencies": {
     "@cashu/cashu-ts": "5.0.0-rc.4",
-    "@cashu/coco-core": "2.0.0-rc.2",
+    "@cashu/coco-core": "2.0.0-rc.3",
     "typescript": "^5"
   },
   "sideEffects": false

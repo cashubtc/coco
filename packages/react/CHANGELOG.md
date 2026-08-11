@@ -1,5 +1,25 @@
 # @cashu/coco-react
 
+## 2.0.0-rc.3
+
+### Patch Changes
+
+- d687d30: Serialize localStorage seed initialization across same-origin browser contexts with the Web Locks
+  API, preventing concurrent first-run tabs from caching different wallet seeds.
+- Updated dependencies [766696d]
+- Updated dependencies [ac1925b]
+- Updated dependencies [faa00d7]
+- Updated dependencies [3d96047]
+- Updated dependencies [dc28d1f]
+- Updated dependencies [d2c3b07]
+- Updated dependencies [37dd447]
+- Updated dependencies [92e5329]
+- Updated dependencies [fbd5d60]
+- Updated dependencies [f15b83c]
+- Updated dependencies [a00bbbc]
+- Updated dependencies [5aef692]
+  - @cashu/coco-core@2.0.0-rc.3
+
 ## 2.0.0-rc.2
 
 ### Patch Changes

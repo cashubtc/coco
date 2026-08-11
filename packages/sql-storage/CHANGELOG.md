@@ -1,5 +1,40 @@
 # @cashu/coco-sql-storage
 
+## 2.0.0-rc.3
+
+### Major Changes
+
+- fbd5d60: Add payer-side NUT-18 P2PK payment request support.
+
+  Core now exposes normalized P2PK payment request requirements, filters payable
+  mints to those advertising NUT-11, and prepares payment request sends through
+  the general P2PK send handler with structured NUT-11 options from cashu-ts.
+  Adapter packages now require cashu-ts 4.6.1, and adapter contract coverage
+  checks that structured send method data remains persisted.
+
+### Patch Changes
+
+- dc28d1f: Upgrade to cashu-ts 5.0.0-rc.4 and consume normalized v5 mint quote snapshots at Coco's quote
+  lifecycle boundary. BLS v3 keysets are temporarily excluded from wallet keysets, and tokens using
+  v3 proofs are rejected until Coco supports curve-aware proof-state handling. P2PK sends now enforce
+  cashu-ts v5's requirement for valid compressed secp256k1 public keys.
+- f15b83c: Add canonical BOLT11 accounting predicates and opt-in NUT-20 locked quote handling with readable
+  diagnostics. Keep SQL and IndexedDB quote state projections aligned with the canonical accounting
+  fields.
+- Updated dependencies [766696d]
+- Updated dependencies [ac1925b]
+- Updated dependencies [faa00d7]
+- Updated dependencies [3d96047]
+- Updated dependencies [dc28d1f]
+- Updated dependencies [d2c3b07]
+- Updated dependencies [37dd447]
+- Updated dependencies [92e5329]
+- Updated dependencies [fbd5d60]
+- Updated dependencies [f15b83c]
+- Updated dependencies [a00bbbc]
+- Updated dependencies [5aef692]
+  - @cashu/coco-core@2.0.0-rc.3
+
 ## 2.0.0-rc.2
 
 ### Patch Changes
