@@ -40,10 +40,26 @@ methods use dedicated handlers.
 _Avoid_: Payment plugin, method switch
 
 **Quote-backed Operation**:
-A wallet operation whose local lifecycle is anchored to a mint quote. Payment methods can vary in
-quote parameters and endpoint fields, but quote-backed minting and melting share the same durable
-saga shape for outputs, inputs, proof state, and recovery.
+A wallet operation whose local lifecycle is anchored to one or more mint quotes. Payment methods
+can vary in quote parameters and endpoint fields, but quote-backed minting and melting share the
+same durable saga shape for outputs, inputs, proof state, and recovery.
 _Avoid_: Method flow, payment workflow
+
+**Mint Operation**:
+A durable, individually observable intent to claim value from one Mint Quote. Its outcome appears
+as one mint history entry.
+_Avoid_: Mint request, quote state
+
+**Batch Mint Operation**:
+A durable aggregate intent to atomically claim value from an exact group of two or more compatible
+Mint Quotes through one issuance outcome. It appears as one aggregate mint history entry rather
+than one Mint Operation per quote.
+_Avoid_: Mint Operation parent, Mint Batch Attempt, transparent batch
+
+**Batch Mint Member**:
+An ordered allocation of an amount from one canonical Mint Quote within a Batch Mint Operation. It
+is not a child operation and does not have an independent operation outcome.
+_Avoid_: Child Mint Operation, batch item, quote owner
 
 **Quote Observation**:
 A mint response that reports the current remote state of a quote. Coco may accept, merge, or ignore
@@ -94,9 +110,10 @@ Claimability because reusable mint quotes can already be claimable before anothe
 _Avoid_: Mint quote paid state, payment status
 
 **Mint Quote Reservation**:
-Paid value from a reusable Mint Quote that Coco has assigned to an in-flight Quote-backed Operation
-but the mint has not yet reported as issued.
-_Avoid_: Remote issued amount, proof reservation
+Paid value from a Mint Quote that Coco has committed to an active issuance but the mint has not yet
+reported as issued. A pending Mint Operation does not reserve value; several reservations may
+coexist for a reusable Mint Quote within its claimable balance.
+_Avoid_: Remote issued amount, proof reservation, quote ownership
 
 **Quote Expiry**:
 The payment deadline advertised by a quote. For a Mint Quote it is advisory metadata for initiating
