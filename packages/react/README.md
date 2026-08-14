@@ -65,6 +65,13 @@ initialization is serialized across same-origin browser contexts. Call it from a
 secure browser context (HTTPS or localhost), and provide another `seedGetter` in
 environments without `window.navigator.locks`.
 
+> [!WARNING]
+> `localStorageSeedGetter()` is an opt-in convenience helper for development, demos, or
+> applications that accept localStorage's security model. Any JavaScript running on the same
+> origin can read or replace the Wallet Seed. Do not use it for Wallets that hold real funds. For
+> production, provide a `seedGetter` backed by storage appropriate for your application's threat
+> model.
+
 If your application already owns the manager lifecycle, pass an initialized
 manager instead:
 
