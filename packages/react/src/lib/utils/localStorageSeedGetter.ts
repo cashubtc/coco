@@ -63,6 +63,11 @@ const createSeed = (browserWindow: Window & typeof globalThis): Uint8Array => {
  *
  * The returned getter reads or creates the seed once, then serves it from its
  * closure on later calls.
+ *
+ * @warning This is an opt-in convenience helper for development, demos, or applications that
+ * accept localStorage's security model. Any JavaScript running on the same origin can read or
+ * replace the Wallet Seed. Do not use it for Wallets that hold real funds. For production, provide
+ * a `seedGetter` backed by storage appropriate for your application's threat model.
  */
 export const localStorageSeedGetter = (config: LocalStorageSeedGetterConfig = {}) => {
   const storageKey = config.storageKey ?? DEFAULT_STORAGE_KEY;
