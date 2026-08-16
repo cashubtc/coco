@@ -13,11 +13,6 @@ _Avoid_: Manager, SDK wallet, account
 The secret root from which a wallet's deterministic Cashu secrets are derived.
 _Avoid_: Account, private key
 
-**Wallet Seed Access**:
-Whether a running host can currently derive a Wallet's secrets from its Wallet Seed. Wallet Seed
-Access can be locked while the Wallet continues to exist.
-_Avoid_: Wallet state, Coco Session
-
 **Coco Session**:
 A running Coco instance through which an application uses a wallet. Ending a session does not end the wallet; starting again with the same wallet inputs creates a new session for the same wallet.
 _Avoid_: Wallet instance, app instance
