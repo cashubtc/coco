@@ -1,14 +1,20 @@
-import { chmod, mkdir, rename } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
 import { generateMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import type { Logger, Manager } from '@cashu/coco-core';
+import {
+  CocoInitializationError,
+  normalizeMintUrl,
+  type Logger,
+  type Manager,
+} from '@cashu/coco-core';
 import type { NPCAccountApi } from 'coco-cashu-plugin-npc';
 
 import { CONFIG_FILE, SALT_FILE, type WalletConfig } from './utils/config.js';
 import { decryptMnemonic, encryptMnemonic } from './utils/crypto.js';
-import { initializeWallet as initializeCocoSession } from './utils/wallet.js';
+import {
+  CocoSessionStartupError,
+  initializeWallet as initializeCocoSession,
+} from './utils/wallet.js';
+import { ensurePrivateStateDirectory, ensureSecretFile, writeSecretFile } from './utils/files.js';
 
 export type CocoSessionState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 
@@ -150,7 +156,9 @@ export class CocodRuntime {
     this.initializeInProgress = true;
     try {
       const passphrase = input.passphrase || undefined;
-      const mintUrl = input.mintUrl || 'https://mint.minibits.cash/Bitcoin';
+      const mintUrl = normalizeConfiguredMintUrl(
+        input.mintUrl || 'https://mint.minibits.cash/Bitcoin',
+      );
       const createdAt = new Date().toISOString();
       let config: WalletConfig;
 
@@ -243,7 +251,7 @@ export class CocodRuntime {
           error instanceof CocodRuntimeError && error.code === 'wallet_unlock_failed';
         this.session = null;
         this.sessionState = cleanupUnconfirmed ? 'failed' : 'stopped';
-        if (config.encrypted && !cleanupUnconfirmed) {
+        if (config.encrypted) {
           this.seedAccessAvailable = false;
         }
         this.startedAt = null;
@@ -298,17 +306,22 @@ export class CocodRuntime {
   }
 
   private async loadWalletConfiguration(): Promise<void> {
-    await ensureStateDirectory(this.configFile);
+    await ensurePrivateStateDirectory(this.configFile);
     if (!(await Bun.file(this.configFile).exists())) {
       return;
     }
 
-    await chmod(this.configFile, 0o600);
+    await ensureSecretFile(this.configFile);
     const contents = await Bun.file(this.configFile).text();
-    const parsed: unknown = JSON.parse(contents);
-    if (!isWalletConfig(parsed)) {
-      throw new CocodRuntimeError('invalid_wallet_config', 'Invalid Wallet configuration');
+    let value: unknown;
+    try {
+      value = JSON.parse(contents);
+    } catch (error) {
+      throw new CocodRuntimeError('invalid_wallet_config', 'Invalid Wallet configuration', {
+        cause: error,
+      });
     }
+    const parsed = parseWalletConfig(value);
     if (parsed.encrypted && !(await Bun.file(this.saltFile).exists())) {
       throw new CocodRuntimeError(
         'invalid_wallet_config',
@@ -316,7 +329,11 @@ export class CocodRuntime {
       );
     }
     if (parsed.encrypted) {
-      await chmod(this.saltFile, 0o600);
+      await ensureSecretFile(this.saltFile);
+      const salt = await Bun.file(this.saltFile).text();
+      if (!isCanonicalBase64(salt, 16, 16)) {
+        throw new CocodRuntimeError('invalid_wallet_config', 'Invalid Wallet encryption salt');
+      }
     }
 
     this.walletConfig = parsed;
@@ -373,26 +390,42 @@ export class CocodRuntime {
   }
 }
 
-function isWalletConfig(value: unknown): value is WalletConfig {
+function parseWalletConfig(value: unknown): WalletConfig {
   if (!value || typeof value !== 'object') {
-    return false;
+    throw invalidWalletConfig();
   }
   const config = value as Partial<WalletConfig>;
-  return (
-    config.version === 1 &&
-    typeof config.mnemonic === 'string' &&
-    typeof config.encrypted === 'boolean' &&
-    typeof config.mintUrl === 'string' &&
-    typeof config.createdAt === 'string'
-  );
+  if (
+    config.version !== 1 ||
+    typeof config.mnemonic !== 'string' ||
+    typeof config.encrypted !== 'boolean' ||
+    typeof config.mintUrl !== 'string' ||
+    typeof config.createdAt !== 'string' ||
+    !isRfc3339Utc(config.createdAt)
+  ) {
+    throw invalidWalletConfig();
+  }
+  if (config.encrypted) {
+    if (!isCanonicalBase64(config.mnemonic, 28)) {
+      throw invalidWalletConfig();
+    }
+  } else if (!validateMnemonic(config.mnemonic, wordlist)) {
+    throw invalidWalletConfig();
+  }
+
+  return {
+    version: 1,
+    mnemonic: config.mnemonic,
+    encrypted: config.encrypted,
+    mintUrl: normalizeConfiguredMintUrl(config.mintUrl, 'invalid_wallet_config'),
+    createdAt: config.createdAt,
+  };
 }
 
 function cleanupWasUnconfirmed(error: unknown): boolean {
   return (
-    typeof error === 'object' &&
-    error !== null &&
-    'cleanupConfirmed' in error &&
-    error.cleanupConfirmed === false
+    (error instanceof CocoInitializationError || error instanceof CocoSessionStartupError) &&
+    error.cleanupState === 'unconfirmed'
   );
 }
 
@@ -401,16 +434,40 @@ function completedStartTransition(): SessionStartTransition {
   return { accepted: completed, completion: completed };
 }
 
-async function ensureStateDirectory(path: string): Promise<void> {
-  const directory = dirname(path);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
+function normalizeConfiguredMintUrl(value: string, code = 'invalid_mint_url'): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error('Mint URL must use HTTP or HTTPS');
+    }
+    return normalizeMintUrl(value);
+  } catch (error) {
+    throw new CocodRuntimeError(code, 'Invalid mint URL', { cause: error });
+  }
 }
 
-async function writeSecretFile(path: string, contents: string): Promise<void> {
-  await ensureStateDirectory(path);
-  const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
-  await Bun.write(temporaryPath, contents);
-  await chmod(temporaryPath, 0o600);
-  await rename(temporaryPath, path);
+function invalidWalletConfig(): CocodRuntimeError {
+  return new CocodRuntimeError('invalid_wallet_config', 'Invalid Wallet configuration');
+}
+
+function isRfc3339Utc(value: string): boolean {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    return false;
+  }
+  return new Date(value).toISOString() === value;
+}
+
+function isCanonicalBase64(value: string, minimumBytes: number, exactBytes?: number): boolean {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) {
+    return false;
+  }
+  const decoded = Buffer.from(value, 'base64');
+  return (
+    decoded.length >= minimumBytes &&
+    (exactBytes === undefined || decoded.length === exactBytes) &&
+    decoded.toString('base64') === value
+  );
 }

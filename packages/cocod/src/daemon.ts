@@ -57,7 +57,7 @@ export async function startDaemon() {
 
   await Bun.write(PID_FILE, process.pid.toString());
 
-  const routeHandlers = createRouteHandlers(runtime, logger.child({ component: 'wallet' }));
+  const routeHandlers = createRouteHandlers(runtime);
   const routes = buildRoutes(
     routeHandlers,
     runtime,

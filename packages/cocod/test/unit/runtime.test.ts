@@ -5,8 +5,9 @@ import { dirname, join } from 'node:path';
 
 import type { Manager } from '@cashu/coco-core';
 
-import { CocodRuntime, CocodRuntimeError, type RunningCocoSession } from './runtime.js';
-import type { WalletConfig } from './utils/config.js';
+import { CocodRuntime, CocodRuntimeError, type RunningCocoSession } from '../../src/runtime.js';
+import { CocoSessionStartupError } from '../../src/utils/wallet.js';
+import type { WalletConfig } from '../../src/utils/config.js';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -44,7 +45,7 @@ describe('CocodRuntime', () => {
 
     const initializing = runtime.initializeWallet({
       mnemonic: MNEMONIC,
-      mintUrl: 'https://mint.example.com',
+      mintUrl: 'https://MINT.example.com/',
     });
     await startCalled.promise;
 
@@ -59,6 +60,10 @@ describe('CocodRuntime', () => {
 
     expect(runtime.getStatus().cocoSession.state).toBe('running');
     expect(runtime.getRunningSession()).not.toBeNull();
+    expect(runtime.getStatus().wallet?.mintUrl).toBe('https://mint.example.com');
+    expect(JSON.parse(await Bun.file(paths.configFile).text())).toMatchObject({
+      mintUrl: 'https://mint.example.com',
+    });
   });
 
   test('keeps passphrase-protected Seed Access locked until session start', async () => {
@@ -186,11 +191,11 @@ describe('CocodRuntime', () => {
     const runtime = await CocodRuntime.load({
       ...paths,
       initializeSession: async () => {
-        const error = new Error('startup cleanup failed') as Error & {
-          cleanupConfirmed: boolean;
-        };
-        error.cleanupConfirmed = false;
-        throw error;
+        throw new CocoSessionStartupError(
+          'startup cleanup failed',
+          'unconfirmed',
+          new Error('dispose failed'),
+        );
       },
     });
 
@@ -204,6 +209,65 @@ describe('CocodRuntime', () => {
       expect(error).toBeInstanceOf(CocodRuntimeError);
       expect((error as CocodRuntimeError).code).toBe('session_restart_required');
     }
+  });
+
+  test('relocks an encrypted Wallet when failed startup cleanup is unconfirmed', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      initializeSession: async () => {
+        throw new CocoSessionStartupError(
+          'startup cleanup failed',
+          'unconfirmed',
+          new Error('dispose failed'),
+        );
+      },
+    });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+    await expect(runtime.startSession({ passphrase: 'correct horse' }).completion).rejects.toThrow(
+      'startup cleanup failed',
+    );
+
+    expect(runtime.getStatus().cocoSession.state).toBe('failed');
+    expect(runtime.getStatus().seedAccess).toEqual({
+      state: 'locked',
+      requiresPassphrase: true,
+    });
+  });
+
+  test('rejects malformed persisted Wallet configuration before becoming available', async () => {
+    const invalidConfigs = [
+      walletConfig({ mnemonic: 'not a mnemonic' }),
+      walletConfig({ mintUrl: 'not a URL' }),
+      walletConfig({ createdAt: 'yesterday' }),
+      walletConfig({ encrypted: true, mnemonic: 'not ciphertext' }),
+    ];
+
+    for (const config of invalidConfigs) {
+      const paths = await createPaths();
+      await Bun.write(paths.configFile, JSON.stringify(config));
+      await expect(CocodRuntime.load(paths)).rejects.toMatchObject({
+        code: 'invalid_wallet_config',
+      });
+    }
+
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, '{not json');
+    await expect(CocodRuntime.load(paths)).rejects.toMatchObject({
+      code: 'invalid_wallet_config',
+    });
+  });
+
+  test('rejects a malformed encryption salt', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load(paths);
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+    await Bun.write(paths.saltFile, 'not a salt');
+
+    await expect(CocodRuntime.load(paths)).rejects.toMatchObject({
+      code: 'invalid_wallet_config',
+    });
   });
 });
 

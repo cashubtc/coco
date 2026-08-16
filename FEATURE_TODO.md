@@ -13,6 +13,7 @@
 - [x] Keep the existing Unix interface as an adapter over the lifecycle module.
 - [x] Bind the Unix listener before unattended Coco Session startup.
 - [x] Cover concurrent start, stop-during-start, retry, and quarantine transitions.
+- [x] Harden partial-start cleanup, persisted configuration validation, and secret file modes.
 - [ ] Review and resolve the open lifecycle decisions with maintainers.
 - [ ] Specify balances, mints, quotes, and operations after the lifecycle is accepted.
 

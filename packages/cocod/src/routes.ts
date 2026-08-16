@@ -1,8 +1,4 @@
-import {
-  getEncodedToken,
-  type Logger,
-  type PaymentRequestSpendingConditionRequirement,
-} from '@cashu/coco-core';
+import { getEncodedToken, type PaymentRequestSpendingConditionRequirement } from '@cashu/coco-core';
 import { nip19 } from 'nostr-tools';
 
 import { CocodRuntimeError, type CocodRuntime, type RunningCocoSession } from './runtime.js';
@@ -13,7 +9,6 @@ export type RouteHandler = (req: Request) => Promise<Response>;
 
 export function createRouteHandlers(
   runtime: CocodRuntime,
-  logger?: Logger,
 ): Record<string, { GET?: RouteHandler; POST?: RouteHandler }> {
   return {
     '/ping': {
@@ -40,7 +35,10 @@ export function createRouteHandlers(
 
           return Response.json({ output });
         } catch (error) {
-          if (error instanceof CocodRuntimeError && error.code === 'invalid_mnemonic') {
+          if (
+            error instanceof CocodRuntimeError &&
+            (error.code === 'invalid_mnemonic' || error.code === 'invalid_mint_url')
+          ) {
             return Response.json({ error: error.message }, { status: 400 });
           }
           const message = error instanceof Error ? error.message : String(error);
@@ -414,10 +412,7 @@ function requireRunning(
 
     const status = runtime.getStatus();
     if (!status.wallet) {
-      return Response.json(
-        { error: "Wallet not initialized. Run 'cocod init [mnemonic]' first." },
-        { status: 503 },
-      );
+      return walletNotInitializedResponse();
     }
     if (status.seedAccess?.state === 'locked') {
       return Response.json(
@@ -451,16 +446,20 @@ function requireLocked(runtime: CocodRuntime, handler: RouteHandler): RouteHandl
   return async (req: Request) => {
     const status = runtime.getStatus();
     if (!status.wallet) {
-      return Response.json(
-        { error: "Wallet not initialized. Run 'cocod init [mnemonic]' first." },
-        { status: 503 },
-      );
+      return walletNotInitializedResponse();
     }
     if (status.seedAccess?.state !== 'locked') {
       return Response.json({ error: 'Wallet is already unlocked' }, { status: 409 });
     }
     return handler(req);
   };
+}
+
+function walletNotInitializedResponse(): Response {
+  return Response.json(
+    { error: "Wallet not initialized. Run 'cocod init [mnemonic]' first." },
+    { status: 503 },
+  );
 }
 
 function legacyStatus(runtime: CocodRuntime): string {

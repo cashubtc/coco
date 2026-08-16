@@ -100,6 +100,21 @@ describe('routes', () => {
     expect(body.error).toBe('Invalid mnemonic');
   });
 
+  test('/init validates invalid mint URL', async () => {
+    const runtime = uninitializedRuntime({
+      initializeWallet: async () => {
+        throw new CocodRuntimeError('invalid_mint_url', 'Invalid mint URL');
+      },
+    });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/init']!.POST!(postJson('/init', { mintUrl: 'not a URL' }));
+
+    const body = (await response.json()) as { error?: string };
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Invalid mint URL');
+  });
+
   test('/unlock requires passphrase', async () => {
     const runtime = lockedRuntime();
     const routes = createRouteHandlers(runtime);

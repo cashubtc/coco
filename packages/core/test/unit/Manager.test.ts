@@ -8,7 +8,7 @@ import {
 } from '@cashu/cashu-ts';
 import { describe, it, beforeEach, expect, mock } from 'bun:test';
 
-import { initializeCoco, type CocoConfig, Manager } from '../../Manager';
+import { CocoInitializationError, initializeCoco, type CocoConfig, Manager } from '../../Manager';
 import { PaymentRequestsApi } from '../../api/PaymentRequestsApi';
 import { QuoteApi } from '../../api/QuoteApi';
 import type { CoreEvents } from '../../events/types';
@@ -298,6 +298,68 @@ describe('initializeCoco', () => {
       });
 
       expect(initSpy).toHaveBeenCalled();
+    });
+
+    it('should dispose a partially initialized Manager when startup fails', async () => {
+      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const startupError = new Error('legacy quote reconciliation failed');
+      const onDispose = mock(async () => {});
+      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+        throw startupError;
+      });
+
+      try {
+        await initializeCoco({
+          ...baseConfig,
+          ...disabledRuntime,
+          plugins: [
+            {
+              name: 'cleanup-observer',
+              required: [],
+              onDispose,
+            },
+          ],
+        });
+        throw new Error('expected initialization to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CocoInitializationError);
+        expect((error as CocoInitializationError).cleanupState).toBe('confirmed');
+        expect((error as CocoInitializationError).cause).toBe(startupError);
+      } finally {
+        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+      }
+
+      expect(onDispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('should report when partial initialization cleanup fails', async () => {
+      const originalDispose = Manager.prototype.dispose;
+      const cleanupError = new Error('cleanup failed');
+      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const dispose = mock(async () => {
+        throw cleanupError;
+      });
+      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+        throw new Error('legacy quote reconciliation failed');
+      });
+      Manager.prototype.dispose = dispose;
+
+      try {
+        await initializeCoco({
+          ...baseConfig,
+          ...disabledRuntime,
+        });
+        throw new Error('expected initialization to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CocoInitializationError);
+        expect((error as CocoInitializationError).cleanupState).toBe('unconfirmed');
+        expect((error as CocoInitializationError).cause).toBeInstanceOf(AggregateError);
+      } finally {
+        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+        Manager.prototype.dispose = originalDispose;
+      }
+
+      expect(dispose).toHaveBeenCalledTimes(1);
     });
 
     it('should expose the dedicated payment requests api', async () => {
