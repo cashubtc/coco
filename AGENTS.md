@@ -21,7 +21,8 @@ Use the default mattpocock/skills triage label vocabulary. See `docs/agents/tria
 
 ### Domain docs
 
-Use a single-context domain doc layout. See `docs/agents/domain.md`.
+Route domain work through the multi-context map and read the relevant glossaries and ADRs. See
+`docs/agents/domain.md`.
 
 ## Git and commits
 
