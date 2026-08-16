@@ -10,6 +10,8 @@ type BindableOperation = {
   updatedAt: number;
 };
 
+type RevisionedOperation = BindableOperation & { revision: number };
+
 export function normalizeHookError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -96,6 +98,14 @@ export function shouldReplaceBoundOperation<TOperation extends BindableOperation
   }
 
   return incomingOperation.updatedAt >= currentOperation.updatedAt;
+}
+
+export function shouldReplaceRevisionedOperation<TOperation extends RevisionedOperation>(
+  currentOperation: TOperation | null,
+  incomingOperation: TOperation,
+): boolean {
+  if (!currentOperation || currentOperation.id !== incomingOperation.id) return true;
+  return incomingOperation.revision >= currentOperation.revision;
 }
 
 export function useOperationHookState<TOperation extends { id: string }, TExecuteResult>(

@@ -19,8 +19,14 @@ import type {
   SendOperation,
   SendOperationState,
 } from '../operations/send/SendOperation.ts';
+import type {
+  MintSwapAttentionReason,
+  MintSwapOperation,
+  MintSwapOperationState,
+} from '../operations/mintSwap/MintSwapOperation.ts';
 
-export type HistoryType = 'mint' | 'melt' | 'send' | 'receive';
+export type HistoryType = 'mint' | 'melt' | 'send' | 'receive' | 'mint-swap';
+export type OrdinaryHistoryType = Exclude<HistoryType, 'mint-swap'>;
 
 type BaseHistoryEntry = {
   id: string;
@@ -80,6 +86,28 @@ export type OperationHistoryEntry =
   | SendHistoryEntry
   | ReceiveHistoryEntry;
 
+export type MintSwapHistoryEntry = {
+  id: string;
+  source: 'operation';
+  type: 'mint-swap';
+  createdAt: number;
+  updatedAt: number;
+  sourceMintUrl: string;
+  destinationMintUrl: string;
+  unit: 'sat';
+  operationId: string;
+  state: MintSwapOperationState;
+  destinationAmount: Amount;
+  minimumSourceDebit?: Amount;
+  maximumSourceDebit?: Amount;
+  finalSourceDebit?: Amount;
+  totalSourceFee?: Amount;
+  destinationAmountIssued?: Amount;
+  failureCode?: string;
+  failureReason?: string;
+  attentionReason?: MintSwapAttentionReason;
+};
+
 export type LegacyMintHistoryState = MintQuoteState | string;
 export type LegacyMeltHistoryState = MeltQuoteState | string;
 export type LegacySendHistoryState = 'prepared' | 'pending' | 'finalized' | 'rolledBack' | string;
@@ -126,11 +154,17 @@ export type LegacyHistoryEntry =
   | LegacySendHistoryEntry
   | LegacyReceiveHistoryEntry;
 
-export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry;
+export type HistoryEntry = OperationHistoryEntry | LegacyHistoryEntry | MintSwapHistoryEntry;
+
+export interface HistoryFilter {
+  types?: HistoryType[];
+  mintUrl?: string;
+  includeOwnedChildren?: boolean;
+}
 
 export type LegacyHistoryRowInput = {
   legacyHistoryId: string | number;
-  type: HistoryType;
+  type: OrdinaryHistoryType;
   createdAt: number;
   mintUrl: string;
   unit: string;
@@ -160,7 +194,7 @@ export function legacyHistoryId(legacyId: string | number): string {
 }
 
 export function parseHistoryEntryId(id: string):
-  | { source: 'operation'; type: HistoryType; operationId: string }
+  | { source: 'operation'; type: OrdinaryHistoryType; operationId: string }
   | {
       source: 'legacy';
       legacyHistoryId: string;
@@ -173,10 +207,46 @@ export function parseHistoryEntryId(id: string):
 
   const separator = id.indexOf(':');
   if (separator === -1) return null;
-  const type = id.slice(0, separator) as HistoryType;
+  const type = id.slice(0, separator) as OrdinaryHistoryType;
   const operationId = id.slice(separator + 1);
   if (!operationId || !isHistoryType(type)) return null;
   return { source: 'operation', type, operationId };
+}
+
+export function projectMintSwapOperation(operation: MintSwapOperation): MintSwapHistoryEntry {
+  return {
+    id: `mint-swap:${operation.id}`,
+    source: 'operation',
+    type: 'mint-swap',
+    createdAt: operation.createdAt,
+    updatedAt: operation.updatedAt,
+    sourceMintUrl: operation.sourceMintUrl,
+    destinationMintUrl: operation.destinationMintUrl,
+    unit: 'sat',
+    operationId: operation.id,
+    state: operation.state,
+    destinationAmount: operation.destinationAmount,
+    ...(operation.preparedPlan
+      ? {
+          minimumSourceDebit: operation.preparedPlan.minimumSourceDebit,
+          maximumSourceDebit: operation.preparedPlan.maximumSourceDebit,
+        }
+      : {}),
+    ...(operation.settlement
+      ? {
+          finalSourceDebit: operation.settlement.finalSourceDebit,
+          totalSourceFee: operation.settlement.totalSourceFee,
+          destinationAmountIssued: operation.settlement.destinationAmountIssued,
+        }
+      : {}),
+    ...(operation.terminalFailure
+      ? {
+          failureCode: operation.terminalFailure.code,
+          failureReason: operation.terminalFailure.reason,
+        }
+      : {}),
+    ...(operation.attention ? { attentionReason: operation.attention.reason } : {}),
+  };
 }
 
 export function compareHistoryEntries(a: HistoryEntry, b: HistoryEntry): number {
@@ -299,7 +369,7 @@ function getReceiveOperationMetadata(
 }
 
 export function projectOperationToHistoryEntry(
-  type: HistoryType,
+  type: OrdinaryHistoryType,
   operation: SendOperation | MeltOperation | MintOperation | ReceiveOperation,
 ): OperationHistoryEntry | null {
   switch (type) {
@@ -362,6 +432,6 @@ export function projectLegacyHistoryRow(row: LegacyHistoryRowInput): LegacyHisto
   }
 }
 
-function isHistoryType(value: string): value is HistoryType {
+function isHistoryType(value: string): value is OrdinaryHistoryType {
   return value === 'mint' || value === 'melt' || value === 'send' || value === 'receive';
 }

@@ -29,6 +29,9 @@
     "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
     "paths": {
+      "@cashu/coco-adapter-tests": ["../adapter-tests/src/index.ts"],
+      "@cashu/coco-core": ["./index.ts"],
+      "@cashu/coco-core/adapter": ["./adapter.ts"],
       "@core/*": ["./*"],
       "@core/models": ["./models/index.ts"],
       "@core/services": ["./services/index.ts"],

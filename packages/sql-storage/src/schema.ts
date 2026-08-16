@@ -1490,6 +1490,129 @@ const MIGRATIONS: readonly Migration[] = [
           END;
     `,
   },
+  {
+    id: '038_mint_swap_operations_and_outbox',
+    sql: `
+      CREATE TABLE IF NOT EXISTS coco_cashu_mint_swap_operations (
+        id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN (
+          'preparing', 'prepared', 'source_inflight', 'destination_funded', 'issuing',
+          'completed', 'cancelled', 'failed', 'needs_attention'
+        )),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        sourceMintUrl TEXT NOT NULL,
+        destinationMintUrl TEXT NOT NULL,
+        destinationMintOperationId TEXT UNIQUE,
+        sourceMeltOperationId TEXT UNIQUE,
+        dueAt INTEGER,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        recordJson TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_swap_operations_state
+        ON coco_cashu_mint_swap_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_mint_swap_operations_due
+        ON coco_cashu_mint_swap_operations(dueAt, createdAt, id)
+        WHERE dueAt IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS coco_cashu_operation_event_outbox (
+        id TEXT PRIMARY KEY,
+        operationId TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        eventType TEXT NOT NULL,
+        payloadJson TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        publishedAt INTEGER,
+        publishAttempts INTEGER NOT NULL DEFAULT 0 CHECK (publishAttempts >= 0),
+        nextAttemptAt INTEGER,
+        lastError TEXT,
+        UNIQUE (operationId, revision, eventType)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_operation_event_outbox_unpublished
+        ON coco_cashu_operation_event_outbox(publishedAt, nextAttemptAt, createdAt, id);
+    `,
+  },
+  {
+    id: '039_mint_swap_child_ownership',
+    sql: `
+      ALTER TABLE coco_cashu_mint_operations ADD COLUMN parentSwapOperationId TEXT;
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN parentSwapOperationId TEXT;
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN parentExecutionPhase TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_mint_operations_parent_swap
+        ON coco_cashu_mint_operations(parentSwapOperationId)
+        WHERE parentSwapOperationId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_operations_parent_swap
+        ON coco_cashu_melt_operations(parentSwapOperationId)
+        WHERE parentSwapOperationId IS NOT NULL;
+    `,
+  },
+  {
+    id: '040_parent_owned_melt_failure_state',
+    sql: `
+      ALTER TABLE coco_cashu_melt_operations
+        RENAME TO coco_cashu_melt_operations_pre_parent_failure;
+
+      CREATE TABLE coco_cashu_melt_operations (
+        id TEXT PRIMARY KEY,
+        mintUrl TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'init', 'prepared', 'executing', 'pending', 'failed', 'finalized',
+          'rolling_back', 'rolled_back'
+        )),
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        error TEXT,
+        method TEXT NOT NULL,
+        methodDataJson TEXT NOT NULL,
+        quoteId TEXT,
+        amount TEXT,
+        fee_reserve TEXT,
+        swap_fee TEXT,
+        needsSwap INTEGER,
+        inputAmount TEXT,
+        inputProofSecretsJson TEXT,
+        changeOutputDataJson TEXT,
+        swapOutputDataJson TEXT,
+        changeAmount TEXT,
+        effectiveFee TEXT,
+        finalizedDataJson TEXT,
+        unit TEXT,
+        parentSwapOperationId TEXT,
+        parentExecutionPhase TEXT
+      );
+
+      INSERT INTO coco_cashu_melt_operations (
+        id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId,
+        amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson,
+        changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson,
+        unit, parentSwapOperationId, parentExecutionPhase
+      )
+      SELECT
+        id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId,
+        amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson,
+        changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson,
+        unit, parentSwapOperationId, parentExecutionPhase
+      FROM coco_cashu_melt_operations_pre_parent_failure;
+
+      DROP TABLE coco_cashu_melt_operations_pre_parent_failure;
+
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_state
+        ON coco_cashu_melt_operations(state);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_mint
+        ON coco_cashu_melt_operations(mintUrl);
+      CREATE INDEX IF NOT EXISTS idx_coco_cashu_melt_operations_createdAt
+        ON coco_cashu_melt_operations(createdAt DESC, id DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_operations_mint_quote
+        ON coco_cashu_melt_operations(mintUrl, quoteId)
+        WHERE quoteId IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_coco_cashu_melt_operations_parent_swap
+        ON coco_cashu_melt_operations(parentSwapOperationId)
+        WHERE parentSwapOperationId IS NOT NULL;
+    `,
+  },
 ];
 
 // Export for testing

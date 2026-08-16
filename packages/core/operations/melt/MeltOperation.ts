@@ -58,6 +58,16 @@ interface MeltOperationBase extends MeltMethodMeta {
 
   /** Error message if the operation failed */
   error?: string;
+
+  /** Owning parent swap. Parent-owned children may only be advanced by that coordinator. */
+  parentSwapOperationId?: string;
+
+  /**
+   * Durable authorization checkpoint for a parent-owned remote source step.
+   *
+   * A pre-swap response must be applied locally before this advances to `melt_authorized`.
+   */
+  parentExecutionPhase?: 'pre_swap_authorized' | 'melt_authorized';
 }
 
 /**
@@ -306,7 +316,7 @@ export function createMeltOperation(
   mintUrl: string,
   meta: MeltMethodMeta,
   unit = DEFAULT_UNIT,
-  options?: { quoteId?: string },
+  options?: { quoteId?: string; parentSwapOperationId?: string },
 ): InitMeltOperation {
   const now = Date.now();
   return {
@@ -316,6 +326,9 @@ export function createMeltOperation(
     mintUrl,
     unit: normalizeUnit(unit, { defaultUnit: DEFAULT_UNIT }),
     ...(options?.quoteId ? { quoteId: options.quoteId } : {}),
+    ...(options?.parentSwapOperationId
+      ? { parentSwapOperationId: options.parentSwapOperationId }
+      : {}),
     createdAt: now,
     updatedAt: now,
   };

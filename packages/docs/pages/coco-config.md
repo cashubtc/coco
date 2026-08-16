@@ -42,6 +42,11 @@ export interface CocoConfig {
       disabled?: boolean;
       initializeExistingPendingOperationsOnStart?: boolean;
     };
+    mintSwapOperationProcessor?: {
+      disabled?: boolean;
+      sweepIntervalMs?: number;
+      dueBatchSize?: number;
+    };
   };
 }
 ```
@@ -54,6 +59,11 @@ export interface CocoConfig {
 - outputDataCreator (optional): A session-wide strategy used only to construct Cashu output material. See [Custom output construction](#custom-output-construction).
 - watchers (optional): Can be used to disable or configure the available watchers. See [Watchers & Processors](./watchers-processors.md) for more information
 - processors (optional): Can be used to disable or configure the available processors. See [Watchers & Processors](./watchers-processors.md) for more information
+
+When the storage adapter supports Mint Swaps, its processor starts automatically. Setting
+`mintSwapOperationProcessor.disabled` stops automatic parent reconciliation but intentionally keeps
+the durable event outbox running. `sweepIntervalMs` controls recovery scans and `dueBatchSize`
+limits each scan.
 
 ## Custom output construction
 

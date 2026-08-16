@@ -83,6 +83,26 @@ export type {
   TerminalMeltOperation,
 } from './operations/melt/MeltOperation.ts';
 export type {
+  MintSwapOperation,
+  MintSwapOperationState,
+  MintSwapAttentionReason,
+  MintSwapSettlement,
+  MintSwapEventType,
+  MintSwapPreparedPlan,
+  MintSwapQuoteRef,
+  MintSwapRetry,
+  MintSwapTerminalFailure,
+} from './operations/mintSwap/MintSwapOperation.ts';
+export type {
+  PrepareMintSwapInput,
+  ListMintSwapInput,
+} from './operations/mintSwap/MintSwapOperationService.ts';
+export {
+  MintSwapSettlementError,
+  type WaitForMintSwapSettlementOptions,
+} from './operations/mintSwap/MintSwapWaiter.ts';
+export type { MintSwapEventPayload } from './models/OperationEventOutbox.ts';
+export type {
   ReceiveOperationSource,
   InitReceiveOperation,
   PreparedReceiveOperation,

@@ -345,6 +345,36 @@ describe('ProofService', () => {
       const counter = await counterRepo.getCounter(mintUrl, 'usd-keyset');
       expect(counter?.counter).toBe(1);
     });
+
+    it('rejects fee-inflated send outputs when keep cannot fund the added fee', async () => {
+      const createDeterministicData = mock(() => [] as OutputDataLike[]);
+      const service = new ProofService(
+        counterService,
+        proofRepo,
+        walletService as any,
+        mintService as any,
+        keyRingService as any,
+        seedService,
+        undefined,
+        bus,
+        makeOutputDataCreator({ createDeterministicData }),
+      );
+      service.calculateSendAmountWithFees = mock(async () => Amount.from(12));
+
+      await expect(
+        service.createOutputsAndIncrementCounters(
+          mintUrl,
+          { keep: unitAmount(1), send: unitAmount(10) },
+          { includeFees: true },
+        ),
+      ).rejects.toThrow('Keep amount cannot cover the receiver fee');
+      expect(createDeterministicData).not.toHaveBeenCalled();
+      await expect(counterRepo.getCounter(mintUrl, keysetId)).resolves.toEqual({
+        mintUrl,
+        keysetId,
+        counter: 0,
+      });
+    });
   });
 
   describe('createBlankOutputs', () => {

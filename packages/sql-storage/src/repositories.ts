@@ -17,6 +17,7 @@ import type {
   ReceiveOperationRepository,
   PaymentRequestReceiveAttemptRepository,
   PaymentRequestReceiveOperationRepository,
+  MintSwapRepositoryCapability,
 } from '@cashu/coco-core/adapter';
 import type { SqlDatabase } from './index.ts';
 import { ensureSchema } from './schema.ts';
@@ -38,6 +39,8 @@ import {
   SqlitePaymentRequestReceiveAttemptRepository,
   SqlitePaymentRequestReceiveOperationRepository,
 } from './repositories/PaymentRequestReceiveRepository.ts';
+import { SqliteMintSwapOperationRepository } from './repositories/MintSwapOperationRepository.ts';
+import { SqliteOperationEventOutboxRepository } from './repositories/OperationEventOutboxRepository.ts';
 
 export interface SqlStorageRepositoriesOptions {
   database: SqlDatabase;
@@ -65,6 +68,10 @@ function createRepositoryScope(database: SqlDatabase): RepositoryTransactionScop
     paymentRequestReceiveAttemptRepository: new SqlitePaymentRequestReceiveAttemptRepository(
       database,
     ),
+    mintSwap: {
+      mintSwapOperationRepository: new SqliteMintSwapOperationRepository(database),
+      operationEventOutboxRepository: new SqliteOperationEventOutboxRepository(database),
+    },
   };
 }
 
@@ -85,6 +92,7 @@ export class SqlStorageRepositories implements Repositories {
   readonly receiveOperationRepository: ReceiveOperationRepository;
   readonly paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   readonly paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  readonly mintSwap: MintSwapRepositoryCapability;
   readonly database: SqlDatabase;
 
   constructor(options: SqlStorageRepositoriesOptions) {
@@ -108,6 +116,7 @@ export class SqlStorageRepositories implements Repositories {
       repositories.paymentRequestReceiveOperationRepository;
     this.paymentRequestReceiveAttemptRepository =
       repositories.paymentRequestReceiveAttemptRepository;
+    this.mintSwap = repositories.mintSwap!;
   }
 
   async init(): Promise<void> {
@@ -136,4 +145,6 @@ export {
   SqliteReceiveOperationRepository,
   SqlitePaymentRequestReceiveOperationRepository,
   SqlitePaymentRequestReceiveAttemptRepository,
+  SqliteMintSwapOperationRepository,
+  SqliteOperationEventOutboxRepository,
 };

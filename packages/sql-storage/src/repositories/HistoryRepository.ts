@@ -1,7 +1,7 @@
 import type {
   HistoryEntry,
   HistoryRepository,
-  HistoryType,
+  OrdinaryHistoryType,
   LegacyHistoryRowInput,
 } from '@cashu/coco-core/adapter';
 import type { Token } from '@cashu/cashu-ts';
@@ -18,7 +18,7 @@ type HistoryProjectionRow = {
   source: 'operation' | 'legacy';
   id: string;
   legacyHistoryId: string | null;
-  type: HistoryType;
+  type: OrdinaryHistoryType;
   mintUrl: string;
   unit: string | null;
   amount: string | number;

@@ -30,6 +30,12 @@ Concrete core services, operation service classes, handler providers, transport
 internals, and individual memory repository classes are not part of the
 app-facing root API.
 
+Mint Swaps require the optional `mintSwap` repository capability, which contains the durable
+parent-operation and event-outbox repositories. Coco's SQLite, Expo SQLite, and IndexedDB adapters
+provide it and apply their schema migrations from `repo.init()`. A custom adapter may omit the
+capability; consumers can check `coco.ops.mintSwap.diagnostics.isAvailable()` and all non-Mint-Swap
+features remain available.
+
 ## Security
 
 Coco's built-in storage adapters do not encrypt wallet data at rest. Stored data can include

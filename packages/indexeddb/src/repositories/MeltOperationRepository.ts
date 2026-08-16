@@ -1,5 +1,7 @@
 import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/adapter';
 import {
+  assertParentOwnedMeltOperationInvariant,
+  assertParentOwnedMeltOperationUpdate,
   deserializeAmount,
   normalizeMeltMethodData,
   normalizeUnit,
@@ -26,6 +28,7 @@ const preparedStates: MeltOperationState[] = [
   'prepared',
   'executing',
   'pending',
+  'failed',
   'finalized',
   'rolling_back',
   'rolled_back',
@@ -46,6 +49,8 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId,
+    parentExecutionPhase: row.parentExecutionPhase,
   };
 
   if (!isPreparedState(row.state)) {
@@ -95,10 +100,6 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
 };
 
 const operationToRow = (operation: MeltOperation): MeltOperationRow => {
-  if (operation.state === 'failed') {
-    throw new Error('Cannot persist failed melt operation');
-  }
-
   const createdAtSeconds = Math.floor(operation.createdAt / 1000);
   const updatedAtSeconds = Math.floor(operation.updatedAt / 1000);
   const methodDataJson = stringifyJson(operation.methodData);
@@ -124,6 +125,8 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       changeOutputDataJson: null,
       swapOutputDataJson: null,
       finalizedDataJson: null,
+      parentSwapOperationId: operation.parentSwapOperationId,
+      parentExecutionPhase: operation.parentExecutionPhase,
     };
   }
 
@@ -160,6 +163,8 @@ const operationToRow = (operation: MeltOperation): MeltOperationRow => {
       operation.state === 'finalized' && settlement.finalizedData !== undefined
         ? JSON.stringify(settlement.finalizedData)
         : null,
+    parentSwapOperationId: operation.parentSwapOperationId,
+    parentExecutionPhase: operation.parentExecutionPhase,
   };
 };
 
@@ -171,6 +176,7 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
   }
 
   async create(operation: MeltOperation): Promise<void> {
+    assertParentOwnedMeltOperationInvariant(operation);
     await this.db.runTransaction('rw', ['coco_cashu_melt_operations'], async (tx) => {
       const table = tx.table('coco_cashu_melt_operations');
       const existing = await table.get(operation.id);
@@ -202,6 +208,7 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
       if (!existing) {
         throw new Error(`MeltOperation with id ${operation.id} not found`);
       }
+      assertParentOwnedMeltOperationUpdate(rowToOperation(existing), operation);
 
       const quoteId = getOperationQuoteId(operation);
       if (quoteId) {
@@ -268,6 +275,10 @@ export class IdbMeltOperationRepository implements MeltOperationRepository {
   async delete(id: string): Promise<void> {
     await this.db.runTransaction('rw', ['coco_cashu_melt_operations'], async (tx) => {
       const table = tx.table('coco_cashu_melt_operations');
+      const existing = (await table.get(id)) as MeltOperationRow | undefined;
+      if (existing?.parentSwapOperationId) {
+        throw new Error(`Cannot delete parent-owned MeltOperation ${id}`);
+      }
       await table.delete(id);
     });
   }
