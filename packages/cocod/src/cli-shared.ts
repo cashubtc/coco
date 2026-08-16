@@ -57,6 +57,17 @@ async function isDaemonReady(): Promise<boolean> {
   }
 }
 
+async function waitForDaemonReady(): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (await isDaemonReady()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error('Daemon failed to become ready within 5 seconds');
+}
+
 export async function startDaemonProcess(): Promise<void> {
   const proc = Bun.spawn({
     cmd: ['bun', 'run', `${import.meta.dir}/index.ts`, 'daemon'],
@@ -65,19 +76,12 @@ export async function startDaemonProcess(): Promise<void> {
     stdin: 'ignore',
   });
   proc.unref();
-
-  for (let i = 0; i < 50; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    if ((await isDaemonRunning()) && (await isDaemonReady())) {
-      return;
-    }
-  }
-
-  throw new Error('Daemon failed to start within 5 seconds');
+  await waitForDaemonReady();
 }
 
 export async function ensureDaemonRunning(): Promise<void> {
   if (await isDaemonRunning()) {
+    await waitForDaemonReady();
     return;
   }
 

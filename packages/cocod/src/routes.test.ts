@@ -115,6 +115,47 @@ describe('routes', () => {
     expect(body.error).toBe('Invalid mint URL');
   });
 
+  test('/init maps concurrent Wallet initialization to a conflict', async () => {
+    const runtime = uninitializedRuntime({
+      initializeWallet: async () => {
+        throw new CocodRuntimeError('wallet_already_configured', 'Wallet already initialized');
+      },
+    });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/init']!.POST!(postJson('/init', {}));
+
+    const body = (await response.json()) as { error?: string };
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('Wallet already initialized');
+  });
+
+  test('/status reports a quarantined encrypted Session as an error', async () => {
+    const runtime = fakeRuntime({
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: {
+        state: 'failed',
+        startedAt: null,
+        lastFailure: {
+          code: 'session_start_failed',
+          message: 'Coco Session failed to start',
+          occurredAt: '2026-08-16T00:00:01.000Z',
+        },
+      },
+    });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/status']!.GET!(new Request('http://localhost/status'));
+
+    const body = (await response.json()) as { output?: string };
+    expect(response.status).toBe(200);
+    expect(body.output).toBe('ERROR');
+  });
+
   test('/unlock requires passphrase', async () => {
     const runtime = lockedRuntime();
     const routes = createRouteHandlers(runtime);

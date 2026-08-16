@@ -41,6 +41,9 @@ export function createRouteHandlers(
           ) {
             return Response.json({ error: error.message }, { status: 400 });
           }
+          if (error instanceof CocodRuntimeError && error.code === 'wallet_already_configured') {
+            return Response.json({ error: error.message }, { status: 409 });
+          }
           const message = error instanceof Error ? error.message : String(error);
           return Response.json({ error: `Init failed: ${message}` }, { status: 500 });
         }
@@ -470,11 +473,11 @@ function legacyStatus(runtime: CocodRuntime): string {
   if (status.cocoSession.state === 'running') {
     return 'UNLOCKED';
   }
-  if (status.seedAccess?.state === 'locked') {
-    return 'LOCKED';
-  }
   if (status.cocoSession.state === 'failed') {
     return 'ERROR';
+  }
+  if (status.seedAccess?.state === 'locked') {
+    return 'LOCKED';
   }
   return status.cocoSession.state.toUpperCase();
 }

@@ -95,6 +95,9 @@ export class PluginHost {
       console.error('One or more plugin dispose/cleanup handlers failed');
     }
     this.disposed = true;
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'One or more plugin dispose/cleanup handlers failed');
+    }
   }
 
   private async initializeRuntimePlugin(plugin: Plugin, services: ServiceMap): Promise<void> {

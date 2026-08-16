@@ -362,6 +362,41 @@ describe('initializeCoco', () => {
       expect(dispose).toHaveBeenCalledTimes(1);
     });
 
+    it('should report plugin cleanup failures as unconfirmed initialization cleanup', async () => {
+      const originalReconcile = Manager.prototype.reconcileLegacyMintQuotes;
+      const originalConsoleError = console.error;
+      const startupError = new Error('legacy quote reconciliation failed');
+      const cleanupError = new Error('plugin cleanup failed');
+      console.error = mock(() => {});
+      Manager.prototype.reconcileLegacyMintQuotes = mock(async () => {
+        throw startupError;
+      });
+
+      try {
+        await initializeCoco({
+          ...baseConfig,
+          ...disabledRuntime,
+          plugins: [
+            {
+              name: 'failing-cleanup',
+              required: [],
+              onDispose: () => {
+                throw cleanupError;
+              },
+            },
+          ],
+        });
+        throw new Error('expected initialization to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CocoInitializationError);
+        expect((error as CocoInitializationError).cleanupState).toBe('unconfirmed');
+        expect((error as CocoInitializationError).cause).toBeInstanceOf(AggregateError);
+      } finally {
+        Manager.prototype.reconcileLegacyMintQuotes = originalReconcile;
+        console.error = originalConsoleError;
+      }
+    });
+
     it('should expose the dedicated payment requests api', async () => {
       const manager = await initializeCoco(baseConfig);
 

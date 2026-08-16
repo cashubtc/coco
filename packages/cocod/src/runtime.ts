@@ -188,7 +188,13 @@ export class CocodRuntime {
       this.lastFailure = null;
 
       if (!config.encrypted) {
-        await this.startSession().completion;
+        const transition = this.startSession();
+        void transition.completion.catch((error) => {
+          this.logger?.error('Coco Session failed to start after Wallet initialization', {
+            error,
+          });
+        });
+        await transition.accepted;
       }
 
       return { mnemonic, requiresPassphrase: config.encrypted };
@@ -360,7 +366,10 @@ export class CocodRuntime {
     if (this.startTransition) {
       try {
         await this.startTransition.completion;
-      } catch {
+      } catch (error) {
+        if (this.sessionState === 'failed') {
+          throw error;
+        }
         return;
       }
     }

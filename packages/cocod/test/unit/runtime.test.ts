@@ -49,14 +49,18 @@ describe('CocodRuntime', () => {
     });
     await startCalled.promise;
 
+    const result = await initializing;
+
     expect(runtime.getStatus().seedAccess).toEqual({
       state: 'available',
       requiresPassphrase: false,
     });
     expect(runtime.getStatus().cocoSession.state).toBe('starting');
+    expect(result).toEqual({ mnemonic: MNEMONIC, requiresPassphrase: false });
 
+    const start = runtime.startSession();
     sessionReady.resolve(fakeSession());
-    await initializing;
+    await start.completion;
 
     expect(runtime.getStatus().cocoSession.state).toBe('running');
     expect(runtime.getRunningSession()).not.toBeNull();
@@ -234,6 +238,63 @@ describe('CocodRuntime', () => {
       state: 'locked',
       requiresPassphrase: true,
     });
+  });
+
+  test('returns a generated mnemonic before unattended Session startup can fail', async () => {
+    const paths = await createPaths();
+    const startCalled = deferred<void>();
+    const sessionReady = deferred<RunningCocoSession>();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      initializeSession: async () => {
+        startCalled.resolve();
+        return sessionReady.promise;
+      },
+    });
+
+    const initializing = runtime.initializeWallet({});
+    await startCalled.promise;
+
+    const result = await initializing;
+    const start = runtime.startSession();
+    expect(result.mnemonic.split(' ')).toHaveLength(24);
+    expect(runtime.getStatus().wallet).not.toBeNull();
+
+    sessionReady.reject(new Error('repository unavailable'));
+    await expect(start.completion).rejects.toThrow('repository unavailable');
+    expect(runtime.getStatus().cocoSession.state).toBe('stopped');
+  });
+
+  test('propagates an unconfirmed startup cleanup failure through a concurrent stop', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const startup = deferred<RunningCocoSession>();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      initializeSession: async () => startup.promise,
+    });
+
+    const start = runtime.startSession();
+    const stop = runtime.stopSession();
+    const outcomes = Promise.allSettled([start.completion, stop]);
+    startup.reject(
+      new CocoSessionStartupError(
+        'startup cleanup failed',
+        'unconfirmed',
+        new Error('dispose failed'),
+      ),
+    );
+
+    const [startOutcome, stopOutcome] = await outcomes;
+    expect(startOutcome).toMatchObject({
+      status: 'rejected',
+      reason: { message: 'startup cleanup failed' },
+    });
+    expect(stopOutcome).toMatchObject({
+      status: 'rejected',
+      reason: { message: 'startup cleanup failed' },
+    });
+    expect(runtime.getStatus().cocoSession.state).toBe('failed');
   });
 
   test('rejects malformed persisted Wallet configuration before becoming available', async () => {
