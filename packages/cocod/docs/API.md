@@ -75,6 +75,7 @@ The CLI talks to the daemon over HTTP on a UNIX socket.
 
 - `GET /ping`
 - `GET /status`
+  - returns `STARTING` or `STOPPING` while a Coco Session lifecycle transition is in progress
 - `POST /init`
 - `POST /unlock`
 - `GET /balance`

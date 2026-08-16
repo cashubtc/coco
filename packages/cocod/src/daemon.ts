@@ -1,13 +1,9 @@
-import { mnemonicToSeedSync } from '@scure/bip39';
-import { CONFIG_FILE, SOCKET_PATH, PID_FILE } from './utils/config.js';
+import { SOCKET_PATH, PID_FILE } from './utils/config.js';
 import { createDaemonLogger, serializeError } from './utils/logger.js';
-import { DaemonStateManager } from './utils/state.js';
-import { initializeWallet } from './utils/wallet.js';
+import { CocodRuntime } from './runtime.js';
 import { createRouteHandlers, buildRoutes } from './routes.js';
-import type { WalletConfig } from './utils/config.js';
 
 export async function startDaemon() {
-  const stateManager = new DaemonStateManager();
   const logger = createDaemonLogger();
 
   logger.info('daemon.start.requested', {
@@ -37,6 +33,10 @@ export async function startDaemon() {
     // Not running, safe to proceed
   }
 
+  const runtime = await CocodRuntime.load({
+    logger: logger.child({ component: 'wallet' }),
+  });
+
   try {
     await Bun.write(PID_FILE, '');
     await Bun.file(PID_FILE).delete();
@@ -57,45 +57,10 @@ export async function startDaemon() {
 
   await Bun.write(PID_FILE, process.pid.toString());
 
-  try {
-    const configExists = await Bun.file(CONFIG_FILE).exists();
-    if (configExists) {
-      const configText = await Bun.file(CONFIG_FILE).text();
-      const config: WalletConfig = JSON.parse(configText);
-
-      if (config.encrypted) {
-        stateManager.setLocked(config.mnemonic, config.mintUrl);
-        logger.info('wallet.config_loaded', {
-          encrypted: true,
-          mintUrl: config.mintUrl,
-          state: 'LOCKED',
-        });
-      } else {
-        const { manager, npcAccount } = await initializeWallet(
-          config,
-          undefined,
-          logger.child({ component: 'wallet' }),
-        );
-        const seed = mnemonicToSeedSync(config.mnemonic);
-        stateManager.setUnlocked(manager, config.mintUrl, seed, npcAccount);
-        logger.info('wallet.config_loaded', {
-          encrypted: false,
-          mintUrl: config.mintUrl,
-          state: 'UNLOCKED',
-        });
-      }
-    } else {
-      logger.info('wallet.config_missing');
-    }
-  } catch (error) {
-    logger.warn('wallet.config_load_failed', { error: serializeError(error) });
-    stateManager.setError(String(error));
-  }
-
-  const routeHandlers = createRouteHandlers(stateManager, logger.child({ component: 'wallet' }));
+  const routeHandlers = createRouteHandlers(runtime, logger.child({ component: 'wallet' }));
   const routes = buildRoutes(
     routeHandlers,
-    () => stateManager.getState(),
+    runtime,
     logger.child({
       component: 'http',
     }),
@@ -114,13 +79,12 @@ export async function startDaemon() {
 
     server?.stop();
 
-    const state = stateManager.getState();
-    if (state.status === 'UNLOCKED') {
+    if (runtime.getStatus().cocoSession.state !== 'stopped') {
       // Give watchers, processors, and plugins a graceful stop, but never block shutdown on it.
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        state.manager.dispose().catch((error) => {
+        runtime.dispose().catch((error) => {
           logger.warn('daemon.dispose_failed', { error: serializeError(error) });
         }),
         new Promise<void>((resolve) => {
@@ -171,8 +135,28 @@ export async function startDaemon() {
   });
 
   logger.info('daemon.started', { socketPath: SOCKET_PATH });
-  if (stateManager.isUninitialized()) {
+  const status = runtime.getStatus();
+  if (!status.wallet) {
     logger.info('wallet.uninitialized');
+  } else if (status.seedAccess?.requiresPassphrase) {
+    logger.info('wallet.config_loaded', {
+      mintUrl: status.wallet.mintUrl,
+      seedAccess: 'locked',
+    });
+  } else {
+    logger.info('wallet.session_start_requested', {
+      mintUrl: status.wallet.mintUrl,
+      reason: 'unattended_startup',
+    });
+    const transition = runtime.startSession();
+    void transition.completion.then(
+      () => {
+        logger.info('wallet.session_started', { mintUrl: status.wallet?.mintUrl });
+      },
+      (error) => {
+        logger.error('wallet.session_start_failed', { error: serializeError(error) });
+      },
+    );
   }
 
   process.on('unhandledRejection', (error) => {

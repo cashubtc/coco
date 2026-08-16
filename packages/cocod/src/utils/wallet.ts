@@ -11,6 +11,7 @@ import type { WalletConfig } from './config.js';
 
 export interface InitializedWallet {
   manager: Manager;
+  mintUrl: string;
   npcAccount: NPCAccountApi;
 }
 
@@ -49,13 +50,25 @@ export async function initializeWallet(
     logger: cocoLogger,
     plugins: [npcPlugin],
   });
+  try {
+    const npcAccount = await npcPlugin.addAccount({
+      id: 'default',
+      signer,
+      useWebsocket: true,
+    });
+    await coco.mint.addMint(config.mintUrl, { trusted: true });
 
-  const npcAccount = await npcPlugin.addAccount({
-    id: 'default',
-    signer,
-    useWebsocket: true,
-  });
-  await coco.mint.addMint(config.mintUrl, { trusted: true });
-
-  return { manager: coco, npcAccount };
+    return { manager: coco, mintUrl: config.mintUrl, npcAccount };
+  } catch (error) {
+    try {
+      await coco.dispose();
+    } catch (cleanupError) {
+      const failure = new Error('Coco Session startup and cleanup failed', {
+        cause: new AggregateError([error, cleanupError]),
+      }) as Error & { cleanupConfirmed: boolean };
+      failure.cleanupConfirmed = false;
+      throw failure;
+    }
+    throw error;
+  }
 }
