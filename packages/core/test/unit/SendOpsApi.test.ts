@@ -7,10 +7,11 @@ import type {
   PreparedSendOperation,
   SendOperation,
 } from '../../operations/send/SendOperation.ts';
-import type { P2pkSendOptions } from '../../operations/send/SendMethodHandler.ts';
+import type { DefaultSendMethodData, P2pkSendOptions } from '../../index.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
 const mintUrl = 'https://mint.test';
+const forcedSwapMethodData = { forceSwap: true } satisfies DefaultSendMethodData;
 
 const p2pkOptionsRejectHashlock = {
   pubkey: 'pubkey-1',
@@ -83,6 +84,35 @@ describe('SendOpsApi', () => {
     );
     expect(sendOperationService.prepare).toHaveBeenCalled();
     expect(result).toBe(preparedOperation);
+  });
+
+  it('prepare maps forceSwap to default send method data', async () => {
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(20),
+      forceSwap: forcedSwapMethodData.forceSwap,
+    });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'default',
+        methodData: forcedSwapMethodData,
+      },
+    );
+  });
+
+  it('prepare preserves empty default method data when forceSwap is false', async () => {
+    await api.prepare({ mintUrl, amount: Amount.from(20), forceSwap: false });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, expect.any(Object), {
+      method: 'default',
+      methodData: {},
+    });
   });
 
   it('prepare maps p2pk target to send method options', async () => {

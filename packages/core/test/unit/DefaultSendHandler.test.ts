@@ -303,6 +303,38 @@ describe('DefaultSendHandler', () => {
       });
     });
 
+    it('prepares a swap send when forceSwap is true and an exact match exists', async () => {
+      (proofService.selectProofsToSend as Mock<any>).mockImplementation(
+        (_mintUrl: string, _intent: { amount: Amount; unit: string }, includeFees: boolean) =>
+          Promise.resolve(
+            includeFees ? [makeProof('proof-100', 100), makeProof('proof-5', 5)] : [],
+          ),
+      );
+
+      const operation = makeInitOp('op-force-swap', { methodData: { forceSwap: true } });
+      const result = await handler.prepare(buildPrepareContext(operation));
+
+      expect(result.needsSwap).toBe(true);
+      expect(result.fee).toEqual(Amount.from(1));
+      expect(result.methodData).toEqual({ forceSwap: true });
+      expect(result.inputProofSecrets).toEqual(['proof-100', 'proof-5']);
+      expect(result.outputData).toBeDefined();
+      expect(proofService.selectProofsToSend).toHaveBeenCalledTimes(1);
+      expect(proofService.selectProofsToSend).toHaveBeenCalledWith(
+        mintUrl,
+        { amount: Amount.from(100), unit: 'sat' },
+        true,
+      );
+      expect(proofService.createOutputsAndIncrementCounters).toHaveBeenCalledWith(
+        mintUrl,
+        {
+          keep: { amount: Amount.from(4), unit: 'sat' },
+          send: { amount: Amount.from(100), unit: 'sat' },
+        },
+        {},
+      );
+    });
+
     it('prepares a swap send when no exact match exists', async () => {
       (proofRepository.getAvailableProofs as Mock<any>).mockImplementation(() =>
         Promise.resolve([makeCoreProof('input-1', 60), makeCoreProof('input-2', 50)]),

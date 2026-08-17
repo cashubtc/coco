@@ -84,6 +84,22 @@ console.log(token.memo); // "Dinner"
 Memos are trimmed before persistence. Whitespace-only memos are treated as
 omitted.
 
+### Forcing a Swap
+
+Default sends reuse ready proofs when they exactly match the requested amount. To reissue the
+amount as fresh send proofs instead, set `forceSwap` while preparing the operation:
+
+```ts
+const prepared = await coco.ops.send.prepare({
+  mintUrl,
+  amount: 100,
+  forceSwap: true,
+});
+```
+
+Forcing a swap may add an input fee, which is reflected in `prepared.fee`. P2PK sends already swap
+to create locked outputs, so this option only changes default sends.
+
 ### P2PK Sends
 
 Use a P2PK target when the token should be locked to one or more public keys:

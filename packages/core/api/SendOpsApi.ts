@@ -25,6 +25,8 @@ export interface PrepareSendInput {
   amount: UnitAmountLike;
   /** Unit to send. */
   unit?: string;
+  /** Force a default send to swap proofs even when an exact match is available. */
+  forceSwap?: boolean;
   /** Optional non-default send target, for example a P2PK recipient. */
   target?: SendTarget;
 }
@@ -75,7 +77,7 @@ export class SendOpsApi {
     const initOp = await this.sendOperationService.init(
       input.mintUrl,
       parsed,
-      this.getCreateOptions(input.target),
+      this.getCreateOptions(input),
     );
     return this.sendOperationService.prepare(initOp);
   }
@@ -173,11 +175,14 @@ export class SendOpsApi {
     await this.sendOperationService.finalize(operationId);
   }
 
-  private getCreateOptions(target?: SendTarget): CreateSendOperationOptions {
+  private getCreateOptions({
+    forceSwap,
+    target,
+  }: Pick<PrepareSendInput, 'forceSwap' | 'target'>): CreateSendOperationOptions {
     if (!target) {
       return {
         method: 'default',
-        methodData: {},
+        methodData: forceSwap ? { forceSwap: true } : {},
       };
     }
 
