@@ -4,24 +4,75 @@ import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
 import { createRouteHandlers } from './routes';
-import { DaemonStateManager } from './utils/state';
+import {
+  CocodRuntimeError,
+  type CocodRuntime,
+  type CocodStatus,
+  type RunningCocoSession,
+} from './runtime';
 
 // A creqB (TLV + bech32m) payment request for 21 sat carrying a P2PK NUT-10
 // spending condition, generated once with the workspace @cashu/cashu-ts.
 const CREQB_P2PK_FIXTURE =
   'CREQB1QYQQ2UN9WYKNZQSQPQQQQQQQQQQQQ9GRQQQSQPQQQYQQ2QQCDP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99E3K7MGXQQX8GETNWSS8QCTED4JKUAQ8QQ0QZQQPQYPQQ9MGW368QUE69UHK27RPD4CXCEFWVDHK6TMSV9USSQZFQYQQZQQZQPPRQVNP89SKXCE3V56RSCEJX4JK2ETZ8YERSWTZX5CRXVTRVV6NWERP89NX2DEJVCEKVEFJ8QMRZEPJXC6XYERRXQMNGV3S893RZVPHVFSNYU24ZDV';
 
-function unlockedStateManager(manager?: unknown): DaemonStateManager {
-  const stateManager = new DaemonStateManager();
+function fakeRuntime(
+  status: CocodStatus,
+  session: RunningCocoSession | null = null,
+  overrides: Partial<CocodRuntime> = {},
+): CocodRuntime {
+  return {
+    getStatus: () => status,
+    getRunningSession: () => session,
+    ...overrides,
+  } as unknown as CocodRuntime;
+}
+
+function uninitializedRuntime(overrides: Partial<CocodRuntime> = {}): CocodRuntime {
+  return fakeRuntime(
+    {
+      wallet: null,
+      seedAccess: null,
+      cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+    },
+    null,
+    overrides,
+  );
+}
+
+function lockedRuntime(): CocodRuntime {
+  return fakeRuntime({
+    wallet: {
+      configuredAt: '2026-08-16T00:00:00.000Z',
+      mintUrl: 'https://mint.example.com',
+    },
+    seedAccess: { state: 'locked', requiresPassphrase: true },
+    cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+  });
+}
+
+function runningRuntime(manager?: unknown): CocodRuntime {
   const fakeManager = (manager ?? {}) as Manager;
   const fakeNpcAccount = {} as unknown as import('coco-cashu-plugin-npc').NPCAccountApi;
-  stateManager.setUnlocked(
-    fakeManager,
-    'https://mint.example.com',
-    new Uint8Array([1, 2, 3]),
-    fakeNpcAccount,
+  return fakeRuntime(
+    {
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'available', requiresPassphrase: false },
+      cocoSession: {
+        state: 'running',
+        startedAt: '2026-08-16T00:00:01.000Z',
+        lastFailure: null,
+      },
+    },
+    {
+      manager: fakeManager,
+      mintUrl: 'https://mint.example.com',
+      npcAccount: fakeNpcAccount,
+    },
   );
-  return stateManager;
 }
 
 function postJson(path: string, body: unknown): Request {
@@ -33,12 +84,15 @@ function postJson(path: string, body: unknown): Request {
 
 describe('routes', () => {
   test('/init validates invalid mnemonic', async () => {
-    const stateManager = new DaemonStateManager();
-    const routes = createRouteHandlers(stateManager);
+    const runtime = uninitializedRuntime({
+      initializeWallet: async () => {
+        throw new CocodRuntimeError('invalid_mnemonic', 'Invalid mnemonic');
+      },
+    });
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/init']!.POST!(
       postJson('/init', { mnemonic: 'invalid mnemonic' }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { error?: string };
@@ -46,15 +100,67 @@ describe('routes', () => {
     expect(body.error).toBe('Invalid mnemonic');
   });
 
-  test('/unlock requires passphrase', async () => {
-    const stateManager = new DaemonStateManager();
-    stateManager.setLocked('encrypted', 'https://mint.example.com');
-    const routes = createRouteHandlers(stateManager);
+  test('/init validates invalid mint URL', async () => {
+    const runtime = uninitializedRuntime({
+      initializeWallet: async () => {
+        throw new CocodRuntimeError('invalid_mint_url', 'Invalid mint URL');
+      },
+    });
+    const routes = createRouteHandlers(runtime);
 
-    const response = await routes['/unlock']!.POST!(
-      postJson('/unlock', {}),
-      stateManager.getState(),
-    );
+    const response = await routes['/init']!.POST!(postJson('/init', { mintUrl: 'not a URL' }));
+
+    const body = (await response.json()) as { error?: string };
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('Invalid mint URL');
+  });
+
+  test('/init maps concurrent Wallet initialization to a conflict', async () => {
+    const runtime = uninitializedRuntime({
+      initializeWallet: async () => {
+        throw new CocodRuntimeError('wallet_already_configured', 'Wallet already initialized');
+      },
+    });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/init']!.POST!(postJson('/init', {}));
+
+    const body = (await response.json()) as { error?: string };
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('Wallet already initialized');
+  });
+
+  test('/status reports a quarantined encrypted Session as an error', async () => {
+    const runtime = fakeRuntime({
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: {
+        state: 'failed',
+        startedAt: null,
+        lastFailure: {
+          code: 'session_start_failed',
+          message: 'Coco Session failed to start',
+          occurredAt: '2026-08-16T00:00:01.000Z',
+        },
+      },
+    });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/status']!.GET!(new Request('http://localhost/status'));
+
+    const body = (await response.json()) as { output?: string };
+    expect(response.status).toBe(200);
+    expect(body.output).toBe('ERROR');
+  });
+
+  test('/unlock requires passphrase', async () => {
+    const runtime = lockedRuntime();
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/unlock']!.POST!(postJson('/unlock', {}));
 
     const body = (await response.json()) as { error?: string };
     expect(response.status).toBe(400);
@@ -62,13 +168,10 @@ describe('routes', () => {
   });
 
   test('/x-cashu/parse requires request field', async () => {
-    const stateManager = unlockedStateManager();
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime();
+    const routes = createRouteHandlers(runtime);
 
-    const response = await routes['/x-cashu/parse']!.POST!(
-      postJson('/x-cashu/parse', {}),
-      stateManager.getState(),
-    );
+    const response = await routes['/x-cashu/parse']!.POST!(postJson('/x-cashu/parse', {}));
 
     const body = (await response.json()) as { error?: string };
     expect(response.status).toBe(400);
@@ -89,11 +192,10 @@ describe('routes', () => {
       expect(parsed.spendingCondition?.kind).toBe('P2PK');
       expect(parsed.amount?.toNumber()).toBe(21);
 
-      const stateManager = unlockedStateManager(manager);
-      const routes = createRouteHandlers(stateManager);
+      const runtime = runningRuntime(manager);
+      const routes = createRouteHandlers(runtime);
       const response = await routes['/x-cashu/parse']!.POST!(
         postJson('/x-cashu/parse', { request: CREQB_P2PK_FIXTURE }),
-        stateManager.getState(),
       );
       const body = (await response.json()) as { output?: string };
       expect(response.status).toBe(200);
@@ -119,12 +221,11 @@ describe('routes', () => {
         },
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/x-cashu/handle']!.POST!(
       postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { error?: string };
@@ -149,13 +250,10 @@ describe('routes', () => {
         },
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
-    const response = await routes['/balance']!.GET!(
-      new Request('http://localhost/balance'),
-      stateManager.getState(),
-    );
+    const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
 
     const body = (await response.json()) as { output?: Record<string, { sats: number }> };
     expect(response.status).toBe(200);
@@ -174,12 +272,11 @@ describe('routes', () => {
         },
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/receive/cashu']!.POST!(
       postJson('/receive/cashu', { token: 'cashuB-fake' }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { output?: string };
@@ -209,12 +306,11 @@ describe('routes', () => {
         },
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/receive/bolt11']!.POST!(
       postJson('/receive/bolt11', { amount: 21 }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { output?: string };
@@ -254,12 +350,11 @@ describe('routes', () => {
         },
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/send/bolt11']!.POST!(
       postJson('/send/bolt11', { invoice: 'lnbc210n1fake' }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { output?: string };
@@ -298,12 +393,11 @@ describe('routes', () => {
         execute: async () => ({ type: 'inband', token }),
       },
     };
-    const stateManager = unlockedStateManager(manager);
-    const routes = createRouteHandlers(stateManager);
+    const runtime = runningRuntime(manager);
+    const routes = createRouteHandlers(runtime);
 
     const response = await routes['/x-cashu/handle']!.POST!(
       postJson('/x-cashu/handle', { request: 'creqA-fake' }),
-      stateManager.getState(),
     );
 
     const body = (await response.json()) as { output?: string };

@@ -1,40 +1,26 @@
-import {
-  getEncodedToken,
-  type Logger,
-  type PaymentRequestSpendingConditionRequirement,
-} from '@cashu/coco-core';
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
-import { wordlist } from '@scure/bip39/wordlists/english.js';
+import { getEncodedToken, type PaymentRequestSpendingConditionRequirement } from '@cashu/coco-core';
 import { nip19 } from 'nostr-tools';
 
-import { encryptMnemonic } from './utils/crypto.js';
-import { CONFIG_FILE, SALT_FILE } from './utils/config.js';
+import { CocodRuntimeError, type CocodRuntime, type RunningCocoSession } from './runtime.js';
 import { serializeError } from './utils/logger.js';
-import { initializeWallet } from './utils/wallet.js';
-import type { WalletConfig } from './utils/config.js';
 import type { AppLogger } from './utils/logger.js';
-import type {
-  DaemonStateManager,
-  LockedState,
-  UnlockedState,
-  RouteHandler,
-} from './utils/state.js';
+
+export type RouteHandler = (req: Request) => Promise<Response>;
 
 export function createRouteHandlers(
-  stateManager: DaemonStateManager,
-  logger?: Logger,
+  runtime: CocodRuntime,
 ): Record<string, { GET?: RouteHandler; POST?: RouteHandler }> {
   return {
     '/ping': {
       GET: async () => Response.json({ output: 'pong' }),
     },
     '/status': {
-      GET: async (_req, state) => {
-        return Response.json({ output: state.status });
+      GET: async () => {
+        return Response.json({ output: legacyStatus(runtime) });
       },
     },
     '/init': {
-      POST: stateManager.requireUninitialized(async (req: Request) => {
+      POST: requireUninitialized(runtime, async (req: Request) => {
         try {
           const body = (await req.json()) as {
             mnemonic?: string;
@@ -42,67 +28,29 @@ export function createRouteHandlers(
             mintUrl?: string;
           };
 
-          let mnemonic: string;
-          if (body.mnemonic) {
-            if (!validateMnemonic(body.mnemonic, wordlist)) {
-              return Response.json({ error: 'Invalid mnemonic' }, { status: 400 });
-            }
-            mnemonic = body.mnemonic;
-          } else {
-            mnemonic = generateMnemonic(wordlist, 256);
-          }
-
-          const mintUrl = body.mintUrl || 'https://mint.minibits.cash/Bitcoin';
-          const encrypted = !!body.passphrase;
-
-          await Bun.write(CONFIG_FILE, '');
-          await Bun.file(CONFIG_FILE).delete();
-
-          let config: WalletConfig;
-
-          if (encrypted && body.passphrase) {
-            const { ciphertext, salt } = await encryptMnemonic(mnemonic, body.passphrase);
-
-            await Bun.write(SALT_FILE, salt);
-
-            config = {
-              version: 1,
-              mnemonic: ciphertext,
-              encrypted: true,
-              mintUrl,
-              createdAt: new Date().toISOString(),
-            };
-
-            stateManager.setLocked(ciphertext, mintUrl);
-          } else {
-            config = {
-              version: 1,
-              mnemonic,
-              encrypted: false,
-              mintUrl,
-              createdAt: new Date().toISOString(),
-            };
-
-            const { manager, npcAccount } = await initializeWallet(config, undefined, logger);
-            const seed = mnemonicToSeedSync(mnemonic);
-            stateManager.setUnlocked(manager, mintUrl, seed, npcAccount);
-          }
-
-          await Bun.write(CONFIG_FILE, JSON.stringify(config, null, 2));
-
-          const output = encrypted
-            ? `Initialized (locked). Mnemonic: ${mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`
-            : `Initialized. Mnemonic: ${mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`;
+          const result = await runtime.initializeWallet(body);
+          const output = result.requiresPassphrase
+            ? `Initialized (locked). Mnemonic: ${result.mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`
+            : `Initialized. Mnemonic: ${result.mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`;
 
           return Response.json({ output });
         } catch (error) {
+          if (
+            error instanceof CocodRuntimeError &&
+            (error.code === 'invalid_mnemonic' || error.code === 'invalid_mint_url')
+          ) {
+            return Response.json({ error: error.message }, { status: 400 });
+          }
+          if (error instanceof CocodRuntimeError && error.code === 'wallet_already_configured') {
+            return Response.json({ error: error.message }, { status: 409 });
+          }
           const message = error instanceof Error ? error.message : String(error);
           return Response.json({ error: `Init failed: ${message}` }, { status: 500 });
         }
       }),
     },
     '/unlock': {
-      POST: stateManager.requireLocked(async (req: Request, state: LockedState) => {
+      POST: requireLocked(runtime, async (req: Request) => {
         try {
           const body = (await req.json()) as { passphrase: string };
 
@@ -110,22 +58,7 @@ export function createRouteHandlers(
             return Response.json({ error: 'Passphrase required' }, { status: 400 });
           }
 
-          const salt = await Bun.file(SALT_FILE).text();
-          const { decryptMnemonic } = await import('./utils/crypto.js');
-          const mnemonic = await decryptMnemonic(state.encryptedMnemonic, body.passphrase, salt);
-
-          const config: WalletConfig = {
-            version: 1,
-            mnemonic,
-            encrypted: false,
-            mintUrl: state.mintUrl,
-            createdAt: new Date().toISOString(),
-          };
-
-          const { manager, npcAccount } = await initializeWallet(config, undefined, logger);
-          const seed = mnemonicToSeedSync(mnemonic);
-
-          stateManager.setUnlocked(manager, state.mintUrl, seed, npcAccount);
+          await runtime.startSession({ passphrase: body.passphrase }).completion;
 
           return Response.json({ output: 'Unlocked' });
         } catch (error) {
@@ -135,7 +68,7 @@ export function createRouteHandlers(
       }),
     },
     '/npc/address': {
-      GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
+      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const info = await state.npcAccount.getInfo();
           if (info.name) {
@@ -150,7 +83,7 @@ export function createRouteHandlers(
       }),
     },
     '/npc/username': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const { username, confirm } = (await req.json()) as {
             username: string;
@@ -191,7 +124,7 @@ export function createRouteHandlers(
     },
 
     '/balance': {
-      GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
+      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const balances = await state.manager.wallet.balances.byMint();
           const augmentedBalance: Record<string, { [unit: string]: number }> = {};
@@ -208,7 +141,7 @@ export function createRouteHandlers(
       }),
     },
     '/receive/cashu': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { token: string };
           const token = body.token;
@@ -224,7 +157,7 @@ export function createRouteHandlers(
       }),
     },
     '/receive/bolt11': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
@@ -242,7 +175,7 @@ export function createRouteHandlers(
       }),
     },
     '/send/cashu': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
@@ -257,7 +190,7 @@ export function createRouteHandlers(
       }),
     },
     '/send/bolt11': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { invoice: string; mintUrl?: string };
           const mintUrl = body.mintUrl || state.mintUrl;
@@ -276,7 +209,7 @@ export function createRouteHandlers(
       }),
     },
     '/x-cashu/parse': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const { request } = (await req.json()) as { request?: string };
           if (!request) {
@@ -302,7 +235,7 @@ export function createRouteHandlers(
       }),
     },
     '/x-cashu/handle': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { request?: string; mintUrl?: string };
           if (!body.request) {
@@ -351,7 +284,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/add': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { url: string };
           await state.manager.mint.addMint(body.url, { trusted: true });
@@ -363,7 +296,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/list': {
-      GET: stateManager.requireUnlocked(async (_req, state: UnlockedState) => {
+      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const mints = await state.manager.mint.getAllTrustedMints();
           return Response.json({
@@ -376,7 +309,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/info': {
-      POST: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { url: string };
           const info = await state.manager.mint.getMintInfo(body.url);
@@ -389,7 +322,7 @@ export function createRouteHandlers(
     },
 
     '/history': {
-      GET: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         const url = new URL(req.url);
         const offsetParam = url.searchParams.get('offset');
         const limitParam = url.searchParams.get('limit');
@@ -413,7 +346,7 @@ export function createRouteHandlers(
       }),
     },
     '/events': {
-      GET: stateManager.requireUnlocked(async (req, state: UnlockedState) => {
+      GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         const KEEP_ALIVE_INTERVAL = 5000; // 5 seconds (prevent 8-10s idle timeout)
 
         const stream = new ReadableStream({
@@ -470,9 +403,88 @@ function spendingConditionError(
   return `Request carries ${label} NUT-10 spending condition (${spendingCondition.nut10Kind}) that cannot be paid safely`;
 }
 
+function requireRunning(
+  runtime: CocodRuntime,
+  handler: (req: Request, session: RunningCocoSession) => Promise<Response>,
+): RouteHandler {
+  return async (req: Request) => {
+    const session = runtime.getRunningSession();
+    if (session) {
+      return handler(req, session);
+    }
+
+    const status = runtime.getStatus();
+    if (!status.wallet) {
+      return walletNotInitializedResponse();
+    }
+    if (status.seedAccess?.state === 'locked') {
+      return Response.json(
+        { error: "Wallet is locked. Run 'cocod unlock <passphrase>' to decrypt." },
+        { status: 403 },
+      );
+    }
+    if (status.cocoSession.state === 'failed') {
+      return Response.json({ error: 'Wallet error' }, { status: 500 });
+    }
+    return Response.json(
+      { error: `Wallet session is ${status.cocoSession.state}` },
+      { status: 503 },
+    );
+  };
+}
+
+function requireUninitialized(runtime: CocodRuntime, handler: RouteHandler): RouteHandler {
+  return async (req: Request) => {
+    if (runtime.getStatus().wallet) {
+      return Response.json(
+        { error: 'Wallet already initialized. Delete ~/.cocod/config.json to reset.' },
+        { status: 409 },
+      );
+    }
+    return handler(req);
+  };
+}
+
+function requireLocked(runtime: CocodRuntime, handler: RouteHandler): RouteHandler {
+  return async (req: Request) => {
+    const status = runtime.getStatus();
+    if (!status.wallet) {
+      return walletNotInitializedResponse();
+    }
+    if (status.seedAccess?.state !== 'locked') {
+      return Response.json({ error: 'Wallet is already unlocked' }, { status: 409 });
+    }
+    return handler(req);
+  };
+}
+
+function walletNotInitializedResponse(): Response {
+  return Response.json(
+    { error: "Wallet not initialized. Run 'cocod init [mnemonic]' first." },
+    { status: 503 },
+  );
+}
+
+function legacyStatus(runtime: CocodRuntime): string {
+  const status = runtime.getStatus();
+  if (!status.wallet) {
+    return 'UNINITIALIZED';
+  }
+  if (status.cocoSession.state === 'running') {
+    return 'UNLOCKED';
+  }
+  if (status.cocoSession.state === 'failed') {
+    return 'ERROR';
+  }
+  if (status.seedAccess?.state === 'locked') {
+    return 'LOCKED';
+  }
+  return status.cocoSession.state.toUpperCase();
+}
+
 export function buildRoutes(
   routeHandlers: Record<string, { GET?: RouteHandler; POST?: RouteHandler }>,
-  getState: () => import('./utils/state.js').DaemonState,
+  runtime: CocodRuntime,
   logger?: AppLogger,
 ): Record<
   string,
@@ -494,12 +506,12 @@ export function buildRoutes(
 
     if (handlers.GET) {
       const handler = handlers.GET;
-      routes[path]!.GET = async (req: Request) => runRoute(path, req, getState, handler, logger);
+      routes[path]!.GET = async (req: Request) => runRoute(path, req, runtime, handler, logger);
     }
 
     if (handlers.POST) {
       const handler = handlers.POST;
-      routes[path]!.POST = async (req: Request) => runRoute(path, req, getState, handler, logger);
+      routes[path]!.POST = async (req: Request) => runRoute(path, req, runtime, handler, logger);
     }
   }
 
@@ -509,7 +521,7 @@ export function buildRoutes(
 async function runRoute(
   path: string,
   req: Request,
-  getState: () => import('./utils/state.js').DaemonState,
+  runtime: CocodRuntime,
   handler: RouteHandler,
   logger?: AppLogger,
 ): Promise<Response> {
@@ -518,13 +530,13 @@ async function runRoute(
   const requestLogger = logger?.child?.({ method: req.method, path, reqId }) ?? logger;
 
   try {
-    const response = await handler(req, getState());
+    const response = await handler(req);
     const durationMs = Math.round(performance.now() - startedAt);
     const level = response.status >= 500 ? 'error' : response.status >= 400 ? 'warn' : 'info';
 
     requestLogger?.log?.(level, 'request.completed', {
       durationMs,
-      state: getState().status,
+      state: runtime.getStatus().cocoSession.state,
       status: response.status,
     });
 
@@ -533,7 +545,7 @@ async function runRoute(
     requestLogger?.error('request.failed', {
       durationMs: Math.round(performance.now() - startedAt),
       error: serializeError(error),
-      state: getState().status,
+      state: runtime.getStatus().cocoSession.state,
     });
 
     return Response.json({ error: 'Internal server error' }, { status: 500 });

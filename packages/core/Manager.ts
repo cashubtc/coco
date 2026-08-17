@@ -173,6 +173,23 @@ export interface CocoConfig {
   };
 }
 
+export type CocoInitializationCleanupState = 'confirmed' | 'unconfirmed';
+
+/**
+ * Reports a failed `initializeCoco()` call and whether its partially initialized Manager was
+ * disposed successfully.
+ */
+export class CocoInitializationError extends Error {
+  constructor(
+    message: string,
+    readonly cleanupState: CocoInitializationCleanupState,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = 'CocoInitializationError';
+  }
+}
+
 /**
  * Initializes and configures a new Coco Cashu manager instance
  * @param config - Configuration options including repositories, seed, and optional features
@@ -192,53 +209,66 @@ export async function initializeCoco(config: CocoConfig): Promise<Manager> {
     config.outputDataCreator,
   );
 
-  // Initialize plugin system (must complete before watchers for extensions to be available)
-  await coco.initPlugins();
+  try {
+    // Initialize plugin system (must complete before watchers for extensions to be available)
+    await coco.initPlugins();
 
-  // Reconcile legacy mint quote rows into mint operations before any watcher,
-  // processor, or mint recovery path starts.
-  await coco.reconcileLegacyMintQuotes();
+    // Reconcile legacy mint quote rows into mint operations before any watcher,
+    // processor, or mint recovery path starts.
+    await coco.reconcileLegacyMintQuotes();
 
-  // Enable watchers (default: all enabled unless explicitly disabled)
-  const mintOperationWatcherConfig = config.watchers?.mintOperationWatcher;
-  if (!mintOperationWatcherConfig?.disabled) {
-    await coco.enableMintOperationWatcher(mintOperationWatcherConfig);
+    // Enable watchers (default: all enabled unless explicitly disabled)
+    const mintOperationWatcherConfig = config.watchers?.mintOperationWatcher;
+    if (!mintOperationWatcherConfig?.disabled) {
+      await coco.enableMintOperationWatcher(mintOperationWatcherConfig);
+    }
+
+    const proofStateWatcherConfig = config.watchers?.proofStateWatcher;
+    if (!proofStateWatcherConfig?.disabled) {
+      await coco.enableProofStateWatcher(proofStateWatcherConfig);
+    }
+
+    const meltQuoteWatcherConfig = config.watchers?.meltQuoteWatcher;
+    if (!meltQuoteWatcherConfig?.disabled) {
+      await coco.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
+    }
+
+    // Enable processors (default: all enabled unless explicitly disabled)
+    const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
+    if (!mintOperationProcessorConfig?.disabled) {
+      await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
+    }
+
+    const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
+    if (!meltSettlementProcessorConfig?.disabled) {
+      await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
+    }
+
+    // Recover any pending send operations from previous session
+    await coco.ops.send.recovery.run();
+
+    // Recover any pending melt operations from previous session
+    await coco.ops.melt.recovery.run();
+
+    // Recover pending receive operations and payment-request receive attempts from previous session
+    await coco.recoverPendingPaymentRequestReceiveAttempts();
+
+    // Recover any pending mint operations from previous session
+    await coco.recoverPendingMintOperations();
+
+    return coco;
+  } catch (error) {
+    try {
+      await coco.dispose();
+    } catch (cleanupError) {
+      throw new CocoInitializationError(
+        'Coco initialization failed and cleanup could not be confirmed',
+        'unconfirmed',
+        new AggregateError([error, cleanupError]),
+      );
+    }
+    throw new CocoInitializationError('Coco initialization failed', 'confirmed', error);
   }
-
-  const proofStateWatcherConfig = config.watchers?.proofStateWatcher;
-  if (!proofStateWatcherConfig?.disabled) {
-    await coco.enableProofStateWatcher(proofStateWatcherConfig);
-  }
-
-  const meltQuoteWatcherConfig = config.watchers?.meltQuoteWatcher;
-  if (!meltQuoteWatcherConfig?.disabled) {
-    await coco.enableMeltQuoteWatcher(meltQuoteWatcherConfig);
-  }
-
-  // Enable processors (default: all enabled unless explicitly disabled)
-  const mintOperationProcessorConfig = config.processors?.mintOperationProcessor;
-  if (!mintOperationProcessorConfig?.disabled) {
-    await coco.enableMintOperationProcessor(mintOperationProcessorConfig);
-  }
-
-  const meltSettlementProcessorConfig = config.processors?.meltSettlementProcessor;
-  if (!meltSettlementProcessorConfig?.disabled) {
-    await coco.enableMeltSettlementProcessor(meltSettlementProcessorConfig);
-  }
-
-  // Recover any pending send operations from previous session
-  await coco.ops.send.recovery.run();
-
-  // Recover any pending melt operations from previous session
-  await coco.ops.melt.recovery.run();
-
-  // Recover any pending receive operations and payment-request receive attempts from previous session
-  await coco.recoverPendingPaymentRequestReceiveAttempts();
-
-  // Recover any pending mint operations from previous session
-  await coco.recoverPendingMintOperations();
-
-  return coco;
 }
 
 export class Manager {

@@ -150,6 +150,7 @@ bun test
 
 - [API and command reference](docs/API.md)
 - [Machine-readable daemon contract](docs/daemon-api.json)
+- [Proposed network interface v1](docs/network-interface-v1.md)
 
 ## License
 

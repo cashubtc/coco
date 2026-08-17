@@ -32,7 +32,7 @@
       "method": "GET",
       "state": "any",
       "responses": {
-        "200": "{ output: \"UNINITIALIZED\" | \"LOCKED\" | \"UNLOCKED\" | \"ERROR\" }"
+        "200": "{ output: \"UNINITIALIZED\" | \"LOCKED\" | \"STARTING\" | \"UNLOCKED\" | \"STOPPING\" | \"ERROR\" }"
       }
     },
     {

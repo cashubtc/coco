@@ -7,11 +7,25 @@ import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { finalizeEvent, type EventTemplate } from 'nostr-tools';
 import { decryptMnemonic } from './crypto.js';
 import { SALT_FILE, DB_FILE } from './config.js';
+import { ensureSecretFile } from './files.js';
 import type { WalletConfig } from './config.js';
 
 export interface InitializedWallet {
   manager: Manager;
+  mintUrl: string;
   npcAccount: NPCAccountApi;
+}
+
+/** Reports whether cocod could clean up a failed post-Coco session initialization step. */
+export class CocoSessionStartupError extends Error {
+  constructor(
+    message: string,
+    readonly cleanupState: 'confirmed' | 'unconfirmed',
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = 'CocoSessionStartupError';
+  }
 }
 
 export async function initializeWallet(
@@ -33,6 +47,7 @@ export async function initializeWallet(
 
   const seed = mnemonicToSeedSync(mnemonic);
 
+  await ensureSecretFile(DB_FILE);
   const repo = new SqliteRepositories({ database: new Database(DB_FILE) });
   const walletLogger = logger?.child?.({ component: 'coco' }) ?? logger;
   const cocoLogger = walletLogger ?? new ConsoleLogger('Coco', { level: 'info' });
@@ -49,13 +64,25 @@ export async function initializeWallet(
     logger: cocoLogger,
     plugins: [npcPlugin],
   });
+  try {
+    const npcAccount = await npcPlugin.addAccount({
+      id: 'default',
+      signer,
+      useWebsocket: true,
+    });
+    await coco.mint.addMint(config.mintUrl, { trusted: true });
 
-  const npcAccount = await npcPlugin.addAccount({
-    id: 'default',
-    signer,
-    useWebsocket: true,
-  });
-  await coco.mint.addMint(config.mintUrl, { trusted: true });
-
-  return { manager: coco, npcAccount };
+    return { manager: coco, mintUrl: config.mintUrl, npcAccount };
+  } catch (error) {
+    try {
+      await coco.dispose();
+    } catch (cleanupError) {
+      throw new CocoSessionStartupError(
+        'Coco Session startup and cleanup failed',
+        'unconfirmed',
+        new AggregateError([error, cleanupError]),
+      );
+    }
+    throw new CocoSessionStartupError('Coco Session startup failed', 'confirmed', error);
+  }
 }

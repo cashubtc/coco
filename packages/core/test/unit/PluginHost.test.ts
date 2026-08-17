@@ -322,7 +322,7 @@ describe('PluginHost', () => {
     expect(calls.includes('cleanupB1')).toBe(true);
   });
 
-  it('logs and swallows errors from hooks', async () => {
+  it('logs hook errors and surfaces disposal failures', async () => {
     const plugin: Plugin<['logger']> = {
       name: 'errors',
       required: ['logger'],
@@ -339,12 +339,44 @@ describe('PluginHost', () => {
     host.use(plugin);
     await host.init(services);
     await host.ready();
-    await host.dispose();
+    await expect(host.dispose()).rejects.toBeInstanceOf(AggregateError);
     // Expect at least one error log per failing phase
     const joined = errorCalls.map((args) => String(args[0] ?? '')).join('\n');
     expect(joined.includes('Plugin init error')).toBe(true);
     expect(joined.includes('Plugin ready error')).toBe(true);
     expect(joined.includes('Plugin dispose error')).toBe(true);
+  });
+
+  it('runs every plugin cleanup before rejecting disposal failures', async () => {
+    const calls: string[] = [];
+    const disposeError = new Error('dispose failed');
+    const cleanupError = new Error('cleanup failed');
+    host.use({
+      name: 'failing-dispose',
+      required: [],
+      onDispose: () => {
+        calls.push('dispose');
+        throw disposeError;
+      },
+    });
+    host.use({
+      name: 'failing-cleanup',
+      required: [],
+      onInit: () => () => {
+        calls.push('cleanup');
+        throw cleanupError;
+      },
+    });
+    await host.init(services);
+
+    try {
+      await host.dispose();
+      throw new Error('expected plugin disposal to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([disposeError, cleanupError]);
+    }
+    expect(calls).toEqual(['dispose', 'cleanup']);
   });
 
   it('registerExtension stores extension and is retrievable', async () => {
