@@ -18,6 +18,7 @@ import type {
   PendingMintOperation,
 } from '../../operations/mint/MintOperation';
 import type {
+  ExecuteContext,
   MintExecutionResult,
   MintMethodHandler,
   MintMethodQuoteImportSnapshot,
@@ -29,6 +30,7 @@ import type { MintHandlerProvider } from '../../infra/handlers/mint';
 import { MemoryMintOperationRepository } from '../../repositories/memory/MemoryMintOperationRepository';
 import { MemoryMintQuoteRepository } from '../../repositories/memory/MemoryMintQuoteRepository';
 import { MemoryProofRepository } from '../../repositories/memory/MemoryProofRepository';
+import { MemoryRepositories } from '../../repositories/memory/MemoryRepositories';
 import { getMintQuoteAvailableAmount } from '../../models/MintQuote';
 import { mintQuoteObservationFromOnchainResponse } from '../../models/MintQuoteObservationFactory';
 import {
@@ -46,12 +48,17 @@ import type { MintAdapter } from '../../infra/MintAdapter';
 import type { Logger } from '../../logging/Logger';
 import { serializeOutputData } from '../../utils';
 import type { CoreProof } from '../../types';
-import { MintQuoteValidationError, QuoteIdentityConflictError } from '../../models/Error';
+import {
+  MintQuoteValidationError,
+  ParentOwnedOperationError,
+  QuoteIdentityConflictError,
+} from '../../models/Error';
 
 describe('MintOperationService', () => {
   const mintUrl = 'https://mint.test';
   const quoteId = 'quote-1';
   const keysetId = 'keyset-1';
+  const destinationNut20PublicKey = `02${'11'.repeat(32)}`;
 
   let operationRepo: MemoryMintOperationRepository;
   let quoteRepo: MemoryMintQuoteRepository;
@@ -324,6 +331,7 @@ describe('MintOperationService', () => {
       ),
       prepare: mockPrepare,
       execute: mockExecute,
+      executeOwnedRemote: mockExecute,
       recoverExecuting: mockRecoverExecuting,
       checkPending: mockCheckPending,
     };
@@ -336,11 +344,18 @@ describe('MintOperationService', () => {
       saveProofs: mock(async (_mintUrl: string, proofs: CoreProof[]) => {
         await proofRepo.saveProofs(mintUrl, proofs);
       }),
+      forTransaction: mock((repositories) => ({
+        saveProofs: mock(async (proofMintUrl: string, proofs: CoreProof[]) => {
+          await repositories.proofRepository.saveProofs(proofMintUrl, proofs);
+        }),
+      })),
       recoverProofsFromOutputData: mock(async (_mintUrl: string, _outputData, options) => {
         if (!options?.createdByOperationId) {
           return [];
         }
-        await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
+        if (options.persistRecoveredProofs !== false) {
+          await proofRepo.saveProofs(mintUrl, [toCoreProof('out-1', options.createdByOperationId)]);
+        }
         return [makeProof('out-1')];
       }),
     } as unknown as ProofService;
@@ -3219,5 +3234,331 @@ describe('MintOperationService', () => {
     }
     expect(pendingEvents).toHaveLength(0);
     expect(handler.checkPending).not.toHaveBeenCalled();
+  });
+
+  describe('parent-owned orchestration commands', () => {
+    const parentSwapOperationId = 'mint-swap-parent';
+
+    const makeOwnedPending = (id: string, secret = 'owned-output'): PendingMintOperation => ({
+      ...makePendingOp(id, secret),
+      parentSwapOperationId,
+      pubkey: destinationNut20PublicKey,
+    });
+
+    it('binds destination preparation to the parent NUT-20 key', async () => {
+      const repositories = new MemoryRepositories();
+      const quote = mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+        pubkey: destinationNut20PublicKey,
+      });
+      const { wallet } = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
+      (handler.prepare as Mock<any>).mockImplementationOnce(
+        async ({
+          operation,
+          importedQuote,
+        }: {
+          operation: InitMintOperation;
+          importedQuote: MintMethodQuoteSnapshot<'bolt11'>;
+        }) => ({
+          ...makePendingOp(operation.id, 'owned-locked-output'),
+          pubkey: importedQuote.pubkey,
+        }),
+      );
+
+      const planned = await service.planOwnedPreparation({
+        operationId: 'owned-locked-destination',
+        parentSwapOperationId,
+        quote,
+        amount: Amount.from(10),
+        destinationNut20PublicKey,
+        wallet,
+      });
+      const prepared = await repositories.withTransaction((transaction) =>
+        service.prepareOwnedInTransaction({
+          operationId: 'owned-locked-destination',
+          parentSwapOperationId,
+          quote,
+          amount: Amount.from(10),
+          destinationNut20PublicKey,
+          preparedOperation: planned,
+          repositories: transaction,
+        }),
+      );
+
+      expect(prepared.pubkey).toBe(destinationNut20PublicKey);
+      expect(prepared.parentSwapOperationId).toBe(parentSwapOperationId);
+    });
+
+    it('rejects a destination quote that is not locked to the parent NUT-20 key', async () => {
+      const repositories = new MemoryRepositories();
+      const quote = mintQuoteFromBolt11Response(mintUrl, {
+        quote: quoteId,
+        request: 'lnbc1test',
+        amount: Amount.from(10),
+        unit: 'sat',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+        state: 'UNPAID',
+        pubkey: `03${'22'.repeat(32)}`,
+      });
+      const { wallet } = await walletService.getWalletWithActiveKeysetId(mintUrl, 'sat');
+
+      await expect(
+        service.planOwnedPreparation({
+          operationId: 'owned-wrong-destination-key',
+          parentSwapOperationId,
+          quote,
+          amount: Amount.from(10),
+          destinationNut20PublicKey,
+          wallet,
+        }),
+      ).rejects.toThrow('not locked to the parent NUT-20 key');
+      expect(handler.prepare).not.toHaveBeenCalled();
+    });
+
+    it('keeps standalone execution from advancing a parent-owned child or emitting events', async () => {
+      const operation = makeOwnedPending('owned-direct-execute');
+      const executingEvents: Array<CoreEvents['mint-op:executing']> = [];
+      eventBus.on('mint-op:executing', (event) => {
+        executingEvents.push(event);
+      });
+      await operationRepo.create(operation);
+
+      await expect(service.execute(operation.id)).rejects.toBeInstanceOf(ParentOwnedOperationError);
+
+      expect((await operationRepo.getById(operation.id))?.state).toBe('pending');
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(executingEvents).toHaveLength(0);
+    });
+
+    it('rejects owned commands before mutation when the durable capability is absent', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = makeOwnedPending('owned-capability-gate');
+      await repositories.mintOperationRepository.create(operation);
+
+      await expect(
+        repositories.withTransaction((transaction) =>
+          service.authorizeOwnedExecutionInTransaction(operation.id, parentSwapOperationId, {
+            ...transaction,
+            mintSwap: undefined,
+          }),
+        ),
+      ).rejects.toThrow('optional durable repository capability');
+      expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+        'pending',
+      );
+      expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
+    });
+
+    it('commits authorization before network execution and gives the remote phase no repositories', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = makeOwnedPending('owned-authorize-before-remote');
+      await repositories.mintOperationRepository.create(operation);
+      let transactionReturned = false;
+
+      const authorized = await repositories.withTransaction((transaction) =>
+        service.authorizeOwnedExecutionInTransaction(
+          operation.id,
+          parentSwapOperationId,
+          transaction,
+        ),
+      );
+      transactionReturned = true;
+
+      const persistedAuthorization = await repositories.mintOperationRepository.getById(
+        operation.id,
+      );
+      await operationRepo.create(authorized);
+      expect(persistedAuthorization?.state).toBe('executing');
+      expect(handler.executeOwnedRemote).not.toHaveBeenCalled();
+
+      (handler.executeOwnedRemote as Mock<any>).mockImplementationOnce(async (context: object) => {
+        expect(transactionReturned).toBe(true);
+        expect('proofRepository' in context).toBe(false);
+        expect('proofService' in context).toBe(false);
+        expect('mintOperationRepository' in context).toBe(false);
+        expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+          'executing',
+        );
+        return { status: 'ISSUED', proofs: [makeProof('owned-output')] };
+      });
+
+      await service.executeOwnedRemote(authorized, parentSwapOperationId);
+
+      expect(await repositories.mintOperationRepository.getById(operation.id)).toEqual(
+        persistedAuthorization,
+      );
+      expect(await repositories.proofRepository.getAllReadyProofs()).toHaveLength(0);
+    });
+
+    it('requires an explicit repository-free seam from custom mint handlers', async () => {
+      const operation = {
+        ...makeExecutingOp('owned-custom-handler', 'owned-custom-output'),
+        parentSwapOperationId,
+        pubkey: destinationNut20PublicKey,
+      };
+      const customHandler: MintMethodHandler<'bolt11'> = {
+        ...handler,
+        executeOwnedRemote: undefined,
+        execute: mock(async (context: ExecuteContext<'bolt11'>): Promise<MintExecutionResult> => {
+          void context.proofService;
+          return { status: 'ISSUED', proofs: [makeProof('owned-custom-output')] };
+        }),
+      };
+      await operationRepo.create(operation);
+      (handlerProvider.get as Mock<any>).mockReturnValueOnce(customHandler);
+
+      await expect(service.executeOwnedRemote(operation, parentSwapOperationId)).rejects.toThrow(
+        'does not support owned remote execution',
+      );
+      expect(customHandler.execute).not.toHaveBeenCalled();
+    });
+
+    it('restores already-issued deterministic outputs outside the transaction without saving', async () => {
+      const operation = {
+        ...makeExecutingOp('owned-restore-issued', 'restored-output'),
+        parentSwapOperationId,
+        pubkey: destinationNut20PublicKey,
+      };
+      await operationRepo.create(operation);
+      (handler.executeOwnedRemote as Mock<any>).mockResolvedValueOnce({
+        status: 'ALREADY_ISSUED',
+      });
+      (proofService.recoverProofsFromOutputData as Mock<any>).mockResolvedValueOnce([
+        makeProof('restored-output'),
+      ]);
+
+      const result = await service.executeOwnedRemote(operation.id, parentSwapOperationId);
+
+      expect(result).toEqual({
+        operationId: operation.id,
+        status: 'ISSUED',
+        proofs: [makeProof('restored-output')],
+      });
+      expect(proofService.recoverProofsFromOutputData).toHaveBeenCalledWith(
+        operation.mintUrl,
+        operation.outputData,
+        {
+          unit: operation.unit,
+          createdByOperationId: operation.id,
+          persistRecoveredProofs: false,
+        },
+      );
+      expect(await proofRepo.getProofBySecret(mintUrl, 'restored-output')).toBeNull();
+    });
+
+    it('atomically rolls back local result application when its composing transaction fails', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makeExecutingOp('owned-atomic-apply', 'atomic-output'),
+        parentSwapOperationId,
+        pubkey: destinationNut20PublicKey,
+      };
+      await repositories.mintOperationRepository.create(operation);
+      await repositories.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: quoteId,
+          request: 'lnbc1test',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          pubkey: destinationNut20PublicKey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.zero(),
+          updated_at: 10,
+        }),
+      );
+
+      await expect(
+        repositories.withTransaction(async (transaction) => {
+          await service.applyOwnedExecutionInTransaction(
+            operation,
+            parentSwapOperationId,
+            {
+              operationId: operation.id,
+              status: 'ISSUED',
+              proofs: [makeProof('atomic-output')],
+            },
+            transaction,
+          );
+          throw new Error('rollback composing parent transition');
+        }),
+      ).rejects.toThrow('rollback composing parent transition');
+
+      expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+        'executing',
+      );
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, 'atomic-output'),
+      ).toBeNull();
+      expect(
+        (await repositories.mintQuoteRepository.getMintQuote(mintUrl, 'bolt11', quoteId))?.state,
+      ).toBe('PAID');
+    });
+
+    it('reuses a complete deterministic proof set when replaying result application', async () => {
+      const repositories = new MemoryRepositories();
+      const operation = {
+        ...makeExecutingOp('owned-idempotent-apply', 'existing-output'),
+        parentSwapOperationId,
+        pubkey: destinationNut20PublicKey,
+      };
+      await repositories.mintOperationRepository.create(operation);
+      await repositories.proofRepository.saveProofs(mintUrl, [
+        toCoreProof('existing-output', operation.id),
+      ]);
+      await repositories.mintQuoteRepository.upsertMintQuote(
+        mintQuoteFromBolt11Response(mintUrl, {
+          quote: quoteId,
+          request: 'lnbc1test',
+          amount: Amount.from(10),
+          unit: 'sat',
+          expiry: Math.floor(Date.now() / 1000) + 3600,
+          state: 'PAID',
+          pubkey: destinationNut20PublicKey,
+          amount_paid: Amount.from(10),
+          amount_issued: Amount.zero(),
+          updated_at: 10,
+        }),
+      );
+      const scopedSaveProofs = mock(async () => {});
+      (proofService.forTransaction as Mock<any>).mockImplementationOnce(() => ({
+        saveProofs: scopedSaveProofs,
+      }));
+
+      await repositories.withTransaction((transaction) =>
+        service.applyOwnedExecutionInTransaction(
+          operation,
+          parentSwapOperationId,
+          {
+            operationId: operation.id,
+            status: 'ISSUED',
+            proofs: [makeProof('existing-output')],
+          },
+          transaction,
+        ),
+      );
+
+      expect(scopedSaveProofs).not.toHaveBeenCalled();
+      expect((await repositories.mintOperationRepository.getById(operation.id))?.state).toBe(
+        'finalized',
+      );
+      expect(
+        await repositories.proofRepository.getProofBySecret(mintUrl, 'existing-output'),
+      ).toMatchObject({ createdByOperationId: operation.id, state: 'ready' });
+      const canonicalQuote = await repositories.mintQuoteRepository.getMintQuote(
+        mintUrl,
+        'bolt11',
+        quoteId,
+      );
+      expect(canonicalQuote?.amountPaid.equals(Amount.from(10))).toBe(true);
+      expect(canonicalQuote?.amountIssued.equals(Amount.from(10))).toBe(true);
+      expect(canonicalQuote?.remoteUpdatedAt).toBe(10);
+    });
   });
 });

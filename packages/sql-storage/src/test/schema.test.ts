@@ -49,6 +49,9 @@ const EXPECTED_MIGRATION_IDS = [
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
+  '038_mint_swap_operations_and_outbox',
+  '039_mint_swap_child_ownership',
+  '040_parent_owned_melt_failure_state',
 ] as const;
 
 const RECEIVE_OPERATIONS_SQL = `
@@ -187,6 +190,68 @@ describe('shared SQL schema migrations', () => {
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
   });
+
+  itWithDatabase(
+    'adds dormant mint-swap storage without changing standalone children',
+    async (db) => {
+      await ensureSchemaUpTo(db, '038_mint_swap_operations_and_outbox');
+      await db.run(
+        `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'legacy-mint-child',
+          'https://mint.test',
+          'mint-quote',
+          'init',
+          1,
+          1,
+          'bolt11',
+          '{}',
+          '1',
+          'sat',
+        ],
+      );
+      await insertMeltOperationRow(db, 'legacy-melt-child', 'melt-quote');
+
+      await ensureSchemaUpTo(db);
+
+      expect(await getColumnNames(db, 'coco_cashu_mint_swap_operations')).toContain('dueAt');
+      expect(await getColumnNames(db, 'coco_cashu_operation_event_outbox')).toContain(
+        'payloadJson',
+      );
+      expect(await getColumnNames(db, 'coco_cashu_mint_operations')).toContain(
+        'parentSwapOperationId',
+      );
+      expect(await getColumnNames(db, 'coco_cashu_melt_operations')).toContain(
+        'parentExecutionPhase',
+      );
+      expect(await getIndexNames(db, 'coco_cashu_mint_swap_operations')).toContain(
+        'idx_coco_cashu_mint_swap_operations_due',
+      );
+      expect(await getIndexNames(db, 'coco_cashu_mint_operations')).toContain(
+        'ux_coco_cashu_mint_operations_parent_swap',
+      );
+      expect(await getIndexNames(db, 'coco_cashu_melt_operations')).toContain(
+        'ux_coco_cashu_melt_operations_parent_swap',
+      );
+
+      const mintChild = await db.get<{ parentSwapOperationId: string | null }>(
+        'SELECT parentSwapOperationId FROM coco_cashu_mint_operations WHERE id = ?',
+        ['legacy-mint-child'],
+      );
+      const meltChild = await db.get<{
+        parentSwapOperationId: string | null;
+        parentExecutionPhase: string | null;
+      }>(
+        `SELECT parentSwapOperationId, parentExecutionPhase
+       FROM coco_cashu_melt_operations WHERE id = ?`,
+        ['legacy-melt-child'],
+      );
+      expect(mintChild).toEqual({ parentSwapOperationId: null });
+      expect(meltChild).toEqual({ parentSwapOperationId: null, parentExecutionPhase: null });
+    },
+  );
 
   itWithDatabase(
     'backfills canonical Mint Quote Accounting without inventing remote time',
