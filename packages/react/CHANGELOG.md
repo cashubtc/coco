@@ -1,5 +1,132 @@
 # @cashu/coco-react
 
+## 2.0.0
+
+### Major Changes
+
+- b910b5f: Migrate Coco to `@cashu/cashu-ts` v4 and native `Amount` semantics.
+
+  Public APIs now accept `AmountLike` inputs where callers provide monetary values
+  and return upstream `Amount` instances for balances, operation amounts, fees,
+  history entries, and proofs. Persistent adapters store amount columns as
+  canonical decimal strings and include migrations that preserve old numeric rows.
+  Operation method metadata serializes BigInt values as decimal strings so
+  AmountLike method fields remain persistable across adapters, while known amount
+  metadata is rehydrated as upstream `Amount` values on operation reads.
+
+  Packages that depend on `cashu-ts` are now ESM-only. CommonJS export entries and
+  CJS build outputs were removed, and token encoding now follows the v4 cashu-ts
+  API without explicit token-version selection.
+
+- f9db334: Add first-class custom Cashu unit support across core APIs, React balance hooks,
+  operation recovery, and storage adapters.
+
+  Bare amount inputs continue to default to sats, while object-form amount inputs
+  carry an explicit unit. Proofs, balances, quotes, operations, history, tokens,
+  restore/sweep flows, and adapter persistence now preserve normalized unit
+  metadata, with migrations and contract tests covering legacy sat fallback and
+  custom-unit rows.
+
+- 71993c2: Refactor melt operation prepare to accept `{ quote }` for BOLT quotes and `{ quote, feeIndex }` for onchain quotes, deriving method data from stored canonical melt quote state.
+- 5e78860: Refactor mint operation prepare to accept `{ quote, amount }`, deriving method and unit data from the stored canonical mint quote.
+- 6b8a896: Move mint quote import to `manager.quotes.mint.import(...)` and remove
+  `manager.ops.mint.importQuote(...)`.
+
+  Mint quote import now only updates canonical quote state and emits
+  `mint-quote:updated` when a quote is created/imported or remote settlement state
+  changes. Mint operations no longer mirror mutable quote remote state; callers
+  should read quote state from `manager.quotes.mint.get(...)` or quote events and
+  call `manager.ops.mint.prepare(...)` when they want an operation/history entry.
+
+- 00ed073: Project history entries from operation repositories instead of maintaining a
+  mutable history table.
+
+  History entries now use deterministic `type:operationId` ids for operation
+  rows, expose `source`, `updatedAt`, and `operationId` on operation-backed
+  entries, and retain legacy table rows behind `legacy:*` ids for migration
+  compatibility. The old history repository mutation contract has been removed;
+  persistent adapters now read history by merging operation rows with legacy rows
+  and de-duplicating legacy records that map to an operation.
+
+- e6876ae: Update operation hooks for quote identity query APIs and remove the mint operation
+  `getByQuote` hook helper.
+
+### Minor Changes
+
+- 0d89b94: Allow `CocoCashuProvider` to initialize Coco from a `CocoConfig` on initial
+  mount, with loading and error fallbacks, while preserving the existing
+  initialized-manager provider path. Add `localStorageSeedGetter()` as a browser
+  localStorage-backed seed getter helper for React applications.
+
+### Patch Changes
+
+- b2ffef1: Add BOLT12 mint and melt operation support, including duplicate quote-id safe persistence.
+- 2601aee: Remove outdated prerelease warning text from the published package READMEs.
+- 0e25ddc: Make `Manager.dispose()` stop manager-owned watchers, processors, subscriptions, and plugin
+  resources, and let the React provider rely on core disposal directly.
+- d687d30: Serialize localStorage seed initialization across same-origin browser contexts with the Web Locks
+  API, preventing concurrent first-run tabs from caching different wallet seeds.
+- Updated dependencies [766696d]
+- Updated dependencies [af4b491]
+- Updated dependencies [b2ffef1]
+- Updated dependencies [1dfdebf]
+- Updated dependencies [ac1925b]
+- Updated dependencies [faa00d7]
+- Updated dependencies [3d96047]
+- Updated dependencies [3ba8af3]
+- Updated dependencies [dc28d1f]
+- Updated dependencies [2601aee]
+- Updated dependencies [0e25ddc]
+- Updated dependencies [d2c3b07]
+- Updated dependencies [b910b5f]
+- Updated dependencies [a8e029e]
+- Updated dependencies [37dd447]
+- Updated dependencies [e6c780a]
+- Updated dependencies [f9db334]
+- Updated dependencies [0a2a8ce]
+- Updated dependencies [203ebf4]
+- Updated dependencies [34c16d3]
+- Updated dependencies [71993c2]
+- Updated dependencies [eefce1c]
+- Updated dependencies [ab0fd42]
+- Updated dependencies [e45cef2]
+- Updated dependencies [167dec6]
+- Updated dependencies [5598750]
+- Updated dependencies [5e78860]
+- Updated dependencies [6b8a896]
+- Updated dependencies [737b993]
+- Updated dependencies [92e5329]
+- Updated dependencies [d76264c]
+- Updated dependencies [ab8be2d]
+- Updated dependencies [fbd5d60]
+- Updated dependencies [9275ab7]
+- Updated dependencies [a7c49ff]
+- Updated dependencies [fe8ef00]
+- Updated dependencies [d787fa1]
+- Updated dependencies [ddbdc97]
+- Updated dependencies [00ed073]
+- Updated dependencies [703a1b4]
+- Updated dependencies [9342e56]
+- Updated dependencies [c0e8d4f]
+- Updated dependencies [16fc82c]
+- Updated dependencies [06deb29]
+- Updated dependencies [c8cee3c]
+- Updated dependencies [0aa9a9f]
+- Updated dependencies [9dd896d]
+- Updated dependencies [be23636]
+- Updated dependencies [f15b83c]
+- Updated dependencies [d4c8a99]
+- Updated dependencies [9dc7be3]
+- Updated dependencies [d25551a]
+- Updated dependencies [fe4b820]
+- Updated dependencies [ad67dbe]
+- Updated dependencies [616f7f9]
+- Updated dependencies [a00bbbc]
+- Updated dependencies [c489ac4]
+- Updated dependencies [5aef692]
+- Updated dependencies [807ae19]
+  - @cashu/coco-core@2.0.0
+
 ## 2.0.0-rc.3
 
 ### Patch Changes

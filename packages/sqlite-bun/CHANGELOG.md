@@ -1,5 +1,219 @@
 # @cashu/coco-sqlite-bun
 
+## 2.0.0
+
+### Major Changes
+
+- faa00d7: Expose canonical Mint Quote Accounting through first-class `amountPaid`, `amountIssued`, and
+  nullable `remoteUpdatedAt` fields for every built-in mint method. Keep BOLT11 `state` as a
+  deprecated compatibility projection, derive legacy quote shapes at the lifecycle boundary, and
+  persist the canonical fields across memory, SQL, and IndexedDB repositories with conservative
+  legacy backfills.
+- b910b5f: Migrate Coco to `@cashu/cashu-ts` v4 and native `Amount` semantics.
+
+  Public APIs now accept `AmountLike` inputs where callers provide monetary values
+  and return upstream `Amount` instances for balances, operation amounts, fees,
+  history entries, and proofs. Persistent adapters store amount columns as
+  canonical decimal strings and include migrations that preserve old numeric rows.
+  Operation method metadata serializes BigInt values as decimal strings so
+  AmountLike method fields remain persistable across adapters, while known amount
+  metadata is rehydrated as upstream `Amount` values on operation reads.
+
+  Packages that depend on `cashu-ts` are now ESM-only. CommonJS export entries and
+  CJS build outputs were removed, and token encoding now follows the v4 cashu-ts
+  API without explicit token-version selection.
+
+- e6c780a: Remove the legacy `MeltQuoteService`, `MeltQuoteRepository`, and `melt-quote:*`
+  event API surface. Melts are now exposed through `manager.ops.melt`; existing
+  legacy melt quote storage is preserved for data compatibility.
+- f9db334: Add first-class custom Cashu unit support across core APIs, React balance hooks,
+  operation recovery, and storage adapters.
+
+  Bare amount inputs continue to default to sats, while object-form amount inputs
+  carry an explicit unit. Proofs, balances, quotes, operations, history, tokens,
+  restore/sweep flows, and adapter persistence now preserve normalized unit
+  metadata, with migrations and contract tests covering legacy sat fallback and
+  custom-unit rows.
+
+- 86af017: Narrow SQLite adapter package exports to the repository aggregate and option types.
+
+  Applications should use `SqliteRepositories` as the adapter entry point. The packages no longer
+  export individual repository classes, database wrapper classes, migration arrays, or schema helper
+  functions.
+
+- fbd5d60: Add payer-side NUT-18 P2PK payment request support.
+
+  Core now exposes normalized P2PK payment request requirements, filters payable
+  mints to those advertising NUT-11, and prepares payment request sends through
+  the general P2PK send handler with structured NUT-11 options from cashu-ts.
+  Adapter packages now require cashu-ts 4.6.1, and adapter contract coverage
+  checks that structured send method data remains persisted.
+
+- a7c49ff: Add incoming payment-request receive operations.
+
+  Core now exposes a payment-request receive saga that creates encoded requests,
+  claims incoming payloads into normal receive operations, deduplicates payloads,
+  records receive metadata for history, and reconciles pending child receive
+  operations during recovery.
+  Transport plugins can now register receive handlers for external transports such
+  as Nostr, and outgoing payment-request parsing exposes Nostr transport
+  descriptors for plugin delivery.
+  Incoming request creation stores active requests immediately; callers can
+  cancel requests to stop accepting future payloads while keeping request history.
+  Stored pre-child crash attempts are resumed during recovery; incomplete attempts
+  without a durable payload are rejected so they do not pin future deliveries.
+
+  Adapters now persist payment-request receive operations and attempts, and receive
+  operations store optional source metadata for request-linked receives.
+
+- 00ed073: Project history entries from operation repositories instead of maintaining a
+  mutable history table.
+
+  History entries now use deterministic `type:operationId` ids for operation
+  rows, expose `source`, `updatedAt`, and `operationId` on operation-backed
+  entries, and retain legacy table rows behind `legacy:*` ids for migration
+  compatibility. The old history repository mutation contract has been removed;
+  persistent adapters now read history by merging operation rows with legacy rows
+  and de-duplicating legacy records that map to an operation.
+
+- c0e8d4f: Add canonical method-aware mint quote records and make BOLT11 mint preparation
+  quote-first.
+
+  Core now exposes canonical quote resurfacing through `manager.quotes.mint` and
+  `manager.quotes.melt`. Mint and melt quotes are created before
+  `manager.ops.mint.prepare()` and `manager.ops.melt.prepare()`, keeping bare
+  quote creation out of history. The quote API facade and input aliases use the
+  concrete built-in method surface instead of supported-method subset generics.
+  Mint quote records are keyed by normalized `(mintUrl, method, quoteId)`, and
+  mint operation quote lookups now return all sibling operations for the full
+  quote identity.
+
+  Quote observers now receive the persisted canonical mint quote snapshot through
+  the quote-level `mint-quote:updated` event, replacing the operation-shaped
+  `mint-op:quote-state-changed` event. Mint operation progress remains exposed
+  through `mint-op:*` lifecycle events.
+
+  Method handler quote refresh hooks are now named `fetchRemoteQuote`, with
+  matching `FetchRemote*QuoteContext` types, so handlers own remote protocol fetches
+  while quote lifecycle services own canonical quote persistence and refresh
+  events.
+
+  Persistent adapters now store canonical mint and melt quotes, migrate existing
+  BOLT11 operation quote snapshots into quote rows, and expose contract coverage
+  for quote records and sibling operation lookup.
+
+  Mint quote records now store method-scoped `quoteData` so BOLT11 fixed amounts
+  and NUT-30 onchain balance snapshots can share the same canonical quote
+  repository without requiring universal top-level quote `amount` or `state`
+  fields.
+
+  Keyring persistence now tracks key purpose metadata so NUT-20 mint quote keys
+  can use a separate deterministic derivation branch and stay hidden from
+  user-facing P2PK key management APIs.
+
+  NUT-30 onchain mint quote creation now derives a fresh NUT-20 key, submits the
+  public key in the onchain quote request, and persists the reusable address quote
+  with `amount_paid`/`amount_issued` balance metadata.
+
+  Onchain mint operation preparation now accepts an explicit withdrawal amount for
+  pre-created reusable quotes, verifies the quote signing key before operation
+  persistence, and creates operation-scoped deterministic outputs without requiring
+  available remote balance during prepare.
+
+  Onchain mint finalization now gates reusable quote execution on available remote
+  balance minus locally executing siblings, keeps underfunded operations pending,
+  signs mint requests with the persisted NUT-20 quote key, and refreshes the
+  canonical quote before finalizing redeemed operations.
+
+### Patch Changes
+
+- b2ffef1: Add BOLT12 mint and melt operation support, including duplicate quote-id safe persistence.
+- 769766f: Align Bun SQLite history projection and melt operation quote constraints with
+  the other SQLite adapters.
+- ac1925b: Return the canonical persisted melt quote from repository upserts.
+- 3d96047: Centralize Mint Quote Claimability on canonical accounting so atomic BOLT11 and balance-based
+  BOLT12/on-chain callers share readiness, reservation, scheduling, and recovery behavior. Make
+  explicit mint execution retry-safe when background processing has already started or completed it.
+- 3ba8af3: Add canonical quote identity contracts and enforce `(mintUrl, quoteId)` uniqueness for stored mint and melt quotes.
+- dc28d1f: Upgrade to cashu-ts 5.0.0-rc.4 and consume normalized v5 mint quote snapshots at Coco's quote
+  lifecycle boundary. BLS v3 keysets are temporarily excluded from wallet keysets, and tokens using
+  v3 proofs are rejected until Coco supports curve-aware proof-state handling. P2PK sends now enforce
+  cashu-ts v5's requirement for valid compressed secp256k1 public keys.
+- 2601aee: Remove outdated prerelease warning text from the published package READMEs.
+- 14542a7: Fail fast instead of silently corrupting operation data when hydrating prepared send, receive, and melt operations. Repository adapters previously defaulted missing (NULL) financial fields such as amounts and fees to zero via `?? 0` fallbacks, masking data integrity issues. Hydration now throws `Invalid operation row <id>: missing required field "<field>"` when a required field is absent.
+- d76264c: Add quote-first NUT-30 onchain melt operations.
+
+  Core now supports onchain melt quotes, fee option selection on melt operations,
+  onchain melt execution, and onchain melt quote polling. Adapter repositories now
+  persist onchain melt quote fee options and outpoints with migrations for existing
+  melt quote rows.
+
+- f15b83c: Add canonical BOLT11 accounting predicates and opt-in NUT-20 locked quote handling with readable
+  diagnostics. Keep SQL and IndexedDB quote state projections aligned with the canonical accounting
+  fields.
+- d15a268: Move SQLite schema and migrations into the shared SQL storage package while keeping adapter schema exports compatible.
+- c489ac4: Reject duplicate melt operations for the same mint and quote across repository adapters.
+- Updated dependencies [766696d]
+- Updated dependencies [af4b491]
+- Updated dependencies [b2ffef1]
+- Updated dependencies [1dfdebf]
+- Updated dependencies [ac1925b]
+- Updated dependencies [faa00d7]
+- Updated dependencies [3d96047]
+- Updated dependencies [3ba8af3]
+- Updated dependencies [dc28d1f]
+- Updated dependencies [2601aee]
+- Updated dependencies [0e25ddc]
+- Updated dependencies [d2c3b07]
+- Updated dependencies [b910b5f]
+- Updated dependencies [a8e029e]
+- Updated dependencies [37dd447]
+- Updated dependencies [e6c780a]
+- Updated dependencies [f9db334]
+- Updated dependencies [0a2a8ce]
+- Updated dependencies [203ebf4]
+- Updated dependencies [34c16d3]
+- Updated dependencies [71993c2]
+- Updated dependencies [eefce1c]
+- Updated dependencies [ab0fd42]
+- Updated dependencies [e45cef2]
+- Updated dependencies [167dec6]
+- Updated dependencies [5598750]
+- Updated dependencies [5e78860]
+- Updated dependencies [6b8a896]
+- Updated dependencies [737b993]
+- Updated dependencies [92e5329]
+- Updated dependencies [d76264c]
+- Updated dependencies [ab8be2d]
+- Updated dependencies [fbd5d60]
+- Updated dependencies [9275ab7]
+- Updated dependencies [a7c49ff]
+- Updated dependencies [fe8ef00]
+- Updated dependencies [d787fa1]
+- Updated dependencies [ddbdc97]
+- Updated dependencies [00ed073]
+- Updated dependencies [703a1b4]
+- Updated dependencies [9342e56]
+- Updated dependencies [c0e8d4f]
+- Updated dependencies [16fc82c]
+- Updated dependencies [06deb29]
+- Updated dependencies [c8cee3c]
+- Updated dependencies [0aa9a9f]
+- Updated dependencies [9dd896d]
+- Updated dependencies [be23636]
+- Updated dependencies [f15b83c]
+- Updated dependencies [d4c8a99]
+- Updated dependencies [9dc7be3]
+- Updated dependencies [d25551a]
+- Updated dependencies [fe4b820]
+- Updated dependencies [ad67dbe]
+- Updated dependencies [616f7f9]
+- Updated dependencies [a00bbbc]
+- Updated dependencies [c489ac4]
+- Updated dependencies [5aef692]
+- Updated dependencies [807ae19]
+  - @cashu/coco-core@2.0.0
+
 ## 2.0.0-rc.3
 
 ### Major Changes
