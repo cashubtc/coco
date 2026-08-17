@@ -1,5 +1,11 @@
 import type { MintOperationRepository } from '@cashu/coco-core/adapter';
-import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
+import {
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+  deserializeAmount,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core/adapter';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
 
@@ -38,6 +44,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -91,6 +98,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      parentSwapOperationId: operation.parentSwapOperationId,
     };
   }
 
@@ -115,6 +123,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       ? JSON.stringify(operation.terminalFailure)
       : null,
     outputDataJson: JSON.stringify(operation.outputData),
+    parentSwapOperationId: operation.parentSwapOperationId,
   };
 };
 
@@ -126,6 +135,7 @@ export class IdbMintOperationRepository implements MintOperationRepository {
   }
 
   async create(operation: MintOperation): Promise<void> {
+    assertParentOwnedMintOperationInvariant(operation);
     await this.db.runTransaction('rw', ['coco_cashu_mint_operations'], async (tx) => {
       const table = tx.table('coco_cashu_mint_operations');
       const existing = await table.get(operation.id);
@@ -143,6 +153,7 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       if (!existing) {
         throw new Error(`MintOperation with id ${operation.id} not found`);
       }
+      assertParentOwnedMintOperationUpdate(rowToOperation(existing), operation);
 
       const row = operationToRow(operation);
       row.updatedAt = getUnixTimeSeconds();
@@ -198,6 +209,10 @@ export class IdbMintOperationRepository implements MintOperationRepository {
   async delete(id: string): Promise<void> {
     await this.db.runTransaction('rw', ['coco_cashu_mint_operations'], async (tx) => {
       const table = tx.table('coco_cashu_mint_operations');
+      const existing = (await table.get(id)) as MintOperationRow | undefined;
+      if (existing?.parentSwapOperationId) {
+        throw new Error(`Cannot delete parent-owned MintOperation ${id}`);
+      }
       await table.delete(id);
     });
   }

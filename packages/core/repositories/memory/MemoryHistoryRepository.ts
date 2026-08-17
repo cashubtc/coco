@@ -1,7 +1,11 @@
-import type { HistoryProjectionRepository, MintQuoteRepository } from '..';
+import type {
+  HistoryProjectionRepository,
+  MintQuoteRepository,
+  MintSwapOperationRepository,
+} from '..';
 import type {
   HistoryEntry,
-  HistoryType,
+  OrdinaryHistoryType,
   LegacyHistoryEntry,
   LegacyHistoryRowInput,
   ReceiveHistoryEntry,
@@ -29,6 +33,7 @@ type OperationRepositories = {
   mintOperationRepository?: MemoryMintOperationRepository;
   mintQuoteRepository?: MintQuoteRepository;
   receiveOperationRepository?: MemoryReceiveOperationRepository;
+  mintSwapOperationRepository?: MintSwapOperationRepository;
 };
 
 export class MemoryHistoryRepository implements HistoryProjectionRepository {
@@ -117,7 +122,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
   }
 
   private async projectOperationById(
-    type: HistoryType,
+    type: OrdinaryHistoryType,
     operationId: string,
   ): Promise<HistoryEntry | null> {
     switch (type) {
@@ -163,7 +168,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     const quoteKeys = new Set<string>();
 
     for (const entry of operationEntries) {
-      if (entry.source !== 'operation') continue;
+      if (entry.source !== 'operation' || entry.type === 'mint-swap') continue;
       operationKeys.add(this.operationKey(entry.type, entry.operationId));
       if ((entry.type === 'mint' || entry.type === 'melt') && entry.quoteId) {
         quoteKeys.add(this.quoteKey(entry.type, entry.mintUrl, entry.quoteId));
@@ -190,7 +195,7 @@ export class MemoryHistoryRepository implements HistoryProjectionRepository {
     });
   }
 
-  private operationKey(type: HistoryType, operationId: string): string {
+  private operationKey(type: OrdinaryHistoryType, operationId: string): string {
     return `${type}:${operationId}`;
   }
 

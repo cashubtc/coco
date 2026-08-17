@@ -212,6 +212,7 @@ describe('MeltBolt11Handler', () => {
     // Mock ProofRepository
     proofRepository = {
       getProofsByOperationId: mock(() => Promise.resolve([])),
+      getProofsBySecrets: mock(() => Promise.resolve([])),
     } as unknown as ProofRepository;
 
     // Mock ProofService
@@ -1482,6 +1483,73 @@ describe('MeltBolt11Handler', () => {
   // ============================================================================
   // Edge Cases
   // ============================================================================
+
+  describe('parent-owned remote phases', () => {
+    it('separates pre-swap network execution from transactional result application', async () => {
+      const operation = makeExecutingOp('owned-pre-swap', {
+        parentSwapOperationId: 'mint-swap-parent',
+        parentExecutionPhase: 'pre_swap_authorized',
+        needsSwap: true,
+        inputProofSecrets: ['input-1'],
+        swapOutputData: createMockOutputData(['keep-1'], ['send-1']),
+      });
+      (mockWallet.send as Mock<any>).mockResolvedValueOnce({
+        keep: [makeProof('keep-1', 10)],
+        send: [makeProof('send-1', 10)],
+      });
+
+      const remoteResult = await handler.executeOwnedRemote!({
+        operation,
+        wallet: mockWallet,
+        mintAdapter,
+        proofs: [makeProof('input-1', 110)],
+        logger,
+      });
+
+      expect(remoteResult).toMatchObject({
+        operationId: operation.id,
+        phase: 'pre_swap',
+      });
+      expect(mockWallet.send).toHaveBeenCalledTimes(1);
+      expect(mintAdapter.customMeltBolt11).not.toHaveBeenCalled();
+      expect(proofService.setProofState).not.toHaveBeenCalled();
+      expect(proofService.saveProofs).not.toHaveBeenCalled();
+
+      const applied = await handler.applyOwnedRemote!(
+        {
+          operation,
+          proofRepository,
+          proofService,
+          logger,
+        },
+        remoteResult,
+      );
+
+      expect('status' in applied).toBe(false);
+      if ('status' in applied) throw new Error('Expected an executing melt child');
+      expect(applied.parentExecutionPhase).toBe('melt_authorized');
+      expect(proofService.setProofState).toHaveBeenCalledWith(
+        mintUrl,
+        operation.inputProofSecrets,
+        'spent',
+      );
+      expect(proofService.saveProofs).toHaveBeenCalledWith(
+        mintUrl,
+        expect.arrayContaining([
+          expect.objectContaining({
+            secret: 'keep-1',
+            state: 'ready',
+            createdByOperationId: operation.id,
+          }),
+          expect.objectContaining({
+            secret: 'send-1',
+            state: 'inflight',
+            createdByOperationId: operation.id,
+          }),
+        ]),
+      );
+    });
+  });
 
   describe('edge cases', () => {
     it('should throw if input proofs count does not match', async () => {
