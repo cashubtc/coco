@@ -7,10 +7,11 @@ import type {
   PreparedSendOperation,
   SendOperation,
 } from '../../operations/send/SendOperation.ts';
-import type { P2pkSendOptions } from '../../operations/send/SendMethodHandler.ts';
+import type { DefaultSendMethodData, P2pkSendOptions } from '../../index.ts';
 import { SendOpsApi } from '../../api/SendOpsApi.ts';
 
 const mintUrl = 'https://mint.test';
+const forcedSwapMethodData = { forceSwap: true } satisfies DefaultSendMethodData;
 
 const p2pkOptionsRejectHashlock = {
   pubkey: 'pubkey-1',
@@ -86,7 +87,11 @@ describe('SendOpsApi', () => {
   });
 
   it('prepare maps forceSwap to default send method data', async () => {
-    await api.prepare({ mintUrl, amount: Amount.from(20), forceSwap: true });
+    await api.prepare({
+      mintUrl,
+      amount: Amount.from(20),
+      forceSwap: forcedSwapMethodData.forceSwap,
+    });
 
     expect(sendOperationService.init).toHaveBeenCalledWith(
       mintUrl,
@@ -96,7 +101,7 @@ describe('SendOpsApi', () => {
       },
       {
         method: 'default',
-        methodData: { forceSwap: true },
+        methodData: forcedSwapMethodData,
       },
     );
   });
