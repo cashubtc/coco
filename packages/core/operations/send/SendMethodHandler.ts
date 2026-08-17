@@ -61,6 +61,12 @@ export type P2pkSendMethodData =
       pubkey?: never;
     };
 
+/** Options that control a standard unlocked token send. */
+export interface DefaultSendMethodData {
+  /** Swap selected proofs even when they exactly match the requested amount. */
+  forceSwap?: boolean;
+}
+
 /**
  * Registry of supported send methods and their payload shapes.
  * Extend via declaration merging if you need to add methods externally.
@@ -69,7 +75,7 @@ export type P2pkSendMethodData =
  * - htlc: { hash: string; timeout: number } - HTLC locked tokens
  */
 export interface SendMethodDefinitions {
-  default: Record<string, never>;
+  default: DefaultSendMethodData;
   p2pk: P2pkSendMethodData;
 }
 

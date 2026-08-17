@@ -8,6 +8,7 @@ import type {
   RecoverExecutingContext,
   ExecutionResult,
   RecoveryResult,
+  SendMethodData,
 } from '../../../operations/send/SendMethodHandler';
 import type {
   PreparedSendOperation,
@@ -35,11 +36,14 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
   async prepare(ctx: BasePrepareContext): Promise<PreparedSendOperation> {
     const { operation, wallet, proofService, logger } = ctx;
     const { mintUrl, amount, unit } = operation;
+    const { forceSwap = false } = operation.methodData as SendMethodData<'default'>;
 
-    // Try exact match first (no swap needed)
-    const exactProofs = await proofService.selectProofsToSend(mintUrl, { amount, unit }, false);
+    // Try exact match first unless the caller requested fresh send proofs.
+    const exactProofs = forceSwap
+      ? []
+      : await proofService.selectProofsToSend(mintUrl, { amount, unit }, false);
     const exactAmount = sumProofs(exactProofs);
-    const needsSwap = !exactAmount.equals(amount);
+    const needsSwap = forceSwap || !exactAmount.equals(amount);
 
     let selectedProofs: Proof[];
     let fee = Amount.zero();
@@ -91,6 +95,7 @@ export class DefaultSendHandler implements SendMethodHandler<'default'> {
         proofCount: selectedProofs.length,
         keepOutputs: outputResult.keep.length,
         sendOutputs: outputResult.send.length,
+        forceSwap,
       });
     }
 

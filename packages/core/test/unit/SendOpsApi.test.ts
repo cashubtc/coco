@@ -85,6 +85,31 @@ describe('SendOpsApi', () => {
     expect(result).toBe(preparedOperation);
   });
 
+  it('prepare maps forceSwap to default send method data', async () => {
+    await api.prepare({ mintUrl, amount: Amount.from(20), forceSwap: true });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(
+      mintUrl,
+      {
+        amount: Amount.from(20),
+        unit: 'sat',
+      },
+      {
+        method: 'default',
+        methodData: { forceSwap: true },
+      },
+    );
+  });
+
+  it('prepare preserves empty default method data when forceSwap is false', async () => {
+    await api.prepare({ mintUrl, amount: Amount.from(20), forceSwap: false });
+
+    expect(sendOperationService.init).toHaveBeenCalledWith(mintUrl, expect.any(Object), {
+      method: 'default',
+      methodData: {},
+    });
+  });
+
   it('prepare maps p2pk target to send method options', async () => {
     await api.prepare({
       mintUrl,
