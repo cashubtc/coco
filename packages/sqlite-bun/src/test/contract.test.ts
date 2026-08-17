@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
@@ -11,6 +14,8 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapRepositoryContract,
+  runMintSwapRepositoryConcurrencyContract,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
 import { SqliteRepositories as Repositories } from '../index.ts';
@@ -24,6 +29,26 @@ async function createRepositories() {
     repositories,
     dispose: async () => {
       rawDatabase.close();
+    },
+  };
+}
+
+async function createRepositoryPair() {
+  const directory = await mkdtemp(join(tmpdir(), 'coco-mint-swap-bun-'));
+  const filename = join(directory, 'wallet.sqlite');
+  const firstDatabase = new Database(filename);
+  const secondDatabase = new Database(filename);
+  const first = new Repositories({ database: firstDatabase });
+  const second = new Repositories({ database: secondDatabase });
+  await first.init();
+  await second.init();
+  return {
+    first,
+    second,
+    dispose: async () => {
+      firstDatabase.close();
+      secondDatabase.close();
+      await rm(directory, { recursive: true, force: true });
     },
   };
 }
@@ -68,6 +93,10 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryConcurrencyContract({ createRepositoryPair }, { describe, it, expect });
 
 describe('hydration corruption guard', () => {
   it('throws when send operation has prepared state but null financial fields', async () => {

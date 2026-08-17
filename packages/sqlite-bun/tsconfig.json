@@ -13,7 +13,7 @@
     "preserveSymlinks": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
-    "types": ["bun"],
+    "types": ["bun", "node"],
     "noEmit": true,
 
     // Best practices

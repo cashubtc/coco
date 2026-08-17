@@ -39,7 +39,7 @@ type LegacyHistoryRow = {
 };
 
 type OperationRow = SendOperationRow | MeltOperationRow | MintOperationRow | ReceiveOperationRow;
-type HistoryVisibleMeltState = Exclude<MeltOperationRow['state'], 'init'>;
+type HistoryVisibleMeltState = Exclude<MeltOperationRow['state'], 'init' | 'failed'>;
 
 const stores = [
   'coco_cashu_send_operations',

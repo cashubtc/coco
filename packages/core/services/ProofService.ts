@@ -19,9 +19,10 @@ import type {
   BalancesByUnit,
   CoreProof,
 } from '../types';
-import type { CounterService } from './CounterService';
+import { CounterService } from './CounterService';
 import type { ProofUnitFilter } from '../repositories';
 import type { ProofRepository } from '../repositories';
+import type { RepositoryTransactionScope } from '../repositories';
 import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import { ProofOperationError, ProofValidationError } from '../models/Error';
@@ -79,6 +80,26 @@ export class ProofService {
     this.logger = logger;
     this.eventBus = eventBus;
     this.outputDataCreator = outputDataCreator ?? OutputData;
+  }
+
+  /**
+   * Bind local proof and counter writes to a repository transaction.
+   *
+   * Events are intentionally suppressed: a composing parent publishes only after its complete
+   * transaction, including child and parent state, has committed.
+   */
+  forTransaction(repositories: RepositoryTransactionScope): ProofService {
+    return new ProofService(
+      new CounterService(repositories.counterRepository, this.logger),
+      repositories.proofRepository,
+      this.walletService,
+      this.mintService,
+      this.keyRingService,
+      this.seedService,
+      this.logger,
+      undefined,
+      this.outputDataCreator,
+    );
   }
 
   /**
@@ -218,10 +239,13 @@ export class ProofService {
         unit,
       });
       const feeAmount = sendAmount.subtract(requestedSend);
-      // Adjust keep amount: if send increases due to fees, keep decreases
-      keepAmount = requestedKeep.greaterThanOrEqual(feeAmount)
-        ? requestedKeep.subtract(feeAmount)
-        : Amount.zero();
+      if (requestedKeep.lessThan(feeAmount)) {
+        throw new ProofValidationError(
+          'Keep amount cannot cover the receiver fee added to send outputs',
+        );
+      }
+      // Preserve value by moving the receiver fee from keep to send.
+      keepAmount = requestedKeep.subtract(feeAmount);
       this.logger?.debug('Fee calculation for send amount', {
         mintUrl,
         unit,
@@ -942,6 +966,32 @@ export class ProofService {
     changeSignatures: SerializedBlindedSignature[],
     options: { unit: string; createdByOperationId?: string },
   ): Promise<CoreProof[]> {
+    const proofs = await this.unblindChangeProofs(mintUrl, outputData, changeSignatures, options);
+    const coreProofs = mapProofToCoreProof(mintUrl, 'ready', proofs, {
+      unit: options.unit,
+      createdByOperationId: options.createdByOperationId,
+    });
+    await this.saveProofs(mintUrl, coreProofs);
+
+    this.logger?.info('Change proofs unblinded and saved', {
+      mintUrl,
+      unit: normalizeUnit(options.unit),
+      count: coreProofs.length,
+      operationId: options.createdByOperationId,
+    });
+    return coreProofs;
+  }
+
+  /**
+   * Unblind all returned change signatures without writing repositories.
+   * Callers may perform this outside a transaction and persist the validated result atomically.
+   */
+  async unblindChangeProofs(
+    mintUrl: string,
+    outputData: OutputDataLike[],
+    changeSignatures: SerializedBlindedSignature[],
+    options: { unit: string; createdByOperationId?: string },
+  ): Promise<Proof[]> {
     if (!mintUrl || mintUrl.trim().length === 0) {
       throw new ProofValidationError('mintUrl is required');
     }
@@ -960,46 +1010,29 @@ export class ProofService {
       keysetMap[ks.id] = ks;
     });
 
+    if (changeSignatures.length > outputData.length) {
+      throw new ProofValidationError('Mint returned more change signatures than prepared outputs');
+    }
+
     // Slice output data to match signature count
     const matchedOutputs = outputData.slice(0, changeSignatures.length);
 
     // Unblind each signature to create proofs
-    const proofs: Proof[] = matchedOutputs.flatMap((output, i) => {
+    const proofs: Proof[] = matchedOutputs.map((output, i) => {
       const sig = changeSignatures[i];
       const keyset = keysetMap[output.blindedMessage.id];
       if (!sig || !keyset) {
         const reason = !sig ? 'missing signature' : 'missing keyset';
-        this.logger?.warn('Failed to create change proof', { reason, index: i });
-        return [];
+        throw new ProofValidationError(`Failed to create change proof: ${reason} at index ${i}`);
       }
       assertSameUnit(
         normalizeUnit(keyset.unit, { defaultUnit: DEFAULT_UNIT }),
         unit,
         'Change proof keyset',
       );
-      return [output.toProof(sig, { id: keyset.id, keys: keyset.keypairs as Keys })];
+      return output.toProof(sig, { id: keyset.id, keys: keyset.keypairs as Keys });
     });
-
-    if (proofs.length === 0) {
-      return [];
-    }
-
-    // Map to CoreProof and save
-    const coreProofs = mapProofToCoreProof(mintUrl, 'ready', proofs, {
-      unit,
-      createdByOperationId: options?.createdByOperationId,
-    });
-
-    await this.saveProofs(mintUrl, coreProofs);
-
-    this.logger?.info('Change proofs unblinded and saved', {
-      mintUrl,
-      unit,
-      count: coreProofs.length,
-      operationId: options?.createdByOperationId,
-    });
-
-    return coreProofs;
+    return proofs;
   }
 
   /**

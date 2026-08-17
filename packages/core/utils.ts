@@ -161,6 +161,36 @@ export function getProofStateInputsFromSerializedOutputs(
   }));
 }
 
+/** Validate that remote proofs are exactly the proofs described by persisted output data. */
+export function assertProofsMatchSerializedOutputs(
+  proofs: readonly Proof[],
+  outputs: readonly SerializedOutput[],
+  label: string,
+): void {
+  if (proofs.length !== outputs.length) {
+    throw new Error(`${label} proof count does not match deterministic outputs`);
+  }
+  const expectedBySecret = new Map(
+    outputs.map((output) => [decodeSecretHex(output.secret), output] as const),
+  );
+  if (expectedBySecret.size !== outputs.length) {
+    throw new Error(`${label} deterministic outputs contain duplicate secrets`);
+  }
+  const seen = new Set<string>();
+  for (const proof of proofs) {
+    if (seen.has(proof.secret)) throw new Error(`${label} proofs contain duplicate secrets`);
+    seen.add(proof.secret);
+    const output = expectedBySecret.get(proof.secret);
+    if (!output) throw new Error(`${label} proof secret does not match deterministic outputs`);
+    if (proof.id !== output.blindedMessage.id) {
+      throw new Error(`${label} proof keyset does not match deterministic outputs`);
+    }
+    if (!Amount.from(proof.amount).equals(Amount.from(output.blindedMessage.amount))) {
+      throw new Error(`${label} proof amount does not match deterministic outputs`);
+    }
+  }
+}
+
 export function mapProofToCoreProof(
   mintUrl: string,
   state: ProofState,

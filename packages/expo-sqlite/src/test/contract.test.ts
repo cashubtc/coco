@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
   runAuthSessionRepositoryContract,
@@ -11,6 +14,8 @@ import {
   runSendOperationRepositoryContract,
   runMeltOperationRepositoryContract,
   runMeltQuoteRepositoryContract,
+  runMintSwapRepositoryContract,
+  runMintSwapRepositoryConcurrencyContract,
   createDummyMint,
 } from '@cashu/coco-adapter-tests';
 import { runSqlDatabaseContract } from '@cashu/coco-sql-storage/test';
@@ -132,6 +137,30 @@ async function createRepositories() {
   } as const;
 }
 
+async function createRepositoryPair() {
+  const directory = await mkdtemp(join(tmpdir(), 'coco-mint-swap-expo-'));
+  const filename = join(directory, 'wallet.sqlite');
+  const firstDatabase = new BunExpoSqliteDatabaseShim(filename);
+  const secondDatabase = new BunExpoSqliteDatabaseShim(filename);
+  const first = new Repositories({
+    database: firstDatabase as unknown as SqliteRepositoriesOptions['database'],
+  });
+  const second = new Repositories({
+    database: secondDatabase as unknown as SqliteRepositoriesOptions['database'],
+  });
+  await first.init();
+  await second.init();
+  return {
+    first,
+    second,
+    dispose: async () => {
+      await firstDatabase.closeAsync();
+      await secondDatabase.closeAsync();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 runSqlDatabaseContract(
   {
     createDatabase() {
@@ -176,6 +205,10 @@ runMeltOperationRepositoryContract({ createRepositories }, { describe, it, expec
 runMeltQuoteRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runPaymentRequestReceiveRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryContract({ createRepositories }, { describe, it, expect });
+
+runMintSwapRepositoryConcurrencyContract({ createRepositoryPair }, { describe, it, expect });
 
 describe('expo-sqlite web transaction compatibility', () => {
   it('uses withTransactionAsync when exclusive transactions are unavailable on web', async () => {

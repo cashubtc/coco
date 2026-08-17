@@ -1,5 +1,11 @@
 import type { MintOperationRepository } from '@cashu/coco-core/adapter';
-import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
+import {
+  assertParentOwnedMintOperationInvariant,
+  assertParentOwnedMintOperationUpdate,
+  deserializeAmount,
+  serializeAmount,
+  stringifyJson,
+} from '@cashu/coco-core/adapter';
 import type { SqlDatabase, SqlValue } from '../index.ts';
 import { getUnixTimeSeconds } from '../utils.ts';
 
@@ -28,6 +34,7 @@ interface MintOperationRow {
   lastObservedRemoteStateAt: number | null;
   terminalFailureJson: string | null;
   outputDataJson: string | null;
+  parentSwapOperationId: string | null;
 }
 
 const persistedStates = ['pending', 'executing', 'finalized', 'failed'] as const;
@@ -60,6 +67,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    parentSwapOperationId: row.parentSwapOperationId ?? undefined,
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
@@ -116,6 +124,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
       null,
       operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
       null,
+      operation.parentSwapOperationId ?? null,
     ];
   }
 
@@ -138,6 +147,7 @@ const operationToParams = (operation: MintOperation): SqlValue[] => {
     null,
     operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
     JSON.stringify(operation.outputData),
+    operation.parentSwapOperationId ?? null,
   ];
 };
 
@@ -149,6 +159,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
   }
 
   async create(operation: MintOperation): Promise<void> {
+    assertParentOwnedMintOperationInvariant(operation);
     const exists = await this.db.get<{ id: string }>(
       'SELECT id FROM coco_cashu_mint_operations WHERE id = ? LIMIT 1',
       [operation.id],
@@ -160,27 +171,25 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_mint_operations
-        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, error, method, methodDataJson, amount, unit, request, expiry, pubkey, lastObservedRemoteState, lastObservedRemoteStateAt, terminalFailureJson, outputDataJson, parentSwapOperationId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }
 
   async update(operation: MintOperation): Promise<void> {
-    const exists = await this.db.get<{ id: string }>(
-      'SELECT id FROM coco_cashu_mint_operations WHERE id = ? LIMIT 1',
-      [operation.id],
-    );
-    if (!exists) {
+    const current = await this.getById(operation.id);
+    if (!current) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
+    assertParentOwnedMintOperationUpdate(current, operation);
 
     const updatedAtSeconds = getUnixTimeSeconds();
 
     if (operation.state === 'init') {
       await this.db.run(
         `UPDATE coco_cashu_mint_operations
-         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?
+         SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, terminalFailureJson = ?, parentSwapOperationId = ?
          WHERE id = ?`,
         [
           operation.quoteId,
@@ -192,6 +201,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
           serializeAmount(operation.amount),
           operation.unit,
           operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
+          operation.parentSwapOperationId ?? null,
           operation.id,
         ],
       );
@@ -200,7 +210,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
 
     await this.db.run(
       `UPDATE coco_cashu_mint_operations
-       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?
+       SET quoteId = ?, state = ?, updatedAt = ?, error = ?, method = ?, methodDataJson = ?, amount = ?, unit = ?, request = ?, expiry = ?, pubkey = ?, lastObservedRemoteState = ?, lastObservedRemoteStateAt = ?, terminalFailureJson = ?, outputDataJson = ?, parentSwapOperationId = ?
        WHERE id = ?`,
       [
         operation.quoteId,
@@ -218,6 +228,7 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
         null,
         operation.terminalFailure ? JSON.stringify(operation.terminalFailure) : null,
         JSON.stringify(operation.outputData),
+        operation.parentSwapOperationId ?? null,
         operation.id,
       ],
     );
@@ -265,6 +276,10 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
   }
 
   async delete(id: string): Promise<void> {
+    const operation = await this.getById(id);
+    if (operation?.parentSwapOperationId) {
+      throw new Error(`Cannot delete parent-owned MintOperation ${id}`);
+    }
     await this.db.run('DELETE FROM coco_cashu_mint_operations WHERE id = ?', [id]);
   }
 }
