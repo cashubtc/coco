@@ -1,6 +1,6 @@
 ---
 name: cut-stable-release
-description: Cut a coco stable release from `master` or finalize one from an existing `release/X.Y.Z-rc` branch. Use when the user asks to create a stable `vX.Y.Z` release, run `changeset version` or `changeset pre exit` plus versioning, validate committed package manifests/changelogs, commit the release files, tag the release commit, and push `master` plus the tag. Supports dry-run, preview, and rehearsal requests by stopping before push.
+description: Cut a coco stable release from `master` or finalize a selected RC cutoff from an existing `release/X.Y.Z-rc` branch while `master` continues independently. Use when the user asks to create a stable `vX.Y.Z` release, preserve an RC's runtime source, finalize Changesets prerelease metadata, validate and build the release, commit and tag it, and push the source branch plus tag. Supports dry-run, preview, and rehearsal requests by stopping before push.
 ---
 
 # Cut Stable Release
@@ -22,6 +22,11 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
   skill.
 - Stable release tags must not contain `.changeset/pre.json`; the repo
   validator enforces this.
+- For stable-from-RC releases, preserve the selected RC as the source cutoff.
+  The stable commit may change only Changesets metadata, package manifests,
+  and package changelogs.
+- Keep `master` work that landed after the RC out of the stable tag. Back-merge
+  the stable release metadata into `master` after the release cut.
 - Treat `dry run`, `dry-run`, `--dry-run`, `preview`, or `rehearsal` as a
   request to create the local commit and tag but skip pushing.
 - Networked git commands usually need escalation.
@@ -31,8 +36,8 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
 - Direct stable release: start from `master` with pending changesets and no RC
   cycle.
 - Final stable after RCs: start from the existing `release/X.Y.Z-rc` branch,
-  run `changeset pre exit`, then version the stable release. After committing,
-  fast-forward `master` to that stable release commit.
+  require its HEAD to be the selected RC tag, then create one stable metadata
+  commit directly on that cutoff. `master` may have advanced independently.
 
 ## Direct Stable Workflow
 
@@ -80,11 +85,25 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
 2. Sync the branch and tags:
 
    ```bash
-   git fetch origin --tags
-   git pull --ff-only
+   RELEASE_BRANCH="$(git branch --show-current)"
+   git fetch origin "$RELEASE_BRANCH" --tags
+   git pull --ff-only origin "$RELEASE_BRANCH"
    ```
 
-3. Confirm `.changeset/pre.json` is present, then exit prerelease mode and
+3. Select the RC cutoff at branch HEAD:
+
+   ```bash
+   RC_CUTOFF_TAG="$(git tag --points-at HEAD --list 'v*-rc.*' --sort=-v:refname | head -n 1)"
+   test -n "$RC_CUTOFF_TAG"
+   RC_CUTOFF_COMMIT="$(git rev-parse "$RC_CUTOFF_TAG^{commit}")"
+   test "$(git rev-parse HEAD)" = "$RC_CUTOFF_COMMIT"
+   ```
+
+   Stop if the branch has commits after the selected RC. Runtime or repository
+   changes after an RC require a new RC; they do not belong in the stable
+   metadata commit.
+
+4. Confirm `.changeset/pre.json` is present, then exit prerelease mode and
    generate stable versions:
 
    ```bash
@@ -93,8 +112,8 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    bunx changeset version
    ```
 
-4. Continue at "Commit And Tag". After committing, this path must fast-forward
-   `master` to the stable release commit before pushing.
+5. Continue at "Commit And Tag" with `RELEASE_BRANCH`, `RC_CUTOFF_TAG`, and
+   `RC_CUTOFF_COMMIT` available in the shell.
 
 ## Commit And Tag
 
@@ -103,6 +122,12 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    ```bash
    eval "$(.agents/skills/cut-stable-release/scripts/derive-stable-release-metadata.sh)"
    printf '%s\n' "$NEW_PACKAGE_VERSION" "$NEW_RELEASE_TAG" "$COMMIT_MESSAGE"
+   ```
+
+   For stable-from-RC, confirm that the stable tag matches the RC line:
+
+   ```bash
+   [[ "$RC_CUTOFF_TAG" == "${NEW_RELEASE_TAG}-rc."* ]]
    ```
 
 2. Validate the committed release state and build:
@@ -119,6 +144,10 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    ```bash
    git diff --name-only
    git diff --stat
+   if [[ -n "${RC_CUTOFF_COMMIT:-}" ]]; then
+     .agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh \
+       "$RC_CUTOFF_COMMIT"
+   fi
    ```
 
    Expect only `.changeset/`, `packages/*/package.json`, and
@@ -130,6 +159,10 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    ```bash
    git add .changeset packages/*/package.json packages/*/CHANGELOG.md
    git commit -m "$COMMIT_MESSAGE"
+   if [[ -n "${RC_CUTOFF_COMMIT:-}" ]]; then
+     .agents/skills/cut-stable-release/scripts/check-stable-cutoff.sh \
+       "$RC_CUTOFF_COMMIT" HEAD
+   fi
    git tag "$NEW_RELEASE_TAG"
    ```
 
@@ -144,12 +177,7 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    Stable from RC normal mode:
 
    ```bash
-   stable_commit="$(git rev-parse HEAD)"
-   git fetch origin master --tags
-   git switch master
-   git pull --ff-only origin master
-   git merge --ff-only "$stable_commit"
-   git push --atomic origin master "refs/tags/$NEW_RELEASE_TAG"
+   git push --atomic origin "$RELEASE_BRANCH" "refs/tags/$NEW_RELEASE_TAG"
    ```
 
    Dry-run mode:
@@ -161,13 +189,28 @@ Use this for tags like `v2.0.0`. Use `$cut-rc-release` for RC tags like
    git tag --list "$NEW_RELEASE_TAG"
    ```
 
-6. Report the package version, tag, commit SHA, whether this was direct stable
-   or stable-from-RC, and whether `master` plus the tag were pushed or left
-   local for dry-run.
+6. Report the package version, tag, commit SHA, and whether this was direct
+   stable or stable-from-RC. For stable-from-RC, also report the cutoff tag,
+   cutoff commit, release branch, that `master` was intentionally unchanged,
+   whether the release branch plus tag were pushed or left local, and that the
+   normal back-merge into `master` remains a separate follow-up.
+
+## Back-Merge After A Stable RC Release
+
+The stable tag remains on the direct child of the selected RC cutoff. After the
+release branch and tag are pushed, merge the stable release commit back into
+current `master` through the repository's normal review or merge process. A
+normal merge commit is expected because `master` can contain post-cutoff work.
+This back-merge records stable versions and consumed changesets on `master`; it
+does not change the stable tag or add post-cutoff work to the release.
+
+Treat the back-merge as a separate operation that requires its own user
+authorization. Do not perform it during a dry run.
 
 ## Notes
 
 - If validation fails, fix the release files before tagging. Do not bypass
   `scripts/check-release.ts`.
-- For stable-from-RC, stop if `master` cannot fast-forward to the stable release
-  commit. Do not create a merge commit on `master` during release finalization.
+- For stable-from-RC, stop if the stable candidate is not a direct child of the
+  selected RC or changes files outside the permitted release metadata paths.
+- If runtime source must change, cut another RC before stable finalization.
