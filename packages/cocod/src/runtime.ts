@@ -421,6 +421,7 @@ export class CocodRuntime {
       }
     } catch (error) {
       this.sessionState = 'failed';
+      this.seedAccessAvailable = this.walletConfig?.encrypted === false;
       this.lastFailure = {
         code: 'session_stop_failed',
         message: 'Coco Session failed to stop cleanly',

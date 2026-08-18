@@ -224,6 +224,30 @@ describe('CocodRuntime', () => {
     });
   });
 
+  test('restores protected Seed Access policy when stop cleanup fails', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      initializeSession: async () => ({
+        ...fakeSession(),
+        manager: {
+          dispose: mock(async () => {
+            throw new Error('dispose failed');
+          }),
+        } as unknown as Manager,
+      }),
+    });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+    await runtime.startSession({ passphrase: 'correct horse' }).completion;
+
+    await expect(runtime.stopSession()).rejects.toThrow('dispose failed');
+
+    expect(runtime.getStatus()).toMatchObject({
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: { state: 'failed' },
+    });
+  });
+
   test('preserves timeout quarantine when an in-progress start later fails', async () => {
     const paths = await createPaths();
     await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
