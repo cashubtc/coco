@@ -188,7 +188,7 @@
       "additionalProperties": false,
       "required": ["generatedMnemonic", "status"],
       "properties": {
-        "generatedMnemonic": { "type": "string" },
+        "generatedMnemonic": { "type": "string", "x-sensitive": true },
         "status": {
           "oneOf": [
             {
@@ -328,13 +328,25 @@
       "type": "object",
       "additionalProperties": false,
       "required": [],
-      "properties": { "passphrase": { "type": "string" } }
+      "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
+    },
+    "WalletRecoveryMaterialResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mnemonic"],
+      "properties": { "mnemonic": { "type": "string", "x-sensitive": true } }
+    },
+    "WalletRecoveryMaterialRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
     },
     "StartSessionRequest": {
       "type": "object",
       "additionalProperties": false,
       "required": [],
-      "properties": { "passphrase": { "type": "string" } }
+      "properties": { "passphrase": { "type": "string", "x-sensitive": true } }
     },
     "StopSessionRequest": {
       "type": "object",
@@ -352,7 +364,8 @@
       "responseSchema": "Health",
       "errorSchema": "Error",
       "successStatuses": [200],
-      "idempotencyKey": null
+      "idempotencyKey": null,
+      "responseCacheControl": null
     },
     {
       "method": "GET",
@@ -362,7 +375,8 @@
       "responseSchema": "LifecycleStatus",
       "errorSchema": "Error",
       "successStatuses": [200],
-      "idempotencyKey": null
+      "idempotencyKey": null,
+      "responseCacheControl": null
     },
     {
       "method": "POST",
@@ -372,7 +386,19 @@
       "responseSchema": "InitializeWalletResponse",
       "errorSchema": "Error",
       "successStatuses": [201, 202],
-      "idempotencyKey": "optional"
+      "idempotencyKey": "optional",
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/wallet/recovery-material",
+      "capability": "wallet:admin",
+      "requestSchema": "WalletRecoveryMaterialRequest",
+      "responseSchema": "WalletRecoveryMaterialResponse",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": "no-store"
     },
     {
       "method": "POST",
@@ -382,7 +408,8 @@
       "responseSchema": "LifecycleStatus",
       "errorSchema": "Error",
       "successStatuses": [200, 202],
-      "idempotencyKey": "optional"
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
     },
     {
       "method": "POST",
@@ -392,7 +419,8 @@
       "responseSchema": "LifecycleStatus",
       "errorSchema": "Error",
       "successStatuses": [200, 202],
-      "idempotencyKey": "optional"
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
     }
   ]
 }

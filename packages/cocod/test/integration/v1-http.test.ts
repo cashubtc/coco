@@ -64,6 +64,8 @@ test('serves public health and authenticated structured status beside legacy rou
         requiresPassphrase,
       };
     },
+    getWalletRecoveryMaterial: async () =>
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
     startSession: () => {
       runtimeStatus = {
         ...runtimeStatus,
@@ -178,6 +180,21 @@ test('serves public health and authenticated structured status beside legacy rou
     { 'Content-Type': 'application/json', 'Idempotency-Key': 'listener-initialize-1' },
   );
   expect(replay.status).toBe(201);
+
+  const recoveryMaterial = await unixFetch(
+    socketPath,
+    '/v1/admin/wallet/recovery-material',
+    plaintext,
+    'POST',
+    JSON.stringify({ passphrase: 'correct horse' }),
+    { 'Content-Type': 'application/json' },
+  );
+  expect(recoveryMaterial.status).toBe(200);
+  expect(recoveryMaterial.headers.get('cache-control')).toBe('no-store');
+  expect(await recoveryMaterial.json()).toEqual({
+    mnemonic:
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+  });
 
   const start = await unixFetch(
     socketPath,

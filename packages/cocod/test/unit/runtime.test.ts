@@ -5,7 +5,12 @@ import { dirname, join } from 'node:path';
 
 import type { Manager } from '@cashu/coco-core';
 
-import { CocodRuntime, CocodRuntimeError, type RunningCocoSession } from '../../src/runtime.js';
+import {
+  CocodRuntime,
+  CocodRuntimeError,
+  type CocoSessionState,
+  type RunningCocoSession,
+} from '../../src/runtime.js';
 import { CocoSessionStartupError } from '../../src/utils/wallet.js';
 import type { WalletConfig } from '../../src/utils/config.js';
 import { deferred } from '../helpers/deferred.js';
@@ -30,6 +35,64 @@ describe('CocodRuntime', () => {
       seedAccess: null,
       cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
     });
+  });
+
+  test('retrieves unencrypted Wallet Recovery Material repeatably without changing status', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const runtime = await CocodRuntime.load(paths);
+    const initialStatus = runtime.getStatus();
+
+    expect(await runtime.getWalletRecoveryMaterial()).toBe(MNEMONIC);
+    expect(await runtime.getWalletRecoveryMaterial({ passphrase: 'ignored' })).toBe(MNEMONIC);
+    expect(runtime.getStatus()).toEqual(initialStatus);
+  });
+
+  test('rejects Wallet Recovery Material retrieval when no Wallet is configured', async () => {
+    const runtime = await CocodRuntime.load(await createPaths());
+
+    await expect(runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+      code: 'wallet_not_configured',
+    });
+  });
+
+  test('requires and validates the passphrase for protected Wallet Recovery Material', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load(paths);
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+    const initialStatus = runtime.getStatus();
+
+    await expect(runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+      code: 'passphrase_required',
+    });
+    await expect(
+      runtime.getWalletRecoveryMaterial({ passphrase: 'wrong horse' }),
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+    expect(await runtime.getWalletRecoveryMaterial({ passphrase: 'correct horse' })).toBe(MNEMONIC);
+    expect(runtime.getStatus()).toEqual(initialStatus);
+  });
+
+  test('retrieves protected Wallet Recovery Material in every Coco Session state', async () => {
+    const states: CocoSessionState[] = ['stopped', 'starting', 'running', 'stopping', 'failed'];
+
+    for (const state of states) {
+      const scenario = await protectedRuntimeInState(state);
+      const initialStatus = scenario.runtime.getStatus();
+      expect(initialStatus.cocoSession.state).toBe(state);
+
+      await expect(scenario.runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+        code: 'passphrase_required',
+      });
+      await expect(
+        scenario.runtime.getWalletRecoveryMaterial({ passphrase: 'wrong horse' }),
+      ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+      expect(
+        await scenario.runtime.getWalletRecoveryMaterial({ passphrase: 'correct horse' }),
+      ).toBe(MNEMONIC);
+      expect(scenario.runtime.getStatus()).toEqual(initialStatus);
+
+      await scenario.settle();
+    }
   });
 
   test('initializes without a passphrase and starts a Coco Session', async () => {
@@ -492,4 +555,65 @@ function fakeSession(): RunningCocoSession {
     mintUrl: 'https://mint.example.com',
     npcAccount: {} as RunningCocoSession['npcAccount'],
   };
+}
+
+async function protectedRuntimeInState(state: CocoSessionState): Promise<{
+  runtime: CocodRuntime;
+  settle(): Promise<void>;
+}> {
+  const paths = await createPaths();
+  const sessionReady = deferred<RunningCocoSession>();
+  const disposal = deferred<void>();
+  const runtime = await CocodRuntime.load({
+    ...paths,
+    initializeSession: async () => sessionReady.promise,
+  });
+  await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+  if (state === 'stopped') {
+    return { runtime, settle: async () => {} };
+  }
+
+  const start = runtime.startSession({ passphrase: 'correct horse' });
+  await start.accepted;
+  if (state === 'starting') {
+    return {
+      runtime,
+      settle: async () => {
+        sessionReady.resolve(fakeSession());
+        await start.completion;
+        await runtime.stopSession();
+      },
+    };
+  }
+
+  const session = fakeSession();
+  if (state === 'stopping') {
+    session.manager.dispose = mock(() => disposal.promise);
+  } else if (state === 'failed') {
+    session.manager.dispose = mock(async () => {
+      throw new Error('dispose failed');
+    });
+  }
+  sessionReady.resolve(session);
+  await start.completion;
+
+  if (state === 'running') {
+    return { runtime, settle: () => runtime.stopSession() };
+  }
+
+  const stop = runtime.stopSession();
+  void stop.catch(() => {});
+  if (state === 'stopping') {
+    return {
+      runtime,
+      settle: async () => {
+        disposal.resolve();
+        await stop;
+      },
+    };
+  }
+
+  await stop.catch(() => {});
+  return { runtime, settle: async () => {} };
 }

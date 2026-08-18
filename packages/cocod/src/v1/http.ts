@@ -16,12 +16,16 @@ import {
   startSessionRequestSchema,
   stopSessionRequestSchema,
   toLifecycleStatusDocument,
+  walletRecoveryMaterialRequestSchema,
+  walletRecoveryMaterialResponseSchema,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
   type LifecycleStatusDocument,
   type StartSessionRequest,
   type StopSessionRequest,
+  type WalletRecoveryMaterialRequest,
+  type WalletRecoveryMaterialResponseDocument,
 } from './schema.js';
 
 export * from './contract.js';
@@ -36,6 +40,7 @@ const HEALTH_ROUTE = {
   responseSchema: healthSchema,
   successStatuses: [200],
   idempotencyKey: null,
+  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, HealthDocument>;
 
 const STATUS_ROUTE = {
@@ -46,6 +51,7 @@ const STATUS_ROUTE = {
   responseSchema: lifecycleStatusSchema,
   successStatuses: [200],
   idempotencyKey: null,
+  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, LifecycleStatusDocument>;
 
 const INITIALIZE_WALLET_ROUTE = {
@@ -56,7 +62,22 @@ const INITIALIZE_WALLET_ROUTE = {
   responseSchema: initializeWalletResponseSchema,
   successStatuses: [201, 202],
   idempotencyKey: 'optional',
+  responseCacheControl: 'no-store',
 } as const satisfies V1RouteMetadata<InitializeWalletRequest, InitializeWalletResponseDocument>;
+
+const WALLET_RECOVERY_MATERIAL_ROUTE = {
+  method: 'POST',
+  path: '/v1/admin/wallet/recovery-material',
+  capability: 'wallet:admin',
+  requestSchema: walletRecoveryMaterialRequestSchema,
+  responseSchema: walletRecoveryMaterialResponseSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: 'no-store',
+} as const satisfies V1RouteMetadata<
+  WalletRecoveryMaterialRequest,
+  WalletRecoveryMaterialResponseDocument
+>;
 
 const START_SESSION_ROUTE = {
   method: 'POST',
@@ -66,6 +87,7 @@ const START_SESSION_ROUTE = {
   responseSchema: lifecycleStatusSchema,
   successStatuses: [200, 202],
   idempotencyKey: 'optional',
+  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<StartSessionRequest, LifecycleStatusDocument>;
 
 const STOP_SESSION_ROUTE = {
@@ -76,6 +98,7 @@ const STOP_SESSION_ROUTE = {
   responseSchema: lifecycleStatusSchema,
   successStatuses: [200, 202],
   idempotencyKey: 'optional',
+  responseCacheControl: null,
 } as const satisfies V1RouteMetadata<StopSessionRequest, LifecycleStatusDocument>;
 
 /** Returns lifecycle route metadata without constructing a runtime or executable handlers. */
@@ -84,6 +107,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     HEALTH_ROUTE,
     STATUS_ROUTE,
     INITIALIZE_WALLET_ROUTE,
+    WALLET_RECOVERY_MATERIAL_ROUTE,
     START_SESSION_ROUTE,
     STOP_SESSION_ROUTE,
   ];
@@ -113,9 +137,13 @@ export function createV1RouteDefinitions(
           status: toLifecycleStatusDocument(runtime.getStatus(), daemonVersion),
         },
         result.requiresPassphrase ? 201 : 202,
-        { 'Cache-Control': 'no-store' },
       );
     },
+  });
+  const walletRecoveryMaterial = defineV1Route({
+    ...WALLET_RECOVERY_MATERIAL_ROUTE,
+    handler: async (input) =>
+      new V1HttpResponse({ mnemonic: await runtime.getWalletRecoveryMaterial(input) }),
   });
   const startSession = defineV1Route({
     ...START_SESSION_ROUTE,
@@ -139,7 +167,7 @@ export function createV1RouteDefinitions(
       return new V1HttpResponse(result, alreadyStopped ? 200 : 202);
     },
   });
-  return [health, status, initializeWallet, startSession, stopSession];
+  return [health, status, initializeWallet, walletRecoveryMaterial, startSession, stopSession];
 }
 
 function observeDetachedTransition(

@@ -9,6 +9,8 @@ import {
   startSessionRequestSchema,
   stopSessionRequestSchema,
   v1ErrorSchema,
+  walletRecoveryMaterialRequestSchema,
+  walletRecoveryMaterialResponseSchema,
 } from '../../src/v1/http.js';
 import { generateV1InterfaceDescription } from '../../src/v1/interface-description.js';
 
@@ -25,6 +27,8 @@ test('the generated lifecycle interface description comes from the runtime schem
     LifecycleStatus: lifecycleStatusSchema.jsonSchema,
     InitializeWalletRequest: initializeWalletRequestSchema.jsonSchema,
     InitializeWalletResponse: initializeWalletResponseSchema.jsonSchema,
+    WalletRecoveryMaterialRequest: walletRecoveryMaterialRequestSchema.jsonSchema,
+    WalletRecoveryMaterialResponse: walletRecoveryMaterialResponseSchema.jsonSchema,
     StartSessionRequest: startSessionRequestSchema.jsonSchema,
     StopSessionRequest: stopSessionRequestSchema.jsonSchema,
   });
@@ -38,6 +42,7 @@ test('the generated lifecycle interface description comes from the runtime schem
       errorSchema: 'Error',
       successStatuses: [200],
       idempotencyKey: null,
+      responseCacheControl: null,
     },
     {
       method: 'GET',
@@ -48,6 +53,7 @@ test('the generated lifecycle interface description comes from the runtime schem
       errorSchema: 'Error',
       successStatuses: [200],
       idempotencyKey: null,
+      responseCacheControl: null,
     },
     {
       method: 'POST',
@@ -58,6 +64,18 @@ test('the generated lifecycle interface description comes from the runtime schem
       errorSchema: 'Error',
       successStatuses: [201, 202],
       idempotencyKey: 'optional',
+      responseCacheControl: 'no-store',
+    },
+    {
+      method: 'POST',
+      path: '/v1/admin/wallet/recovery-material',
+      capability: 'wallet:admin',
+      requestSchema: 'WalletRecoveryMaterialRequest',
+      responseSchema: 'WalletRecoveryMaterialResponse',
+      errorSchema: 'Error',
+      successStatuses: [200],
+      idempotencyKey: null,
+      responseCacheControl: 'no-store',
     },
     {
       method: 'POST',
@@ -68,6 +86,7 @@ test('the generated lifecycle interface description comes from the runtime schem
       errorSchema: 'Error',
       successStatuses: [200, 202],
       idempotencyKey: 'optional',
+      responseCacheControl: null,
     },
     {
       method: 'POST',
@@ -78,6 +97,7 @@ test('the generated lifecycle interface description comes from the runtime schem
       errorSchema: 'Error',
       successStatuses: [200, 202],
       idempotencyKey: 'optional',
+      responseCacheControl: null,
     },
   ]);
 
@@ -85,6 +105,12 @@ test('the generated lifecycle interface description comes from the runtime schem
   expect(JSON.stringify(generated.schemas.LifecycleStatus)).toContain(
     '^\\\\d{4}-\\\\d{2}-\\\\d{2}T',
   );
+  expect(generated.schemas.WalletRecoveryMaterialRequest).toMatchObject({
+    properties: { passphrase: { 'x-sensitive': true } },
+  });
+  expect(generated.schemas.WalletRecoveryMaterialResponse).toMatchObject({
+    properties: { mnemonic: { 'x-sensitive': true } },
+  });
 
   const cocoSession = { state: 'stopped', startedAt: null, lastFailure: null };
   expect(() =>

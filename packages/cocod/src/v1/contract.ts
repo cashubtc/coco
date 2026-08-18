@@ -4,6 +4,7 @@ import type {
   InitializeWalletInput,
   InitializeWalletResult,
   SessionStartTransition,
+  WalletRecoveryMaterialInput,
 } from '../runtime.js';
 import type { RuntimeSchema, StartSessionRequest, V1ErrorCode } from './schema.js';
 
@@ -24,6 +25,7 @@ export interface V1RouteMetadata<TRequest = unknown, TResponse = unknown> {
   readonly responseSchema: RuntimeSchema<TResponse>;
   readonly successStatuses?: readonly number[];
   readonly idempotencyKey?: 'optional' | null;
+  readonly responseCacheControl?: 'no-store' | null;
 }
 
 /** Executable v1 route definition formed by binding a handler to route metadata. */
@@ -66,6 +68,7 @@ export class V1HttpResponse<T> {
 export interface V1LifecycleRuntime {
   getStatus(): CocodStatus;
   initializeWallet(input: InitializeWalletInput): Promise<InitializeWalletResult>;
+  getWalletRecoveryMaterial(input?: WalletRecoveryMaterialInput): Promise<string>;
   startSession(input?: StartSessionRequest): SessionStartTransition;
   stopSession(): Promise<void>;
 }
@@ -78,6 +81,7 @@ export function defineV1Route<TRequest, TResponse>(
     ...definition,
     successStatuses: definition.successStatuses ?? [200],
     idempotencyKey: definition.idempotencyKey ?? null,
+    responseCacheControl: definition.responseCacheControl ?? null,
     handler: (input, request) => definition.handler(input as TRequest, request),
   };
 }

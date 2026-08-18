@@ -16,6 +16,7 @@ export interface V1InterfaceDescription {
     errorSchema: 'Error';
     successStatuses: readonly number[];
     idempotencyKey: 'optional' | null;
+    responseCacheControl: 'no-store' | null;
   }>;
 }
 
@@ -50,6 +51,7 @@ export function generateV1InterfaceDescription(
       errorSchema: 'Error',
       successStatuses: definition.successStatuses ?? [200],
       idempotencyKey: definition.idempotencyKey ?? null,
+      responseCacheControl: definition.responseCacheControl ?? null,
     })),
   };
 }

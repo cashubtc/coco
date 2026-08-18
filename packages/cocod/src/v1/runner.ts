@@ -172,7 +172,11 @@ async function runV1Route(
       );
     }
     const output = definition.responseSchema.parse(routeResponse.body);
-    const response = jsonResponse(output, routeResponse.status, requestId, routeResponse.headers);
+    const responseHeaders = new Headers(routeResponse.headers);
+    if (definition.responseCacheControl) {
+      responseHeaders.set('Cache-Control', definition.responseCacheControl);
+    }
+    const response = jsonResponse(output, routeResponse.status, requestId, responseHeaders);
     logCompleted(requestLogger, startedAt, response.status);
     return response;
   } catch (error) {

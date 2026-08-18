@@ -58,6 +58,10 @@ export interface InitializeWalletResult {
   requiresPassphrase: boolean;
 }
 
+export interface WalletRecoveryMaterialInput {
+  passphrase?: string;
+}
+
 export interface SessionStartTransition {
   /** Resolves after Seed Access is acquired and the session enters `starting`. */
   accepted: Promise<void>;
@@ -151,6 +155,23 @@ export class CocodRuntime {
 
   getRunningSession(): RunningCocoSession | null {
     return this.sessionState === 'running' ? this.session : null;
+  }
+
+  async getWalletRecoveryMaterial(input: WalletRecoveryMaterialInput = {}): Promise<string> {
+    const config = this.walletConfig;
+    if (!config) {
+      throw new CocodRuntimeError('wallet_not_configured', 'Wallet is not initialized');
+    }
+    if (config.encrypted) {
+      if (!input.passphrase) {
+        throw new CocodRuntimeError(
+          'passphrase_required',
+          'Passphrase required for encrypted wallet',
+        );
+      }
+      return this.decryptWalletMnemonic(config, input.passphrase);
+    }
+    return config.mnemonic;
   }
 
   async initializeWallet(input: InitializeWalletInput): Promise<InitializeWalletResult> {

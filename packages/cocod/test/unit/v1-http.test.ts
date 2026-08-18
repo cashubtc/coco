@@ -43,6 +43,7 @@ describe('v1 HTTP route interface', () => {
           responseSchema,
           successStatuses,
           idempotencyKey,
+          responseCacheControl,
         }) => ({
           method,
           path,
@@ -51,6 +52,7 @@ describe('v1 HTTP route interface', () => {
           responseSchema: responseSchema.name,
           successStatuses,
           idempotencyKey,
+          responseCacheControl,
         }),
       ),
     ).toEqual([
@@ -62,6 +64,7 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'Health',
         successStatuses: [200],
         idempotencyKey: null,
+        responseCacheControl: null,
       },
       {
         method: 'GET',
@@ -71,6 +74,7 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'LifecycleStatus',
         successStatuses: [200],
         idempotencyKey: null,
+        responseCacheControl: null,
       },
       {
         method: 'POST',
@@ -80,6 +84,17 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'InitializeWalletResponse',
         successStatuses: [201, 202],
         idempotencyKey: 'optional',
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'POST',
+        path: '/v1/admin/wallet/recovery-material',
+        capability: 'wallet:admin',
+        requestSchema: 'WalletRecoveryMaterialRequest',
+        responseSchema: 'WalletRecoveryMaterialResponse',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
       },
       {
         method: 'POST',
@@ -89,6 +104,7 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'LifecycleStatus',
         successStatuses: [200, 202],
         idempotencyKey: 'optional',
+        responseCacheControl: null,
       },
       {
         method: 'POST',
@@ -98,6 +114,7 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'LifecycleStatus',
         successStatuses: [200, 202],
         idempotencyKey: 'optional',
+        responseCacheControl: null,
       },
     ]);
   });
@@ -256,6 +273,125 @@ describe('v1 HTTP route interface', () => {
     );
     expect(importAttempt.status).toBe(400);
     expect(initializeWallet).not.toHaveBeenCalled();
+  });
+
+  test('retrieves Wallet Recovery Material repeatably with a non-cacheable response', async () => {
+    const credential = await createCredential();
+    const mnemonic =
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+    const status = configuredStatus('failed');
+    const getWalletRecoveryMaterial = mock(async () => mnemonic);
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(
+        lifecycleRuntime(() => status, { getWalletRecoveryMaterial }),
+        '0.0.17',
+      ),
+      credential.credentials,
+    );
+
+    for (let retrieval = 0; retrieval < 2; retrieval += 1) {
+      const response = await routes['/v1/admin/wallet/recovery-material']!.POST!(
+        authorizedJsonRequest(
+          '/v1/admin/wallet/recovery-material',
+          credential.plaintext,
+          { passphrase: 'correct horse' },
+          undefined,
+          { 'Idempotency-Key': 'not-required-for-retrieval' },
+        ),
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.json()).toEqual({ mnemonic });
+      expect(status.cocoSession.state).toBe('failed');
+    }
+    expect(getWalletRecoveryMaterial).toHaveBeenCalledTimes(2);
+    expect(getWalletRecoveryMaterial).toHaveBeenCalledWith({ passphrase: 'correct horse' });
+  });
+
+  test('protects recovery retrieval and keeps request and response secrets out of logs', async () => {
+    const credential = await createCredential();
+    const mnemonic =
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+    const correctPassphrase = 'correct horse battery staple';
+    const wrongPassphrase = 'wrong secret passphrase';
+    const getWalletRecoveryMaterial = mock(async ({ passphrase }: { passphrase?: string }) => {
+      if (!passphrase) {
+        throw new CocodRuntimeError('passphrase_required', 'unsafe missing-passphrase detail');
+      }
+      if (passphrase !== correctPassphrase) {
+        throw new CocodRuntimeError('wallet_unlock_failed', `unsafe ${passphrase}`);
+      }
+      return mnemonic;
+    });
+    const debug = mock((_event: string, _fields?: unknown) => {});
+    const info = mock((_event: string, _fields?: unknown) => {});
+    const warn = mock((_event: string, _fields?: unknown) => {});
+    const error = mock((_event: string, _fields?: unknown) => {});
+    const logger = createTestLogger({ debug, info, warn, error });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(
+        lifecycleRuntime(() => configuredStatus('running'), { getWalletRecoveryMaterial }),
+        '0.0.17',
+      ),
+      credential.credentials,
+      logger,
+    );
+    const recoveryRoute = routes['/v1/admin/wallet/recovery-material']!.POST!;
+
+    const unauthenticated = await recoveryRoute(
+      new Request('http://localhost/v1/admin/wallet/recovery-material', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passphrase: correctPassphrase }),
+      }),
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(getWalletRecoveryMaterial).not.toHaveBeenCalled();
+
+    const missing = await recoveryRoute(
+      authorizedJsonRequest('/v1/admin/wallet/recovery-material', credential.plaintext, {}),
+    );
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({
+      error: {
+        code: 'passphrase_required',
+        message: 'A passphrase is required',
+        retryable: false,
+      },
+    });
+
+    const invalid = await recoveryRoute(
+      authorizedJsonRequest('/v1/admin/wallet/recovery-material', credential.plaintext, {
+        passphrase: wrongPassphrase,
+      }),
+    );
+    expect(invalid.status).toBe(401);
+    expect(await invalid.json()).toEqual({
+      error: {
+        code: 'wallet_unlock_failed',
+        message: 'Wallet unlock failed',
+        retryable: false,
+      },
+    });
+
+    const success = await recoveryRoute(
+      authorizedJsonRequest('/v1/admin/wallet/recovery-material', credential.plaintext, {
+        passphrase: correctPassphrase,
+      }),
+    );
+    expect(await success.json()).toEqual({ mnemonic });
+
+    const logs = JSON.stringify([
+      debug.mock.calls,
+      info.mock.calls,
+      warn.mock.calls,
+      error.mock.calls,
+    ]);
+    expect(logs).not.toContain(correctPassphrase);
+    expect(logs).not.toContain(wrongPassphrase);
+    expect(logs).not.toContain(mnemonic);
+    expect(logs).not.toContain(credential.plaintext);
   });
 
   test('returns asynchronous Session transition status without awaiting completion', async () => {
@@ -786,6 +922,9 @@ function lifecycleRuntime(
     getStatus,
     initializeWallet: async () => {
       throw new Error('initializeWallet was not expected');
+    },
+    getWalletRecoveryMaterial: async () => {
+      throw new Error('getWalletRecoveryMaterial was not expected');
     },
     startSession: () => {
       throw new Error('startSession was not expected');

@@ -63,6 +63,11 @@ export interface InitializeWalletRequest {
   passphrase?: string;
 }
 
+/** Wallet Recovery Material retrieval input containing optional Wallet-unlocking material. */
+export interface WalletRecoveryMaterialRequest {
+  passphrase?: string;
+}
+
 /** Coco Session start input containing optional Wallet-unlocking material. */
 export interface StartSessionRequest {
   passphrase?: string;
@@ -75,6 +80,11 @@ export type StopSessionRequest = Record<string, never>;
 export interface InitializeWalletResponseDocument {
   generatedMnemonic: string;
   status: LifecycleStatusDocument;
+}
+
+/** Sensitive Wallet Recovery Material returned only by the administrative retrieval route. */
+export interface WalletRecoveryMaterialResponseDocument {
+  mnemonic: string;
 }
 
 const INTERFACE_VERSION = '1' as const;
@@ -161,13 +171,19 @@ export const lifecycleStatusSchema = namedSchema<LifecycleStatusDocument>(
 /** Runtime and generated schema for Wallet initialization requests. */
 export const initializeWalletRequestSchema = namedSchema<InitializeWalletRequest>(
   'InitializeWalletRequest',
-  objectNode({ passphrase: stringNode() }, { optional: ['passphrase'] }),
+  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
+);
+
+/** Runtime and generated schema for Wallet Recovery Material retrieval requests. */
+export const walletRecoveryMaterialRequestSchema = namedSchema<WalletRecoveryMaterialRequest>(
+  'WalletRecoveryMaterialRequest',
+  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
 );
 
 /** Runtime and generated schema for Coco Session start requests. */
 export const startSessionRequestSchema = namedSchema<StartSessionRequest>(
   'StartSessionRequest',
-  objectNode({ passphrase: stringNode() }, { optional: ['passphrase'] }),
+  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
 );
 
 /** Runtime and generated schema for Coco Session stop requests. */
@@ -180,10 +196,17 @@ export const stopSessionRequestSchema = namedSchema<StopSessionRequest>(
 export const initializeWalletResponseSchema = namedSchema<InitializeWalletResponseDocument>(
   'InitializeWalletResponse',
   objectNode({
-    generatedMnemonic: stringNode(),
+    generatedMnemonic: stringNode({ sensitive: true }),
     status: lifecycleStatusNode,
   }),
 );
+
+/** Runtime and generated schema for sensitive Wallet Recovery Material responses. */
+export const walletRecoveryMaterialResponseSchema =
+  namedSchema<WalletRecoveryMaterialResponseDocument>(
+    'WalletRecoveryMaterialResponse',
+    objectNode({ mnemonic: stringNode({ sensitive: true }) }),
+  );
 
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(
@@ -220,9 +243,16 @@ function literalNode<T extends string | null>(expected: T): SchemaNode {
   };
 }
 
-function stringNode(options: { format?: 'date-time'; pattern?: string } = {}): SchemaNode {
+function stringNode(
+  options: { format?: 'date-time'; pattern?: string; sensitive?: boolean } = {},
+): SchemaNode {
   return {
-    jsonSchema: { type: 'string', ...options },
+    jsonSchema: {
+      type: 'string',
+      ...(options.format ? { format: options.format } : {}),
+      ...(options.pattern ? { pattern: options.pattern } : {}),
+      ...(options.sensitive ? { 'x-sensitive': true } : {}),
+    },
     parse(value, path) {
       if (typeof value !== 'string') {
         throw new Error(`${path} must be a string`);
