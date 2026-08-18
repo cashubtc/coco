@@ -235,6 +235,11 @@ export function serializeError(error: unknown): Record<string, unknown> {
   return { message: String(error) };
 }
 
+/** Applies the logger's sensitive-field policy before data reaches any logging adapter. */
+export function redactLogValue(value: unknown): unknown {
+  return sanitizeValue(value);
+}
+
 function extractFields(meta: unknown[]): [Record<string, unknown>, unknown[]] {
   if (meta.length === 1 && isPlainObject(meta[0])) {
     return [meta[0], []];

@@ -3,6 +3,8 @@ import { createDaemonLogger, serializeError } from './utils/logger.js';
 import { CocodRuntime } from './runtime.js';
 import { buildFallbackHandler, createRouteHandlers, buildRoutes } from './routes.js';
 import { AdministrativeCredential } from './credentials.js';
+import { buildV1FallbackHandler, buildV1Routes, createV1RouteDefinitions } from './v1/http.js';
+import packageJson from '../package.json' with { type: 'json' };
 
 export async function startDaemon() {
   const logger = createDaemonLogger();
@@ -111,19 +113,19 @@ export async function startDaemon() {
     }, 100);
     return Response.json({ output: 'Daemon stopping' });
   });
-  const routes = buildRoutes(
-    routeHandlers,
-    runtime,
+  const httpLogger = logger.child({ component: 'http' });
+  const legacyRoutes = buildRoutes(routeHandlers, runtime, credentials, httpLogger);
+  const v1Routes = buildV1Routes(
+    createV1RouteDefinitions(runtime, packageJson.version),
     credentials,
-    logger.child({
-      component: 'http',
-    }),
+    httpLogger,
   );
+  const legacyFallback = buildFallbackHandler(runtime, credentials, httpLogger);
 
   server = Bun.serve({
     unix: SOCKET_PATH,
-    routes,
-    fetch: buildFallbackHandler(runtime, credentials, logger.child({ component: 'http' })),
+    routes: { ...legacyRoutes, ...v1Routes },
+    fetch: buildV1FallbackHandler(credentials, legacyFallback, httpLogger),
   });
 
   logger.info('daemon.started', { socketPath: SOCKET_PATH });
