@@ -1,6 +1,6 @@
 ---
 name: cocod
-description: A Cashu ecash wallet CLI for Bitcoin and Lightning payments. Use when managing Cashu tokens, sending/receiving payments via Lightning (bolt11) or ecash, handling HTTP 402 X-Cashu payment requests, or viewing wallet history.
+description: A Cashu ecash wallet CLI for Bitcoin and Lightning payments. Use when managing Cashu tokens, sending/receiving payments via Lightning (bolt11 invoices or bolt12 offers) or ecash, handling HTTP 402 X-Cashu payment requests, or viewing wallet history.
 compatibility: Requires the cocod CLI, a private package in this repository that runs from workspace source (packages/cocod). Supports Cashu ecash protocol, Lightning Network payments, and NUT-24 HTTP 402 X-Cashu flows.
 metadata:
   project: cocod
@@ -106,7 +106,18 @@ cocod receive cashu <token>
 
 # Create Lightning invoice to receive
 cocod receive bolt11 <amount> [--mint-url <url>]
+
+# Get a reusable BOLT12 offer to receive
+cocod receive bolt12 [--amount <sats>] [--mint-url <url>]
+
+# List the offers that can still be paid
+cocod receive bolt12 list
 ```
+
+A BOLT12 offer keeps working after it is paid, so one offer can be handed out repeatedly.
+Payments are claimed in the background, so no follow-up command is needed; use `cocod history`
+to check whether an offer was paid. `cocod receive bolt12 list` reports each offer with the
+amount the mint has received against it and the amount this wallet has already claimed.
 
 ### Sending Payments
 
@@ -118,7 +129,16 @@ cocod send cashu <amount> [--mint-url <url>]
 
 # Pay a Lightning invoice
 cocod send bolt11 <invoice> [--mint-url <url>]
+
+# Pay a BOLT12 offer (--amount is required for offers without a fixed amount)
+cocod send bolt12 <offer> [--amount <sats>] [--mint-url <url>]
 ```
+
+`cocod send bolt12` prints the amount plus the fee reserve, which is spent on top of it.
+
+An unconfirmed payment must NOT be retried — every payment to a BOLT12 offer is a separate
+invoice, so retrying pays the payee twice. Report it as unconfirmed, quote the operation id,
+and check `cocod history`.
 
 ### HTTP 402 Web Payments (NUT-24)
 
@@ -246,6 +266,7 @@ cocod history --limit 10
 - **Cashu**: Privacy-preserving ecash protocol using blind signatures
 - **Mint**: Server that issues and redeems Cashu tokens
 - **Token**: Transferable Cashu string representing satoshi value
-- **Bolt11**: Lightning Network invoice format
+- **Bolt11**: Lightning Network invoice format, payable once
+- **Bolt12**: Lightning Network offer format, reusable across payments
 - **NPC**: Lightning Address service for receiving payments
 - **Mnemonic**: Seed phrase for wallet recovery

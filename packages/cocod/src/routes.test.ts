@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
@@ -80,6 +80,22 @@ function postJson(path: string, body: unknown): Request {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+/** Fakes the melt APIs `/send/bolt12` drives. */
+function bolt12SendManager(execute: () => Promise<unknown>) {
+  const create = mock(async (_input: unknown) => ({
+    quoteId: 'melt-1',
+    amount: toAmount(21),
+    fee_reserve: toAmount(2),
+    unit: 'sat',
+  }));
+  const prepare = mock(async (_input: unknown) => ({ id: 'op1', state: 'prepared' }));
+  const manager = {
+    quotes: { melt: { create } },
+    ops: { melt: { prepare, execute: mock(async (_prepared: unknown) => execute()) } },
+  };
+  return { manager, create, prepare };
 }
 
 describe('routes', () => {
@@ -367,6 +383,117 @@ describe('routes', () => {
     });
     expect(prepareInput).toEqual({ quote: createdQuote });
     expect(executed).toBe(true);
+  });
+
+  test('/receive/bolt12 returns the offer without preparing a mint operation', async () => {
+    // A BOLT12 offer stays payable after it is paid, so there is no single operation to
+    // prepare: core watches the canonical quote and claims each payment on its own.
+    for (const [requestBody, expected] of [
+      [{}, { mintUrl: 'https://mint.example.com', method: 'bolt12', amount: undefined }],
+      [{ amount: 21 }, { mintUrl: 'https://mint.example.com', method: 'bolt12', amount: 21 }],
+    ] as const) {
+      const create = mock(async (_input: unknown) => ({ request: 'lno1created' }));
+      const runtime = runningRuntime({ quotes: { mint: { create } } });
+      const routes = createRouteHandlers(runtime);
+
+      const response = await routes['/receive/bolt12']!.POST!(
+        postJson('/receive/bolt12', requestBody),
+      );
+
+      const body = (await response.json()) as { output?: string };
+      expect(response.status).toBe(200);
+      expect(body.output).toBe('lno1created');
+      expect(create.mock.calls).toEqual([[expected]]);
+    }
+  });
+
+  test('/receive/bolt12/list summarises the offers that are still payable', async () => {
+    const listPending = mock(async (_input: unknown) => [
+      {
+        quoteId: 'quote-1',
+        mintUrl: 'https://mint.example.com',
+        request: 'lno1offer',
+        amount: toAmount(21),
+        amountPaid: toAmount(42),
+        amountIssued: toAmount(21),
+        expiry: null,
+      },
+    ]);
+    const runtime = runningRuntime({ quotes: { mint: { listPending } } });
+    const routes = createRouteHandlers(runtime);
+
+    const response = await routes['/receive/bolt12/list']!.GET!(
+      new Request('http://localhost/receive/bolt12/list'),
+    );
+
+    const body = (await response.json()) as { output?: unknown };
+    expect(response.status).toBe(200);
+    expect(listPending.mock.calls).toEqual([[{ method: 'bolt12' }]]);
+    expect(body.output).toEqual([
+      {
+        quoteId: 'quote-1',
+        mintUrl: 'https://mint.example.com',
+        request: 'lno1offer',
+        amount: 21,
+        paid: 42,
+        issued: 21,
+        expiry: null,
+      },
+    ]);
+  });
+
+  test('/send/bolt12 reports the amount and fee reserve it paid', async () => {
+    const { manager, create } = bolt12SendManager(async () => ({ id: 'op1', state: 'finalized' }));
+    const routes = createRouteHandlers(runningRuntime(manager));
+
+    const response = await routes['/send/bolt12']!.POST!(
+      postJson('/send/bolt12', { offer: ' lno1example ', amount: 21 }),
+    );
+
+    const body = (await response.json()) as { output?: string };
+    expect(response.status).toBe(200);
+    expect(body.output).toBe('Paid 21 sat plus up to 2 fee reserve to offer: lno1example');
+    expect(create.mock.calls).toEqual([
+      [
+        {
+          mintUrl: 'https://mint.example.com',
+          method: 'bolt12',
+          methodData: { offer: 'lno1example', amountSats: 21 },
+        },
+      ],
+    ]);
+  });
+
+  test('/send/bolt12 reports an unsettled melt as unconfirmed instead of paid', async () => {
+    // Every payment to an offer is a separate invoice, so retrying an unconfirmed melt pays
+    // the payee twice.
+    const { manager } = bolt12SendManager(async () => ({ id: 'op2', state: 'pending' }));
+    const routes = createRouteHandlers(runningRuntime(manager));
+
+    const response = await routes['/send/bolt12']!.POST!(
+      postJson('/send/bolt12', { offer: 'lno1example' }),
+    );
+
+    const body = (await response.json()) as { output?: string };
+    expect(response.status).toBe(202);
+    expect(body.output).toContain('is not confirmed (operation op2)');
+    expect(body.output).toContain('Do not retry');
+  });
+
+  test('/send/bolt12 requires an offer before touching the melt APIs', async () => {
+    for (const requestBody of [{}, { offer: '   ' }]) {
+      const { manager, create } = bolt12SendManager(async () => {
+        throw new Error('should not execute');
+      });
+      const routes = createRouteHandlers(runningRuntime(manager));
+
+      const response = await routes['/send/bolt12']!.POST!(postJson('/send/bolt12', requestBody));
+
+      const body = (await response.json()) as { error?: string };
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Offer is required');
+      expect(create).not.toHaveBeenCalled();
+    }
   });
 
   test('/x-cashu/handle settles an inband request into an X-Cashu header', async () => {

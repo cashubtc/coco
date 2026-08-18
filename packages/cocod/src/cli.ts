@@ -87,6 +87,28 @@ receiveCmd
     });
   });
 
+const receiveBolt12Cmd = receiveCmd
+  .command('bolt12')
+  .description('Get a reusable BOLT12 offer to receive tokens')
+  .option('--amount <amount>', 'Fixed amount in sats to embed in the offer')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .action(async (options: { amount?: string; mintUrl?: string }) => {
+    await handleDaemonCommand('/receive/bolt12', {
+      method: 'POST',
+      body: {
+        amount: options.amount !== undefined ? Number(options.amount) : undefined,
+        mintUrl: options.mintUrl,
+      },
+    });
+  });
+
+receiveBolt12Cmd
+  .command('list')
+  .description('List BOLT12 offers that can still be paid')
+  .action(async () => {
+    await handleDaemonCommand('/receive/bolt12/list');
+  });
+
 // Send - nested subcommands
 const sendCmd = program.command('send').description('Send operations');
 
@@ -109,6 +131,22 @@ sendCmd
     await handleDaemonCommand('/send/bolt11', {
       method: 'POST',
       body: { invoice, mintUrl: options.mintUrl },
+    });
+  });
+
+sendCmd
+  .command('bolt12 <offer>')
+  .description('Pay a BOLT12 offer')
+  .option('--amount <amount>', 'Amount in sats (required for offers without a fixed amount)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .action(async (offer: string, options: { amount?: string; mintUrl?: string }) => {
+    await handleDaemonCommand('/send/bolt12', {
+      method: 'POST',
+      body: {
+        offer,
+        amount: options.amount !== undefined ? Number(options.amount) : undefined,
+        mintUrl: options.mintUrl,
+      },
     });
   });
 

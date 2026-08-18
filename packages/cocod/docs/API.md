@@ -24,6 +24,10 @@ All commands are available under `cocod`.
 - `receive cashu <token>` - Receive a Cashu token
 - `receive bolt11 <amount>` - Create a Lightning invoice
   - `--mint-url <url>` override default mint for this request
+- `receive bolt12` - Get a reusable BOLT12 offer
+  - `--amount <sats>` embed a fixed amount in the offer
+  - `--mint-url <url>` override default mint for this request
+- `receive bolt12 list` - List the BOLT12 offers that can still be paid
 
 ### Send
 
@@ -31,6 +35,13 @@ All commands are available under `cocod`.
   - `--mint-url <url>` override default mint
 - `send bolt11 <invoice>` - Pay a Lightning invoice
   - `--mint-url <url>` override default mint
+- `send bolt12 <offer>` - Pay a BOLT12 offer
+  - `--amount <sats>` amount to pay; the mint requires it for offers without a fixed amount
+  - `--mint-url <url>` override default mint
+
+An unsettled melt is reported as unconfirmed with its operation id and must not be retried —
+every payment to an offer is a separate invoice, so a retry pays the payee twice. Check
+`cocod history`.
 
 ### Mints
 
@@ -81,8 +92,11 @@ The CLI talks to the daemon over HTTP on a UNIX socket.
 - `GET /balance`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
+- `POST /receive/bolt12`
+- `GET /receive/bolt12/list`
 - `POST /send/cashu`
 - `POST /send/bolt11`
+- `POST /send/bolt12`
 - `POST /x-cashu/parse`
 - `POST /x-cashu/handle`
 - `POST /mints/add`
