@@ -603,8 +603,8 @@ async function protectedRuntimeInState(state: CocoSessionState): Promise<{
   }
 
   const stop = runtime.stopSession();
-  void stop.catch(() => {});
   if (state === 'stopping') {
+    void stop.catch(() => {});
     return {
       runtime,
       settle: async () => {
@@ -614,6 +614,6 @@ async function protectedRuntimeInState(state: CocoSessionState): Promise<{
     };
   }
 
-  await stop.catch(() => {});
+  await expect(stop).rejects.toThrow('dispose failed');
   return { runtime, settle: async () => {} };
 }

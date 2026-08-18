@@ -58,6 +58,7 @@ export interface InitializeWalletResult {
   requiresPassphrase: boolean;
 }
 
+/** Per-request Wallet-unlocking material used only to authorize recovery export. */
 export interface WalletRecoveryMaterialInput {
   passphrase?: string;
 }
@@ -157,6 +158,10 @@ export class CocodRuntime {
     return this.sessionState === 'running' ? this.session : null;
   }
 
+  /**
+   * Retrieves Wallet Recovery Material without changing Wallet Seed Access or Coco Session state.
+   * Protected Wallets validate and decrypt from configuration on every call.
+   */
   async getWalletRecoveryMaterial(input: WalletRecoveryMaterialInput = {}): Promise<string> {
     const config = this.walletConfig;
     if (!config) {

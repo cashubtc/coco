@@ -133,6 +133,10 @@ const lifecycleStatusNode = unionNode([
     cocoSession: cocoSessionStatusNode,
   }),
 ]);
+const sensitivePassphraseRequestNode = objectNode(
+  { passphrase: stringNode({ sensitive: true }) },
+  { optional: ['passphrase'] },
+);
 
 /** Runtime schema for a route that accepts no request body. */
 export const noBodySchema = namedSchema<null>('NoBody', literalNode(null));
@@ -171,19 +175,19 @@ export const lifecycleStatusSchema = namedSchema<LifecycleStatusDocument>(
 /** Runtime and generated schema for Wallet initialization requests. */
 export const initializeWalletRequestSchema = namedSchema<InitializeWalletRequest>(
   'InitializeWalletRequest',
-  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
+  sensitivePassphraseRequestNode,
 );
 
 /** Runtime and generated schema for Wallet Recovery Material retrieval requests. */
 export const walletRecoveryMaterialRequestSchema = namedSchema<WalletRecoveryMaterialRequest>(
   'WalletRecoveryMaterialRequest',
-  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
+  sensitivePassphraseRequestNode,
 );
 
 /** Runtime and generated schema for Coco Session start requests. */
 export const startSessionRequestSchema = namedSchema<StartSessionRequest>(
   'StartSessionRequest',
-  objectNode({ passphrase: stringNode({ sensitive: true }) }, { optional: ['passphrase'] }),
+  sensitivePassphraseRequestNode,
 );
 
 /** Runtime and generated schema for Coco Session stop requests. */
