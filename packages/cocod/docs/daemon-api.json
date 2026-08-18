@@ -104,6 +104,30 @@
       }
     },
     {
+      "path": "/receive/bolt12",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "amount": "number (optional, positive integer sats; embedded in the offer)",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "500": "{ error: string }"
+      },
+      "notes": "NUT-25 BOLT12 mint quote. The returned offer is reusable and stays payable after it is paid. Payments are claimed in the background and show up in /history."
+    },
+    {
+      "path": "/receive/bolt12/list",
+      "method": "GET",
+      "state": "UNLOCKED",
+      "responses": {
+        "200": "{ output: Array<{ quoteId, mintUrl, request, amount?, paid, issued, expiry }> }",
+        "500": "{ error: string }"
+      },
+      "notes": "Offers that are still payable. `paid` is what the mint has received against the offer and `issued` is what this wallet has already claimed from it; the difference is claimed in the background."
+    },
+    {
       "path": "/send/cashu",
       "method": "POST",
       "state": "UNLOCKED",
@@ -128,6 +152,23 @@
         "200": "{ output: string }",
         "500": "{ error: string }"
       }
+    },
+    {
+      "path": "/send/bolt12",
+      "method": "POST",
+      "state": "UNLOCKED",
+      "body": {
+        "offer": "string",
+        "amount": "number (optional, positive integer sats; required by the mint for offers without a fixed amount)",
+        "mintUrl": "string (optional)"
+      },
+      "responses": {
+        "200": "{ output: string }",
+        "202": "{ output: string }",
+        "400": "{ error: string }",
+        "500": "{ error: string }"
+      },
+      "notes": "NUT-25 BOLT12 melt. The mint's fee reserve is spent on top of the amount. A 202 means the mint has not settled the payment: it is not confirmed, must not be retried, and carries the operation id."
     },
     {
       "path": "/x-cashu/parse",

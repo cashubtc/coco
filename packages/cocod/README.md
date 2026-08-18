@@ -10,7 +10,7 @@ If you like simple tools: run commands in your terminal, and let the daemon hand
 - Initialize and secure a Cashu wallet
 - Check balances and transaction history
 - Send and receive Cashu tokens
-- Send and receive Lightning payments (BOLT11)
+- Send and receive Lightning payments (BOLT11 invoices and reusable BOLT12 offers)
 - Handle HTTP 402 payments with `X-Cashu`
 - Manage trusted mints
 
@@ -57,10 +57,13 @@ cocod balance
 # Receive
 cocod receive cashu "cashuA..."
 cocod receive bolt11 1000
+cocod receive bolt12                # reusable offer, payable more than once
+cocod receive bolt12 list           # offers that can still be paid
 
 # Send
 cocod send cashu 500
 cocod send bolt11 "lnbc..."
+cocod send bolt12 "lno1..." --amount 1000
 
 # Mints
 cocod mints add https://mint.example.com/Bitcoin

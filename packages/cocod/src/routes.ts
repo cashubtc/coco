@@ -174,6 +174,48 @@ export function createRouteHandlers(
         }
       }),
     },
+    '/receive/bolt12': {
+      // No mint operation is prepared: a BOLT12 offer stays payable after it is paid, and core
+      // watches the canonical quote and claims each payment on its own.
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
+        try {
+          const body = (await req.json()) as { amount?: number; mintUrl?: string };
+          const mintUrl = body.mintUrl || state.mintUrl;
+          const quote = await state.manager.quotes.mint.create({
+            mintUrl,
+            method: 'bolt12',
+            amount: body.amount,
+          });
+          return Response.json({ output: quote.request });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return Response.json({ error: `Failed to create offer: ${message}` }, { status: 500 });
+        }
+      }),
+    },
+    '/receive/bolt12/list': {
+      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
+        try {
+          const quotes = await state.manager.quotes.mint.listPending({ method: 'bolt12' });
+          return Response.json({
+            output: quotes.map((quote) => ({
+              quoteId: quote.quoteId,
+              mintUrl: quote.mintUrl,
+              request: quote.request,
+              amount: quote.amount?.toNumber(),
+              // What the mint has received against the offer, and what this wallet has
+              // already claimed from it.
+              paid: quote.amountPaid.toNumber(),
+              issued: quote.amountIssued.toNumber(),
+              expiry: quote.expiry,
+            })),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return Response.json({ error: `Failed to list offers: ${message}` }, { status: 500 });
+        }
+      }),
+    },
     '/send/cashu': {
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
@@ -202,6 +244,42 @@ export function createRouteHandlers(
           const prepared = await state.manager.ops.melt.prepare({ quote });
           await state.manager.ops.melt.execute(prepared);
           return Response.json({ output: `Paid invoice: ${body.invoice}` });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return Response.json({ error: `Payment failed: ${message}` }, { status: 500 });
+        }
+      }),
+    },
+    '/send/bolt12': {
+      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
+        try {
+          const body = (await req.json()) as { offer?: string; amount?: number; mintUrl?: string };
+          const offer = body.offer?.trim();
+          if (!offer) {
+            return Response.json({ error: 'Offer is required' }, { status: 400 });
+          }
+          const mintUrl = body.mintUrl || state.mintUrl;
+          const quote = await state.manager.quotes.melt.create({
+            mintUrl,
+            method: 'bolt12',
+            methodData: { offer, amountSats: body.amount },
+          });
+          // The fee reserve is melted alongside the amount, so report what the payment costs.
+          const cost = `${quote.amount.toNumber()} ${quote.unit} plus up to ${quote.fee_reserve.toNumber()} fee reserve`;
+          const prepared = await state.manager.ops.melt.prepare({ quote });
+          const result = await state.manager.ops.melt.execute(prepared);
+          // Tested against `finalized` rather than for `pending` so a state core adds later is
+          // not reported as paid. Every payment to an offer is a separate invoice, so a retry
+          // of an unconfirmed melt pays the payee twice.
+          if (result.state !== 'finalized') {
+            return Response.json(
+              {
+                output: `Payment of ${cost} to offer ${offer} is not confirmed (operation ${result.id}). Do not retry; check 'cocod history'.`,
+              },
+              { status: 202 },
+            );
+          }
+          return Response.json({ output: `Paid ${cost} to offer: ${offer}` });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return Response.json({ error: `Payment failed: ${message}` }, { status: 500 });
