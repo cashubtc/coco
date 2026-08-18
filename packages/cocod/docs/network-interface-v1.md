@@ -8,6 +8,8 @@ description of the current Unix-socket interface. The first revision covers the 
 Session lifecycle; later revisions will specify balances, mints, quotes, operations, history, and
 events.
 
+Implementation is organized as [focused delivery slices](./slices/README.md).
+
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 ## Goals
@@ -23,7 +25,11 @@ Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 - Mirroring every method on Coco's `Manager` class.
 - Supporting multiple Wallets in one cocod process.
 - Defining payment, quote, or operation resources in this first revision.
-- Preserving the current `{ output }` and `{ error }` response shapes.
+- Identifying or revoking individual Cocod Clients in the first interface version.
+- Importing a Wallet from existing Wallet Recovery Material through the network interface.
+- Providing native TLS termination.
+- Supporting browser clients or defining a CORS policy.
+- Preserving the current `{ output }` and `{ error }` response shapes in `/v1` resources.
 - Providing durable event replay in the first interface version.
 
 ## Domain language
@@ -38,11 +44,16 @@ is stopped or its seed is locked.
 **Wallet Seed Access** describes whether this cocod process can currently derive Wallet secrets.
 It is `locked` or `available`. It is not a client authentication session.
 
+**Wallet Recovery Material** is the human-portable secret from which the Wallet Seed can be
+reconstructed. Cocod represents it as a BIP39 mnemonic.
+
 **Coco Session** is a running Coco instance through which cocod uses the Wallet. Cocod owns at most
 one Coco Session. Starting or stopping a Coco Session does not create or delete the Wallet.
 
-**Client credential** authorizes a client to call the network interface. It does not unlock the
-Wallet Seed and MUST NOT be treated as Wallet-unlocking material.
+**Client Credential** authorizes one or more Cocod Clients to call the network interface. In v1,
+clients share one administrative credential, so authentication proves owner-level authority rather
+than an individual client identity. A Client Credential does not unlock the Wallet Seed and MUST
+NOT be treated as Wallet-unlocking material.
 
 The interface deliberately avoids the term "cocod session." It is ambiguous between the Coco
 Session and client authentication.
@@ -130,6 +141,8 @@ confirmed.
 - Restarting cocod MUST NOT make passphrase-encrypted Wallet Seed material available automatically.
 - Wallet-unlocking material MUST NOT be persisted, logged, returned, or used as a client
   credential.
+- The Client Credential alone MUST NOT expose passphrase-encrypted Wallet Recovery Material.
+- Retrieving Wallet Recovery Material MUST NOT start or stop a Coco Session or change its state.
 
 ### State transitions
 
@@ -165,8 +178,9 @@ Cocod process startup and Coco Session startup are separate. The process becomes
 an unattended Coco Session finishes starting.
 
 1. Create or verify the mode-`0700` state directory.
-2. Load and validate daemon configuration, listener security, and client credentials. Invalid
-   configuration fails the process before it binds a network listener.
+2. Load and validate daemon configuration and listener security. Load the administrative Client
+   Credential, or automatically generate it when no credential exists. Invalid configuration fails
+   the process before it binds a network listener.
 3. Load and validate the Wallet configuration when present. A missing Wallet is valid; a malformed
    Wallet configuration fails the process before it binds.
 4. Bind the TCP listener. `/health` and authenticated `/v1/status` are now available.
@@ -203,22 +217,59 @@ bind authenticated TCP listener
                                       `-- failure -> session stopped or failed
 ```
 
-Client credential provisioning must complete before the TCP listener binds. The exact first-run
-credential bootstrap flow remains to be specified with the authentication contract.
+Client Credential provisioning completes before the TCP listener binds. On first start, cocod
+generates one opaque, high-entropy bearer credential with `wallet:read` and `wallet:admin`. The
+daemon stores only its verifier. The local CLI stores the plaintext credential in a distinct
+mode-`0600` client file, from which the Cocod Owner may provision other consumers.
+
+The first interface version has no network credential-management endpoints. Several Cocod Clients
+may share the administrative credential, and cocod cannot distinguish them. Credential rotation
+is a host-local operation that atomically replaces the verifier and the local client file. Rotation
+invalidates every copied credential.
 
 ## Transport and authentication
 
-- Cocod MUST listen on TCP and SHOULD bind to `127.0.0.1` by default.
+- Cocod MUST listen on TCP and defaults to `127.0.0.1:62626`.
+- Listener overrides use `COCOD_LISTEN_HOST` and `COCOD_LISTEN_PORT`. Cocod MUST pass the validated
+  host and port explicitly to the HTTP server and MUST NOT inherit generic `PORT` variables.
 - Binding to a non-loopback address MUST require explicit configuration.
-- Non-loopback deployments MUST terminate TLS either in cocod or in a trusted local proxy.
-- `GET /health` MAY be unauthenticated and MUST NOT reveal Wallet state.
+- Cocod does not terminate TLS in v1. Remote deployments MUST use a trusted TLS proxy such as Caddy.
+- A TLS proxy supplies transport security only. Cocod MUST ignore forwarded client-identity headers
+  and authenticate the Client Credential itself.
+- `GET /health` MUST NOT require a Client Credential and MUST NOT reveal Wallet state.
 - Every `/v1/*` request MUST be authenticated.
 - Lifecycle mutation requires a client credential with the `wallet:admin` capability.
 - Lifecycle status requires at least the `wallet:read` capability.
-- Client credentials SHOULD be read from a mode-`0600` file rather than command arguments.
+- The v1 administrative credential has both capabilities.
+- Clients send the opaque credential in the `Authorization: Bearer` header.
+- Client credentials MUST be read from a mode-`0600` file rather than command arguments.
 
 Authentication proves which client is calling cocod. It does not by itself grant Wallet Seed
 Access.
+
+Browser clients are outside v1 scope. Cocod does not emit permissive CORS headers and clients MUST
+NOT expose the shared administrative credential to browser storage or browser application code.
+
+## Legacy command compatibility
+
+The existing unversioned command routes move from the Unix socket to the same TCP listener as
+`/v1`. They retain their current request and response shapes temporarily so the CLI's balance,
+send, receive, mint, history, NPC, and X-Cashu commands remain usable while their v1 resources are
+specified.
+
+Every unversioned route except the minimal health check requires the same administrative Client
+Credential. Cocod does not run a Unix listener or a second compatibility transport. Later interface
+revisions replace these routes incrementally and remove their CLI-oriented response envelopes.
+
+The legacy `/stop` route is not carried forward. The CLI uses the authenticated v1 process-shutdown
+resource instead.
+
+## Client endpoint selection
+
+Without an explicit endpoint, the CLI uses `http://127.0.0.1:62626` and may automatically start a
+local Cocod Process when it cannot connect. With `--url` or `COCOD_URL`, the CLI uses the supplied
+endpoint and MUST NOT start a Cocod Process. This distinction affects local process discovery only;
+local and remote clients use the same HTTP resources and authentication.
 
 ## Common representation rules
 
@@ -304,7 +355,6 @@ Proposed request:
 
 ```json
 {
-  "mnemonic": "optional existing recovery phrase",
   "passphrase": "optional seed-encryption passphrase"
 }
 ```
@@ -321,10 +371,40 @@ Proposed behavior:
   stopped.
 - Repeating initialization after a Wallet exists returns `wallet_already_configured`.
 - The interface does not provide remote Wallet deletion or reset in v1.
-- If `mnemonic` is omitted, cocod generates one and returns it exactly once as
-  `generatedMnemonic`. Sensitive responses MUST NOT be cached or logged.
+- Cocod generates the Wallet Recovery Material and returns its mnemonic as `generatedMnemonic`.
+  Sensitive responses MUST NOT be cached or logged.
 - Initialization without a passphrase returns `202 Accepted` while the automatic Coco Session
   start is in progress. Initialization with a passphrase returns `201 Created`.
+
+## Retrieve Wallet Recovery Material
+
+### `POST /v1/admin/wallet/recovery-material`
+
+Returns the host-generated Wallet Recovery Material so the Cocod Owner can back it up again. This
+command requires `wallet:admin` and is available in every Coco Session state, including `failed`.
+
+For a Wallet configured with a passphrase:
+
+```json
+{
+  "passphrase": "Wallet Seed encryption passphrase"
+}
+```
+
+A Wallet without a passphrase uses an empty JSON object.
+
+Proposed behavior:
+
+- A Wallet without a passphrase returns its mnemonic to an authenticated administrative client.
+- A Wallet with a passphrase requires and validates that passphrase on every retrieval. The Client
+  Credential or a running Coco Session MUST NOT bypass this requirement.
+- Retrieval decrypts only for the response. It MUST NOT start or stop a Coco Session, persist the
+  passphrase, or change the reported Wallet Seed Access or Coco Session state.
+- A successful response is `{ "mnemonic": "..." }` and includes `Cache-Control: no-store`.
+- Request bodies and response bodies MUST NOT be logged. A safe audit log MAY record that retrieval
+  occurred without recording Wallet Recovery Material, the passphrase, or the Client Credential.
+- Missing or invalid passphrases use the same safe error semantics as Coco Session start.
+- The operation is repeatable and does not require an `Idempotency-Key`.
 
 ## Start a Coco Session
 
@@ -383,6 +463,24 @@ Proposed behavior:
   MUST NOT immediately undo an explicit stop by starting another session.
 - Disposal failures MUST be logged safely, reflected in `lastFailure`, and transition the session
   to `failed`; they MUST NOT leave the interface reporting the session as running.
+- Graceful shutdown has a configurable deadline that defaults to 30 seconds. If cleanup cannot be
+  confirmed by the deadline, the Coco Session transitions to `failed`.
+
+## Process shutdown
+
+### `POST /v1/admin/process/stop`
+
+Requests graceful termination of the Cocod Process. This command requires `wallet:admin` and
+returns `202 Accepted` before closing the listener.
+
+After accepting the request, cocod stops accepting new work, closes its listener, and attempts to
+stop the Coco Session within the configurable 30-second deadline. Disconnecting the initiating
+client does not cancel an accepted shutdown. Successful cleanup exits zero; cleanup that cannot be
+confirmed records and logs a safe failure and exits non-zero.
+
+The endpoint requests termination of the current process; it does not promise that the deployment
+remains stopped. A process supervisor or container runtime may start another Cocod Process. Local
+and remote `cocod stop` commands call this same endpoint.
 
 ## Wallet-dependent requests
 
@@ -405,6 +503,9 @@ every state.
 - Lifecycle mutation requests SHOULD include an `Idempotency-Key` header.
 - Repeating the same key and request returns the original result.
 - Reusing a key with a different request returns `idempotency_key_conflict`.
+- Idempotency records live only for the lifetime of one Cocod Process. After a restart, clients
+  reconcile lifecycle state through `GET /v1/status`; cocod does not promise to replay the original
+  response for a pre-restart key.
 - Cocod serializes lifecycle transitions.
 - Concurrent callers observe the same transition; cocod MUST NOT construct two Coco Sessions.
 - Disconnecting the initiating client does not cancel an accepted transition.
@@ -418,7 +519,8 @@ Implementations and contract tests MUST cover these scenarios.
 1. Start cocod; `/health` reports `ok`.
 2. Authenticate and read `/v1/status`; no Wallet is configured.
 3. Initialize a Wallet with or without a passphrase.
-4. Store a generated mnemonic outside cocod if one was returned.
+4. Store the generated Wallet Recovery Material outside cocod. If delivery is interrupted, retrieve
+   it through the authenticated recovery-material endpoint.
 5. Without a passphrase, poll status while cocod starts the Coco Session automatically.
 6. With a passphrase, explicitly start the Coco Session and then poll status.
 
@@ -459,17 +561,12 @@ Implementations and contract tests MUST cover these scenarios.
 3. Cocod cancels or finishes startup, disposes all acquired session resources, restores Wallet
    Seed Access according to the Wallet configuration, and reports stopped.
 
-## Open decisions
+## Wallet Import
 
-The following decisions should be resolved before implementing the network adapter:
-
-1. How the first administrative client credential is provisioned without exposing it through an
-   unauthenticated network endpoint.
-2. Whether lifecycle transitions need durable idempotency records across process restarts or only
-   within one process lifetime.
-3. What deadline applies to graceful session shutdown before the session moves to `failed`.
-4. Whether generated recovery-material delivery belongs in the network interface or in a separate
-   local bootstrap workflow.
+Wallet Import is not part of the network interface in v1. A later host-local workflow may
+initialize cocod from existing Wallet Recovery Material. After Wallet Import, Coco Restore remains
+a separate action that reconstructs proofs from mints; importing the mnemonic does not itself
+restore proofs.
 
 ## Next specification slices
 
