@@ -1,4 +1,5 @@
 import { CocodRuntimeError } from '../runtime-error.js';
+import type { ProcessShutdownCoordinator } from '../process-shutdown.js';
 import type { AppLogger } from '../utils/logger.js';
 import {
   defineV1Route,
@@ -13,6 +14,8 @@ import {
   initializeWalletResponseSchema,
   lifecycleStatusSchema,
   noBodySchema,
+  processShutdownRequestSchema,
+  processShutdownResponseSchema,
   startSessionRequestSchema,
   stopSessionRequestSchema,
   toLifecycleStatusDocument,
@@ -22,6 +25,8 @@ import {
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
   type LifecycleStatusDocument,
+  type ProcessShutdownRequest,
+  type ProcessShutdownResponseDocument,
   type StartSessionRequest,
   type StopSessionRequest,
   type WalletRecoveryMaterialRequest,
@@ -101,6 +106,17 @@ const STOP_SESSION_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<StopSessionRequest, LifecycleStatusDocument>;
 
+const STOP_PROCESS_ROUTE = {
+  method: 'POST',
+  path: '/v1/admin/process/stop',
+  capability: 'wallet:admin',
+  requestSchema: processShutdownRequestSchema,
+  responseSchema: processShutdownResponseSchema,
+  successStatuses: [202],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<ProcessShutdownRequest, ProcessShutdownResponseDocument>;
+
 /** Returns lifecycle route metadata without constructing a runtime or executable handlers. */
 export function createV1RouteMetadata(): Array<V1RouteMetadata> {
   return [
@@ -110,6 +126,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     WALLET_RECOVERY_MATERIAL_ROUTE,
     START_SESSION_ROUTE,
     STOP_SESSION_ROUTE,
+    STOP_PROCESS_ROUTE,
   ];
 }
 
@@ -117,6 +134,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
 export function createV1RouteDefinitions(
   runtime: V1LifecycleRuntime,
   daemonVersion: string,
+  processShutdown: Pick<ProcessShutdownCoordinator, 'request'>,
   logger?: AppLogger,
 ): Array<V1RouteDefinition> {
   const health = defineV1Route({
@@ -167,7 +185,22 @@ export function createV1RouteDefinitions(
       return new V1HttpResponse(result, alreadyStopped ? 200 : 202);
     },
   });
-  return [health, status, initializeWallet, walletRecoveryMaterial, startSession, stopSession];
+  const stopProcess = defineV1Route({
+    ...STOP_PROCESS_ROUTE,
+    handler: () => {
+      void processShutdown.request('http_stop');
+      return new V1HttpResponse({ status: 'stopping' }, 202);
+    },
+  });
+  return [
+    health,
+    status,
+    initializeWallet,
+    walletRecoveryMaterial,
+    startSession,
+    stopSession,
+    stopProcess,
+  ];
 }
 
 function observeDetachedTransition(

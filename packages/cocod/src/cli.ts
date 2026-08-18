@@ -172,7 +172,7 @@ program
   .command('stop')
   .description('Stop the background daemon')
   .action(async () => {
-    await handleDaemonCommand('/stop', { method: 'POST' });
+    await handleDaemonCommand('/v1/admin/process/stop', { method: 'POST', body: {} });
   });
 
 const credentialCmd = program.command('credential').description('Client Credential operations');

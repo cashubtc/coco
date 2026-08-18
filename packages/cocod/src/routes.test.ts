@@ -230,33 +230,27 @@ describe('routes', () => {
     }
   });
 
-  test('protects the temporary legacy /stop route with wallet:admin', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-stop-'));
+  test('removes legacy /stop and rejects new legacy work during process shutdown', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-shutdown-'));
     try {
       const paths = credentialPaths(directory);
       const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
       const plaintext = await loadClientCredential(paths.clientCredentialFile);
       const runtime = uninitializedRuntime();
-      let stopRequested = false;
-      const definitions = createRouteHandlers(runtime, async () => {
-        stopRequested = true;
-        return Response.json({ output: 'Daemon stopping' });
+      const definitions = createRouteHandlers(runtime);
+      const routes = buildRoutes(definitions, runtime, credentials, undefined, {
+        isAcceptingWork: () => false,
       });
-      const routes = buildRoutes(definitions, runtime, credentials);
 
-      const unauthorizedResponse = await routes['/stop']!.POST!(
-        new Request('http://localhost/stop', { method: 'POST' }),
-      );
-      const authorizedResponse = await routes['/stop']!.POST!(
-        new Request('http://localhost/stop', {
-          method: 'POST',
+      const response = await routes['/status']!.GET!(
+        new Request('http://localhost/status', {
           headers: { Authorization: `Bearer ${plaintext}` },
         }),
       );
 
-      expect(unauthorizedResponse.status).toBe(401);
-      expect(authorizedResponse.status).toBe(200);
-      expect(stopRequested).toBe(true);
+      expect(definitions['/stop']).toBeUndefined();
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'Daemon is shutting down' });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -8,7 +8,12 @@ import {
 } from '@cashu/coco-core';
 import type { NPCAccountApi } from 'coco-cashu-plugin-npc';
 
-import { CONFIG_FILE, SALT_FILE, type WalletConfig } from './utils/config.js';
+import {
+  CONFIG_FILE,
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  SALT_FILE,
+  type WalletConfig,
+} from './utils/config.js';
 import { decryptMnemonic, encryptMnemonic } from './utils/crypto.js';
 import {
   CocoSessionStartupError,
@@ -108,7 +113,7 @@ export class CocodRuntime {
     this.saltFile = options.saltFile ?? SALT_FILE;
     this.logger = options.logger;
     this.initializeSession = options.initializeSession ?? initializeCocoSession;
-    this.stopTimeoutMs = options.stopTimeoutMs ?? 30_000;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     if (!Number.isFinite(this.stopTimeoutMs) || this.stopTimeoutMs <= 0) {
       throw new Error('stopTimeoutMs must be a positive finite number');
     }

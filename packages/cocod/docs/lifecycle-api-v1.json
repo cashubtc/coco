@@ -29,7 +29,8 @@
                 "passphrase_required",
                 "wallet_unlock_failed",
                 "session_transition_in_progress",
-                "session_restart_required"
+                "session_restart_required",
+                "process_shutting_down"
               ]
             },
             "message": { "type": "string" },
@@ -353,6 +354,18 @@
       "additionalProperties": false,
       "required": [],
       "properties": {}
+    },
+    "ProcessShutdownResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "const": "stopping" } }
+    },
+    "ProcessShutdownRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
     }
   },
   "routes": [
@@ -419,6 +432,17 @@
       "responseSchema": "LifecycleStatus",
       "errorSchema": "Error",
       "successStatuses": [200, 202],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/process/stop",
+      "capability": "wallet:admin",
+      "requestSchema": "ProcessShutdownRequest",
+      "responseSchema": "ProcessShutdownResponse",
+      "errorSchema": "Error",
+      "successStatuses": [202],
       "idempotencyKey": "optional",
       "responseCacheControl": null
     }

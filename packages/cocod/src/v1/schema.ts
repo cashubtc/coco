@@ -24,6 +24,7 @@ export const V1_ERROR_CODES = [
   'wallet_unlock_failed',
   'session_transition_in_progress',
   'session_restart_required',
+  'process_shutting_down',
 ] as const;
 
 /** Stable machine-readable code carried by every v1 error document. */
@@ -76,6 +77,9 @@ export interface StartSessionRequest {
 /** Coco Session stop accepts an empty JSON object. */
 export type StopSessionRequest = Record<string, never>;
 
+/** Cocod Process shutdown accepts an empty JSON object. */
+export type ProcessShutdownRequest = Record<string, never>;
+
 /** Non-cacheable result returned after cocod durably configures its generated Wallet. */
 export interface InitializeWalletResponseDocument {
   generatedMnemonic: string;
@@ -85,6 +89,11 @@ export interface InitializeWalletResponseDocument {
 /** Sensitive Wallet Recovery Material returned only by the administrative retrieval route. */
 export interface WalletRecoveryMaterialResponseDocument {
   mnemonic: string;
+}
+
+/** Acknowledges that Cocod Process shutdown has been accepted. */
+export interface ProcessShutdownResponseDocument {
+  status: 'stopping';
 }
 
 const INTERFACE_VERSION = '1' as const;
@@ -196,6 +205,12 @@ export const stopSessionRequestSchema = namedSchema<StopSessionRequest>(
   objectNode({}),
 );
 
+/** Runtime and generated schema for Cocod Process shutdown requests. */
+export const processShutdownRequestSchema = namedSchema<ProcessShutdownRequest>(
+  'ProcessShutdownRequest',
+  objectNode({}),
+);
+
 /** Runtime and generated schema for the sensitive Wallet initialization response. */
 export const initializeWalletResponseSchema = namedSchema<InitializeWalletResponseDocument>(
   'InitializeWalletResponse',
@@ -211,6 +226,12 @@ export const walletRecoveryMaterialResponseSchema =
     'WalletRecoveryMaterialResponse',
     objectNode({ mnemonic: stringNode({ sensitive: true }) }),
   );
+
+/** Runtime and generated schema for accepted Cocod Process shutdown. */
+export const processShutdownResponseSchema = namedSchema<ProcessShutdownResponseDocument>(
+  'ProcessShutdownResponse',
+  objectNode({ status: literalNode('stopping') }),
+);
 
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(

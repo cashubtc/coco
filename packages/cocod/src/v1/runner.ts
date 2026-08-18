@@ -37,6 +37,7 @@ export function buildV1Routes(
   definitions: ReadonlyArray<V1RouteDefinition>,
   credentials: AdministrativeCredential,
   logger?: AppLogger,
+  options: { isAcceptingWork?: () => boolean } = {},
 ): BunRouteHandlers {
   const routes: BunRouteHandlers = {};
   const idempotency = new ProcessLocalIdempotency();
@@ -46,7 +47,10 @@ export function buildV1Routes(
     }
     const handlers = (routes[definition.path] ??= {});
     handlers[definition.method] = (request) =>
-      runV1Route(definition, request, credentials, logger, { idempotency });
+      runV1Route(definition, request, credentials, logger, {
+        idempotency,
+        isAcceptingWork: options.isAcceptingWork,
+      });
   }
   return routes;
 }
@@ -123,6 +127,7 @@ async function runV1Route(
     requestPath?: string;
     skipRequestParsing?: boolean;
     idempotency?: ProcessLocalIdempotency;
+    isAcceptingWork?: () => boolean;
   } = {},
 ): Promise<Response> {
   const startedAt = performance.now();
@@ -154,6 +159,15 @@ async function runV1Route(
         logCompleted(requestLogger, startedAt, response.status);
         return response;
       }
+    }
+
+    if (definition.path !== '/v1/admin/process/stop' && options.isAcceptingWork?.() === false) {
+      throw new V1HttpError({
+        status: 503,
+        code: 'process_shutting_down',
+        message: 'The Cocod Process is shutting down',
+        retryable: false,
+      });
     }
 
     const input = options.skipRequestParsing

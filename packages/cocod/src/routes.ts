@@ -14,10 +14,7 @@ export interface RouteDefinition {
   POST?: RouteHandler;
 }
 
-export function createRouteHandlers(
-  runtime: CocodRuntime,
-  stopHandler?: RouteHandler,
-): Record<string, RouteDefinition> {
+export function createRouteHandlers(runtime: CocodRuntime): Record<string, RouteDefinition> {
   const routes: Record<string, RouteDefinition> = {
     '/ping': {
       capability: null,
@@ -413,13 +410,6 @@ export function createRouteHandlers(
     },
   };
 
-  if (stopHandler) {
-    routes['/stop'] = {
-      capability: 'wallet:admin',
-      POST: stopHandler,
-    };
-  }
-
   return routes;
 }
 
@@ -522,6 +512,7 @@ export function buildRoutes(
   runtime: CocodRuntime,
   credentials: AdministrativeCredential,
   logger?: AppLogger,
+  options: { isAcceptingWork?: () => boolean } = {},
 ): Record<
   string,
   {
@@ -543,13 +534,31 @@ export function buildRoutes(
     if (handlers.GET) {
       const handler = handlers.GET;
       routes[path]!.GET = async (req: Request) =>
-        runRoute(path, req, runtime, credentials, handlers.capability, handler, logger);
+        runRoute(
+          path,
+          req,
+          runtime,
+          credentials,
+          handlers.capability,
+          handler,
+          logger,
+          options.isAcceptingWork,
+        );
     }
 
     if (handlers.POST) {
       const handler = handlers.POST;
       routes[path]!.POST = async (req: Request) =>
-        runRoute(path, req, runtime, credentials, handlers.capability, handler, logger);
+        runRoute(
+          path,
+          req,
+          runtime,
+          credentials,
+          handlers.capability,
+          handler,
+          logger,
+          options.isAcceptingWork,
+        );
     }
   }
 
@@ -560,6 +569,7 @@ export function buildFallbackHandler(
   runtime: CocodRuntime,
   credentials: AdministrativeCredential,
   logger?: AppLogger,
+  options: { isAcceptingWork?: () => boolean } = {},
 ): (req: Request) => Promise<Response> {
   return async (req: Request) => {
     const path = new URL(req.url).pathname;
@@ -574,6 +584,7 @@ export function buildFallbackHandler(
         return Response.json({ error: `Unknown endpoint: ${req.url}` }, { status: 404 });
       },
       logger,
+      options.isAcceptingWork,
     );
   };
 }
@@ -586,6 +597,7 @@ async function runRoute(
   capability: ClientCapability | null,
   handler: RouteHandler,
   logger?: AppLogger,
+  isAcceptingWork?: () => boolean,
 ): Promise<Response> {
   const startedAt = performance.now();
   const reqId = crypto.randomUUID();
@@ -612,6 +624,16 @@ async function runRoute(
           },
         );
       }
+    }
+
+    if (isAcceptingWork?.() === false) {
+      const response = Response.json({ error: 'Daemon is shutting down' }, { status: 503 });
+      requestLogger?.warn('request.rejected', {
+        durationMs: Math.round(performance.now() - startedAt),
+        state: runtime.getStatus().cocoSession.state,
+        status: response.status,
+      });
+      return response;
     }
 
     const response = await handler(req);

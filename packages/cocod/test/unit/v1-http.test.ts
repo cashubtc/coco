@@ -9,6 +9,7 @@ import {
   type ClientCapability,
 } from '../../src/credentials.js';
 import type { CocodStatus } from '../../src/runtime.js';
+import { ProcessShutdownCoordinator } from '../../src/process-shutdown.js';
 import { CocodRuntimeError } from '../../src/runtime-error.js';
 import {
   buildV1Routes,
@@ -20,6 +21,7 @@ import {
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
+import { createLifecycleTestRouteDefinitions } from '../helpers/v1.js';
 
 const directories: string[] = [];
 
@@ -31,7 +33,10 @@ afterEach(async () => {
 
 describe('v1 HTTP route interface', () => {
   test('declares lifecycle routes with their runtime schemas and capabilities', () => {
-    const routes = createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17');
+    const routes = createLifecycleTestRouteDefinitions(
+      statusRuntime(unconfiguredStatus()),
+      '0.0.17',
+    );
 
     expect(
       routes.map(
@@ -116,7 +121,110 @@ describe('v1 HTTP route interface', () => {
         idempotencyKey: 'optional',
         responseCacheControl: null,
       },
+      {
+        method: 'POST',
+        path: '/v1/admin/process/stop',
+        capability: 'wallet:admin',
+        requestSchema: 'ProcessShutdownRequest',
+        responseSchema: 'ProcessShutdownResponse',
+        successStatuses: [202],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
     ]);
+  });
+
+  test('authenticates and accepts Cocod Process shutdown', async () => {
+    const credential = await createCredential();
+    const requestShutdown = mock(async (_reason: 'http_stop') => 0);
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17', {
+        request: requestShutdown,
+      }),
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/admin/process/stop']!.POST!(
+      new Request('http://localhost/v1/admin/process/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+    );
+    const accepted = await routes['/v1/admin/process/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/process/stop', credential.plaintext, {}),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(requestShutdown).toHaveBeenCalledTimes(1);
+    expect(requestShutdown).toHaveBeenCalledWith('http_stop');
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({ status: 'stopping' });
+  });
+
+  test('rejects new v1 work after shutdown acceptance while replaying stop acceptance', async () => {
+    const credential = await createCredential();
+    let acceptingWork = true;
+    const requestShutdown = mock(async (_reason: 'http_stop') => {
+      acceptingWork = false;
+      return 0;
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17', {
+        request: requestShutdown,
+      }),
+      credential.credentials,
+      undefined,
+      { isAcceptingWork: () => acceptingWork },
+    );
+
+    const accepted = await routes['/v1/admin/process/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/process/stop', credential.plaintext, {}),
+    );
+    const rejected = await routes['/v1/status']!.GET!(
+      authorizedRequest('/v1/status', credential.plaintext),
+    );
+    const concurrent = await routes['/v1/admin/process/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/process/stop', credential.plaintext, {}),
+    );
+
+    expect(accepted.status).toBe(202);
+    expect(rejected.status).toBe(503);
+    expect(await rejected.json()).toMatchObject({
+      error: { code: 'process_shutting_down', retryable: false },
+    });
+    expect(concurrent.status).toBe(202);
+    expect(await concurrent.json()).toEqual({ status: 'stopping' });
+  });
+
+  test('continues an accepted shutdown after the initiating client disconnects', async () => {
+    const credential = await createCredential();
+    const listenerClosed = deferred<void>();
+    const exit = mock((_code: number) => {});
+    const shutdown = new ProcessShutdownCoordinator({
+      closeListener: () => listenerClosed.promise,
+      disposeRuntime: async () => {},
+      cleanupProcessState: async () => {},
+      flushLogs: async () => {},
+      reportFailure: () => {},
+      exit,
+      logger: createTestLogger(),
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17', shutdown),
+      credential.credentials,
+    );
+    const controller = new AbortController();
+
+    const response = await routes['/v1/admin/process/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/process/stop', credential.plaintext, {}, controller.signal),
+    );
+    controller.abort();
+    listenerClosed.resolve();
+
+    expect(response.status).toBe(202);
+    expect(await shutdown.request('http_stop')).toBe(0);
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
   test('returns the documented status resource in every Coco Session state', async () => {
@@ -126,7 +234,7 @@ describe('v1 HTTP route interface', () => {
     for (const state of states) {
       const status = configuredStatus(state);
       const routes = buildV1Routes(
-        createV1RouteDefinitions(statusRuntime(status), '0.0.17'),
+        createLifecycleTestRouteDefinitions(statusRuntime(status), '0.0.17'),
         credential.credentials,
       );
       const response = await routes['/v1/status']!.GET!(
@@ -161,7 +269,7 @@ describe('v1 HTTP route interface', () => {
   test('returns null Wallet and Seed Access when no Wallet is configured', async () => {
     const credential = await createCredential();
     const routes = buildV1Routes(
-      createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17'),
+      createLifecycleTestRouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17'),
       credential.credentials,
     );
 
@@ -188,7 +296,7 @@ describe('v1 HTTP route interface', () => {
       cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
     };
     const routes = buildV1Routes(
-      createV1RouteDefinitions(statusRuntime(status), '0.0.17'),
+      createLifecycleTestRouteDefinitions(statusRuntime(status), '0.0.17'),
       credential.credentials,
     );
 
@@ -230,7 +338,7 @@ describe('v1 HTTP route interface', () => {
         return { mnemonic: generatedMnemonic, requiresPassphrase };
       });
       const routes = buildV1Routes(
-        createV1RouteDefinitions(
+        createLifecycleTestRouteDefinitions(
           lifecycleRuntime(() => status, { initializeWallet }),
           '0.0.17',
         ),
@@ -260,7 +368,7 @@ describe('v1 HTTP route interface', () => {
       requiresPassphrase: false,
     }));
     const routes = buildV1Routes(
-      createV1RouteDefinitions(
+      createLifecycleTestRouteDefinitions(
         lifecycleRuntime(unconfiguredStatus, { initializeWallet }),
         '0.0.17',
       ),
@@ -282,7 +390,7 @@ describe('v1 HTTP route interface', () => {
     const status = configuredStatus('failed');
     const getWalletRecoveryMaterial = mock(async () => mnemonic);
     const routes = buildV1Routes(
-      createV1RouteDefinitions(
+      createLifecycleTestRouteDefinitions(
         lifecycleRuntime(() => status, { getWalletRecoveryMaterial }),
         '0.0.17',
       ),
@@ -330,7 +438,7 @@ describe('v1 HTTP route interface', () => {
     const error = mock((_event: string, _fields?: unknown) => {});
     const logger = createTestLogger({ debug, info, warn, error });
     const routes = buildV1Routes(
-      createV1RouteDefinitions(
+      createLifecycleTestRouteDefinitions(
         lifecycleRuntime(() => configuredStatus('running'), { getWalletRecoveryMaterial }),
         '0.0.17',
       ),
@@ -432,7 +540,7 @@ describe('v1 HTTP route interface', () => {
       },
     });
     const routes = buildV1Routes(
-      createV1RouteDefinitions(runtime, '0.0.17'),
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
       credential.credentials,
     );
 
@@ -490,7 +598,7 @@ describe('v1 HTTP route interface', () => {
       },
     });
     const routes = buildV1Routes(
-      createV1RouteDefinitions(runtime, '0.0.17'),
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
       credential.credentials,
     );
 
@@ -521,7 +629,7 @@ describe('v1 HTTP route interface', () => {
       },
     });
     const routes = buildV1Routes(
-      createV1RouteDefinitions(runtime, '0.0.17', logger),
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17', logger),
       credential.credentials,
       logger,
     );
@@ -605,7 +713,7 @@ describe('v1 HTTP route interface', () => {
         },
       });
       const routes = buildV1Routes(
-        createV1RouteDefinitions(runtime, '0.0.17'),
+        createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
         credential.credentials,
       );
       const response = await routes[testCase.path]!.POST!(
@@ -651,7 +759,7 @@ describe('v1 HTTP route interface', () => {
       };
     });
     const routes = buildV1Routes(
-      createV1RouteDefinitions(
+      createLifecycleTestRouteDefinitions(
         lifecycleRuntime(() => status, { initializeWallet }),
         '0.0.17',
       ),
@@ -698,7 +806,7 @@ describe('v1 HTTP route interface', () => {
   test('returns stable authentication and capability errors without legacy envelopes', async () => {
     const credential = await createCredential();
     const routes = buildV1Routes(
-      createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17'),
+      createLifecycleTestRouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17'),
       credential.credentials,
     );
 

@@ -8,9 +8,10 @@ import type { Manager } from '@cashu/coco-core';
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
 import { CocodRuntime, type RunningCocoSession } from '../../src/runtime.js';
 import { CocoSessionStartupError } from '../../src/utils/wallet.js';
-import { buildV1Routes, createV1RouteDefinitions } from '../../src/v1/http.js';
+import { buildV1Routes } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
+import { createLifecycleTestRouteDefinitions } from '../helpers/v1.js';
 
 const directories: string[] = [];
 
@@ -25,7 +26,10 @@ test('real lifecycle routes serialize concurrent start and stop during startup',
   const sessionReady = deferred<RunningCocoSession>();
   const initializeSession = mock(async () => sessionReady.promise);
   const runtime = await CocodRuntime.load({ ...harness.paths, initializeSession });
-  const routes = buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17'), harness.credentials);
+  const routes = buildV1Routes(
+    createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+    harness.credentials,
+  );
 
   const initialize = await routes['/v1/admin/wallet/initialize']!.POST!(
     request(
@@ -83,7 +87,10 @@ test('protected lifecycle routes validate every start while starting and running
   const sessionReady = deferred<RunningCocoSession>();
   const initializeSession = mock(async () => sessionReady.promise);
   const runtime = await CocodRuntime.load({ ...harness.paths, initializeSession });
-  const routes = buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17'), harness.credentials);
+  const routes = buildV1Routes(
+    createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+    harness.credentials,
+  );
 
   await routes['/v1/admin/wallet/initialize']!.POST!(
     request('/v1/admin/wallet/initialize', harness.plaintext, {
@@ -143,7 +150,7 @@ test('real lifecycle routes permit retry after confirmed startup cleanup', async
   });
   const runtime = await CocodRuntime.load({ ...harness.paths, initializeSession });
   const routes = buildV1Routes(
-    createV1RouteDefinitions(
+    createLifecycleTestRouteDefinitions(
       runtime,
       '0.0.17',
       testLogger(() => failureObserved.resolve()),
@@ -198,7 +205,7 @@ test('real lifecycle routes quarantine unconfirmed startup cleanup', async () =>
     },
   });
   const routes = buildV1Routes(
-    createV1RouteDefinitions(
+    createLifecycleTestRouteDefinitions(
       runtime,
       '0.0.17',
       testLogger(() => failureObserved.resolve()),
@@ -238,7 +245,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
     initializeSession: async () => fakeSession(),
   });
   const initialRoutes = buildV1Routes(
-    createV1RouteDefinitions(initialRuntime, '0.0.17'),
+    createLifecycleTestRouteDefinitions(initialRuntime, '0.0.17'),
     unattended.credentials,
   );
   const initialized = await initialRoutes['/v1/admin/wallet/initialize']!.POST!(
@@ -254,7 +261,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
     initializeSession: async () => unattendedReady.promise,
   });
   const unattendedRoutes = buildV1Routes(
-    createV1RouteDefinitions(restartedUnattended, '0.0.17'),
+    createLifecycleTestRouteDefinitions(restartedUnattended, '0.0.17'),
     unattended.credentials,
   );
   const available = await unattendedRoutes['/v1/status']!.GET!(
@@ -276,7 +283,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
   const protectedHarness = await createHarness();
   const protectedInitial = await CocodRuntime.load(protectedHarness.paths);
   const protectedInitialRoutes = buildV1Routes(
-    createV1RouteDefinitions(protectedInitial, '0.0.17'),
+    createLifecycleTestRouteDefinitions(protectedInitial, '0.0.17'),
     protectedHarness.credentials,
   );
   await protectedInitialRoutes['/v1/admin/wallet/initialize']!.POST!(
@@ -291,7 +298,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
     initializeSession: async () => protectedReady.promise,
   });
   const protectedRoutes = buildV1Routes(
-    createV1RouteDefinitions(restartedProtected, '0.0.17'),
+    createLifecycleTestRouteDefinitions(restartedProtected, '0.0.17'),
     protectedHarness.credentials,
   );
   const locked = await protectedRoutes['/v1/status']!.GET!(
@@ -321,7 +328,7 @@ test('a stop disposal failure is exposed only as safe failed lifecycle status', 
     initializeSession: async () => fakeSession(() => dispose.promise),
   });
   const routes = buildV1Routes(
-    createV1RouteDefinitions(
+    createLifecycleTestRouteDefinitions(
       runtime,
       '0.0.17',
       testLogger(() => failureObserved.resolve()),

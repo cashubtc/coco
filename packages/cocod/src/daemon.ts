@@ -3,6 +3,7 @@ import { createDaemonLogger, serializeError } from './utils/logger.js';
 import { CocodRuntime } from './runtime.js';
 import { buildFallbackHandler, createRouteHandlers, buildRoutes } from './routes.js';
 import { AdministrativeCredential } from './credentials.js';
+import { ProcessShutdownCoordinator } from './process-shutdown.js';
 import { buildV1FallbackHandler, buildV1Routes, createV1RouteDefinitions } from './v1/http.js';
 import packageJson from '../package.json' with { type: 'json' };
 
@@ -62,65 +63,38 @@ export async function startDaemon() {
   await Bun.write(PID_FILE, process.pid.toString());
 
   let server: ReturnType<typeof Bun.serve> | undefined;
-  let isShuttingDown = false;
-
-  const cleanup = async (reason: string) => {
-    if (isShuttingDown) {
-      return;
-    }
-
-    isShuttingDown = true;
-    logger.info('daemon.shutdown.requested', { reason });
-
-    server?.stop();
-
-    if (runtime.getStatus().cocoSession.state !== 'stopped') {
-      // Give watchers, processors, and plugins a graceful stop, but never block shutdown on it.
-      let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        runtime.dispose().catch((error) => {
-          logger.warn('daemon.dispose_failed', { error: serializeError(error) });
-        }),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            resolve();
-          }, 3000);
-        }),
-      ]);
-      clearTimeout(timer);
-      if (timedOut) {
-        logger.warn('daemon.dispose_timed_out', { timeoutMs: 3000 });
+  const shutdown = new ProcessShutdownCoordinator({
+    closeListener: async () => {
+      await server?.stop();
+    },
+    disposeRuntime: () => runtime.dispose(),
+    cleanupProcessState: async () => {
+      try {
+        await Bun.file(PID_FILE).delete();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
       }
-    }
-
-    try {
-      await Bun.file(PID_FILE).delete();
-    } catch {
-      // File might not exist
-    }
-
-    logger.info('daemon.shutdown.completed', { reason });
-    await logger.flush();
-    process.exit(0);
-  };
-
-  const routeHandlers = createRouteHandlers(runtime, async () => {
-    logger.info('daemon.stop_requested', { reason: 'http_stop' });
-    setTimeout(() => {
-      void cleanup('http_stop');
-    }, 100);
-    return Response.json({ output: 'Daemon stopping' });
+    },
+    flushLogs: () => logger.flush(),
+    reportFailure: (event, fields) => {
+      process.stderr.write(`${JSON.stringify({ event, ...fields })}\n`);
+    },
+    exit: (code) => process.exit(code),
+    logger,
   });
+  const routeHandlers = createRouteHandlers(runtime);
   const httpLogger = logger.child({ component: 'http' });
-  const legacyRoutes = buildRoutes(routeHandlers, runtime, credentials, httpLogger);
+  const availability = { isAcceptingWork: () => shutdown.isAcceptingWork() };
+  const legacyRoutes = buildRoutes(routeHandlers, runtime, credentials, httpLogger, availability);
   const v1Routes = buildV1Routes(
-    createV1RouteDefinitions(runtime, packageJson.version, httpLogger),
+    createV1RouteDefinitions(runtime, packageJson.version, shutdown, httpLogger),
     credentials,
     httpLogger,
+    availability,
   );
-  const legacyFallback = buildFallbackHandler(runtime, credentials, httpLogger);
+  const legacyFallback = buildFallbackHandler(runtime, credentials, httpLogger, availability);
 
   server = Bun.serve({
     unix: SOCKET_PATH,
@@ -165,9 +139,9 @@ export async function startDaemon() {
   });
 
   process.on('SIGINT', () => {
-    void cleanup('sigint');
+    void shutdown.request('sigint');
   });
   process.on('SIGTERM', () => {
-    void cleanup('sigterm');
+    void shutdown.request('sigterm');
   });
 }

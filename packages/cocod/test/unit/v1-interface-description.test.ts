@@ -6,6 +6,8 @@ import {
   initializeWalletRequestSchema,
   initializeWalletResponseSchema,
   lifecycleStatusSchema,
+  processShutdownRequestSchema,
+  processShutdownResponseSchema,
   startSessionRequestSchema,
   stopSessionRequestSchema,
   v1ErrorSchema,
@@ -31,6 +33,8 @@ test('the generated lifecycle interface description comes from the runtime schem
     WalletRecoveryMaterialResponse: walletRecoveryMaterialResponseSchema.jsonSchema,
     StartSessionRequest: startSessionRequestSchema.jsonSchema,
     StopSessionRequest: stopSessionRequestSchema.jsonSchema,
+    ProcessShutdownRequest: processShutdownRequestSchema.jsonSchema,
+    ProcessShutdownResponse: processShutdownResponseSchema.jsonSchema,
   });
   expect(generated.routes).toEqual([
     {
@@ -96,6 +100,17 @@ test('the generated lifecycle interface description comes from the runtime schem
       responseSchema: 'LifecycleStatus',
       errorSchema: 'Error',
       successStatuses: [200, 202],
+      idempotencyKey: 'optional',
+      responseCacheControl: null,
+    },
+    {
+      method: 'POST',
+      path: '/v1/admin/process/stop',
+      capability: 'wallet:admin',
+      requestSchema: 'ProcessShutdownRequest',
+      responseSchema: 'ProcessShutdownResponse',
+      errorSchema: 'Error',
+      successStatuses: [202],
       idempotencyKey: 'optional',
       responseCacheControl: null,
     },

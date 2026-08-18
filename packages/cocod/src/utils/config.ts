@@ -11,6 +11,7 @@ export const CREDENTIAL_DIRECTORY = `${CONFIG_DIR}/credentials`;
 export const CREDENTIAL_CURRENT_DIRECTORY = `${CREDENTIAL_DIRECTORY}/current`;
 export const CREDENTIAL_VERIFIER_FILE = `${CREDENTIAL_CURRENT_DIRECTORY}/verifier.json`;
 export const CLIENT_CREDENTIAL_FILE = `${CREDENTIAL_CURRENT_DIRECTORY}/client`;
+export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 export interface WalletConfig {
   version: number;

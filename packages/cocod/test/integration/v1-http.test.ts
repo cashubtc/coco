@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, mock, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
-import type { CocodRuntime, CocodStatus } from '../../src/runtime.js';
+import { ProcessShutdownCoordinator } from '../../src/process-shutdown.js';
+import { CocodRuntime, type CocodStatus } from '../../src/runtime.js';
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from '../../src/routes.js';
 import {
   buildV1FallbackHandler,
@@ -13,6 +14,8 @@ import {
   type V1LifecycleRuntime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
+import { createTestLogger } from '../helpers/logger.js';
+import { createLifecycleTestRouteDefinitions } from '../helpers/v1.js';
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 const directories: string[] = [];
@@ -107,7 +110,7 @@ test('serves public health and authenticated structured status beside legacy rou
     unix: socketPath,
     routes: {
       ...buildRoutes(createRouteHandlers(legacyRuntime), legacyRuntime, credentials),
-      ...buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17'), credentials),
+      ...buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
     },
     fetch: buildV1FallbackHandler(credentials, legacyFallback),
   });
@@ -216,6 +219,57 @@ test('serves public health and authenticated structured status beside legacy rou
   expect(stop.status).toBe(202);
   expect(await stop.json()).toMatchObject({ cocoSession: { state: 'stopping' } });
   stopCompletion.resolve();
+});
+
+test('commits accepted process shutdown before graceful listener closure completes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
+  directories.push(directory);
+  const socketPath = join(directory, 'cocod.sock');
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const runtime = await CocodRuntime.load({
+    configFile: join(directory, 'state', 'config.json'),
+    saltFile: join(directory, 'state', 'salt'),
+  });
+  const exit = mock((_code: number) => {});
+  const shutdown = new ProcessShutdownCoordinator({
+    closeListener: async () => {
+      await server?.stop();
+    },
+    disposeRuntime: () => runtime.dispose(),
+    cleanupProcessState: async () => {},
+    flushLogs: async () => {},
+    reportFailure: () => {},
+    exit,
+    logger: createTestLogger(),
+  });
+  const availability = { isAcceptingWork: () => shutdown.isAcceptingWork() };
+  const legacyFallback = buildFallbackHandler(runtime, credentials, undefined, availability);
+
+  server = Bun.serve({
+    unix: socketPath,
+    routes: {
+      ...buildRoutes(createRouteHandlers(runtime), runtime, credentials, undefined, availability),
+      ...buildV1Routes(
+        createV1RouteDefinitions(runtime, '0.0.17', shutdown),
+        credentials,
+        undefined,
+        availability,
+      ),
+    },
+    fetch: buildV1FallbackHandler(credentials, legacyFallback),
+  });
+
+  const response = await unixFetch(socketPath, '/v1/admin/process/stop', plaintext, 'POST', '{}', {
+    'Content-Type': 'application/json',
+  });
+
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ status: 'stopping' });
+  expect(await shutdown.request('http_stop')).toBe(0);
+  expect(exit).toHaveBeenCalledWith(0);
+  await expect(unixFetch(socketPath, '/health')).rejects.toThrow();
 });
 
 function unixFetch(
