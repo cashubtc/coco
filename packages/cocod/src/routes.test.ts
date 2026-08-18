@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initializeCoco, toAmount, type Manager } from '@cashu/coco-core';
 import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
-import { createRouteHandlers } from './routes';
+import { AdministrativeCredential, loadClientCredential } from './credentials.js';
+import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
+import type { AppLogger } from './utils/logger.js';
 import {
   CocodRuntimeError,
   type CocodRuntime,
@@ -82,7 +87,181 @@ function postJson(path: string, body: unknown): Request {
   });
 }
 
+function credentialPaths(directory: string): {
+  credentialDirectory: string;
+  verifierFile: string;
+  clientCredentialFile: string;
+} {
+  const credentialDirectory = join(directory, 'credentials');
+  const currentDirectory = join(credentialDirectory, 'current');
+  return {
+    credentialDirectory,
+    verifierFile: join(currentDirectory, 'verifier.json'),
+    clientCredentialFile: join(currentDirectory, 'client'),
+  };
+}
+
 describe('routes', () => {
+  test('rejects a protected route without a bearer credential', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-auth-'));
+    try {
+      const credentials = await AdministrativeCredential.loadOrBootstrap(
+        credentialPaths(directory),
+      );
+      const runtime = uninitializedRuntime();
+      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
+
+      const response = await routes['/status']!.GET!(new Request('http://localhost/status'));
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('enforces authentication through the Unix listener while leaving /ping open', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-unix-auth-'));
+    const socketPath = join(directory, 'cocod.sock');
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const paths = credentialPaths(directory);
+      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
+      const plaintext = await loadClientCredential(paths.clientCredentialFile);
+      const runtime = uninitializedRuntime();
+      server = Bun.serve({
+        unix: socketPath,
+        routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
+        fetch: buildFallbackHandler(runtime, credentials),
+      });
+
+      const pingResponse = await fetch('http://localhost/ping', {
+        unix: socketPath,
+      } as RequestInit);
+      const unauthorizedResponse = await fetch('http://localhost/status', {
+        unix: socketPath,
+      } as RequestInit);
+      const authorizedResponse = await fetch('http://localhost/status', {
+        unix: socketPath,
+        headers: { Authorization: `Bearer ${plaintext}` },
+      } as RequestInit);
+      const unknownResponse = await fetch('http://localhost/unknown', {
+        unix: socketPath,
+      } as RequestInit);
+      const authorizedUnknownResponse = await fetch('http://localhost/unknown', {
+        unix: socketPath,
+        headers: { Authorization: `Bearer ${plaintext}` },
+      } as RequestInit);
+
+      expect(pingResponse.status).toBe(200);
+      expect(unauthorizedResponse.status).toBe(401);
+      expect(authorizedResponse.status).toBe(200);
+      expect(await authorizedResponse.json()).toEqual({ output: 'UNINITIALIZED' });
+      expect(unknownResponse.status).toBe(401);
+      expect(authorizedUnknownResponse.status).toBe(404);
+    } finally {
+      await server?.stop(true);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('returns a generic forbidden response when a capability is missing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-capability-'));
+    try {
+      const paths = credentialPaths(directory);
+      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
+      const plaintext = await loadClientCredential(paths.clientCredentialFile);
+      const state = JSON.parse(await readFile(paths.verifierFile, 'utf8')) as {
+        capabilities: string[];
+      };
+      state.capabilities = ['wallet:read'];
+      await writeFile(paths.verifierFile, JSON.stringify(state), { mode: 0o600 });
+      const runtime = uninitializedRuntime();
+      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
+
+      const response = await routes['/init']!.POST!(
+        new Request('http://localhost/init', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${plaintext}` },
+          body: '{}',
+        }),
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: 'Forbidden' });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('does not include bearer credentials or authorization headers in route logs', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-redaction-'));
+    try {
+      const credentials = await AdministrativeCredential.loadOrBootstrap(
+        credentialPaths(directory),
+      );
+      const entries: unknown[] = [];
+      const logger = {
+        child: () => logger,
+        debug: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
+        error: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
+        info: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
+        log: (_level: string, message: string, ...meta: unknown[]) =>
+          entries.push([message, ...meta]),
+        warn: (message: string, ...meta: unknown[]) => entries.push([message, ...meta]),
+        flush: async () => {},
+      } as AppLogger;
+      const runtime = uninitializedRuntime();
+      const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
+      const presentedCredential = 'z'.repeat(43);
+
+      const response = await routes['/status']!.GET!(
+        new Request('http://localhost/status', {
+          headers: { Authorization: `Bearer ${presentedCredential}` },
+        }),
+      );
+
+      const logged = JSON.stringify(entries);
+      expect(response.status).toBe(401);
+      expect(logged).not.toContain(presentedCredential);
+      expect(logged.toLowerCase()).not.toContain('authorization');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('protects the temporary legacy /stop route with wallet:admin', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-stop-'));
+    try {
+      const paths = credentialPaths(directory);
+      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
+      const plaintext = await loadClientCredential(paths.clientCredentialFile);
+      const runtime = uninitializedRuntime();
+      let stopRequested = false;
+      const definitions = createRouteHandlers(runtime, async () => {
+        stopRequested = true;
+        return Response.json({ output: 'Daemon stopping' });
+      });
+      const routes = buildRoutes(definitions, runtime, credentials);
+
+      const unauthorizedResponse = await routes['/stop']!.POST!(
+        new Request('http://localhost/stop', { method: 'POST' }),
+      );
+      const authorizedResponse = await routes['/stop']!.POST!(
+        new Request('http://localhost/stop', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${plaintext}` },
+        }),
+      );
+
+      expect(unauthorizedResponse.status).toBe(401);
+      expect(authorizedResponse.status).toBe(200);
+      expect(stopRequested).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test('/init validates invalid mnemonic', async () => {
     const runtime = uninitializedRuntime({
       initializeWallet: async () => {

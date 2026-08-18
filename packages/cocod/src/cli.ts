@@ -1,4 +1,5 @@
 import { startDaemon } from './daemon';
+import { AdministrativeCredential } from './credentials.js';
 import { program, handleDaemonCommand, callDaemonStream } from './cli-shared';
 import {
   DEFAULT_LOG_LINES,
@@ -172,6 +173,17 @@ program
   .description('Stop the background daemon')
   .action(async () => {
     await handleDaemonCommand('/stop', { method: 'POST' });
+  });
+
+const credentialCmd = program.command('credential').description('Client Credential operations');
+
+credentialCmd
+  .command('rotate')
+  .description('Rotate the shared administrative Client Credential on this host')
+  .action(async () => {
+    const credentials = await AdministrativeCredential.loadOrBootstrap();
+    await credentials.rotate();
+    console.log('Administrative Client Credential rotated');
   });
 
 // Mints - nested subcommands

@@ -1,23 +1,30 @@
 import { program } from 'commander';
 
-const CONFIG_DIR = `${process.env.HOME || process.env.USERPROFILE}/.cocod`;
-const SOCKET_PATH = process.env.COCOD_SOCKET || `${CONFIG_DIR}/cocod.sock`;
+import { ClientCredentialFileError, loadClientCredential } from './credentials.js';
+import { CLIENT_CREDENTIAL_FILE, SOCKET_PATH } from './utils/config.js';
 
 export interface CommandResponse {
   output?: unknown;
   error?: string;
 }
 
-async function callDaemon(
-  path: string,
-  options: { method?: 'GET' | 'POST'; body?: object } = {},
-): Promise<CommandResponse> {
-  const { method = 'GET', body } = options;
+export interface ClientCredentialOptions {
+  credentialFile?: string;
+}
+
+export interface DaemonCallOptions extends ClientCredentialOptions {
+  method?: 'GET' | 'POST';
+  body?: object;
+}
+
+async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
+  const { method = 'GET', body, credentialFile = CLIENT_CREDENTIAL_FILE } = options;
+  const headers = await buildRequestHeaders(path, credentialFile, body !== undefined);
 
   const init: RequestInit & { unix: string } = {
     unix: SOCKET_PATH,
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   } as RequestInit & { unix: string };
 
@@ -31,6 +38,25 @@ async function callDaemon(
   return response.json() as Promise<CommandResponse>;
 }
 
+function isProtectedPath(path: string): boolean {
+  return new URL(path, 'http://localhost').pathname !== '/ping';
+}
+
+async function buildRequestHeaders(
+  path: string,
+  credentialFile: string | undefined,
+  hasJsonBody = false,
+): Promise<Headers> {
+  const headers = new Headers();
+  if (hasJsonBody) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (isProtectedPath(path)) {
+    headers.set('Authorization', `Bearer ${await loadClientCredential(credentialFile)}`);
+  }
+  return headers;
+}
+
 export async function isDaemonRunning(): Promise<boolean> {
   try {
     const response = await fetch(`http://localhost/ping`, {
@@ -42,25 +68,34 @@ export async function isDaemonRunning(): Promise<boolean> {
   }
 }
 
-async function isDaemonReady(): Promise<boolean> {
+async function isDaemonReady(credentialFile = CLIENT_CREDENTIAL_FILE): Promise<boolean> {
   try {
-    const response = await fetch(`http://localhost/status`, {
-      unix: SOCKET_PATH,
-    } as RequestInit);
-    if (!response.ok) {
-      return false;
-    }
-    const body = (await response.json()) as CommandResponse;
+    const body = await callDaemon('/status', { credentialFile });
     return body.output !== 'STARTING' && body.output !== 'STOPPING';
-  } catch {
+  } catch (error) {
+    if (error instanceof ClientCredentialFileError) {
+      throw error;
+    }
     return false;
   }
 }
 
-async function waitForDaemonReady(): Promise<void> {
+async function waitForDaemonReady(
+  credentialFile = CLIENT_CREDENTIAL_FILE,
+  retryMissingCredential = false,
+): Promise<void> {
   for (let i = 0; i < 50; i++) {
-    if (await isDaemonReady()) {
-      return;
+    try {
+      if (await isDaemonReady(credentialFile)) {
+        return;
+      }
+    } catch (error) {
+      if (!(retryMissingCredential && error instanceof ClientCredentialFileError)) {
+        throw error;
+      }
+      if (await isDaemonRunning()) {
+        throw error;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -68,7 +103,7 @@ async function waitForDaemonReady(): Promise<void> {
   throw new Error('Daemon failed to become ready within 5 seconds');
 }
 
-export async function startDaemonProcess(): Promise<void> {
+export async function startDaemonProcess(options: ClientCredentialOptions = {}): Promise<void> {
   const proc = Bun.spawn({
     cmd: ['bun', 'run', `${import.meta.dir}/index.ts`, 'daemon'],
     stdout: 'ignore',
@@ -76,25 +111,25 @@ export async function startDaemonProcess(): Promise<void> {
     stdin: 'ignore',
   });
   proc.unref();
-  await waitForDaemonReady();
+  await waitForDaemonReady(options.credentialFile, true);
 }
 
-export async function ensureDaemonRunning(): Promise<void> {
+export async function ensureDaemonRunning(options: ClientCredentialOptions = {}): Promise<void> {
   if (await isDaemonRunning()) {
-    await waitForDaemonReady();
+    await waitForDaemonReady(options.credentialFile);
     return;
   }
 
   console.log('Starting daemon...');
-  await startDaemonProcess();
+  await startDaemonProcess(options);
 }
 
 export async function handleDaemonCommand(
   path: string,
-  options: { method?: 'GET' | 'POST'; body?: object } = {},
+  options: DaemonCallOptions = {},
 ): Promise<CommandResponse> {
   try {
-    await ensureDaemonRunning();
+    await ensureDaemonRunning({ credentialFile: options.credentialFile });
     const result = await callDaemon(path, options);
 
     if (result.error) {
@@ -130,12 +165,14 @@ export async function handleDaemonCommand(
 export async function callDaemonStream(
   path: string,
   onData: (data: unknown) => void,
+  options: ClientCredentialOptions = {},
 ): Promise<void> {
-  await ensureDaemonRunning();
+  await ensureDaemonRunning(options);
 
   const init: RequestInit & { unix: string } = {
     unix: SOCKET_PATH,
     method: 'GET',
+    headers: await buildRequestHeaders(path, options.credentialFile),
   } as RequestInit & { unix: string };
 
   const response = await fetch(`http://localhost${path}`, init);

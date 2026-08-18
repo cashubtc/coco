@@ -1,7 +1,8 @@
 import { SOCKET_PATH, PID_FILE } from './utils/config.js';
 import { createDaemonLogger, serializeError } from './utils/logger.js';
 import { CocodRuntime } from './runtime.js';
-import { createRouteHandlers, buildRoutes } from './routes.js';
+import { buildFallbackHandler, createRouteHandlers, buildRoutes } from './routes.js';
+import { AdministrativeCredential } from './credentials.js';
 
 export async function startDaemon() {
   const logger = createDaemonLogger();
@@ -33,6 +34,7 @@ export async function startDaemon() {
     // Not running, safe to proceed
   }
 
+  const credentials = await AdministrativeCredential.loadOrBootstrap();
   const runtime = await CocodRuntime.load({
     logger: logger.child({ component: 'wallet' }),
   });
@@ -56,15 +58,6 @@ export async function startDaemon() {
   }
 
   await Bun.write(PID_FILE, process.pid.toString());
-
-  const routeHandlers = createRouteHandlers(runtime);
-  const routes = buildRoutes(
-    routeHandlers,
-    runtime,
-    logger.child({
-      component: 'http',
-    }),
-  );
 
   let server: ReturnType<typeof Bun.serve> | undefined;
   let isShuttingDown = false;
@@ -111,27 +104,26 @@ export async function startDaemon() {
     process.exit(0);
   };
 
+  const routeHandlers = createRouteHandlers(runtime, async () => {
+    logger.info('daemon.stop_requested', { reason: 'http_stop' });
+    setTimeout(() => {
+      void cleanup('http_stop');
+    }, 100);
+    return Response.json({ output: 'Daemon stopping' });
+  });
+  const routes = buildRoutes(
+    routeHandlers,
+    runtime,
+    credentials,
+    logger.child({
+      component: 'http',
+    }),
+  );
+
   server = Bun.serve({
     unix: SOCKET_PATH,
-    routes: {
-      ...routes,
-      '/stop': {
-        POST: async () => {
-          logger.info('daemon.stop_requested', { reason: 'http_stop' });
-          setTimeout(() => {
-            void cleanup('http_stop');
-          }, 100);
-          return Response.json({ output: 'Daemon stopping' });
-        },
-      },
-    },
-    async fetch(req) {
-      logger.warn('request.unknown_endpoint', {
-        method: req.method,
-        url: req.url,
-      });
-      return Response.json({ error: `Unknown endpoint: ${req.url}` }, { status: 404 });
-    },
+    routes,
+    fetch: buildFallbackHandler(runtime, credentials, logger.child({ component: 'http' })),
   });
 
   logger.info('daemon.started', { socketPath: SOCKET_PATH });

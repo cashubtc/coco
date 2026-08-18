@@ -7,6 +7,10 @@ export const LOG_FILE = process.env.COCOD_LOG_FILE || `${CONFIG_DIR}/daemon.log`
 export const CONFIG_FILE = `${CONFIG_DIR}/config.json`;
 export const SALT_FILE = `${CONFIG_DIR}/salt`;
 export const DB_FILE = `${CONFIG_DIR}/coco.db`;
+export const CREDENTIAL_DIRECTORY = `${CONFIG_DIR}/credentials`;
+export const CREDENTIAL_CURRENT_DIRECTORY = `${CREDENTIAL_DIRECTORY}/current`;
+export const CREDENTIAL_VERIFIER_FILE = `${CREDENTIAL_CURRENT_DIRECTORY}/verifier.json`;
+export const CLIENT_CREDENTIAL_FILE = `${CREDENTIAL_CURRENT_DIRECTORY}/client`;
 
 export interface WalletConfig {
   version: number;

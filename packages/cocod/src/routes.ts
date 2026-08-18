@@ -1,25 +1,36 @@
 import { getEncodedToken, type PaymentRequestSpendingConditionRequirement } from '@cashu/coco-core';
 import { nip19 } from 'nostr-tools';
 
+import { type AdministrativeCredential, type ClientCapability } from './credentials.js';
 import { CocodRuntimeError, type CocodRuntime, type RunningCocoSession } from './runtime.js';
 import { serializeError } from './utils/logger.js';
 import type { AppLogger } from './utils/logger.js';
 
 export type RouteHandler = (req: Request) => Promise<Response>;
 
+export interface RouteDefinition {
+  capability: ClientCapability | null;
+  GET?: RouteHandler;
+  POST?: RouteHandler;
+}
+
 export function createRouteHandlers(
   runtime: CocodRuntime,
-): Record<string, { GET?: RouteHandler; POST?: RouteHandler }> {
-  return {
+  stopHandler?: RouteHandler,
+): Record<string, RouteDefinition> {
+  const routes: Record<string, RouteDefinition> = {
     '/ping': {
+      capability: null,
       GET: async () => Response.json({ output: 'pong' }),
     },
     '/status': {
+      capability: 'wallet:read',
       GET: async () => {
         return Response.json({ output: legacyStatus(runtime) });
       },
     },
     '/init': {
+      capability: 'wallet:admin',
       POST: requireUninitialized(runtime, async (req: Request) => {
         try {
           const body = (await req.json()) as {
@@ -50,6 +61,7 @@ export function createRouteHandlers(
       }),
     },
     '/unlock': {
+      capability: 'wallet:admin',
       POST: requireLocked(runtime, async (req: Request) => {
         try {
           const body = (await req.json()) as { passphrase: string };
@@ -68,6 +80,7 @@ export function createRouteHandlers(
       }),
     },
     '/npc/address': {
+      capability: 'wallet:read',
       GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const info = await state.npcAccount.getInfo();
@@ -83,6 +96,7 @@ export function createRouteHandlers(
       }),
     },
     '/npc/username': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const { username, confirm } = (await req.json()) as {
@@ -124,6 +138,7 @@ export function createRouteHandlers(
     },
 
     '/balance': {
+      capability: 'wallet:read',
       GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const balances = await state.manager.wallet.balances.byMint();
@@ -141,6 +156,7 @@ export function createRouteHandlers(
       }),
     },
     '/receive/cashu': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { token: string };
@@ -157,6 +173,7 @@ export function createRouteHandlers(
       }),
     },
     '/receive/bolt11': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
@@ -175,6 +192,7 @@ export function createRouteHandlers(
       }),
     },
     '/send/cashu': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { amount: number; mintUrl?: string };
@@ -190,6 +208,7 @@ export function createRouteHandlers(
       }),
     },
     '/send/bolt11': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { invoice: string; mintUrl?: string };
@@ -209,6 +228,7 @@ export function createRouteHandlers(
       }),
     },
     '/x-cashu/parse': {
+      capability: 'wallet:read',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const { request } = (await req.json()) as { request?: string };
@@ -235,6 +255,7 @@ export function createRouteHandlers(
       }),
     },
     '/x-cashu/handle': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { request?: string; mintUrl?: string };
@@ -284,6 +305,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/add': {
+      capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { url: string };
@@ -296,6 +318,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/list': {
+      capability: 'wallet:read',
       GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
         try {
           const mints = await state.manager.mint.getAllTrustedMints();
@@ -309,6 +332,7 @@ export function createRouteHandlers(
       }),
     },
     '/mints/info': {
+      capability: 'wallet:read',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         try {
           const body = (await req.json()) as { url: string };
@@ -322,6 +346,7 @@ export function createRouteHandlers(
     },
 
     '/history': {
+      capability: 'wallet:read',
       GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         const url = new URL(req.url);
         const offsetParam = url.searchParams.get('offset');
@@ -346,6 +371,7 @@ export function createRouteHandlers(
       }),
     },
     '/events': {
+      capability: 'wallet:read',
       GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {
         const KEEP_ALIVE_INTERVAL = 5000; // 5 seconds (prevent 8-10s idle timeout)
 
@@ -386,6 +412,15 @@ export function createRouteHandlers(
       }),
     },
   };
+
+  if (stopHandler) {
+    routes['/stop'] = {
+      capability: 'wallet:admin',
+      POST: stopHandler,
+    };
+  }
+
+  return routes;
 }
 
 /**
@@ -483,8 +518,9 @@ function legacyStatus(runtime: CocodRuntime): string {
 }
 
 export function buildRoutes(
-  routeHandlers: Record<string, { GET?: RouteHandler; POST?: RouteHandler }>,
+  routeHandlers: Record<string, RouteDefinition>,
   runtime: CocodRuntime,
+  credentials: AdministrativeCredential,
   logger?: AppLogger,
 ): Record<
   string,
@@ -506,22 +542,48 @@ export function buildRoutes(
 
     if (handlers.GET) {
       const handler = handlers.GET;
-      routes[path]!.GET = async (req: Request) => runRoute(path, req, runtime, handler, logger);
+      routes[path]!.GET = async (req: Request) =>
+        runRoute(path, req, runtime, credentials, handlers.capability, handler, logger);
     }
 
     if (handlers.POST) {
       const handler = handlers.POST;
-      routes[path]!.POST = async (req: Request) => runRoute(path, req, runtime, handler, logger);
+      routes[path]!.POST = async (req: Request) =>
+        runRoute(path, req, runtime, credentials, handlers.capability, handler, logger);
     }
   }
 
   return routes;
 }
 
+export function buildFallbackHandler(
+  runtime: CocodRuntime,
+  credentials: AdministrativeCredential,
+  logger?: AppLogger,
+): (req: Request) => Promise<Response> {
+  return async (req: Request) => {
+    const path = new URL(req.url).pathname;
+    return runRoute(
+      path,
+      req,
+      runtime,
+      credentials,
+      'wallet:read',
+      async () => {
+        logger?.warn('request.unknown_endpoint', { method: req.method, path });
+        return Response.json({ error: `Unknown endpoint: ${req.url}` }, { status: 404 });
+      },
+      logger,
+    );
+  };
+}
+
 async function runRoute(
   path: string,
   req: Request,
   runtime: CocodRuntime,
+  credentials: AdministrativeCredential,
+  capability: ClientCapability | null,
   handler: RouteHandler,
   logger?: AppLogger,
 ): Promise<Response> {
@@ -530,6 +592,28 @@ async function runRoute(
   const requestLogger = logger?.child?.({ method: req.method, path, reqId }) ?? logger;
 
   try {
+    if (capability) {
+      const authorization = await credentials.authorize(
+        req.headers.get('authorization'),
+        capability,
+      );
+      if (authorization !== 'authorized') {
+        const status = authorization === 'unauthenticated' ? 401 : 403;
+        requestLogger?.warn('request.rejected', {
+          durationMs: Math.round(performance.now() - startedAt),
+          state: runtime.getStatus().cocoSession.state,
+          status,
+        });
+        return Response.json(
+          { error: status === 401 ? 'Unauthorized' : 'Forbidden' },
+          {
+            status,
+            headers: status === 401 ? { 'WWW-Authenticate': 'Bearer' } : undefined,
+          },
+        );
+      }
+    }
+
     const response = await handler(req);
     const durationMs = Math.round(performance.now() - startedAt);
     const level = response.status >= 500 ? 'error' : response.status >= 400 ? 'warn' : 'info';
