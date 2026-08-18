@@ -8,14 +8,18 @@ import {
   loadClientCredential,
   type ClientCapability,
 } from '../../src/credentials.js';
-import type { CocodRuntime, CocodStatus } from '../../src/runtime.js';
-import type { AppLogger } from '../../src/utils/logger.js';
+import type { CocodStatus } from '../../src/runtime.js';
+import { CocodRuntimeError } from '../../src/runtime-error.js';
 import {
   buildV1Routes,
   createV1RouteDefinitions,
   defineV1Route,
+  type LifecycleStatusDocument,
   type RuntimeSchema,
+  type V1LifecycleRuntime,
 } from '../../src/v1/http.js';
+import { deferred } from '../helpers/deferred.js';
+import { createTestLogger } from '../helpers/logger.js';
 
 const directories: string[] = [];
 
@@ -26,17 +30,29 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
-  test('declares health and status with their runtime schemas and capabilities', () => {
+  test('declares lifecycle routes with their runtime schemas and capabilities', () => {
     const routes = createV1RouteDefinitions(statusRuntime(unconfiguredStatus()), '0.0.17');
 
     expect(
-      routes.map(({ method, path, capability, requestSchema, responseSchema }) => ({
-        method,
-        path,
-        capability,
-        requestSchema: requestSchema.name,
-        responseSchema: responseSchema.name,
-      })),
+      routes.map(
+        ({
+          method,
+          path,
+          capability,
+          requestSchema,
+          responseSchema,
+          successStatuses,
+          idempotencyKey,
+        }) => ({
+          method,
+          path,
+          capability,
+          requestSchema: requestSchema.name,
+          responseSchema: responseSchema.name,
+          successStatuses,
+          idempotencyKey,
+        }),
+      ),
     ).toEqual([
       {
         method: 'GET',
@@ -44,6 +60,8 @@ describe('v1 HTTP route interface', () => {
         capability: null,
         requestSchema: 'NoBody',
         responseSchema: 'Health',
+        successStatuses: [200],
+        idempotencyKey: null,
       },
       {
         method: 'GET',
@@ -51,6 +69,35 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'LifecycleStatus',
+        successStatuses: [200],
+        idempotencyKey: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/admin/wallet/initialize',
+        capability: 'wallet:admin',
+        requestSchema: 'InitializeWalletRequest',
+        responseSchema: 'InitializeWalletResponse',
+        successStatuses: [201, 202],
+        idempotencyKey: 'optional',
+      },
+      {
+        method: 'POST',
+        path: '/v1/admin/session/start',
+        capability: 'wallet:admin',
+        requestSchema: 'StartSessionRequest',
+        responseSchema: 'LifecycleStatus',
+        successStatuses: [200, 202],
+        idempotencyKey: 'optional',
+      },
+      {
+        method: 'POST',
+        path: '/v1/admin/session/stop',
+        capability: 'wallet:admin',
+        requestSchema: 'StopSessionRequest',
+        responseSchema: 'LifecycleStatus',
+        successStatuses: [200, 202],
+        idempotencyKey: 'optional',
       },
     ]);
   });
@@ -138,6 +185,378 @@ describe('v1 HTTP route interface', () => {
       seedAccess: { state: 'locked', requiresPassphrase: true },
       cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
     });
+  });
+
+  test('initializes only host-generated Wallets with non-cacheable transition responses', async () => {
+    const credential = await createCredential();
+    const generatedMnemonic =
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+    for (const request of [
+      { body: { passphrase: 'correct horse' }, status: 201, state: 'stopped' as const },
+      { body: {}, status: 202, state: 'starting' as const },
+    ]) {
+      let status = unconfiguredStatus();
+      const initializeWallet = mock(async (input: { passphrase?: string }) => {
+        const requiresPassphrase = Boolean(input.passphrase);
+        status = {
+          wallet: {
+            configuredAt: '2026-08-16T00:00:00.000Z',
+            mintUrl: 'https://mint.example.com',
+          },
+          seedAccess: {
+            state: requiresPassphrase ? 'locked' : 'available',
+            requiresPassphrase,
+          },
+          cocoSession: { state: request.state, startedAt: null, lastFailure: null },
+        };
+        return { mnemonic: generatedMnemonic, requiresPassphrase };
+      });
+      const routes = buildV1Routes(
+        createV1RouteDefinitions(
+          lifecycleRuntime(() => status, { initializeWallet }),
+          '0.0.17',
+        ),
+        credential.credentials,
+      );
+
+      const response = await routes['/v1/admin/wallet/initialize']!.POST!(
+        authorizedJsonRequest('/v1/admin/wallet/initialize', credential.plaintext, request.body),
+      );
+
+      expect(response.status).toBe(request.status);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.json()).toEqual({
+        generatedMnemonic,
+        status: {
+          daemon: { version: '0.0.17', interfaceVersion: '1' },
+          wallet: { configuredAt: '2026-08-16T00:00:00.000Z' },
+          seedAccess: status.seedAccess,
+          cocoSession: status.cocoSession,
+        },
+      });
+      expect(initializeWallet).toHaveBeenCalledWith(request.body);
+    }
+
+    const initializeWallet = mock(async () => ({
+      mnemonic: generatedMnemonic,
+      requiresPassphrase: false,
+    }));
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(
+        lifecycleRuntime(unconfiguredStatus, { initializeWallet }),
+        '0.0.17',
+      ),
+      credential.credentials,
+    );
+    const importAttempt = await routes['/v1/admin/wallet/initialize']!.POST!(
+      authorizedJsonRequest('/v1/admin/wallet/initialize', credential.plaintext, {
+        mnemonic: generatedMnemonic,
+      }),
+    );
+    expect(importAttempt.status).toBe(400);
+    expect(initializeWallet).not.toHaveBeenCalled();
+  });
+
+  test('returns asynchronous Session transition status without awaiting completion', async () => {
+    const credential = await createCredential();
+    let status = configuredStatus('stopped');
+    const startRequested = deferred<void>();
+    const startAccepted = deferred<void>();
+    const startCompletion = deferred<void>();
+    const stopCompletion = deferred<void>();
+    const runtime = lifecycleRuntime(() => status, {
+      startSession: () => {
+        startRequested.resolve();
+        if (status.cocoSession.state === 'stopped') {
+          status = { ...status, cocoSession: { ...status.cocoSession, state: 'starting' } };
+        }
+        return {
+          accepted: startAccepted.promise,
+          completion: startCompletion.promise.then(() => {
+            status = {
+              ...status,
+              cocoSession: {
+                state: 'running',
+                startedAt: '2026-08-16T00:00:01.000Z',
+                lastFailure: null,
+              },
+            };
+          }),
+        };
+      },
+      stopSession: () => {
+        if (status.cocoSession.state === 'running') {
+          status = { ...status, cocoSession: { ...status.cocoSession, state: 'stopping' } };
+          return stopCompletion.promise.then(() => {
+            status = configuredStatus('stopped');
+          });
+        }
+        return Promise.resolve();
+      },
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const controller = new AbortController();
+    const startingResponse = routes['/v1/admin/session/start']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/start', credential.plaintext, {}, controller.signal),
+    );
+    await startRequested.promise;
+    controller.abort();
+    startAccepted.resolve();
+    const starting = await startingResponse;
+    expect(starting.status).toBe(202);
+    expect(((await starting.json()) as LifecycleStatusDocument).cocoSession.state).toBe('starting');
+
+    startCompletion.resolve();
+    await startCompletion.promise;
+    await Promise.resolve();
+    expect(status.cocoSession.state).toBe('running');
+
+    const alreadyRunning = await routes['/v1/admin/session/start']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/start', credential.plaintext, {}),
+    );
+    expect(alreadyRunning.status).toBe(200);
+
+    const stopping = await routes['/v1/admin/session/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/stop', credential.plaintext, {}),
+    );
+    expect(stopping.status).toBe(202);
+    expect(((await stopping.json()) as LifecycleStatusDocument).cocoSession.state).toBe('stopping');
+
+    stopCompletion.resolve();
+    await stopCompletion.promise;
+    await Promise.resolve();
+    const alreadyStopped = await routes['/v1/admin/session/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/stop', credential.plaintext, {}),
+    );
+    expect(alreadyStopped.status).toBe(200);
+  });
+
+  test('returns accepted when stop cancels encrypted startup before Seed Access is acquired', async () => {
+    const credential = await createCredential();
+    let status: CocodStatus = {
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+    };
+    const stopCompletion = deferred<void>();
+    const runtime = lifecycleRuntime(() => status, {
+      stopSession: () => {
+        status = { ...status, cocoSession: { ...status.cocoSession, state: 'stopping' } };
+        return stopCompletion.promise;
+      },
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/admin/session/stop']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/stop', credential.plaintext, {}),
+    );
+
+    expect(response.status).toBe(202);
+    expect(((await response.json()) as LifecycleStatusDocument).cocoSession.state).toBe('stopping');
+    stopCompletion.resolve();
+  });
+
+  test('logs detached transition failures without raw diagnostics', async () => {
+    const credential = await createCredential();
+    const completion = deferred<void>();
+    const failureLogged = deferred<void>();
+    const error = mock((event: string, _fields?: unknown) => {
+      if (event === 'lifecycle.transition_failed') {
+        failureLogged.resolve();
+      }
+    });
+    const logger = createTestLogger({ error });
+    let status = configuredStatus('stopped');
+    const runtime = lifecycleRuntime(() => status, {
+      startSession: () => {
+        status = { ...status, cocoSession: { ...status.cocoSession, state: 'starting' } };
+        return { accepted: Promise.resolve(), completion: completion.promise };
+      },
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(runtime, '0.0.17', logger),
+      credential.credentials,
+      logger,
+    );
+
+    const response = await routes['/v1/admin/session/start']!.POST!(
+      authorizedJsonRequest('/v1/admin/session/start', credential.plaintext, {}),
+    );
+    expect(response.status).toBe(202);
+    completion.reject(new Error('postgres://owner:password@wallet-db'));
+    await failureLogged.promise;
+
+    expect(JSON.stringify(error.mock.calls)).not.toContain('postgres://owner:password@wallet-db');
+    expect(error).toHaveBeenCalledWith('lifecycle.transition_failed', {
+      transition: 'session_start',
+      error: { name: 'Error' },
+    });
+  });
+
+  test('maps every synchronous runtime lifecycle failure to stable v1 errors', async () => {
+    const credential = await createCredential();
+    const cases = [
+      {
+        path: '/v1/admin/wallet/initialize',
+        code: 'wallet_already_configured',
+        expectedStatus: 409,
+        retryable: false,
+      },
+      {
+        path: '/v1/admin/session/start',
+        code: 'wallet_not_configured',
+        expectedStatus: 409,
+        retryable: false,
+      },
+      {
+        path: '/v1/admin/session/start',
+        code: 'passphrase_required',
+        expectedStatus: 400,
+        retryable: false,
+      },
+      {
+        path: '/v1/admin/session/start',
+        code: 'wallet_unlock_failed',
+        expectedStatus: 401,
+        retryable: false,
+      },
+      {
+        path: '/v1/admin/session/start',
+        code: 'session_transition_in_progress',
+        expectedStatus: 409,
+        retryable: true,
+      },
+      {
+        path: '/v1/admin/session/start',
+        code: 'session_restart_required',
+        expectedStatus: 503,
+        retryable: false,
+      },
+      {
+        path: '/v1/admin/session/stop',
+        code: 'session_restart_required',
+        expectedStatus: 503,
+        retryable: false,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const failure = new CocodRuntimeError(testCase.code, 'unsafe internal diagnostic');
+      const runtime = lifecycleRuntime(() => configuredStatus('stopped'), {
+        initializeWallet: async () => {
+          throw failure;
+        },
+        startSession: () => {
+          if (testCase.code === 'wallet_unlock_failed') {
+            const rejected = Promise.reject(failure);
+            return { accepted: rejected, completion: rejected };
+          }
+          throw failure;
+        },
+        stopSession: () => {
+          throw failure;
+        },
+      });
+      const routes = buildV1Routes(
+        createV1RouteDefinitions(runtime, '0.0.17'),
+        credential.credentials,
+      );
+      const response = await routes[testCase.path]!.POST!(
+        authorizedJsonRequest(testCase.path, credential.plaintext, {}),
+      );
+      const document = (await response.json()) as {
+        error: { code: string; message: string; retryable: boolean };
+      };
+
+      expect(response.status).toBe(testCase.expectedStatus);
+      expect(document.error.code).toBe(testCase.code);
+      expect(document.error.retryable).toBe(testCase.retryable);
+      expect(document.error.message).not.toContain('unsafe internal diagnostic');
+    }
+  });
+
+  test('replays lifecycle mutations by key and rejects conflicting request content', async () => {
+    const credential = await createCredential();
+    const initialized = deferred<void>();
+    let status = unconfiguredStatus();
+    const initializeWallet = mock(async (input: { passphrase?: string }) => {
+      await initialized.promise;
+      const requiresPassphrase = Boolean(input.passphrase);
+      status = {
+        wallet: {
+          configuredAt: '2026-08-16T00:00:00.000Z',
+          mintUrl: 'https://mint.example.com',
+        },
+        seedAccess: {
+          state: requiresPassphrase ? 'locked' : 'available',
+          requiresPassphrase,
+        },
+        cocoSession: {
+          state: requiresPassphrase ? 'stopped' : 'starting',
+          startedAt: null,
+          lastFailure: null,
+        },
+      };
+      return {
+        mnemonic:
+          'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+        requiresPassphrase,
+      };
+    });
+    const routes = buildV1Routes(
+      createV1RouteDefinitions(
+        lifecycleRuntime(() => status, { initializeWallet }),
+        '0.0.17',
+      ),
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/admin/wallet/initialize',
+        credential.plaintext,
+        { passphrase: 'correct horse' },
+        undefined,
+        { 'Idempotency-Key': 'initialize-wallet-1' },
+      );
+
+    const firstResponse = routes['/v1/admin/wallet/initialize']!.POST!(request());
+    const concurrentReplay = routes['/v1/admin/wallet/initialize']!.POST!(request());
+    await Promise.resolve();
+    initialized.resolve();
+    const [first, concurrent] = await Promise.all([firstResponse, concurrentReplay]);
+    const firstBody = await first.json();
+    const concurrentBody = await concurrent.json();
+
+    expect(initializeWallet).toHaveBeenCalledTimes(1);
+    expect(concurrent.status).toBe(201);
+    expect(concurrentBody).toEqual(firstBody);
+
+    const completedReplay = await routes['/v1/admin/wallet/initialize']!.POST!(request());
+    expect(completedReplay.status).toBe(201);
+    expect(await completedReplay.json()).toEqual(firstBody);
+    expect(initializeWallet).toHaveBeenCalledTimes(1);
+
+    const conflict = await routes['/v1/admin/wallet/initialize']!.POST!(
+      authorizedJsonRequest('/v1/admin/wallet/initialize', credential.plaintext, {}, undefined, {
+        'Idempotency-Key': 'initialize-wallet-1',
+      }),
+    );
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: 'idempotency_key_conflict', retryable: false },
+    });
+    expect(initializeWallet).toHaveBeenCalledTimes(1);
   });
 
   test('returns stable authentication and capability errors without legacy envelopes', async () => {
@@ -306,15 +725,7 @@ describe('v1 HTTP route interface', () => {
   test('redacts sensitive input fields in centralized request logs', async () => {
     const credential = await createCredential();
     const debug = mock((_event: string, _fields?: unknown) => {});
-    let logger: AppLogger;
-    logger = {
-      error: mock(() => {}),
-      warn: mock(() => {}),
-      info: mock(() => {}),
-      debug,
-      child: mock(() => logger),
-      flush: mock(async () => {}),
-    } as unknown as AppLogger;
+    const logger = createTestLogger({ debug });
     const requestSchema: RuntimeSchema<{ passphrase: string; label: string }> = {
       name: 'SensitiveRequest',
       jsonSchema: { type: 'object' },
@@ -363,8 +774,27 @@ describe('v1 HTTP route interface', () => {
   });
 });
 
-function statusRuntime(status: CocodStatus): CocodRuntime {
-  return { getStatus: () => status } as CocodRuntime;
+function statusRuntime(status: CocodStatus): V1LifecycleRuntime {
+  return lifecycleRuntime(() => status);
+}
+
+function lifecycleRuntime(
+  getStatus: () => CocodStatus,
+  overrides: Partial<V1LifecycleRuntime> = {},
+): V1LifecycleRuntime {
+  return {
+    getStatus,
+    initializeWallet: async () => {
+      throw new Error('initializeWallet was not expected');
+    },
+    startSession: () => {
+      throw new Error('startSession was not expected');
+    },
+    stopSession: async () => {
+      throw new Error('stopSession was not expected');
+    },
+    ...overrides,
+  };
 }
 
 function unconfiguredStatus(): CocodStatus {
@@ -423,6 +853,25 @@ async function setCapabilities(path: string, capabilities: ClientCapability[]): 
 function authorizedRequest(path: string, credential: string): Request {
   return new Request(`http://localhost${path}`, {
     headers: { Authorization: `Bearer ${credential}` },
+  });
+}
+
+function authorizedJsonRequest(
+  path: string,
+  credential: string,
+  body: unknown,
+  signal?: AbortSignal,
+  headers?: Record<string, string>,
+): Request {
+  return new Request(`http://localhost${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${credential}`,
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    body: JSON.stringify(body),
+    signal,
   });
 }
 

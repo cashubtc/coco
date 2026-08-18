@@ -116,7 +116,7 @@ export async function startDaemon() {
   const httpLogger = logger.child({ component: 'http' });
   const legacyRoutes = buildRoutes(routeHandlers, runtime, credentials, httpLogger);
   const v1Routes = buildV1Routes(
-    createV1RouteDefinitions(runtime, packageJson.version),
+    createV1RouteDefinitions(runtime, packageJson.version, httpLogger),
     credentials,
     httpLogger,
   );

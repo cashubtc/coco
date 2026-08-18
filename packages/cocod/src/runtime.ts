@@ -15,6 +15,9 @@ import {
   initializeWallet as initializeCocoSession,
 } from './utils/wallet.js';
 import { ensurePrivateStateDirectory, ensureSecretFile, writeSecretFile } from './utils/files.js';
+import { CocodRuntimeError, type CocodRuntimeErrorCode } from './runtime-error.js';
+
+export { CocodRuntimeError } from './runtime-error.js';
 
 export type CocoSessionState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 
@@ -65,23 +68,13 @@ export interface SessionStartTransition {
 interface CocodRuntimeOptions {
   configFile?: string;
   saltFile?: string;
+  stopTimeoutMs?: number;
   logger?: Logger;
   initializeSession?: (
     config: WalletConfig,
     passphrase: string | undefined,
     logger: Logger | undefined,
   ) => Promise<RunningCocoSession>;
-}
-
-export class CocodRuntimeError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = 'CocodRuntimeError';
-  }
 }
 
 /**
@@ -92,6 +85,7 @@ export class CocodRuntime {
   private readonly saltFile: string;
   private readonly logger?: Logger;
   private readonly initializeSession: NonNullable<CocodRuntimeOptions['initializeSession']>;
+  private readonly stopTimeoutMs: number;
 
   private walletConfig: WalletConfig | null = null;
   private seedAccessAvailable = false;
@@ -102,12 +96,17 @@ export class CocodRuntime {
   private initializeInProgress = false;
   private startTransition: SessionStartTransition | null = null;
   private stopPromise: Promise<void> | null = null;
+  private stopDeadlineExceeded = false;
 
   private constructor(options: CocodRuntimeOptions = {}) {
     this.configFile = options.configFile ?? CONFIG_FILE;
     this.saltFile = options.saltFile ?? SALT_FILE;
     this.logger = options.logger;
     this.initializeSession = options.initializeSession ?? initializeCocoSession;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? 30_000;
+    if (!Number.isFinite(this.stopTimeoutMs) || this.stopTimeoutMs <= 0) {
+      throw new Error('stopTimeoutMs must be a positive finite number');
+    }
   }
 
   static async load(options: CocodRuntimeOptions = {}): Promise<CocodRuntime> {
@@ -245,7 +244,7 @@ export class CocodRuntime {
       .then((sessionConfig) => this.initializeSession(sessionConfig, undefined, this.logger))
       .then((session) => {
         this.session = session;
-        if (!this.stopPromise) {
+        if (!this.stopPromise && !this.stopDeadlineExceeded && this.sessionState !== 'failed') {
           this.sessionState = 'running';
           this.startedAt = new Date().toISOString();
           this.lastFailure = null;
@@ -256,12 +255,12 @@ export class CocodRuntime {
         const unlockFailed =
           error instanceof CocodRuntimeError && error.code === 'wallet_unlock_failed';
         this.session = null;
-        this.sessionState = cleanupUnconfirmed ? 'failed' : 'stopped';
+        this.sessionState = cleanupUnconfirmed || this.stopDeadlineExceeded ? 'failed' : 'stopped';
         if (config.encrypted) {
           this.seedAccessAvailable = false;
         }
         this.startedAt = null;
-        if (!unlockFailed) {
+        if (!unlockFailed && !this.stopDeadlineExceeded) {
           this.lastFailure = {
             code: 'session_start_failed',
             message: 'Coco Session failed to start',
@@ -286,15 +285,14 @@ export class CocodRuntime {
       return Promise.resolve();
     }
     if (this.sessionState === 'failed') {
-      return Promise.reject(
-        new CocodRuntimeError('session_restart_required', 'Cocod process restart required'),
-      );
+      throw new CocodRuntimeError('session_restart_required', 'Cocod process restart required');
     }
 
     if (this.startTransition) {
       this.sessionState = 'stopping';
     }
-    const stop = this.stopAfterPendingStart().finally(() => {
+    this.stopDeadlineExceeded = false;
+    const stop = this.enforceStopDeadline(this.stopAfterPendingStart()).finally(() => {
       this.stopPromise = null;
     });
     this.stopPromise = stop;
@@ -347,19 +345,25 @@ export class CocodRuntime {
   }
 
   private async acquireSeedAccess(config: WalletConfig, passphrase: string): Promise<WalletConfig> {
+    let mnemonic: string;
     try {
       const salt = await Bun.file(this.saltFile).text();
-      const mnemonic = await decryptMnemonic(config.mnemonic, passphrase, salt);
-      this.seedAccessAvailable = true;
-      if (!this.stopPromise) {
-        this.sessionState = 'starting';
-      }
-      return { ...config, mnemonic, encrypted: false };
+      mnemonic = await decryptMnemonic(config.mnemonic, passphrase, salt);
     } catch (error) {
       throw new CocodRuntimeError('wallet_unlock_failed', 'Wallet unlock failed', {
         cause: error,
       });
     }
+
+    if (this.stopDeadlineExceeded || this.sessionState === 'failed') {
+      throw new CocodRuntimeError('session_restart_required', 'Cocod process restart required');
+    }
+
+    this.seedAccessAvailable = true;
+    if (!this.stopPromise) {
+      this.sessionState = 'starting';
+    }
+    return { ...config, mnemonic, encrypted: false };
   }
 
   private async stopAfterPendingStart(): Promise<void> {
@@ -375,18 +379,24 @@ export class CocodRuntime {
     }
 
     if (!this.session) {
-      this.sessionState = 'stopped';
-      this.startedAt = null;
+      if (!this.stopDeadlineExceeded) {
+        this.sessionState = 'stopped';
+        this.startedAt = null;
+      }
       return;
     }
 
-    this.sessionState = 'stopping';
+    if (!this.stopDeadlineExceeded) {
+      this.sessionState = 'stopping';
+    }
     try {
       await this.session.manager.dispose();
       this.session = null;
-      this.sessionState = 'stopped';
-      this.seedAccessAvailable = this.walletConfig?.encrypted === false;
-      this.startedAt = null;
+      if (!this.stopDeadlineExceeded) {
+        this.sessionState = 'stopped';
+        this.seedAccessAvailable = this.walletConfig?.encrypted === false;
+        this.startedAt = null;
+      }
     } catch (error) {
       this.sessionState = 'failed';
       this.lastFailure = {
@@ -395,6 +405,30 @@ export class CocodRuntime {
         occurredAt: new Date().toISOString(),
       };
       throw error;
+    }
+  }
+
+  private async enforceStopDeadline(completion: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.stopDeadlineExceeded = true;
+        this.sessionState = 'failed';
+        this.seedAccessAvailable = this.walletConfig?.encrypted === false;
+        this.startedAt = null;
+        this.lastFailure = {
+          code: 'session_stop_failed',
+          message: 'Coco Session failed to stop cleanly',
+          occurredAt: new Date().toISOString(),
+        };
+        reject(new CocodRuntimeError('session_restart_required', 'Cocod process restart required'));
+      }, this.stopTimeoutMs);
+    });
+
+    try {
+      await Promise.race([completion, deadline]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
@@ -443,7 +477,10 @@ function completedStartTransition(): SessionStartTransition {
   return { accepted: completed, completion: completed };
 }
 
-function normalizeConfiguredMintUrl(value: string, code = 'invalid_mint_url'): string {
+function normalizeConfiguredMintUrl(
+  value: string,
+  code: CocodRuntimeErrorCode = 'invalid_mint_url',
+): string {
   try {
     const url = new URL(value);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {

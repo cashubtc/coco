@@ -1,16 +1,22 @@
 import { expect, test } from 'bun:test';
 
-import type { CocodRuntime } from '../../src/runtime.js';
 import {
   createV1RouteDefinitions,
   healthSchema,
+  initializeWalletRequestSchema,
+  initializeWalletResponseSchema,
   lifecycleStatusSchema,
+  startSessionRequestSchema,
+  stopSessionRequestSchema,
   v1ErrorSchema,
 } from '../../src/v1/http.js';
-import { generateV1InterfaceDescription } from '../../src/v1/interface-description.js';
+import {
+  createV1InterfaceMetadataRuntime,
+  generateV1InterfaceDescription,
+} from '../../src/v1/interface-description.js';
 
 test('the generated lifecycle interface description comes from the runtime schemas', async () => {
-  const definitions = createV1RouteDefinitions({} as CocodRuntime, '0.0.17');
+  const definitions = createV1RouteDefinitions(createV1InterfaceMetadataRuntime(), '0.0.17');
   const generated = generateV1InterfaceDescription(definitions, '0.0.17');
   const checkedIn = JSON.parse(
     await Bun.file(new URL('../../docs/lifecycle-api-v1.json', import.meta.url)).text(),
@@ -21,6 +27,10 @@ test('the generated lifecycle interface description comes from the runtime schem
     Error: v1ErrorSchema.jsonSchema,
     Health: healthSchema.jsonSchema,
     LifecycleStatus: lifecycleStatusSchema.jsonSchema,
+    InitializeWalletRequest: initializeWalletRequestSchema.jsonSchema,
+    InitializeWalletResponse: initializeWalletResponseSchema.jsonSchema,
+    StartSessionRequest: startSessionRequestSchema.jsonSchema,
+    StopSessionRequest: stopSessionRequestSchema.jsonSchema,
   });
   expect(generated.routes).toEqual([
     {
@@ -30,6 +40,8 @@ test('the generated lifecycle interface description comes from the runtime schem
       requestSchema: null,
       responseSchema: 'Health',
       errorSchema: 'Error',
+      successStatuses: [200],
+      idempotencyKey: null,
     },
     {
       method: 'GET',
@@ -38,6 +50,38 @@ test('the generated lifecycle interface description comes from the runtime schem
       requestSchema: null,
       responseSchema: 'LifecycleStatus',
       errorSchema: 'Error',
+      successStatuses: [200],
+      idempotencyKey: null,
+    },
+    {
+      method: 'POST',
+      path: '/v1/admin/wallet/initialize',
+      capability: 'wallet:admin',
+      requestSchema: 'InitializeWalletRequest',
+      responseSchema: 'InitializeWalletResponse',
+      errorSchema: 'Error',
+      successStatuses: [201, 202],
+      idempotencyKey: 'optional',
+    },
+    {
+      method: 'POST',
+      path: '/v1/admin/session/start',
+      capability: 'wallet:admin',
+      requestSchema: 'StartSessionRequest',
+      responseSchema: 'LifecycleStatus',
+      errorSchema: 'Error',
+      successStatuses: [200, 202],
+      idempotencyKey: 'optional',
+    },
+    {
+      method: 'POST',
+      path: '/v1/admin/session/stop',
+      capability: 'wallet:admin',
+      requestSchema: 'StopSessionRequest',
+      responseSchema: 'LifecycleStatus',
+      errorSchema: 'Error',
+      successStatuses: [200, 202],
+      idempotencyKey: 'optional',
     },
   ]);
 

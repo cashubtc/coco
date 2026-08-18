@@ -1,18 +1,15 @@
 import { format, resolveConfig } from 'prettier';
 
 import packageJson from '../package.json' with { type: 'json' };
-import type { CocodRuntime } from '../src/runtime.js';
 import { createV1RouteDefinitions } from '../src/v1/http.js';
-import { generateV1InterfaceDescription } from '../src/v1/interface-description.js';
+import {
+  createV1InterfaceMetadataRuntime,
+  generateV1InterfaceDescription,
+} from '../src/v1/interface-description.js';
 
 const outputPath = new URL('../docs/lifecycle-api-v1.json', import.meta.url);
-const metadataOnlyRuntime = {
-  getStatus() {
-    throw new Error('Interface generation does not execute route handlers');
-  },
-} as unknown as CocodRuntime;
 const description = generateV1InterfaceDescription(
-  createV1RouteDefinitions(metadataOnlyRuntime, packageJson.version),
+  createV1RouteDefinitions(createV1InterfaceMetadataRuntime(), packageJson.version),
   packageJson.version,
 );
 const prettierConfig = (await resolveConfig(outputPath.pathname)) ?? {};

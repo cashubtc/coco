@@ -31,6 +31,8 @@ describe('StructuredLogger', () => {
     });
 
     logger.info('wallet.unlock_requested', {
+      generatedMnemonic:
+        'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
       mintUrl: 'https://mint.example.com/Bitcoin',
       passphrase: 'secret-passphrase',
     });
@@ -43,6 +45,7 @@ describe('StructuredLogger', () => {
     expect(entry.level).toBe('info');
     expect(entry.component).toBe('daemon');
     expect(entry.passphrase).toBe('[REDACTED]');
+    expect(entry.generatedMnemonic).toBe('[REDACTED]');
     expect(entry.mintUrl).toBe('https://mint.example.com/Bitcoin');
   });
 

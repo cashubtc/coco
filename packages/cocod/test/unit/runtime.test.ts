@@ -8,6 +8,7 @@ import type { Manager } from '@cashu/coco-core';
 import { CocodRuntime, CocodRuntimeError, type RunningCocoSession } from '../../src/runtime.js';
 import { CocoSessionStartupError } from '../../src/utils/wallet.js';
 import type { WalletConfig } from '../../src/utils/config.js';
+import { deferred } from '../helpers/deferred.js';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -167,6 +168,87 @@ describe('CocodRuntime', () => {
 
     expect(session.manager.dispose).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().cocoSession.state).toBe('stopped');
+  });
+
+  test('quarantines a Session when stop cleanup exceeds its deadline', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 5,
+      initializeSession: async () => ({
+        ...fakeSession(),
+        manager: {
+          dispose: mock(() => new Promise<void>(() => {})),
+        } as unknown as Manager,
+      }),
+    });
+    await runtime.startSession().completion;
+
+    await expect(runtime.stopSession()).rejects.toMatchObject({
+      code: 'session_restart_required',
+    });
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: {
+        code: 'session_stop_failed',
+        message: 'Coco Session failed to stop cleanly',
+      },
+    });
+  });
+
+  test('preserves timeout quarantine when an in-progress start later fails', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const startup = deferred<RunningCocoSession>();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 5,
+      initializeSession: async () => startup.promise,
+    });
+
+    const start = runtime.startSession();
+    const stop = runtime.stopSession();
+    await expect(stop).rejects.toMatchObject({ code: 'session_restart_required' });
+    startup.reject(new Error('late startup failure'));
+    await expect(start.completion).rejects.toThrow('late startup failure');
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: { code: 'session_stop_failed' },
+    });
+    expect(() => runtime.startSession()).toThrow('Cocod process restart required');
+  });
+
+  test('preserves timeout quarantine when encrypted Seed Access is acquired late', async () => {
+    const paths = await createPaths();
+    const initializeSession = mock(async () => fakeSession());
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 1,
+      initializeSession,
+    });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+    const start = runtime.startSession({ passphrase: 'correct horse' });
+    await expect(runtime.stopSession()).rejects.toMatchObject({
+      code: 'session_restart_required',
+    });
+    await start.completion.catch(() => {});
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: { code: 'session_stop_failed' },
+    });
+    expect(runtime.getStatus().seedAccess).toEqual({
+      state: 'locked',
+      requiresPassphrase: true,
+    });
+    expect(runtime.getRunningSession()).toBeNull();
+    expect(() => runtime.startSession({ passphrase: 'correct horse' })).toThrow(
+      'Cocod process restart required',
+    );
   });
 
   test('records a failed start and permits retry after confirmed cleanup', async () => {
@@ -360,18 +442,4 @@ function fakeSession(): RunningCocoSession {
     mintUrl: 'https://mint.example.com',
     npcAccount: {} as RunningCocoSession['npcAccount'],
   };
-}
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }

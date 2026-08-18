@@ -1,4 +1,9 @@
-import { v1ErrorSchema, type V1RouteDefinition, type RuntimeSchema } from './http.js';
+import {
+  v1ErrorSchema,
+  type RuntimeSchema,
+  type V1LifecycleRuntime,
+  type V1RouteDefinition,
+} from './http.js';
 
 export interface V1InterfaceDescription {
   name: 'cocod-lifecycle-api';
@@ -12,7 +17,22 @@ export interface V1InterfaceDescription {
     requestSchema: string | null;
     responseSchema: string;
     errorSchema: 'Error';
+    successStatuses: readonly number[];
+    idempotencyKey: 'optional' | null;
   }>;
+}
+
+/** Supplies route metadata without constructing a Cocod runtime or executing a handler. */
+export function createV1InterfaceMetadataRuntime(): V1LifecycleRuntime {
+  const handlerWasExecuted = (): never => {
+    throw new Error('Interface generation does not execute route handlers');
+  };
+  return {
+    getStatus: handlerWasExecuted,
+    initializeWallet: handlerWasExecuted,
+    startSession: handlerWasExecuted,
+    stopSession: handlerWasExecuted,
+  };
 }
 
 /** Generates the machine-readable lifecycle interface from the schemas used by v1 routes. */
@@ -44,6 +64,8 @@ export function generateV1InterfaceDescription(
         definition.requestSchema.name === 'NoBody' ? null : definition.requestSchema.name,
       responseSchema: definition.responseSchema.name,
       errorSchema: 'Error',
+      successStatuses: definition.successStatuses ?? [200],
+      idempotencyKey: definition.idempotencyKey ?? null,
     })),
   };
 }

@@ -40,10 +40,12 @@ const DEFAULT_SERVICE = 'cocod-daemon';
 const REDACTED_KEYS = new Set([
   'authorization',
   'encryptedMnemonic',
+  'generatedMnemonic',
   'invoice',
   'mnemonic',
   'passphrase',
   'request',
+  'recoveryMaterial',
   'seed',
   'token',
   'xCashuHeader',

@@ -164,6 +164,165 @@
           }
         }
       ]
+    },
+    "InitializeWalletResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generatedMnemonic", "status"],
+      "properties": {
+        "generatedMnemonic": { "type": "string" },
+        "status": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+              "properties": {
+                "daemon": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["version", "interfaceVersion"],
+                  "properties": {
+                    "version": { "type": "string" },
+                    "interfaceVersion": { "const": "1" }
+                  }
+                },
+                "wallet": { "type": "null" },
+                "seedAccess": { "type": "null" },
+                "cocoSession": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["state", "startedAt", "lastFailure"],
+                  "properties": {
+                    "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                    "startedAt": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        }
+                      ]
+                    },
+                    "lastFailure": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["code", "message", "occurredAt"],
+                          "properties": {
+                            "code": { "type": "string" },
+                            "message": { "type": "string" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["daemon", "wallet", "seedAccess", "cocoSession"],
+              "properties": {
+                "daemon": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["version", "interfaceVersion"],
+                  "properties": {
+                    "version": { "type": "string" },
+                    "interfaceVersion": { "const": "1" }
+                  }
+                },
+                "wallet": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["configuredAt"],
+                  "properties": {
+                    "configuredAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    }
+                  }
+                },
+                "seedAccess": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["state", "requiresPassphrase"],
+                  "properties": {
+                    "state": { "enum": ["locked", "available"] },
+                    "requiresPassphrase": { "type": "boolean" }
+                  }
+                },
+                "cocoSession": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["state", "startedAt", "lastFailure"],
+                  "properties": {
+                    "state": { "enum": ["stopped", "starting", "running", "stopping", "failed"] },
+                    "startedAt": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                        }
+                      ]
+                    },
+                    "lastFailure": {
+                      "anyOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["code", "message", "occurredAt"],
+                          "properties": {
+                            "code": { "type": "string" },
+                            "message": { "type": "string" },
+                            "occurredAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "InitializeWalletRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": { "passphrase": { "type": "string" } }
+    },
+    "StartSessionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": { "passphrase": { "type": "string" } }
+    },
+    "StopSessionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
     }
   },
   "routes": [
@@ -173,7 +332,9 @@
       "capability": null,
       "requestSchema": null,
       "responseSchema": "Health",
-      "errorSchema": "Error"
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null
     },
     {
       "method": "GET",
@@ -181,7 +342,39 @@
       "capability": "wallet:read",
       "requestSchema": null,
       "responseSchema": "LifecycleStatus",
-      "errorSchema": "Error"
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/wallet/initialize",
+      "capability": "wallet:admin",
+      "requestSchema": "InitializeWalletRequest",
+      "responseSchema": "InitializeWalletResponse",
+      "errorSchema": "Error",
+      "successStatuses": [201, 202],
+      "idempotencyKey": "optional"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/session/start",
+      "capability": "wallet:admin",
+      "requestSchema": "StartSessionRequest",
+      "responseSchema": "LifecycleStatus",
+      "errorSchema": "Error",
+      "successStatuses": [200, 202],
+      "idempotencyKey": "optional"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/session/stop",
+      "capability": "wallet:admin",
+      "requestSchema": "StopSessionRequest",
+      "responseSchema": "LifecycleStatus",
+      "errorSchema": "Error",
+      "successStatuses": [200, 202],
+      "idempotencyKey": "optional"
     }
   ]
 }
