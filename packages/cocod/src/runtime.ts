@@ -115,6 +115,17 @@ export class CocodRuntime {
     return runtime;
   }
 
+  /**
+   * Applies cocod's unattended-start policy after the process listener is reachable. A missing or
+   * passphrase-protected Wallet deliberately produces no transition.
+   */
+  startUnattendedSession(): SessionStartTransition | null {
+    if (!this.walletConfig || this.walletConfig.encrypted) {
+      return null;
+    }
+    return this.startSession();
+  }
+
   getStatus(): CocodStatus {
     const config = this.walletConfig;
     return {
@@ -206,27 +217,31 @@ export class CocodRuntime {
     if (!this.walletConfig) {
       throw new CocodRuntimeError('wallet_not_configured', 'Wallet is not initialized');
     }
-    if (this.sessionState === 'running') {
-      return completedStartTransition();
-    }
     if (this.sessionState === 'stopping') {
       throw new CocodRuntimeError('session_transition_in_progress', 'Coco Session is stopping');
-    }
-    if (this.startTransition) {
-      return this.startTransition;
     }
     if (this.sessionState === 'failed') {
       throw new CocodRuntimeError('session_restart_required', 'Cocod process restart required');
     }
-    if (this.walletConfig.encrypted && !input.passphrase) {
+    const config = this.walletConfig;
+    if (config.encrypted && !input.passphrase) {
       throw new CocodRuntimeError(
         'passphrase_required',
         'Passphrase required for encrypted wallet',
       );
     }
+    if (this.sessionState === 'running') {
+      return config.encrypted
+        ? completedAfter(this.validatePassphrase(config, input.passphrase!))
+        : completedStartTransition();
+    }
+    if (this.startTransition) {
+      return config.encrypted
+        ? followAfter(this.validatePassphrase(config, input.passphrase!), this.startTransition)
+        : this.startTransition;
+    }
 
     this.startedAt = null;
-    const config = this.walletConfig;
     if (!config.encrypted) {
       this.sessionState = 'starting';
     }
@@ -345,15 +360,7 @@ export class CocodRuntime {
   }
 
   private async acquireSeedAccess(config: WalletConfig, passphrase: string): Promise<WalletConfig> {
-    let mnemonic: string;
-    try {
-      const salt = await Bun.file(this.saltFile).text();
-      mnemonic = await decryptMnemonic(config.mnemonic, passphrase, salt);
-    } catch (error) {
-      throw new CocodRuntimeError('wallet_unlock_failed', 'Wallet unlock failed', {
-        cause: error,
-      });
-    }
+    const mnemonic = await this.decryptWalletMnemonic(config, passphrase);
 
     if (this.stopDeadlineExceeded || this.sessionState === 'failed') {
       throw new CocodRuntimeError('session_restart_required', 'Cocod process restart required');
@@ -364,6 +371,21 @@ export class CocodRuntime {
       this.sessionState = 'starting';
     }
     return { ...config, mnemonic, encrypted: false };
+  }
+
+  private async validatePassphrase(config: WalletConfig, passphrase: string): Promise<void> {
+    await this.decryptWalletMnemonic(config, passphrase);
+  }
+
+  private async decryptWalletMnemonic(config: WalletConfig, passphrase: string): Promise<string> {
+    try {
+      const salt = await Bun.file(this.saltFile).text();
+      return await decryptMnemonic(config.mnemonic, passphrase, salt);
+    } catch (error) {
+      throw new CocodRuntimeError('wallet_unlock_failed', 'Wallet unlock failed', {
+        cause: error,
+      });
+    }
   }
 
   private async stopAfterPendingStart(): Promise<void> {
@@ -408,6 +430,11 @@ export class CocodRuntime {
     }
   }
 
+  /**
+   * Quarantines the runtime when cleanup misses its deadline. The raced cleanup promise is not
+   * cancelled and may settle later, so every late start/stop continuation checks
+   * `stopDeadlineExceeded` before publishing state or reacquiring Seed Access.
+   */
   private async enforceStopDeadline(completion: Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
@@ -475,6 +502,23 @@ function cleanupWasUnconfirmed(error: unknown): boolean {
 function completedStartTransition(): SessionStartTransition {
   const completed = Promise.resolve();
   return { accepted: completed, completion: completed };
+}
+
+function completedAfter(validation: Promise<void>): SessionStartTransition {
+  return { accepted: validation, completion: validation };
+}
+
+function followAfter(
+  validation: Promise<void>,
+  transition: SessionStartTransition,
+): SessionStartTransition {
+  const accepted = validation.then(() => transition.accepted);
+  const completion = accepted.then(() => transition.completion);
+  void completion.catch(() => {});
+  return {
+    accepted,
+    completion,
+  };
 }
 
 function normalizeConfiguredMintUrl(

@@ -129,10 +129,11 @@ export async function startDaemon() {
   });
 
   logger.info('daemon.started', { socketPath: SOCKET_PATH });
+  const unattendedStart = runtime.startUnattendedSession();
   const status = runtime.getStatus();
   if (!status.wallet) {
     logger.info('wallet.uninitialized');
-  } else if (status.seedAccess?.requiresPassphrase) {
+  } else if (!unattendedStart) {
     logger.info('wallet.config_loaded', {
       mintUrl: status.wallet.mintUrl,
       seedAccess: 'locked',
@@ -142,8 +143,7 @@ export async function startDaemon() {
       mintUrl: status.wallet.mintUrl,
       reason: 'unattended_startup',
     });
-    const transition = runtime.startSession();
-    void transition.completion.then(
+    void unattendedStart.completion.then(
       () => {
         logger.info('wallet.session_started', { mintUrl: status.wallet?.mintUrl });
       },

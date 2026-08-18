@@ -96,9 +96,8 @@ describe('CocodRuntime', () => {
 
     const firstStart = runtime.startSession({ passphrase: 'correct horse' });
     const secondStart = runtime.startSession({ passphrase: 'correct horse' });
-    expect(secondStart).toBe(firstStart);
     expect(runtime.getStatus().seedAccess?.state).toBe('locked');
-    await Promise.all([startAccepted.promise, firstStart.accepted]);
+    await Promise.all([startAccepted.promise, firstStart.accepted, secondStart.accepted]);
     expect(initializeSession).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().seedAccess?.state).toBe('available');
 
@@ -110,6 +109,33 @@ describe('CocodRuntime', () => {
     expect(session.manager.dispose).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().seedAccess?.state).toBe('locked');
     expect(runtime.getStatus().cocoSession.state).toBe('stopped');
+  });
+
+  test('validates every protected start request while starting and running', async () => {
+    const paths = await createPaths();
+    const sessionReady = deferred<RunningCocoSession>();
+    const initializeSession = mock(async () => sessionReady.promise);
+    const runtime = await CocodRuntime.load({ ...paths, initializeSession });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+    const firstStart = runtime.startSession({ passphrase: 'correct horse' });
+    expect(() => runtime.startSession()).toThrow('Passphrase required');
+    await expect(
+      runtime.startSession({ passphrase: 'wrong horse' }).completion,
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+
+    sessionReady.resolve(fakeSession());
+    await firstStart.completion;
+    expect(initializeSession).toHaveBeenCalledTimes(1);
+
+    expect(() => runtime.startSession()).toThrow('Passphrase required');
+    await expect(
+      runtime.startSession({ passphrase: 'wrong horse' }).accepted,
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+    await expect(runtime.startSession({ passphrase: 'correct horse' }).completion).resolves.toBe(
+      undefined,
+    );
+    expect(initializeSession).toHaveBeenCalledTimes(1);
   });
 
   test('keeps Seed Access locked when the passphrase is invalid', async () => {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import {
-  createV1RouteDefinitions,
+  createV1RouteMetadata,
   healthSchema,
   initializeWalletRequestSchema,
   initializeWalletResponseSchema,
@@ -10,14 +10,10 @@ import {
   stopSessionRequestSchema,
   v1ErrorSchema,
 } from '../../src/v1/http.js';
-import {
-  createV1InterfaceMetadataRuntime,
-  generateV1InterfaceDescription,
-} from '../../src/v1/interface-description.js';
+import { generateV1InterfaceDescription } from '../../src/v1/interface-description.js';
 
 test('the generated lifecycle interface description comes from the runtime schemas', async () => {
-  const definitions = createV1RouteDefinitions(createV1InterfaceMetadataRuntime(), '0.0.17');
-  const generated = generateV1InterfaceDescription(definitions, '0.0.17');
+  const generated = generateV1InterfaceDescription(createV1RouteMetadata(), '0.0.17');
   const checkedIn = JSON.parse(
     await Bun.file(new URL('../../docs/lifecycle-api-v1.json', import.meta.url)).text(),
   ) as unknown;

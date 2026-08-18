@@ -1,17 +1,11 @@
 import { format, resolveConfig } from 'prettier';
 
 import packageJson from '../package.json' with { type: 'json' };
-import { createV1RouteDefinitions } from '../src/v1/http.js';
-import {
-  createV1InterfaceMetadataRuntime,
-  generateV1InterfaceDescription,
-} from '../src/v1/interface-description.js';
+import { createV1RouteMetadata } from '../src/v1/http.js';
+import { generateV1InterfaceDescription } from '../src/v1/interface-description.js';
 
 const outputPath = new URL('../docs/lifecycle-api-v1.json', import.meta.url);
-const description = generateV1InterfaceDescription(
-  createV1RouteDefinitions(createV1InterfaceMetadataRuntime(), packageJson.version),
-  packageJson.version,
-);
+const description = generateV1InterfaceDescription(createV1RouteMetadata(), packageJson.version);
 const prettierConfig = (await resolveConfig(outputPath.pathname)) ?? {};
 const output = await format(JSON.stringify(description), {
   ...prettierConfig,

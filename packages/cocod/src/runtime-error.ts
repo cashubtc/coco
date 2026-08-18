@@ -1,3 +1,4 @@
+/** Stable error codes emitted by the transport-independent Cocod lifecycle runtime. */
 export type CocodRuntimeErrorCode =
   | 'invalid_mint_url'
   | 'invalid_mnemonic'

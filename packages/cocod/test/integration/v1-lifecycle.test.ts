@@ -78,6 +78,60 @@ test('real lifecycle routes serialize concurrent start and stop during startup',
   });
 });
 
+test('protected lifecycle routes validate every start while starting and running', async () => {
+  const harness = await createHarness();
+  const sessionReady = deferred<RunningCocoSession>();
+  const initializeSession = mock(async () => sessionReady.promise);
+  const runtime = await CocodRuntime.load({ ...harness.paths, initializeSession });
+  const routes = buildV1Routes(createV1RouteDefinitions(runtime, '0.0.17'), harness.credentials);
+
+  await routes['/v1/admin/wallet/initialize']!.POST!(
+    request('/v1/admin/wallet/initialize', harness.plaintext, {
+      passphrase: 'correct horse',
+    }),
+  );
+  const firstStart = await routes['/v1/admin/session/start']!.POST!(
+    request('/v1/admin/session/start', harness.plaintext, {
+      passphrase: 'correct horse',
+    }),
+  );
+  expect(firstStart.status).toBe(202);
+
+  for (const [body, expectedStatus, expectedCode] of [
+    [{}, 400, 'passphrase_required'],
+    [{ passphrase: 'wrong horse' }, 401, 'wallet_unlock_failed'],
+  ] as const) {
+    const response = await routes['/v1/admin/session/start']!.POST!(
+      request('/v1/admin/session/start', harness.plaintext, body),
+    );
+    expect(response.status).toBe(expectedStatus);
+    expect(await response.json()).toMatchObject({ error: { code: expectedCode } });
+  }
+  expect(initializeSession).toHaveBeenCalledTimes(1);
+
+  sessionReady.resolve(fakeSession());
+  await runtime.startSession({ passphrase: 'correct horse' }).completion;
+
+  for (const [body, expectedStatus, expectedCode] of [
+    [{}, 400, 'passphrase_required'],
+    [{ passphrase: 'wrong horse' }, 401, 'wallet_unlock_failed'],
+  ] as const) {
+    const response = await routes['/v1/admin/session/start']!.POST!(
+      request('/v1/admin/session/start', harness.plaintext, body),
+    );
+    expect(response.status).toBe(expectedStatus);
+    expect(await response.json()).toMatchObject({ error: { code: expectedCode } });
+  }
+
+  const validatedReplay = await routes['/v1/admin/session/start']!.POST!(
+    request('/v1/admin/session/start', harness.plaintext, {
+      passphrase: 'correct horse',
+    }),
+  );
+  expect(validatedReplay.status).toBe(200);
+  expect(initializeSession).toHaveBeenCalledTimes(1);
+});
+
 test('real lifecycle routes permit retry after confirmed startup cleanup', async () => {
   const harness = await createHarness();
   const failureObserved = deferred<void>();
@@ -125,7 +179,7 @@ test('real lifecycle routes permit retry after confirmed startup cleanup', async
     ),
   );
   expect(retry.status).toBe(202);
-  await runtime.startSession().completion;
+  await runtime.startSession({ passphrase: 'correct horse' }).completion;
   expect(runtime.getStatus().cocoSession.state).toBe('running');
   expect(initializeSession).toHaveBeenCalledTimes(2);
 });
@@ -210,13 +264,14 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
     seedAccess: { state: 'available', requiresPassphrase: false },
     cocoSession: { state: 'stopped' },
   });
-  const unattendedStart = restartedUnattended.startSession();
+  const unattendedStart = restartedUnattended.startUnattendedSession();
+  expect(unattendedStart).not.toBeNull();
   const starting = await unattendedRoutes['/v1/status']!.GET!(
     getRequest('/v1/status', unattended.plaintext),
   );
   expect(await starting.json()).toMatchObject({ cocoSession: { state: 'starting' } });
   unattendedReady.resolve(fakeSession());
-  await unattendedStart.completion;
+  await unattendedStart!.completion;
 
   const protectedHarness = await createHarness();
   const protectedInitial = await CocodRuntime.load(protectedHarness.paths);
@@ -246,6 +301,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
     seedAccess: { state: 'locked', requiresPassphrase: true },
     cocoSession: { state: 'stopped' },
   });
+  expect(restartedProtected.startUnattendedSession()).toBeNull();
   const protectedStart = await protectedRoutes['/v1/admin/session/start']!.POST!(
     request('/v1/admin/session/start', protectedHarness.plaintext, {
       passphrase: 'correct horse',
@@ -253,7 +309,7 @@ test('lifecycle routes report unattended and protected Wallet restart states', a
   );
   expect(protectedStart.status).toBe(202);
   protectedReady.resolve(fakeSession());
-  await restartedProtected.startSession().completion;
+  await restartedProtected.startSession({ passphrase: 'correct horse' }).completion;
 });
 
 test('a stop disposal failure is exposed only as safe failed lifecycle status', async () => {
@@ -282,7 +338,7 @@ test('a stop disposal failure is exposed only as safe failed lifecycle status', 
       passphrase: 'correct horse',
     }),
   );
-  await runtime.startSession().completion;
+  await runtime.startSession({ passphrase: 'correct horse' }).completion;
 
   const stopping = await routes['/v1/admin/session/stop']!.POST!(
     request('/v1/admin/session/stop', harness.plaintext, {}),

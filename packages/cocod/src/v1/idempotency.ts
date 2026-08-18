@@ -21,7 +21,7 @@ export class IdempotencyCapacityError extends Error {
 }
 
 /**
- * Replays accepted process-local commands while retaining only a bounded number of opaque request
+ * Replays accepted process-local commands while retaining bounded records with opaque request
  * fingerprints. Failed commands are removed so the same key can be retried.
  */
 export class ProcessLocalIdempotency {

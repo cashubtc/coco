@@ -1,19 +1,16 @@
-import {
-  v1ErrorSchema,
-  type RuntimeSchema,
-  type V1LifecycleRuntime,
-  type V1RouteDefinition,
-} from './http.js';
+import type { V1RouteMetadata } from './contract.js';
+import { v1ErrorSchema, type RuntimeSchema } from './schema.js';
 
+/** Generated machine-readable description of cocod's v1 lifecycle interface. */
 export interface V1InterfaceDescription {
   name: 'cocod-lifecycle-api';
   version: string;
   interfaceVersion: '1';
   schemas: Record<string, Readonly<Record<string, unknown>>>;
   routes: Array<{
-    method: V1RouteDefinition['method'];
+    method: V1RouteMetadata['method'];
     path: string;
-    capability: V1RouteDefinition['capability'];
+    capability: V1RouteMetadata['capability'];
     requestSchema: string | null;
     responseSchema: string;
     errorSchema: 'Error';
@@ -22,22 +19,9 @@ export interface V1InterfaceDescription {
   }>;
 }
 
-/** Supplies route metadata without constructing a Cocod runtime or executing a handler. */
-export function createV1InterfaceMetadataRuntime(): V1LifecycleRuntime {
-  const handlerWasExecuted = (): never => {
-    throw new Error('Interface generation does not execute route handlers');
-  };
-  return {
-    getStatus: handlerWasExecuted,
-    initializeWallet: handlerWasExecuted,
-    startSession: handlerWasExecuted,
-    stopSession: handlerWasExecuted,
-  };
-}
-
 /** Generates the machine-readable lifecycle interface from the schemas used by v1 routes. */
 export function generateV1InterfaceDescription(
-  definitions: ReadonlyArray<V1RouteDefinition>,
+  definitions: ReadonlyArray<V1RouteMetadata>,
   daemonVersion: string,
 ): V1InterfaceDescription {
   const schemas: V1InterfaceDescription['schemas'] = {

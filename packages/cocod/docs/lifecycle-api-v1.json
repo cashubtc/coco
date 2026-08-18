@@ -13,7 +13,25 @@
           "additionalProperties": false,
           "required": ["code", "message", "retryable"],
           "properties": {
-            "code": { "type": "string" },
+            "code": {
+              "enum": [
+                "unauthenticated",
+                "forbidden",
+                "invalid_request",
+                "not_found",
+                "method_not_allowed",
+                "internal_error",
+                "invalid_idempotency_key",
+                "idempotency_key_conflict",
+                "idempotency_capacity_exceeded",
+                "wallet_already_configured",
+                "wallet_not_configured",
+                "passphrase_required",
+                "wallet_unlock_failed",
+                "session_transition_in_progress",
+                "session_restart_required"
+              ]
+            },
             "message": { "type": "string" },
             "retryable": { "type": "boolean" },
             "details": {
