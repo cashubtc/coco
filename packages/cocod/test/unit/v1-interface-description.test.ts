@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import {
+  balancesSchema,
   createV1RouteMetadata,
   healthSchema,
   initializeWalletRequestSchema,
@@ -16,7 +17,7 @@ import {
 } from '../../src/v1/http.js';
 import { generateV1InterfaceDescription } from '../../src/v1/interface-description.js';
 
-test('the generated lifecycle interface description comes from the runtime schemas', async () => {
+test('the generated v1 interface description comes from the runtime schemas', async () => {
   const generated = generateV1InterfaceDescription(createV1RouteMetadata(), '0.0.17');
   const checkedIn = JSON.parse(
     await Bun.file(new URL('../../docs/lifecycle-api-v1.json', import.meta.url)).text(),
@@ -27,6 +28,7 @@ test('the generated lifecycle interface description comes from the runtime schem
     Error: v1ErrorSchema.jsonSchema,
     Health: healthSchema.jsonSchema,
     LifecycleStatus: lifecycleStatusSchema.jsonSchema,
+    Balances: balancesSchema.jsonSchema,
     InitializeWalletRequest: initializeWalletRequestSchema.jsonSchema,
     InitializeWalletResponse: initializeWalletResponseSchema.jsonSchema,
     WalletRecoveryMaterialRequest: walletRecoveryMaterialRequestSchema.jsonSchema,
@@ -54,6 +56,17 @@ test('the generated lifecycle interface description comes from the runtime schem
       capability: 'wallet:read',
       requestSchema: null,
       responseSchema: 'LifecycleStatus',
+      errorSchema: 'Error',
+      successStatuses: [200],
+      idempotencyKey: null,
+      responseCacheControl: null,
+    },
+    {
+      method: 'GET',
+      path: '/v1/balances',
+      capability: 'wallet:read',
+      requestSchema: null,
+      responseSchema: 'Balances',
       errorSchema: 'Error',
       successStatuses: [200],
       idempotencyKey: null,

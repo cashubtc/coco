@@ -30,6 +30,9 @@
                 "wallet_unlock_failed",
                 "session_transition_in_progress",
                 "session_restart_required",
+                "wallet_locked",
+                "session_stopped",
+                "coco_error",
                 "process_shutting_down"
               ]
             },
@@ -183,6 +186,28 @@
           }
         }
       ]
+    },
+    "Balances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mintUrl", "unit", "spendable", "reserved", "total"],
+            "properties": {
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "spendable": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "reserved": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "total": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+            }
+          }
+        }
+      }
     },
     "InitializeWalletResponse": {
       "type": "object",
@@ -386,6 +411,17 @@
       "capability": "wallet:read",
       "requestSchema": null,
       "responseSchema": "LifecycleStatus",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/balances",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "Balances",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": null,

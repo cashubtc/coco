@@ -90,6 +90,7 @@ describe('routes', () => {
   test('does not expose superseded lifecycle command routes', () => {
     const routes = createRouteHandlers(uninitializedRuntime());
 
+    expect(routes['/balance']).toBeUndefined();
     expect(routes['/ping']).toBeUndefined();
     expect(routes['/status']).toBeUndefined();
     expect(routes['/init']).toBeUndefined();
@@ -105,7 +106,9 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
+      const response = await routes['/mints/list']!.GET!(
+        new Request('http://localhost/mints/list'),
+      );
 
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: 'Unauthorized' });
@@ -214,8 +217,8 @@ describe('routes', () => {
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
       const presentedCredential = 'z'.repeat(43);
 
-      const response = await routes['/balance']!.GET!(
-        new Request('http://localhost/balance', {
+      const response = await routes['/mints/list']!.GET!(
+        new Request('http://localhost/mints/list', {
           headers: { Authorization: `Bearer ${presentedCredential}` },
         }),
       );
@@ -241,8 +244,8 @@ describe('routes', () => {
         isAcceptingWork: () => false,
       });
 
-      const response = await routes['/balance']!.GET!(
-        new Request('http://localhost/balance', {
+      const response = await routes['/mints/list']!.GET!(
+        new Request('http://localhost/mints/list', {
           headers: { Authorization: `Bearer ${plaintext}` },
         }),
       );
@@ -321,31 +324,6 @@ describe('routes', () => {
     expect(body.error).toContain('NUT-10');
     expect(body.error).toContain('HTLC');
     expect(prepareCalled).toBe(false);
-  });
-
-  test('/balance reports numeric per-mint totals from the v2 balance snapshots', async () => {
-    const manager = {
-      wallet: {
-        balances: {
-          byMint: async () => ({
-            'https://mint.example.com': {
-              spendable: toAmount(40),
-              reserved: toAmount(2),
-              total: toAmount(42),
-              unit: 'sat',
-            },
-          }),
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
-
-    const body = (await response.json()) as { output?: Record<string, { sats: number }> };
-    expect(response.status).toBe(200);
-    expect(body.output).toEqual({ 'https://mint.example.com': { sats: 42 } });
   });
 
   test('/receive/cashu reports the received amount as a number', async () => {

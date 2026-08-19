@@ -84,7 +84,7 @@ browser CORS.
 
 ### Response shapes
 
-- The v1 lifecycle resources return typed documents directly. Their errors use
+- The v1 resources return typed documents directly. Their errors use
   `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
 - The remaining operational legacy routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
@@ -98,7 +98,7 @@ browser CORS.
 - `POST /v1/admin/session/start`
 - `POST /v1/admin/session/stop`
 - `POST /v1/admin/process/stop`
-- `GET /balance`
+- `GET /v1/balances`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
 - `POST /send/cashu`
@@ -117,6 +117,6 @@ The list above is the currently callable HTTP interface. See the
 [accepted network interface v1](network-interface-v1.md) for the complete target resource surface
 and legacy replacement map; resources marked as proposed there are not callable yet.
 
-The [implemented v1 lifecycle contract](lifecycle-api-v1.json) is generated from runtime schemas.
+The [implemented v1 contract](lifecycle-api-v1.json) is generated from runtime schemas.
 The [remaining legacy operational contract](daemon-api.json) describes the unversioned routes that
 have not yet migrated to v1.

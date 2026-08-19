@@ -3,6 +3,7 @@ import type {
   CocodStatus,
   InitializeWalletInput,
   InitializeWalletResult,
+  RunningCocoSession,
   SessionStartTransition,
   WalletRecoveryMaterialInput,
 } from '../runtime.js';
@@ -64,9 +65,10 @@ export class V1HttpResponse<T> {
   ) {}
 }
 
-/** Minimal transport-independent lifecycle interface consumed by the v1 route handlers. */
-export interface V1LifecycleRuntime {
+/** Transport-independent host interface consumed by the implemented v1 route handlers. */
+export interface V1Runtime {
   getStatus(): CocodStatus;
+  getRunningSession(): RunningCocoSession | null;
   initializeWallet(input: InitializeWalletInput): Promise<InitializeWalletResult>;
   getWalletRecoveryMaterial(input?: WalletRecoveryMaterialInput): Promise<string>;
   startSession(input?: StartSessionRequest): SessionStartTransition;

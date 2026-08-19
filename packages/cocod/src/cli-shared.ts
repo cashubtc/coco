@@ -2,12 +2,14 @@ import { program } from 'commander';
 
 import { loadClientCredential } from './credentials.js';
 import {
+  balancesSchema,
   healthSchema,
   initializeWalletResponseSchema,
   lifecycleStatusSchema,
   processShutdownResponseSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
+  type BalancesDocument,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
@@ -50,9 +52,16 @@ export interface SessionTransitionWaitOptions {
   pollIntervalMs?: number;
 }
 
+export interface BalanceFilters {
+  mintUrls?: string[];
+  units?: string[];
+  trustedOnly?: boolean;
+}
+
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
+  balances(filters?: BalanceFilters): Promise<BalancesDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
   getWalletRecoveryMaterial(
     input: WalletRecoveryMaterialRequest,
@@ -89,7 +98,7 @@ export function assertHostLocalOperation(
   }
 }
 
-/** Creates one typed client for the implemented v1 lifecycle interface. */
+/** Creates one typed client for the implemented v1 interface. */
 export function createV1Client(options: ClientCredentialOptions = {}): V1Client {
   const endpoint = configuredClientEndpoint(options.url);
   const credentialFile = options.credentialFile;
@@ -98,6 +107,8 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
     health: () => requestV1(endpoint, '/health', 'GET', undefined, healthSchema, credentialFile),
     status: () =>
       requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
+    balances: (filters = {}) =>
+      requestV1(endpoint, balancePath(filters), 'GET', undefined, balancesSchema, credentialFile),
     initializeWallet: (input) =>
       requestV1(
         endpoint,
@@ -144,6 +155,41 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         credentialFile,
       ),
   };
+}
+
+function balancePath(filters: BalanceFilters): string {
+  const query = new URLSearchParams();
+  for (const mintUrl of filters.mintUrls ?? []) {
+    query.append('mintUrl', mintUrl);
+  }
+  for (const unit of filters.units ?? []) {
+    query.append('unit', unit);
+  }
+  if (filters.trustedOnly !== undefined) {
+    query.set('trustedOnly', String(filters.trustedOnly));
+  }
+  const serialized = query.toString();
+  return serialized.length > 0 ? `/v1/balances?${serialized}` : '/v1/balances';
+}
+
+/** Formats safe balance resources for the human-oriented CLI. */
+export function formatBalances(document: BalancesDocument): string {
+  if (document.items.length === 0) {
+    return 'No balances.';
+  }
+
+  const lines: string[] = [];
+  let previousMintUrl: string | undefined;
+  for (const balance of document.items) {
+    if (balance.mintUrl !== previousMintUrl) {
+      lines.push(balance.mintUrl);
+      previousMintUrl = balance.mintUrl;
+    }
+    lines.push(
+      `  ${balance.unit}: ${balance.total} total (${balance.spendable} spendable, ${balance.reserved} reserved)`,
+    );
+  }
+  return lines.join('\n');
 }
 
 async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
@@ -276,6 +322,17 @@ export async function handleV1Command<T>(
   } catch (error) {
     exitForClientError(error);
   }
+}
+
+/** Runs a human CLI command only after any active Coco Session transition settles. */
+export async function handleWalletV1Command<T>(
+  action: (client: V1Client) => Promise<T>,
+  options: ClientCredentialOptions = {},
+): Promise<T> {
+  return handleV1Command(async (client) => {
+    await waitForOperationalSession(client);
+    return action(client);
+  }, options);
 }
 
 export async function handleDaemonCommand(

@@ -30,18 +30,6 @@
   },
   "endpoints": [
     {
-      "path": "/balance",
-      "method": "GET",
-      "state": "cocoSession.running",
-      "notes": "sats is the total balance (spendable + reserved), matching pre-v2 semantics; sat unit only. Mints with no proofs are omitted.",
-      "responses": {
-        "200": "{ output: Record<string, { sats: number }> }",
-        "403": "{ error: string }",
-        "503": "{ error: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
       "path": "/receive/cashu",
       "method": "POST",
       "state": "cocoSession.running",

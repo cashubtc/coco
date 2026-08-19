@@ -74,24 +74,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
       }),
     },
 
-    '/balance': {
-      capability: 'wallet:read',
-      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
-        try {
-          const balances = await state.manager.wallet.balances.byMint();
-          const augmentedBalance: Record<string, { [unit: string]: number }> = {};
-          for (const [url, snapshot] of Object.entries(balances)) {
-            // total (spendable + reserved) matches v2's own getBalances(), which sums the
-            // same ready-proof set the v1 output contract was pinned against
-            augmentedBalance[url] = { sats: snapshot.total.toNumber() };
-          }
-          return Response.json({ output: augmentedBalance });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Failed to get balance: ${message}` }, { status: 500 });
-        }
-      }),
-    },
     '/receive/cashu': {
       capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {

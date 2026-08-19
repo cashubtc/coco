@@ -229,6 +229,62 @@ test('Wallet recovery material can be retrieved after initialization response lo
   }
 });
 
+test('balance CLI uses the structured v1 resource and prints every balance component', async () => {
+  const home = await temporaryHome();
+  const credential = 'b'.repeat(43);
+  await writeClientCredential(home, credential);
+  const requests: Array<{ path: string; authorization: string | null }> = [];
+  const server = startTcpTestServer({
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      requests.push({ path, authorization: request.headers.get('authorization') });
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      if (path === '/v1/status') {
+        return Response.json({
+          ...lifecycleStatus('running'),
+          cocoSession: {
+            state: 'running',
+            startedAt: '2026-08-19T00:00:01.000Z',
+            lastFailure: null,
+          },
+        });
+      }
+      if (path === '/v1/balances') {
+        return Response.json({
+          items: [
+            {
+              mintUrl: 'https://mint.example.com',
+              unit: 'sat',
+              spendable: '1200',
+              reserved: '300',
+              total: '1500',
+            },
+          ],
+        });
+      }
+      return Response.json({ error: 'unexpected route' }, { status: 404 });
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, ['--url', endpoint, 'balance']);
+
+    expect(await command.exited).toBe(0);
+    const output = await new Response(command.stdout as ReadableStream<Uint8Array>).text();
+    expect(output).toContain('https://mint.example.com');
+    expect(output).toContain('sat: 1500 total (1200 spendable, 300 reserved)');
+    expect(requests).toEqual([
+      { path: '/health', authorization: null },
+      { path: '/v1/status', authorization: `Bearer ${credential}` },
+      { path: '/v1/balances', authorization: `Bearer ${credential}` },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('Coco Session start fails when the accepted transition does not reach running', async () => {
   const home = await temporaryHome();
   await writeClientCredential(home, 'e'.repeat(43));
@@ -344,7 +400,7 @@ async function writeClientCredential(home: string, credential: string): Promise<
   await writeFile(join(directory, 'client'), `${credential}\n`, { mode: 0o600 });
 }
 
-function lifecycleStatus(state: 'stopped' | 'starting') {
+function lifecycleStatus(state: 'stopped' | 'starting' | 'running') {
   return {
     daemon: { version: '0.0.17', interfaceVersion: '1' as const },
     wallet: { configuredAt: '2026-08-19T00:00:00.000Z' },

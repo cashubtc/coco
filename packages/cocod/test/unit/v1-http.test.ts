@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { toAmount } from '@cashu/coco-core';
 
 import {
   AdministrativeCredential,
@@ -17,7 +18,7 @@ import {
   defineV1Route,
   type LifecycleStatusDocument,
   type RuntimeSchema,
-  type V1LifecycleRuntime,
+  type V1Runtime,
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
@@ -32,7 +33,221 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
-  test('declares lifecycle routes with their runtime schemas and capabilities', () => {
+  test('returns filtered balances as lossless flat v1 resources', async () => {
+    const credential = await createCredential();
+    const byMintAndUnit = mock(async () => ({
+      'https://mint.example.com': {
+        sat: {
+          spendable: toAmount(9_007_199_254_740_993n),
+          reserved: toAmount(7),
+          total: toAmount(9_007_199_254_741_000n),
+          unit: 'sat',
+        },
+        usd: {
+          spendable: toAmount(2),
+          reserved: toAmount(1),
+          total: toAmount(3),
+          unit: 'usd',
+        },
+      },
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { wallet: { balances: { byMintAndUnit } } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/balances']!.GET!(
+      new Request('http://localhost/v1/balances'),
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(await unauthenticated.json()).toMatchObject({
+      error: { code: 'unauthenticated', retryable: false },
+    });
+    expect(byMintAndUnit).not.toHaveBeenCalled();
+
+    const response = await routes['/v1/balances']!.GET!(
+      authorizedRequest(
+        '/v1/balances?mintUrl=https%3A%2F%2Fmint.example.com&mintUrl=https%3A%2F%2Fmint.other&unit=sat&unit=usd&trustedOnly=true',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          spendable: '9007199254740993',
+          reserved: '7',
+          total: '9007199254741000',
+        },
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'usd',
+          spendable: '2',
+          reserved: '1',
+          total: '3',
+        },
+      ],
+    });
+    expect(byMintAndUnit).toHaveBeenCalledWith({
+      mintUrls: ['https://mint.example.com', 'https://mint.other'],
+      units: ['sat', 'usd'],
+      trustedOnly: true,
+    });
+  });
+
+  test('returns a safe v1 error when Coco cannot read balances', async () => {
+    const credential = await createCredential();
+    const unsafeDiagnostic = 'postgres://owner:secret@wallet-db';
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          wallet: {
+            balances: {
+              byMintAndUnit: async () => {
+                throw new Error(unsafeDiagnostic);
+              },
+            },
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/balances']!.GET!(
+      authorizedRequest('/v1/balances', credential.plaintext),
+    );
+    const document = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(document).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not return Wallet balances',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(document)).not.toContain(unsafeDiagnostic);
+  });
+
+  test('rejects invalid balance filters before calling Coco', async () => {
+    const credential = await createCredential();
+    const byMintAndUnit = mock(async () => ({}));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { wallet: { balances: { byMintAndUnit } } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    for (const query of [
+      'trustedOnly=yes',
+      'trustedOnly=true&trustedOnly=false',
+      'mintUrl=not-a-url',
+      'mintUrl=ftp%3A%2F%2Fmint.example.com',
+      'unit=',
+      'unexpected=sat',
+    ]) {
+      const response = await routes['/v1/balances']!.GET!(
+        authorizedRequest(`/v1/balances?${query}`, credential.plaintext),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'invalid_request', retryable: false },
+      });
+    }
+    expect(byMintAndUnit).not.toHaveBeenCalled();
+  });
+
+  test('maps every inactive Coco Session state to its shared v1 error', async () => {
+    const credential = await createCredential();
+    const cases: Array<{
+      status: CocodStatus;
+      httpStatus: number;
+      code: string;
+      retryable: boolean;
+      retryAfter?: string;
+    }> = [
+      {
+        status: unconfiguredStatus(),
+        httpStatus: 409,
+        code: 'wallet_not_configured',
+        retryable: false,
+      },
+      {
+        status: configuredStatus('starting'),
+        httpStatus: 503,
+        code: 'session_transition_in_progress',
+        retryable: true,
+        retryAfter: '1',
+      },
+      {
+        status: configuredStatus('stopping'),
+        httpStatus: 503,
+        code: 'session_transition_in_progress',
+        retryable: true,
+        retryAfter: '1',
+      },
+      {
+        status: configuredStatus('failed'),
+        httpStatus: 503,
+        code: 'session_restart_required',
+        retryable: false,
+      },
+      {
+        status: {
+          ...configuredStatus('stopped'),
+          seedAccess: { state: 'locked', requiresPassphrase: true },
+        },
+        httpStatus: 423,
+        code: 'wallet_locked',
+        retryable: false,
+      },
+      {
+        status: configuredStatus('stopped'),
+        httpStatus: 503,
+        code: 'session_stopped',
+        retryable: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const runtime = lifecycleRuntime(() => testCase.status);
+      const routes = buildV1Routes(
+        createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+        credential.credentials,
+      );
+
+      const response = await routes['/v1/balances']!.GET!(
+        authorizedRequest('/v1/balances', credential.plaintext),
+      );
+
+      expect(response.status).toBe(testCase.httpStatus);
+      expect(response.headers.get('retry-after')).toBe(testCase.retryAfter ?? null);
+      expect(await response.json()).toMatchObject({
+        error: { code: testCase.code, retryable: testCase.retryable },
+      });
+    }
+  });
+
+  test('declares implemented v1 routes with their runtime schemas and capabilities', () => {
     const routes = createLifecycleTestRouteDefinitions(
       statusRuntime(unconfiguredStatus()),
       '0.0.17',
@@ -77,6 +292,16 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'LifecycleStatus',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/balances',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'Balances',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,
@@ -1018,16 +1243,17 @@ describe('v1 HTTP route interface', () => {
   });
 });
 
-function statusRuntime(status: CocodStatus): V1LifecycleRuntime {
+function statusRuntime(status: CocodStatus): V1Runtime {
   return lifecycleRuntime(() => status);
 }
 
 function lifecycleRuntime(
   getStatus: () => CocodStatus,
-  overrides: Partial<V1LifecycleRuntime> = {},
-): V1LifecycleRuntime {
+  overrides: Partial<V1Runtime> = {},
+): V1Runtime {
   return {
     getStatus,
+    getRunningSession: () => null,
     initializeWallet: async () => {
       throw new Error('initializeWallet was not expected');
     },

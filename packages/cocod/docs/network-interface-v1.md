@@ -1,10 +1,10 @@
 # Cocod Network Interface v1
 
 Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
-lifecycle, Wallet Recovery Material, Cocod Process shutdown, and the legacy compatibility described
-here. The complete v1 resource surface is accepted as the target design; balance, Mint, Quote,
-Operation, Payment Request, history, event, and machine-description resources remain proposed until
-their individual contracts and implementations land.
+lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance resources, and the legacy
+compatibility described here. The complete v1 resource surface is accepted as the target design;
+Mint, Quote, Operation, Payment Request, history, event, and machine-description resources remain
+proposed until their individual contracts and implementations land.
 
 This document specifies cocod's machine-oriented network interface. It distinguishes implemented
 resources from the accepted target surface so resources can land incrementally without inventing
@@ -436,7 +436,7 @@ These resources are implemented.
 
 ### Balance resources
 
-These resources are proposed.
+This resource is implemented.
 
 | Method | Path           | Purpose                                        |
 | ------ | -------------- | ---------------------------------------------- |

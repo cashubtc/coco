@@ -5,7 +5,9 @@ import {
   program,
   handleDaemonCommand,
   callDaemonStream,
+  formatBalances,
   handleV1Command,
+  handleWalletV1Command,
   waitForSessionTransition,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
@@ -92,12 +94,12 @@ sessionCmd
     printLifecycleStatus(status);
   });
 
-// Balance - simple GET command
 program
   .command('balance')
   .description('Get wallet balance')
   .action(async () => {
-    await handleDaemonCommand('/balance');
+    const balances = await handleWalletV1Command((client) => client.balances());
+    console.log(formatBalances(balances));
   });
 
 // Receive - nested subcommands

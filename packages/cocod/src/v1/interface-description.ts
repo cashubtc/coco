@@ -1,7 +1,7 @@
 import type { V1RouteMetadata } from './contract.js';
 import { v1ErrorSchema, type RuntimeSchema } from './schema.js';
 
-/** Generated machine-readable description of cocod's v1 lifecycle interface. */
+/** Generated machine-readable description of cocod's implemented v1 interface. */
 export interface V1InterfaceDescription {
   name: 'cocod-lifecycle-api';
   version: string;
@@ -20,7 +20,7 @@ export interface V1InterfaceDescription {
   }>;
 }
 
-/** Generates the machine-readable lifecycle interface from the schemas used by v1 routes. */
+/** Generates the machine-readable interface from the schemas used by implemented v1 routes. */
 export function generateV1InterfaceDescription(
   definitions: ReadonlyArray<V1RouteMetadata>,
   daemonVersion: string,

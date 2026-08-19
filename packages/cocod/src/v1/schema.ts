@@ -24,6 +24,9 @@ export const V1_ERROR_CODES = [
   'wallet_unlock_failed',
   'session_transition_in_progress',
   'session_restart_required',
+  'wallet_locked',
+  'session_stopped',
+  'coco_error',
   'process_shutting_down',
 ] as const;
 
@@ -94,6 +97,20 @@ export interface WalletRecoveryMaterialResponseDocument {
 /** Acknowledges that Cocod Process shutdown has been accepted. */
 export interface ProcessShutdownResponseDocument {
   status: 'stopping';
+}
+
+/** Safe balance projection for one Known Mint and unit. */
+export interface BalanceDocument {
+  mintUrl: string;
+  unit: string;
+  spendable: string;
+  reserved: string;
+  total: string;
+}
+
+/** Flat collection of Wallet balances without cross-unit aggregation. */
+export interface BalancesDocument {
+  items: BalanceDocument[];
 }
 
 const INTERFACE_VERSION = '1' as const;
@@ -233,6 +250,24 @@ export const processShutdownResponseSchema = namedSchema<ProcessShutdownResponse
   objectNode({ status: literalNode('stopping') }),
 );
 
+const decimalAmountNode = stringNode({ pattern: '^(0|[1-9]\\d*)$' });
+
+/** Runtime and generated schema for safe Wallet balances. */
+export const balancesSchema = namedSchema<BalancesDocument>(
+  'Balances',
+  objectNode({
+    items: arrayNode(
+      objectNode({
+        mintUrl: stringNode(),
+        unit: stringNode(),
+        spendable: decimalAmountNode,
+        reserved: decimalAmountNode,
+        total: decimalAmountNode,
+      }),
+    ),
+  }),
+);
+
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(
   status: CocodStatus,
@@ -304,6 +339,18 @@ function booleanNode(): SchemaNode {
         throw new Error(`${path} must be a boolean`);
       }
       return value;
+    },
+  };
+}
+
+function arrayNode(item: SchemaNode): SchemaNode {
+  return {
+    jsonSchema: { type: 'array', items: item.jsonSchema },
+    parse(value, path) {
+      if (!Array.isArray(value)) {
+        throw new Error(`${path} must be an array`);
+      }
+      return value.map((entry, index) => item.parse(entry, `${path}[${index}]`));
     },
   };
 }
