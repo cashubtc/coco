@@ -471,6 +471,7 @@ These resources are implemented.
 | Method | Path                                                      | Purpose                                                           |
 | ------ | --------------------------------------------------------- | ----------------------------------------------------------------- |
 | `GET`  | `/v1/mints`                                               | List Known Mints, optionally limited to trusted Mints.            |
+| `GET`  | `/v1/mints/by-url?mintUrl={mintUrl}`                      | Retrieve one Known Mint by its normalized URL.                    |
 | `POST` | `/v1/mints`                                               | Discover and persist a Known Mint without implicitly trusting it. |
 | `GET`  | `/v1/mints/info?mintUrl={mintUrl}`                        | Resolve Mint information through Coco.                            |
 | `POST` | `/v1/mints/trust`                                         | Mark the body-supplied `mintUrl` as trusted.                      |
@@ -488,7 +489,7 @@ Known Mint documents contain `mintUrl`, `name`, `trusted`, `createdAt`, and `upd
 normalized through Coco and timestamps are RFC 3339 UTC strings. Registration returns `201` for a
 new Known Mint and `200` for an already-known Mint without changing its trust state. New Known Mints
 are untrusted; the human-oriented `mints add` CLI follows registration with an explicit trust
-command.
+command. A newly registered Mint's `Location` identifies its `/v1/mints/by-url` resource.
 
 Mint information responses contain the normalized `mintUrl` and an `info` object projected from
 Coco's Mint metadata. Payment-method capability responses contain `items` with `operation`, `nut`,

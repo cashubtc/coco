@@ -1,4 +1,4 @@
-import { normalizeMintUrl, type BalanceQuery } from '@cashu/coco-core';
+import { normalizeMintUrl, type BalanceQuery, type Mint } from '@cashu/coco-core';
 
 import { CocodRuntimeError } from '../runtime-error.js';
 import type { ProcessShutdownCoordinator } from '../process-shutdown.js';
@@ -107,6 +107,17 @@ const LIST_MINTS_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, KnownMintsDocument>;
 
+const GET_MINT_ROUTE = {
+  method: 'GET',
+  path: '/v1/mints/by-url',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: knownMintSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, KnownMintDocument>;
+
 const TRUST_MINT_ROUTE = {
   method: 'POST',
   path: '/v1/mints/trust',
@@ -210,6 +221,7 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     STATUS_ROUTE,
     BALANCES_ROUTE,
     LIST_MINTS_ROUTE,
+    GET_MINT_ROUTE,
     CREATE_MINT_ROUTE,
     TRUST_MINT_ROUTE,
     UNTRUST_MINT_ROUTE,
@@ -275,15 +287,9 @@ export function createV1RouteDefinitions(
       const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
 
       try {
-        const existing = (await session.manager.mint.getAllMints()).find(
-          (mint) => normalizeMintUrl(mint.mintUrl) === mintUrl,
-        );
-        if (existing) {
-          return new V1HttpResponse(toKnownMintDocument(existing), 200);
-        }
-        const { mint } = await session.manager.mint.addMint(mintUrl);
-        return new V1HttpResponse(toKnownMintDocument(mint), 201, {
-          Location: `/v1/mints/info?mintUrl=${encodeURIComponent(mint.mintUrl)}`,
+        const { mint, created } = await session.manager.mint.addMint(mintUrl);
+        return new V1HttpResponse(toKnownMintDocument(mint), created ? 201 : 200, {
+          Location: knownMintLocation(mint.mintUrl),
         });
       } catch (error) {
         throw new V1HttpError({
@@ -317,6 +323,29 @@ export function createV1RouteDefinitions(
       }
     },
   });
+  const getMint = defineV1Route({
+    ...GET_MINT_ROUTE,
+    handler: async (_input, request) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl = parseSingleMintUrlQuery(request, 'The Known Mint query is invalid');
+      try {
+        const mint = await findKnownMint(session.manager.mint, mintUrl);
+        if (!mint) {
+          throw knownMintNotFound();
+        }
+        return toKnownMintDocument(mint);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw new V1HttpError({
+          status: 500,
+          code: 'coco_error',
+          message: 'Coco could not return the Known Mint',
+          retryable: false,
+          cause: error,
+        });
+      }
+    },
+  });
   const changeMintTrust = (
     route: typeof TRUST_MINT_ROUTE | typeof UNTRUST_MINT_ROUTE,
     trusted: boolean,
@@ -329,12 +358,7 @@ export function createV1RouteDefinitions(
         try {
           const existing = await findKnownMint(session.manager.mint, mintUrl);
           if (!existing) {
-            throw new V1HttpError({
-              status: 404,
-              code: 'not_found',
-              message: 'The Known Mint does not exist',
-              retryable: false,
-            });
+            throw knownMintNotFound();
           }
           if (trusted) {
             await session.manager.mint.trustMint(mintUrl);
@@ -364,12 +388,7 @@ export function createV1RouteDefinitions(
       const mintUrl = parseSingleMintUrlQuery(request, 'The Mint information query is invalid');
       try {
         if (!(await findKnownMint(session.manager.mint, mintUrl))) {
-          throw new V1HttpError({
-            status: 404,
-            code: 'not_found',
-            message: 'The Known Mint does not exist',
-            retryable: false,
-          });
+          throw knownMintNotFound();
         }
         const info = await session.manager.mint.getMintInfo(mintUrl);
         return { mintUrl, info: toJsonObject(info) };
@@ -389,17 +408,15 @@ export function createV1RouteDefinitions(
     ...PAYMENT_METHOD_CAPABILITIES_ROUTE,
     handler: async (_input, request) => {
       const session = requireRunningSession(runtime);
-      const input = parsePaymentMethodCapabilityQuery(request);
+      const mintUrl = parseSingleMintUrlQuery(
+        request,
+        'The Payment Method Capability query is invalid',
+      );
       try {
-        if (!(await findKnownMint(session.manager.mint, input.mintUrl))) {
-          throw new V1HttpError({
-            status: 404,
-            code: 'not_found',
-            message: 'The Known Mint does not exist',
-            retryable: false,
-          });
+        if (!(await findKnownMint(session.manager.mint, mintUrl))) {
+          throw knownMintNotFound();
         }
-        const capabilities = await session.manager.mint.listPaymentMethodCapabilities(input);
+        const capabilities = await session.manager.mint.listPaymentMethodCapabilities({ mintUrl });
         return {
           items: capabilities.map((capability) => ({
             operation: capability.operation,
@@ -481,6 +498,7 @@ export function createV1RouteDefinitions(
     status,
     balances,
     listMints,
+    getMint,
     createMint,
     trustMint,
     untrustMint,
@@ -494,48 +512,11 @@ export function createV1RouteDefinitions(
   ];
 }
 
-function parsePaymentMethodCapabilityQuery(request: Request): {
-  mintUrl: string;
-  operation?: 'mint' | 'melt';
-  unit?: string;
-} {
-  const query = new URL(request.url).searchParams;
-  const allowedKeys = new Set(['mintUrl', 'operation', 'unit']);
-  const mintUrls = query.getAll('mintUrl');
-  const operations = query.getAll('operation');
-  const units = query.getAll('unit');
-  const invalid =
-    Array.from(query.keys()).some((key) => !allowedKeys.has(key)) ||
-    mintUrls.length !== 1 ||
-    operations.length > 1 ||
-    operations.some((value) => value !== 'mint' && value !== 'melt') ||
-    units.length > 1 ||
-    units.some((value) => value.length === 0);
-  if (invalid) {
-    throw new V1HttpError({
-      status: 400,
-      code: 'invalid_request',
-      message: 'The Payment Method Capability query is invalid',
-      retryable: false,
-    });
-  }
-  return {
-    mintUrl: parseMintUrl(mintUrls[0]!, 'The Payment Method Capability query is invalid'),
-    ...(operations.length === 1 ? { operation: operations[0] as 'mint' | 'melt' } : {}),
-    ...(units.length === 1 ? { unit: units[0] } : {}),
-  };
-}
-
 function parseSingleMintUrlQuery(request: Request, message: string): string {
-  const query = new URL(request.url).searchParams;
+  const query = parseQuery(request, ['mintUrl'], message);
   const values = query.getAll('mintUrl');
-  if (Array.from(query.keys()).some((key) => key !== 'mintUrl') || values.length !== 1) {
-    throw new V1HttpError({
-      status: 400,
-      code: 'invalid_request',
-      message,
-      retryable: false,
-    });
+  if (values.length !== 1) {
+    throw invalidQuery(message);
   }
   return parseMintUrl(values[0]!, message);
 }
@@ -550,37 +531,17 @@ function toJsonObject(value: unknown): Record<string, unknown> {
 }
 
 async function findKnownMint(
-  mintApi: { getAllMints(): Promise<Array<{ mintUrl: string }>> },
+  mintApi: { getAllMints(): Promise<Mint[]> },
   mintUrl: string,
-) {
-  return (await mintApi.getAllMints()).find(
-    (mint) => normalizeMintUrl(mint.mintUrl) === mintUrl,
-  ) as
-    | {
-        mintUrl: string;
-        name: string;
-        trusted: boolean;
-        createdAt: number;
-        updatedAt: number;
-      }
-    | undefined;
+): Promise<Mint | undefined> {
+  return (await mintApi.getAllMints()).find((mint) => normalizeMintUrl(mint.mintUrl) === mintUrl);
 }
 
 function parseTrustedOnly(request: Request, message: string): boolean {
-  const query = new URL(request.url).searchParams;
-  const allowedKeys = new Set(['trustedOnly']);
+  const query = parseQuery(request, ['trustedOnly'], message);
   const values = query.getAll('trustedOnly');
-  if (
-    Array.from(query.keys()).some((key) => !allowedKeys.has(key)) ||
-    values.length > 1 ||
-    values.some((value) => value !== 'true' && value !== 'false')
-  ) {
-    throw new V1HttpError({
-      status: 400,
-      code: 'invalid_request',
-      message,
-      retryable: false,
-    });
+  if (values.length > 1 || values.some((value) => value !== 'true' && value !== 'false')) {
+    throw invalidQuery(message);
   }
   return values[0] === 'true';
 }
@@ -606,13 +567,7 @@ function parseMintUrl(value: string, message: string): string {
   }
 }
 
-function toKnownMintDocument(mint: {
-  mintUrl: string;
-  name: string;
-  trusted: boolean;
-  createdAt: number;
-  updatedAt: number;
-}): KnownMintDocument {
+function toKnownMintDocument(mint: Mint): KnownMintDocument {
   return {
     mintUrl: normalizeMintUrl(mint.mintUrl),
     name: mint.name,
@@ -620,6 +575,38 @@ function toKnownMintDocument(mint: {
     createdAt: new Date(mint.createdAt * 1_000).toISOString(),
     updatedAt: new Date(mint.updatedAt * 1_000).toISOString(),
   };
+}
+
+function knownMintLocation(mintUrl: string): string {
+  return `/v1/mints/by-url?mintUrl=${encodeURIComponent(normalizeMintUrl(mintUrl))}`;
+}
+
+function knownMintNotFound(): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: 'The Known Mint does not exist',
+    retryable: false,
+  });
+}
+
+function parseQuery(request: Request, allowedKeys: readonly string[], message: string) {
+  const query = new URL(request.url).searchParams;
+  const allowed = new Set(allowedKeys);
+  if (Array.from(query.keys()).some((key) => !allowed.has(key))) {
+    throw invalidQuery(message);
+  }
+  return query;
+}
+
+function invalidQuery(message: string, cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 400,
+    code: 'invalid_request',
+    message,
+    retryable: false,
+    cause,
+  });
 }
 
 function requireRunningSession(runtime: V1Runtime) {
@@ -672,11 +659,11 @@ function requireRunningSession(runtime: V1Runtime) {
 }
 
 function parseBalanceScope(request: Request): BalanceQuery {
-  const query = new URL(request.url).searchParams;
-  const allowedKeys = new Set(['mintUrl', 'unit', 'trustedOnly']);
-  if (Array.from(query.keys()).some((key) => !allowedKeys.has(key))) {
-    throw invalidBalanceQuery();
-  }
+  const query = parseQuery(
+    request,
+    ['mintUrl', 'unit', 'trustedOnly'],
+    'The balance filters are invalid',
+  );
 
   const rawMintUrls = query.getAll('mintUrl');
   let mintUrls: string[];

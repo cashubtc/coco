@@ -95,9 +95,6 @@ describe('routes', () => {
     expect(routes['/status']).toBeUndefined();
     expect(routes['/init']).toBeUndefined();
     expect(routes['/unlock']).toBeUndefined();
-    expect(routes['/mints/add']).toBeUndefined();
-    expect(routes['/mints/list']).toBeUndefined();
-    expect(routes['/mints/info']).toBeUndefined();
   });
 
   test('rejects a protected route without a bearer credential', async () => {

@@ -827,6 +827,17 @@ describe('MintService', () => {
       const second = await service.addMintByUrl(testMintUrl);
 
       expect(first.mint.mintUrl).toBe(second.mint.mintUrl);
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+    });
+
+    it('reports one creation for concurrent registration', async () => {
+      const results = await Promise.all([
+        service.addMintByUrl(testMintUrl),
+        service.addMintByUrl(testMintUrl),
+      ]);
+
+      expect(results.map((result) => result.created).sort()).toEqual([false, true]);
     });
 
     it('should fetch and store mint info', async () => {

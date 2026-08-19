@@ -236,7 +236,7 @@ mintsCmd
   .description('Add a mint URL')
   .action(async (url: string) => {
     const mint = await handleWalletV1Command((client) => registerAndTrustMint(client, url));
-    console.log(`Added mint: ${mint.mintUrl}`);
+    console.log(`Known Mint registered and trusted: ${mint.mintUrl}`);
   });
 
 mintsCmd

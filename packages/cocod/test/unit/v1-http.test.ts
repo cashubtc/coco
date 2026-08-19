@@ -35,21 +35,24 @@ afterEach(async () => {
 describe('v1 HTTP route interface', () => {
   test('registers a normalized Known Mint without granting trust', async () => {
     const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
     const addMint = mock(async (mintUrl: string, options?: { trusted?: boolean }) => ({
-      mint: {
-        mintUrl: 'https://mint.example.com',
-        name: 'Example Mint',
-        mintInfo: { name: 'Example Mint' },
-        trusted: false,
-        createdAt: 1_786_838_400,
-        updatedAt: 1_786_838_460,
-      },
+      mint,
       keysets: [],
+      created: true,
     }));
-    const getAllMints = mock(async () => []);
     const runtime = {
       ...lifecycleRuntime(() => configuredStatus('running')),
-      getRunningSession: () => ({ manager: { mint: { addMint, getAllMints } } }),
+      getRunningSession: () => ({
+        manager: { mint: { addMint, getAllMints: async () => [mint] } },
+      }),
     } as unknown as V1Runtime;
     const routes = buildV1Routes(
       createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
@@ -64,7 +67,7 @@ describe('v1 HTTP route interface', () => {
 
     expect(response.status).toBe(201);
     expect(response.headers.get('location')).toBe(
-      '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com',
+      '/v1/mints/by-url?mintUrl=https%3A%2F%2Fmint.example.com',
     );
     expect(await response.json()).toEqual({
       mintUrl: 'https://mint.example.com',
@@ -74,6 +77,17 @@ describe('v1 HTTP route interface', () => {
       updatedAt: '2026-08-16T00:01:00.000Z',
     });
     expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
+
+    const canonical = await routes['/v1/mints/by-url']!.GET!(
+      authorizedRequest(response.headers.get('location')!, credential.plaintext),
+    );
+    expect(await canonical.json()).toEqual({
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      trusted: false,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
   });
 
   test('lists Known Mints and preserves trust on duplicate registration', async () => {
@@ -88,9 +102,7 @@ describe('v1 HTTP route interface', () => {
     };
     const getAllMints = mock(async () => [knownMint]);
     const getAllTrustedMints = mock(async () => [knownMint]);
-    const addMint = mock(async () => {
-      throw new Error('duplicate registration must not change trust');
-    });
+    const addMint = mock(async () => ({ mint: knownMint, keysets: [], created: false }));
     const runtime = {
       ...lifecycleRuntime(() => configuredStatus('running')),
       getRunningSession: () => ({
@@ -128,7 +140,44 @@ describe('v1 HTTP route interface', () => {
       mintUrl: 'https://mint.example.com',
       trusted: true,
     });
-    expect(addMint).not.toHaveBeenCalled();
+    expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
+  });
+
+  test('uses Coco registration results for concurrent creation status', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    let registrations = 0;
+    const addMint = mock(async () => ({
+      mint,
+      keysets: [],
+      created: registrations++ === 0,
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({ manager: { mint: { addMint } } }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+    const register = () =>
+      routes['/v1/mints']!.POST!(
+        authorizedJsonRequest('/v1/mints', credential.plaintext, {
+          mintUrl: mint.mintUrl,
+        }),
+      );
+
+    const responses = await Promise.all([register(), register()]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 201]);
+    expect(addMint).toHaveBeenCalledTimes(2);
   });
 
   test('changes trust only through explicit authenticated commands', async () => {
@@ -288,7 +337,7 @@ describe('v1 HTTP route interface', () => {
 
     const response = await routes['/v1/mints/payment-method-capabilities']!.GET!(
       authorizedRequest(
-        '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.example.com%2F&operation=mint&unit=SAT',
+        '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.example.com%2F',
         credential.plaintext,
       ),
     );
@@ -308,8 +357,6 @@ describe('v1 HTTP route interface', () => {
     });
     expect(listPaymentMethodCapabilities).toHaveBeenCalledWith({
       mintUrl: 'https://mint.example.com',
-      operation: 'mint',
-      unit: 'SAT',
     });
   });
 
@@ -356,7 +403,7 @@ describe('v1 HTTP route interface', () => {
       ),
       routes['/v1/mints/payment-method-capabilities']!.GET!(
         authorizedRequest(
-          '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.test&operation=swap',
+          '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.test&operation=mint',
           credential.plaintext,
         ),
       ),
@@ -660,6 +707,16 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'KnownMints',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/mints/by-url',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'KnownMint',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,

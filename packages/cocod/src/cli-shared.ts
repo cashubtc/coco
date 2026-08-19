@@ -70,11 +70,6 @@ export interface KnownMintFilters {
   trustedOnly?: boolean;
 }
 
-export interface PaymentMethodCapabilityFilters {
-  operation?: 'mint' | 'melt';
-  unit?: string;
-}
-
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
@@ -84,10 +79,7 @@ export interface V1Client {
   getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
   trustMint(mintUrl: string): Promise<KnownMintDocument>;
   untrustMint(mintUrl: string): Promise<KnownMintDocument>;
-  listPaymentMethodCapabilities(
-    mintUrl: string,
-    filters?: PaymentMethodCapabilityFilters,
-  ): Promise<PaymentMethodCapabilitiesDocument>;
+  listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
   getWalletRecoveryMaterial(
     input: WalletRecoveryMaterialRequest,
@@ -166,10 +158,10 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         knownMintSchema,
         credentialFile,
       ),
-    listPaymentMethodCapabilities: (mintUrl, filters = {}) =>
+    listPaymentMethodCapabilities: (mintUrl) =>
       requestV1(
         endpoint,
-        paymentMethodCapabilitiesPath(mintUrl, filters),
+        mintResourcePath('/v1/mints/payment-method-capabilities', mintUrl),
         'GET',
         undefined,
         paymentMethodCapabilitiesSchema,
@@ -240,16 +232,6 @@ function mintListPath(filters: KnownMintFilters): string {
 
 function mintResourcePath(path: string, mintUrl: string): string {
   return `${path}?${new URLSearchParams({ mintUrl }).toString()}`;
-}
-
-function paymentMethodCapabilitiesPath(
-  mintUrl: string,
-  filters: PaymentMethodCapabilityFilters,
-): string {
-  const query = new URLSearchParams({ mintUrl });
-  if (filters.operation) query.set('operation', filters.operation);
-  if (filters.unit) query.set('unit', filters.unit);
-  return `/v1/mints/payment-method-capabilities?${query.toString()}`;
 }
 
 function balancePath(filters: BalanceFilters): string {

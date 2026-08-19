@@ -13,6 +13,7 @@ import { EventBus } from '../events/EventBus';
 import type { CoreEvents } from '../events/types';
 import type { MintInfo } from '../types';
 import type { Logger } from '../logging/Logger.ts';
+import { MintScopedLock } from '../operations/MintScopedLock.ts';
 import { normalizeMintUrl } from '../utils';
 import { DEFAULT_UNIT, normalizeUnit, normalizeUnitAmount, type UnitAmount } from '../amounts.ts';
 
@@ -97,6 +98,13 @@ export interface PaymentMethodCapabilityCheck extends PaymentMethodCapability {
   reason?: string;
 }
 
+/** Result of atomically discovering or refreshing one Known Mint. */
+export interface AddMintResult {
+  mint: Mint;
+  keysets: Keyset[];
+  created: boolean;
+}
+
 type NutMethodSetting = {
   method: string;
   unit: string;
@@ -122,6 +130,7 @@ export class MintService {
   private readonly mintAdapter: MintAdapter;
   private readonly eventBus?: EventBus<CoreEvents>;
   private readonly logger?: Logger;
+  private readonly registrationLock = new MintScopedLock();
 
   constructor(
     mintRepo: MintRepository,
@@ -146,11 +155,20 @@ export class MintService {
    * @param options - Optional configuration
    * @param options.trusted - Whether to add the mint as trusted (default: false)
    */
-  async addMintByUrl(
+  async addMintByUrl(mintUrl: string, options?: { trusted?: boolean }): Promise<AddMintResult> {
+    mintUrl = normalizeMintUrl(mintUrl);
+    const release = await this.registrationLock.acquire(mintUrl);
+    try {
+      return await this.addMintByNormalizedUrl(mintUrl, options);
+    } finally {
+      release();
+    }
+  }
+
+  private async addMintByNormalizedUrl(
     mintUrl: string,
     options?: { trusted?: boolean },
-  ): Promise<{ mint: Mint; keysets: Keyset[] }> {
-    mintUrl = normalizeMintUrl(mintUrl);
+  ): Promise<AddMintResult> {
     const trusted = options?.trusted ?? false;
     this.logger?.info('Adding mint by URL', { mintUrl, trusted });
     const exists = await this.mintRepo.getMintByUrl(mintUrl).catch(() => null);
@@ -168,9 +186,9 @@ export class MintService {
         }
         const updated = await this.ensureUpdatedMint(mintUrl);
         await this.eventBus?.emit('mint:updated', updated);
-        return updated;
+        return { ...updated, created: false };
       }
-      return this.ensureUpdatedMint(mintUrl);
+      return { ...(await this.ensureUpdatedMint(mintUrl)), created: false };
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -186,7 +204,7 @@ export class MintService {
     const added = await this.updateMint(newMint);
     await this.eventBus?.emit('mint:added', added);
     this.logger?.info('Mint added', { mintUrl, trusted });
-    return added;
+    return { ...added, created: true };
   }
 
   async updateMintData(mintUrl: string): Promise<{ mint: Mint; keysets: Keyset[] }> {

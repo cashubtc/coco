@@ -94,6 +94,17 @@ test('the generated v1 interface description comes from the runtime schemas', as
       responseCacheControl: null,
     },
     {
+      method: 'GET',
+      path: '/v1/mints/by-url',
+      capability: 'wallet:read',
+      requestSchema: null,
+      responseSchema: 'KnownMint',
+      errorSchema: 'Error',
+      successStatuses: [200],
+      idempotencyKey: null,
+      responseCacheControl: null,
+    },
+    {
       method: 'POST',
       path: '/v1/mints',
       capability: 'wallet:admin',

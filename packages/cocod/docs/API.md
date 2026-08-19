@@ -100,6 +100,7 @@ browser CORS.
 - `POST /v1/admin/process/stop`
 - `GET /v1/balances`
 - `GET /v1/mints`
+- `GET /v1/mints/by-url?mintUrl={mintUrl}`
 - `POST /v1/mints`
 - `GET /v1/mints/info?mintUrl={mintUrl}`
 - `POST /v1/mints/trust`
