@@ -1,7 +1,8 @@
 # cocod
 
-`cocod` is a Cashu wallet CLI with a local daemon, built on the Coco packages in this
-workspace.
+`cocod` is a Cashu wallet CLI and authenticated daemon, built on the Coco packages in this
+workspace. The daemon defaults to the local loopback interface and can also serve remote clients
+through the same machine-oriented HTTP interface.
 
 If you like simple tools: run commands in your terminal, and let the daemon handle wallet state in the background.
 
@@ -123,7 +124,8 @@ upgrading and delete the copy once you're settled.
 
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
-- Routes: `src/routes.ts`
+- V1 lifecycle interface: `src/v1/`
+- Remaining legacy operational routes: `src/routes.ts`
 - Transport: authenticated HTTP over one TCP listener
 
 Defaults:
@@ -185,8 +187,9 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Machine-readable daemon contract](docs/daemon-api.json)
-- [Network interface v1](docs/network-interface-v1.md)
+- [Implemented v1 lifecycle contract](docs/lifecycle-api-v1.json)
+- [Remaining legacy operational contract](docs/daemon-api.json)
+- [Accepted network interface v1](docs/network-interface-v1.md)
 
 ## License
 

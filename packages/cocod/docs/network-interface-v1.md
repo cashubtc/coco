@@ -1,12 +1,14 @@
 # Cocod Network Interface v1
 
-Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
-Wallet and Coco Session lifecycle, Wallet Recovery Material, and Cocod Process shutdown described
-here. The later balance, mint, quote, operation, history, and event resources remain proposed.
+Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
+lifecycle, Wallet Recovery Material, Cocod Process shutdown, and the legacy compatibility described
+here. The complete v1 resource surface is accepted as the target design; balance, Mint, Quote,
+Operation, Payment Request, history, event, and extension resources remain proposed until their
+individual contracts and implementations land.
 
-This document specifies cocod's machine-oriented network interface. The implemented first revision
-covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
-operations, history, and events.
+This document specifies cocod's machine-oriented network interface. It distinguishes implemented
+resources from the accepted target surface so resources can land incrementally without inventing
+new protocol shapes in each implementation slice.
 
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
@@ -22,13 +24,14 @@ Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 - Mirroring every method on Coco's `Manager` class.
 - Supporting multiple Wallets in one cocod process.
-- Defining payment, quote, or operation resources in this first revision.
 - Identifying or revoking individual Cocod Clients in the first interface version.
 - Importing a Wallet from existing Wallet Recovery Material through the network interface.
 - Providing native TLS termination.
 - Supporting browser clients or defining a CORS policy.
 - Preserving the current `{ output }` and `{ error }` response shapes in `/v1` resources.
 - Providing durable event replay in the first interface version.
+- Mirroring proof-bearing Coco models or repository records directly into network responses.
+- Providing one-shot server commands that hide preparation and execution of durable Operations.
 
 ## Domain language
 
@@ -256,9 +259,9 @@ The existing unversioned command routes move from the Unix socket to the same TC
 send, receive, mint, history, NPC, and X-Cashu commands remain usable while their v1 resources are
 specified.
 
-Every unversioned route except the minimal health check requires the same administrative Client
-Credential. Cocod does not run a Unix listener or a second compatibility transport. Later interface
-revisions replace these routes incrementally and remove their CLI-oriented response envelopes.
+Every remaining unversioned route requires the same administrative Client Credential. Cocod does
+not run a Unix listener or a second compatibility transport. Later interface revisions replace
+these routes incrementally and remove their CLI-oriented response envelopes.
 
 The legacy `/stop` route is not carried forward. The CLI uses the authenticated v1 process-shutdown
 resource instead.
@@ -294,6 +297,279 @@ local and remote clients use the same HTTP resources and authentication.
 
 `code` is stable interface data. `message` is diagnostic text and clients MUST NOT branch on it.
 `details` is optional and its schema depends on `code`.
+
+### Amounts
+
+Amounts MUST be represented losslessly as a decimal integer string paired with a unit. Clients MUST
+NOT assume that an amount fits in a JavaScript safe integer.
+
+```json
+{
+  "value": "1234",
+  "unit": "sat"
+}
+```
+
+Fields that compare several amounts, such as requested amount, input amount, fee reserve, swap fee,
+and effective fee, MUST use the same representation.
+
+### Pagination
+
+Collection resources use cursor pagination rather than exposing repository offsets. A paginated
+response has this shape:
+
+```json
+{
+  "items": [],
+  "nextCursor": null
+}
+```
+
+Cursors are opaque. A client MUST NOT construct, inspect, or reuse a cursor with different filters.
+
+### Resource creation and commands
+
+- Successful resource creation returns `201 Created`, the resource document, and a `Location`
+  header containing its canonical path.
+- `GET` requests MUST NOT refresh remote state or otherwise mutate Wallet state.
+- Remote reconciliation is an explicit `POST` command named `refresh`.
+- Mutation commands accept `Idempotency-Key` according to the concurrency rules in this document.
+- A command returns the updated resource directly unless its endpoint documents a distinct result.
+- A command that is unavailable for the resource's current type or state returns `409 Conflict`
+  with the current state and allowed commands in error details.
+
+## Target resource model
+
+The v1 target surface uses unified Quote and Operation collections. Their documents are
+discriminated unions rather than unrelated route families:
+
+- A Quote has `type: mint | melt` and a method such as `bolt11`, `bolt12`, or `onchain`.
+- An Operation has `type: mint | melt | send | receive` and retains its type-specific state.
+- Quote and Operation identifiers are opaque and globally unambiguous within their respective v1
+  resource collections. The external Quote identifier represents Coco's composite Quote Identity;
+  clients MUST NOT construct it from a Mint URL or a mint-assigned quote identifier.
+- Responses are stable cocod documents. They MUST NOT serialize Coco classes, raw proofs, proof
+  secrets, blinded messages, serialized output data, or repository rows directly.
+
+### Preparation and execution
+
+Creating an Operation means preparing it as far as that Operation type supports. Creation MUST NOT
+also execute the Operation.
+
+Preparation is not a dry run. It persists an Operation and may reserve proofs, calculate outputs,
+or otherwise reduce spendable balance. The prepared representation exposes safe inspection data
+such as requested amount, input amount, fees, whether a swap is required, timestamps, state, and
+allowed commands. It MUST omit proof-bearing and recovery data.
+
+The common interaction is:
+
+```text
+create Quote when required
+        |
+        v
+create and prepare Operation
+        |
+        +----> inspect amounts, fees, state, and allowed commands
+        |                         |
+        |                         +----> cancel when supported
+        v
+execute explicitly
+        |
+        v
+inspect, refresh, or retrieve result
+```
+
+Operation types retain their real Coco states. In particular, preparing a Mint Operation produces
+a durable `pending` Operation rather than renaming it to `prepared`. The common interface describes
+the transition intent without flattening the underlying state machines.
+
+The CLI MAY retain one-shot human commands by creating and then executing an Operation as two v1
+requests. That convenience belongs to the client and MUST NOT remove the prepared Operation from
+the network interface.
+
+## Complete endpoint surface
+
+### Process and lifecycle resources
+
+These resources are implemented.
+
+| Method | Path                                 | Purpose                                                     |
+| ------ | ------------------------------------ | ----------------------------------------------------------- |
+| `GET`  | `/health`                            | Report public Cocod Process liveness.                       |
+| `GET`  | `/v1/status`                         | Report Wallet, Wallet Seed Access, and Coco Session status. |
+| `POST` | `/v1/admin/wallet/initialize`        | Generate and initialize the Wallet.                         |
+| `POST` | `/v1/admin/wallet/recovery-material` | Retrieve Wallet Recovery Material.                          |
+| `POST` | `/v1/admin/session/start`            | Start the Coco Session.                                     |
+| `POST` | `/v1/admin/session/stop`             | Stop the Coco Session.                                      |
+| `POST` | `/v1/admin/process/stop`             | Stop the Cocod Process.                                     |
+
+### Balance resources
+
+These resources are proposed.
+
+| Method | Path           | Purpose                                                      |
+| ------ | -------------- | ------------------------------------------------------------ |
+| `GET`  | `/v1/balances` | Return structured balances filtered by Mint, unit, or trust. |
+
+The response distinguishes spendable, reserved, and total amounts. It MUST NOT reduce all units to
+`sat` or omit the distinction between available and reserved proofs.
+
+### Mint resources
+
+These resources are proposed.
+
+| Method | Path                                             | Purpose                                                           |
+| ------ | ------------------------------------------------ | ----------------------------------------------------------------- |
+| `GET`  | `/v1/mints`                                      | List Known Mints with optional trust and capability filters.      |
+| `POST` | `/v1/mints`                                      | Discover and persist a Known Mint without implicitly trusting it. |
+| `GET`  | `/v1/mints/{mintId}`                             | Return cached Mint metadata and trust state.                      |
+| `POST` | `/v1/mints/{mintId}/refresh`                     | Refresh metadata from the Mint.                                   |
+| `POST` | `/v1/mints/{mintId}/trust`                       | Mark a Known Mint as trusted.                                     |
+| `POST` | `/v1/mints/{mintId}/untrust`                     | Remove trust without forgetting the Known Mint.                   |
+| `GET`  | `/v1/mints/{mintId}/payment-method-capabilities` | List Mint and Melt method/unit capabilities.                      |
+
+Mint discovery and Mint trust are separate transitions. Creating a Known Mint MUST NOT authorize
+Wallet operations through that Mint until trust is granted explicitly.
+
+### Quote resources
+
+These resources are proposed.
+
+| Method | Path                           | Purpose                                               |
+| ------ | ------------------------------ | ----------------------------------------------------- |
+| `GET`  | `/v1/quotes`                   | List Quotes filtered by type, method, Mint, or state. |
+| `POST` | `/v1/quotes`                   | Create a Mint Quote or Melt Quote.                    |
+| `GET`  | `/v1/quotes/{quoteId}`         | Return canonical local Quote state.                   |
+| `POST` | `/v1/quotes/{quoteId}/refresh` | Reconcile the Quote with its Mint.                    |
+
+Creating or refreshing a Quote MUST NOT create or execute an Operation. Quote responses expose
+remote terms and canonical accounting but omit blinded signatures and other proof-bearing fields.
+
+### Operation resources
+
+These resources are proposed.
+
+| Method | Path                                   | Purpose                                                         |
+| ------ | -------------------------------------- | --------------------------------------------------------------- |
+| `GET`  | `/v1/operations`                       | List Operations filtered by type, state, Mint, or Quote.        |
+| `POST` | `/v1/operations`                       | Create and prepare a Mint, Melt, Send, or Receive Operation.    |
+| `GET`  | `/v1/operations/{operationId}`         | Inspect state, safe preparation data, and allowed commands.     |
+| `POST` | `/v1/operations/{operationId}/execute` | Execute or resume the prepared Operation.                       |
+| `POST` | `/v1/operations/{operationId}/cancel`  | Cancel before irreversible execution when supported.            |
+| `POST` | `/v1/operations/{operationId}/refresh` | Reconcile persisted, Wallet, and remote state.                  |
+| `POST` | `/v1/operations/{operationId}/reclaim` | Reclaim a pending Send or Melt when Coco determines it is safe. |
+| `GET`  | `/v1/operations/{operationId}/result`  | Retrieve sensitive or terminal Operation output.                |
+
+`execute`, `cancel`, and `reclaim` are explicit state transitions. Concurrent execution requests
+for one Operation MUST join or replay the same transition rather than execute twice.
+
+The ordinary Operation representation MUST omit outgoing tokens, payment preimages, raw proofs,
+and transport payloads. The result resource is authenticated with `wallet:admin`, includes
+`Cache-Control: no-store`, and returns `409 Conflict` until a result is available. A result that
+contains an outgoing token remains retrievable after client disconnection so an accepted Send does
+not strand value-bearing output.
+
+`refresh` is the common safe reconciliation command. V1 does not initially expose separate
+`check-payment` or `finalize` routes; the adapter maps refresh or execute intent onto the correct
+type-specific Coco behavior.
+
+### Outgoing Payment Requests
+
+This resource is proposed.
+
+| Method | Path                            | Purpose                                                   |
+| ------ | ------------------------------- | --------------------------------------------------------- |
+| `POST` | `/v1/payment-requests/evaluate` | Parse and return structured Payment Request requirements. |
+
+Evaluation is read-like but uses `POST` because the encoded request may be large or sensitive and
+is supplied in the body. It does not persist state or move value. The response exposes amount,
+unit, transport, allowed Mints, payable Mints, and safe spending-condition requirements.
+
+Paying an evaluated in-band Payment Request uses `POST /v1/operations` with a Send Operation source
+that contains the encoded request. The normal prepare, inspect, execute, and result lifecycle then
+applies. V1 does not initially promise durable HTTP or Nostr delivery; those transports require a
+separately persisted Payment Request Payment Operation rather than an in-memory prepared value.
+
+### Incoming Payment Requests
+
+These resources are proposed and add machine-oriented capability beyond the legacy routes.
+
+| Method | Path                                               | Purpose                                    |
+| ------ | -------------------------------------------------- | ------------------------------------------ |
+| `GET`  | `/v1/incoming-payment-requests`                    | List incoming Payment Requests by state.   |
+| `POST` | `/v1/incoming-payment-requests`                    | Create a durable incoming Payment Request. |
+| `GET`  | `/v1/incoming-payment-requests/{requestId}`        | Inspect request state.                     |
+| `POST` | `/v1/incoming-payment-requests/{requestId}/cancel` | Cancel an active request.                  |
+| `POST` | `/v1/incoming-payment-requests/{requestId}/claims` | Submit and claim a received payload.       |
+
+Claim submission creates or joins the durable Receive work owned by the incoming Payment Request.
+Responses expose safe attempt and linked Receive Operation identifiers but omit received proofs and
+payloads from ordinary request documents.
+
+### History and event resources
+
+These resources are proposed.
+
+| Method | Path                           | Purpose                                                   |
+| ------ | ------------------------------ | --------------------------------------------------------- |
+| `GET`  | `/v1/history`                  | Return cursor-paginated, filterable safe history.         |
+| `GET`  | `/v1/history/{historyEntryId}` | Return one safe history entry.                            |
+| `GET`  | `/v1/events`                   | Stream typed safe projections through Server-Sent Events. |
+
+History and event documents MUST omit tokens, proofs, proof secrets, serialized output data, and
+raw third-party responses. An event contains a stable event type, event ID, timestamp, and a safe
+resource projection or resource reference. V1 does not promise replay after a Cocod Process
+restart.
+
+### NPC extension resources
+
+These resources are proposed as a separately namespaced extension rather than part of the core
+Wallet interface.
+
+| Method | Path                                                           | Purpose                                           |
+| ------ | -------------------------------------------------------------- | ------------------------------------------------- |
+| `GET`  | `/v1/extensions/npc/account`                                   | Return the NPC address and safe account metadata. |
+| `POST` | `/v1/extensions/npc/username-operations`                       | Prepare a username purchase.                      |
+| `GET`  | `/v1/extensions/npc/username-operations/{operationId}`         | Inspect price and state.                          |
+| `POST` | `/v1/extensions/npc/username-operations/{operationId}/execute` | Pay and claim the username.                       |
+
+The NPC extension MUST persist enough preparation state to resume after client disconnection before
+these mutation resources are considered implemented. Its resources follow the common error,
+idempotency, redaction, and no-cache rules without adding NPC concepts to the Coco Cashu domain.
+
+### Machine-readable description
+
+This resource is proposed.
+
+| Method | Path               | Purpose                                                  |
+| ------ | ------------------ | -------------------------------------------------------- |
+| `GET`  | `/v1/openapi.json` | Return generated OpenAPI for the implemented v1 surface. |
+
+The document is generated from the runtime request and response schemas. Proposed but unimplemented
+resources MUST NOT appear as callable operations in the generated document. Compatibility policy
+MUST distinguish additive schema changes from changes that require a new interface version.
+
+## Legacy route replacement map
+
+Legacy command routes remain only until the corresponding v1 resources and CLI calls land in the
+same delivery slice.
+
+| Legacy route           | V1 replacement                                                           |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `GET /balance`         | `GET /v1/balances`                                                       |
+| `POST /mints/add`      | Create a Known Mint, then explicitly trust it.                           |
+| `GET /mints/list`      | `GET /v1/mints`                                                          |
+| `POST /mints/info`     | Read or explicitly refresh one Mint resource.                            |
+| `POST /receive/bolt11` | Create a Mint Quote, then prepare a Mint Operation.                      |
+| `POST /send/bolt11`    | Create a Melt Quote, prepare a Melt Operation, then execute explicitly.  |
+| `POST /send/cashu`     | Prepare a Send Operation, then execute explicitly.                       |
+| `POST /receive/cashu`  | Prepare a Receive Operation, then execute explicitly.                    |
+| `POST /x-cashu/parse`  | Evaluate the Payment Request.                                            |
+| `POST /x-cashu/handle` | Evaluate the request, prepare a Send Operation, then execute explicitly. |
+| `GET /history`         | `GET /v1/history`                                                        |
+| `GET /events`          | `GET /v1/events`                                                         |
+| `GET /npc/address`     | `GET /v1/extensions/npc/account`                                         |
+| `POST /npc/username`   | Prepare and execute an NPC username Operation.                           |
 
 ## Health
 
@@ -350,7 +626,7 @@ third-party responses.
 
 Creates the single Wallet owned by this cocod process. This command requires `wallet:admin`.
 
-Proposed request:
+Request:
 
 ```json
 {
@@ -361,7 +637,7 @@ Proposed request:
 Omitting `passphrase` enables unattended Coco Session start. Providing a non-empty passphrase
 requires explicit session start after process restart.
 
-Proposed behavior:
+Behavior:
 
 - The state directory MUST be mode `0700`; secret-bearing files MUST be mode `0600`.
 - Configuration writes MUST be atomic.
@@ -392,7 +668,7 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - A Wallet without a passphrase returns its mnemonic to an authenticated administrative client.
 - A Wallet with a passphrase requires and validates that passphrase on every retrieval. The Client
@@ -422,7 +698,7 @@ For a Wallet configured with a passphrase:
 
 A Wallet without a passphrase uses an empty JSON object.
 
-Proposed behavior:
+Behavior:
 
 - When a passphrase is configured, cocod validates it and acquires Wallet Seed Access before
   accepting the transition. Otherwise no unlocking material is required.
@@ -448,7 +724,7 @@ acquired.
 Stops Wallet-dependent work, disposes the Coco Session, and removes seed bytes retained by that
 session from reachable application state. This command requires `wallet:admin`.
 
-Proposed behavior:
+Behavior:
 
 - A running session transitions to `stopping` and returns `202 Accepted` with status.
 - Calling stop while the session is `stopped` is idempotent and returns `200 OK` with status.
@@ -567,13 +843,19 @@ initialize cocod from existing Wallet Recovery Material. After Wallet Import, Co
 a separate action that reconstructs proofs from mints; importing the mnemonic does not itself
 restore proofs.
 
-## Next specification slices
+## Delivery order
 
-After the lifecycle is accepted, extend this document in this order:
+The accepted target surface lands as focused vertical slices. Each slice specifies request and
+response schemas, implements runtime routes, migrates the CLI, removes the superseded legacy route,
+and updates the generated interface description before it is complete.
 
-1. Common identifiers, amounts, timestamps, pagination, errors, and idempotency.
-2. Balance snapshots and mint trust/capability resources.
-3. Mint and Melt Quotes as durable resources.
-4. Mint, Melt, Send, and Receive Operations with explicit lifecycle commands.
-5. Payment requests, history, and safe live events.
-6. Generated OpenAPI and client compatibility policy.
+1. Common identifiers, lossless amounts, cursors, errors, and schema infrastructure.
+2. Balance snapshots.
+3. Known Mint, trust, metadata, and capability resources.
+4. Quote resources.
+5. Operation resources, beginning with Send and Receive preparation/execution semantics, then Mint
+   and Melt Quote-backed workflows.
+6. Payment Request evaluation and incoming Payment Request resources.
+7. History and safe live events.
+8. NPC extension resources after their preparation state is durable.
+9. Generated OpenAPI and client compatibility enforcement.

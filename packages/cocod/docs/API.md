@@ -113,5 +113,10 @@ browser CORS.
 - `GET /npc/address`
 - `POST /npc/username`
 
-For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
-generated structured lifecycle description is `docs/lifecycle-api-v1.json`.
+The list above is the currently callable HTTP interface. See the
+[accepted network interface v1](network-interface-v1.md) for the complete target resource surface
+and legacy replacement map; resources marked as proposed there are not callable yet.
+
+The [implemented v1 lifecycle contract](lifecycle-api-v1.json) is generated from runtime schemas.
+The [remaining legacy operational contract](daemon-api.json) describes the unversioned routes that
+have not yet migrated to v1.
