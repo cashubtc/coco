@@ -1,66 +1,75 @@
-import { SOCKET_PATH, PID_FILE } from './utils/config.js';
+import {
+  CONFIG_DIR,
+  listenerUrl,
+  PID_FILE,
+  resolveListenerConfig,
+  type ListenerConfig,
+} from './utils/config.js';
 import { createDaemonLogger, serializeError } from './utils/logger.js';
 import { CocodRuntime } from './runtime.js';
 import { buildFallbackHandler, createRouteHandlers, buildRoutes } from './routes.js';
 import { AdministrativeCredential } from './credentials.js';
 import { ProcessShutdownCoordinator } from './process-shutdown.js';
+import {
+  StateDirectoryLease,
+  StateDirectoryLeaseUnavailableError,
+} from './state-directory-lease.js';
 import { buildV1FallbackHandler, buildV1Routes, createV1RouteDefinitions } from './v1/http.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 export async function startDaemon() {
   const logger = createDaemonLogger();
+  let listener: ListenerConfig;
+
+  try {
+    listener = resolveListenerConfig();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('daemon.configuration_invalid', { message });
+    await logger.flush();
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+  const endpoint = listenerUrl(listener);
 
   logger.info('daemon.start.requested', {
     pidFile: PID_FILE,
-    socketPath: SOCKET_PATH,
+    endpoint,
   });
 
+  let stateDirectoryLease: StateDirectoryLease;
   try {
-    const testConn = await Bun.connect({
-      unix: SOCKET_PATH,
-      socket: {
-        data() {},
-        open() {},
-        close() {},
-        drain() {},
-      },
-    });
-    testConn.end();
-    logger.warn('daemon.start.skipped', {
-      reason: 'already_running',
-      socketPath: SOCKET_PATH,
+    stateDirectoryLease = await StateDirectoryLease.acquire();
+  } catch (error) {
+    if (error instanceof StateDirectoryLeaseUnavailableError) {
+      logger.warn('daemon.start.skipped', {
+        reason: 'state_directory_owned',
+        stateDirectory: CONFIG_DIR,
+      });
+      await logger.flush();
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
+    }
+    logger.error('daemon.state_directory_lease_failed', {
+      stateDirectory: CONFIG_DIR,
+      error: serializeError(error),
     });
     await logger.flush();
-    console.error(`Error: Daemon is already running on ${SOCKET_PATH}`);
+    console.error(`Error: Failed to acquire Cocod state directory lease at ${CONFIG_DIR}`);
     process.exit(1);
-  } catch {
-    // Not running, safe to proceed
   }
 
-  const credentials = await AdministrativeCredential.loadOrBootstrap();
-  const runtime = await CocodRuntime.load({
-    logger: logger.child({ component: 'wallet' }),
-  });
-
+  let credentials: AdministrativeCredential;
+  let runtime: CocodRuntime;
   try {
-    await Bun.write(PID_FILE, '');
-    await Bun.file(PID_FILE).delete();
-  } catch {
-    // Directory creation failed or file didn't exist
+    credentials = await AdministrativeCredential.loadOrBootstrap();
+    runtime = await CocodRuntime.load({
+      logger: logger.child({ component: 'wallet' }),
+    });
+  } catch (error) {
+    await stateDirectoryLease.release();
+    throw error;
   }
-
-  try {
-    await Bun.file(SOCKET_PATH).delete();
-  } catch {
-    // File might not exist
-  }
-  try {
-    await Bun.file(PID_FILE).delete();
-  } catch {
-    // File might not exist
-  }
-
-  await Bun.write(PID_FILE, process.pid.toString());
 
   let server: ReturnType<typeof Bun.serve> | undefined;
   const shutdown = new ProcessShutdownCoordinator({
@@ -69,13 +78,7 @@ export async function startDaemon() {
     },
     disposeRuntime: () => runtime.dispose(),
     cleanupProcessState: async () => {
-      try {
-        await Bun.file(PID_FILE).delete();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error;
-        }
-      }
+      await cleanupProcessState(stateDirectoryLease);
     },
     flushLogs: () => logger.flush(),
     reportFailure: (event, fields) => {
@@ -96,13 +99,46 @@ export async function startDaemon() {
   );
   const legacyFallback = buildFallbackHandler(runtime, credentials, httpLogger, availability);
 
-  server = Bun.serve({
-    unix: SOCKET_PATH,
-    routes: { ...legacyRoutes, ...v1Routes },
-    fetch: buildV1FallbackHandler(credentials, legacyFallback, httpLogger),
-  });
+  try {
+    server = Bun.serve({
+      hostname: listener.hostname,
+      port: listener.port,
+      routes: { ...legacyRoutes, ...v1Routes },
+      fetch: buildV1FallbackHandler(credentials, legacyFallback, httpLogger),
+    });
+  } catch (error) {
+    try {
+      await runtime.dispose();
+    } finally {
+      await stateDirectoryLease.release();
+    }
+    logger.error('daemon.listener_bind_failed', { endpoint, error: serializeError(error) });
+    await logger.flush();
+    console.error(`Error: Failed to bind Cocod TCP listener at ${endpoint}`);
+    process.exit(1);
+  }
 
-  logger.info('daemon.started', { socketPath: SOCKET_PATH });
+  try {
+    await Bun.write(PID_FILE, process.pid.toString());
+  } catch (error) {
+    try {
+      await server.stop(true);
+    } finally {
+      try {
+        await runtime.dispose();
+      } finally {
+        await stateDirectoryLease.release();
+      }
+    }
+    logger.error('daemon.process_state_initialization_failed', {
+      error: serializeError(error),
+    });
+    await logger.flush();
+    console.error(`Error: Failed to write Cocod PID file at ${PID_FILE}`);
+    process.exit(1);
+  }
+
+  logger.info('daemon.started', { endpoint });
   const unattendedStart = runtime.startUnattendedSession();
   const status = runtime.getStatus();
   if (!status.wallet) {
@@ -144,4 +180,31 @@ export async function startDaemon() {
   process.on('SIGTERM', () => {
     void shutdown.request('sigterm');
   });
+}
+
+async function cleanupProcessState(stateDirectoryLease: StateDirectoryLease): Promise<void> {
+  let pidCleanupError: unknown;
+  try {
+    await Bun.file(PID_FILE).delete();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      pidCleanupError = error;
+    }
+  }
+
+  try {
+    await stateDirectoryLease.release();
+  } catch (error) {
+    if (pidCleanupError !== undefined) {
+      throw new AggregateError(
+        [pidCleanupError, error],
+        'Failed to clean up Cocod PID and state directory lease',
+      );
+    }
+    throw error;
+  }
+
+  if (pidCleanupError !== undefined) {
+    throw pidCleanupError;
+  }
 }

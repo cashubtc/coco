@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  assertHostLocalOperation,
   callDaemon,
   callDaemonStream,
   ensureDaemonRunning,
@@ -25,14 +26,17 @@ afterEach(async () => {
 test('normal protected requests attach the file-backed bearer credential', async () => {
   const credentialFile = await temporaryCredentialFile('a'.repeat(43));
   const authorizations: Array<string | null> = [];
-  globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+  const requestedUrls: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    requestedUrls.push(input instanceof Request ? input.url : input.toString());
     authorizations.push(new Headers(init?.headers).get('authorization'));
     return Response.json({ output: 'UNLOCKED' });
   }) as unknown as typeof fetch;
 
-  await callDaemon('/status', { credentialFile });
+  await callDaemon('/status', { credentialFile, url: 'https://wallet.example.com' });
 
   expect(authorizations).toEqual([`Bearer ${'a'.repeat(43)}`]);
+  expect(requestedUrls).toEqual(['https://wallet.example.com/status']);
 });
 
 test('the liveness request remains credential-free', async () => {
@@ -47,11 +51,21 @@ test('the liveness request remains credential-free', async () => {
   expect(authorizations).toEqual([null]);
 });
 
+test('host-local operations reject an explicit remote endpoint', () => {
+  expect(() => assertHostLocalOperation('logs', 'https://wallet.example.com')).toThrow(
+    'cocod logs is host-local and cannot use the explicit Cocod endpoint https://wallet.example.com',
+  );
+  expect(() => assertHostLocalOperation('logs', undefined, {})).not.toThrow();
+});
+
 test('streaming requests attach the file-backed bearer credential', async () => {
   const credentialFile = await temporaryCredentialFile('c'.repeat(43));
   const streamAuthorizations: Array<string | null> = [];
+  const requestedUrls: string[] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-    const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+    const url = input instanceof Request ? input.url : input.toString();
+    requestedUrls.push(url);
+    const path = new URL(url).pathname;
     if (path === '/events') {
       streamAuthorizations.push(new Headers(init?.headers).get('authorization'));
       return new Response('data: {"type":"ready"}\n\n');
@@ -62,9 +76,17 @@ test('streaming requests attach the file-backed bearer credential', async () => 
     return Response.json({ output: 'pong' });
   }) as unknown as typeof fetch;
 
-  await callDaemonStream('/events', () => {}, { credentialFile });
+  await callDaemonStream('/events', () => {}, {
+    credentialFile,
+    url: 'https://wallet.example.com',
+  });
 
   expect(streamAuthorizations).toEqual([`Bearer ${'c'.repeat(43)}`]);
+  expect(requestedUrls).toEqual([
+    'https://wallet.example.com/ping',
+    'https://wallet.example.com/status',
+    'https://wallet.example.com/events',
+  ]);
 });
 
 describe('ensureDaemonRunning', () => {
@@ -119,6 +141,21 @@ describe('ensureDaemonRunning', () => {
       startDaemonProcess({ credentialFile: join(directory, 'missing-credential') }),
     ).rejects.toThrow('Cocod Client Credential file is missing');
   }, 7_000);
+
+  test('never auto-starts when an explicit endpoint is unreachable', async () => {
+    const spawn = mock(() => ({
+      unref() {},
+    })) as unknown as typeof Bun.spawn;
+    (Bun as unknown as { spawn: typeof Bun.spawn }).spawn = spawn;
+    globalThis.fetch = mock(async () => {
+      throw new Error('Connection refused');
+    }) as unknown as typeof fetch;
+
+    await expect(ensureDaemonRunning({ url: 'https://wallet.example.com' })).rejects.toThrow(
+      'Cannot connect to the explicit Cocod endpoint https://wallet.example.com; no local process was started',
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
 });
 
 async function temporaryCredentialFile(credential: string): Promise<string> {

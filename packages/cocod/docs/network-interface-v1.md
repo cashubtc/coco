@@ -1,12 +1,12 @@
 # Cocod Network Interface v1
 
-Status: proposed. The transport-independent lifecycle module is implemented behind the current
-Unix-socket interface; the TCP interface and authentication remain unimplemented.
+Status: accepted and implemented for the authenticated TCP transport, legacy compatibility,
+Wallet and Coco Session lifecycle, Wallet Recovery Material, and Cocod Process shutdown described
+here. The later balance, mint, quote, operation, history, and event resources remain proposed.
 
-This document specifies the intended machine-oriented network interface for cocod. It is not a
-description of the current Unix-socket interface. The first revision covers the Wallet and Coco
-Session lifecycle; later revisions will specify balances, mints, quotes, operations, history, and
-events.
+This document specifies cocod's machine-oriented network interface. The implemented first revision
+covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
+operations, history, and events.
 
 Implementation is organized as [focused delivery slices](./slices/README.md).
 
@@ -177,7 +177,8 @@ normal configuration-specific startup path
 Cocod process startup and Coco Session startup are separate. The process becomes reachable before
 an unattended Coco Session finishes starting.
 
-1. Create or verify the mode-`0700` state directory.
+1. Create or verify the mode-`0700` state directory and acquire its exclusive process lease.
+   Another process that owns the same state directory makes startup fail before state is loaded.
 2. Load and validate daemon configuration and listener security. Load the administrative Client
    Credential, or automatically generate it when no credential exists. Invalid configuration fails
    the process before it binds a network listener.

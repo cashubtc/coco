@@ -8,6 +8,7 @@ import { SqliteRepositories } from '@cashu/coco-sqlite-bun';
 
 import { AdministrativeCredential, loadClientCredential } from './credentials.js';
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
+import { startTcpTestServer } from '../test/helpers/tcp.js';
 import type { AppLogger } from './utils/logger.js';
 import {
   CocodRuntimeError,
@@ -120,38 +121,28 @@ describe('routes', () => {
     }
   });
 
-  test('enforces authentication through the Unix listener while leaving /ping open', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-unix-auth-'));
-    const socketPath = join(directory, 'cocod.sock');
+  test('enforces authentication through the TCP listener while leaving /ping open', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-auth-'));
     let server: ReturnType<typeof Bun.serve> | undefined;
     try {
       const paths = credentialPaths(directory);
       const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
       const plaintext = await loadClientCredential(paths.clientCredentialFile);
       const runtime = uninitializedRuntime();
-      server = Bun.serve({
-        unix: socketPath,
+      server = startTcpTestServer({
         routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
         fetch: buildFallbackHandler(runtime, credentials),
       });
 
-      const pingResponse = await fetch('http://localhost/ping', {
-        unix: socketPath,
-      } as RequestInit);
-      const unauthorizedResponse = await fetch('http://localhost/status', {
-        unix: socketPath,
-      } as RequestInit);
-      const authorizedResponse = await fetch('http://localhost/status', {
-        unix: socketPath,
+      const pingResponse = await fetch(new URL('/ping', server.url));
+      const unauthorizedResponse = await fetch(new URL('/status', server.url));
+      const authorizedResponse = await fetch(new URL('/status', server.url), {
         headers: { Authorization: `Bearer ${plaintext}` },
-      } as RequestInit);
-      const unknownResponse = await fetch('http://localhost/unknown', {
-        unix: socketPath,
-      } as RequestInit);
-      const authorizedUnknownResponse = await fetch('http://localhost/unknown', {
-        unix: socketPath,
+      });
+      const unknownResponse = await fetch(new URL('/unknown', server.url));
+      const authorizedUnknownResponse = await fetch(new URL('/unknown', server.url), {
         headers: { Authorization: `Bearer ${plaintext}` },
-      } as RequestInit);
+      });
 
       expect(pingResponse.status).toBe(200);
       expect(unauthorizedResponse.status).toBe(401);
@@ -159,6 +150,55 @@ describe('routes', () => {
       expect(await authorizedResponse.json()).toEqual({ output: 'UNINITIALIZED' });
       expect(unknownResponse.status).toBe(401);
       expect(authorizedUnknownResponse.status).toBe(404);
+    } finally {
+      await server?.stop(true);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('serves authenticated normal and streaming legacy routes on one TCP listener', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-stream-'));
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const paths = credentialPaths(directory);
+      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
+      const plaintext = await loadClientCredential(paths.clientCredentialFile);
+      let publishHistory: ((payload: unknown) => void) | undefined;
+      const runtime = runningRuntime({
+        on: (_event: string, listener: (payload: unknown) => void) => {
+          publishHistory = listener;
+          return () => {};
+        },
+      });
+      server = startTcpTestServer({
+        routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
+        fetch: buildFallbackHandler(runtime, credentials),
+      });
+
+      const normal = await fetch(new URL('/status', server.url), {
+        headers: { Authorization: `Bearer ${plaintext}` },
+      });
+      const unauthorizedStream = await fetch(new URL('/events', server.url));
+      const abort = new AbortController();
+      const streamResponse = fetch(new URL('/events', server.url), {
+        headers: { Authorization: `Bearer ${plaintext}` },
+        signal: abort.signal,
+      });
+
+      expect(normal.status).toBe(200);
+      expect(await normal.json()).toEqual({ output: 'UNLOCKED' });
+      expect(unauthorizedStream.status).toBe(401);
+      for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
+        await Bun.sleep(5);
+      }
+      expect(publishHistory).toBeFunction();
+      publishHistory!({ id: 'history-1' });
+      const stream = await streamResponse;
+      expect(stream.status).toBe(200);
+      expect(stream.headers.get('content-type')).toBe('text/event-stream');
+      const chunk = await stream.body!.getReader().read();
+      expect(new TextDecoder().decode(chunk.value)).toContain('"id":"history-1"');
+      abort.abort();
     } finally {
       await server?.stop(true);
       await rm(directory, { recursive: true, force: true });

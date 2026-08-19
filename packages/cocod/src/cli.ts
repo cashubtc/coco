@@ -1,6 +1,11 @@
 import { startDaemon } from './daemon';
 import { AdministrativeCredential } from './credentials.js';
-import { program, handleDaemonCommand, callDaemonStream } from './cli-shared';
+import {
+  assertHostLocalOperation,
+  program,
+  handleDaemonCommand,
+  callDaemonStream,
+} from './cli-shared';
 import {
   DEFAULT_LOG_LINES,
   followLogFile,
@@ -16,7 +21,8 @@ const cliVersion = packageJson.version;
 program
   .name('cocod')
   .description('Coco CLI - A Cashu wallet daemon')
-  .version(cliVersion, '--version', 'output the version number');
+  .version(cliVersion, '--version', 'output the version number')
+  .option('--url <url>', 'Cocod HTTP endpoint (or COCOD_URL)');
 
 // Status - check daemon/wallet state
 program
@@ -130,6 +136,7 @@ program
   .option('--path', 'Print the resolved log file path')
   .action(async (options: { follow?: boolean; lines?: string; path?: boolean }) => {
     try {
+      assertHostLocalOperation('logs');
       if (options.path) {
         console.log(LOG_FILE);
         return;
@@ -181,6 +188,7 @@ credentialCmd
   .command('rotate')
   .description('Rotate the shared administrative Client Credential on this host')
   .action(async () => {
+    requireHostLocalOperation('credential rotate');
     const credentials = await AdministrativeCredential.loadOrBootstrap();
     await credentials.rotate();
     console.log('Administrative Client Credential rotated');
@@ -321,8 +329,18 @@ program
   .command('daemon')
   .description('Start the background daemon')
   .action(async () => {
+    requireHostLocalOperation('daemon');
     await startDaemon();
   });
+
+function requireHostLocalOperation(operation: string): void {
+  try {
+    assertHostLocalOperation(operation);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
 
 export function cli(args: string[]) {
   program.parse(args);

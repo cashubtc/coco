@@ -15,6 +15,7 @@ import {
 } from '../../src/v1/http.js';
 import { deferred } from '../helpers/deferred.js';
 import { createTestLogger } from '../helpers/logger.js';
+import { startTcpTestServer } from '../helpers/tcp.js';
 import { createLifecycleTestRouteDefinitions } from '../helpers/v1.js';
 
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -31,7 +32,6 @@ afterEach(async () => {
 test('serves public health and authenticated structured status beside legacy routes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-listener-'));
   directories.push(directory);
-  const socketPath = join(directory, 'cocod.sock');
   const credentialDirectory = join(directory, 'credentials');
   const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
   const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
@@ -106,8 +106,7 @@ test('serves public health and authenticated structured status beside legacy rou
   const legacyRuntime = runtime as CocodRuntime;
   const legacyFallback = buildFallbackHandler(legacyRuntime, credentials);
 
-  server = Bun.serve({
-    unix: socketPath,
+  server = startTcpTestServer({
     routes: {
       ...buildRoutes(createRouteHandlers(legacyRuntime), legacyRuntime, credentials),
       ...buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
@@ -115,18 +114,12 @@ test('serves public health and authenticated structured status beside legacy rou
     fetch: buildV1FallbackHandler(credentials, legacyFallback),
   });
 
-  const health = await unixFetch(socketPath, '/health');
-  const healthMethodNotAllowed = await unixFetch(
-    socketPath,
-    '/health',
-    undefined,
-    'POST',
-    '{not-json',
-  );
-  const unauthenticated = await unixFetch(socketPath, '/v1/status');
-  const status = await unixFetch(socketPath, '/v1/status', plaintext);
-  const unknown = await unixFetch(socketPath, '/v1/unknown', plaintext);
-  const legacy = await unixFetch(socketPath, '/status', plaintext);
+  const health = await tcpFetch(server, '/health');
+  const healthMethodNotAllowed = await tcpFetch(server, '/health', undefined, 'POST', '{not-json');
+  const unauthenticated = await tcpFetch(server, '/v1/status');
+  const status = await tcpFetch(server, '/v1/status', plaintext);
+  const unknown = await tcpFetch(server, '/v1/unknown', plaintext);
+  const legacy = await tcpFetch(server, '/status', plaintext);
 
   expect(health.status).toBe(200);
   expect(await health.json()).toEqual({ status: 'ok', interfaceVersion: '1' });
@@ -158,8 +151,8 @@ test('serves public health and authenticated structured status beside legacy rou
   });
   expect(await legacy.json()).toEqual({ output: 'UNINITIALIZED' });
 
-  const initialize = await unixFetch(
-    socketPath,
+  const initialize = await tcpFetch(
+    server,
     '/v1/admin/wallet/initialize',
     plaintext,
     'POST',
@@ -174,8 +167,8 @@ test('serves public health and authenticated structured status beside legacy rou
     status: { cocoSession: { state: 'stopped' } },
   });
 
-  const replay = await unixFetch(
-    socketPath,
+  const replay = await tcpFetch(
+    server,
     '/v1/admin/wallet/initialize',
     plaintext,
     'POST',
@@ -184,8 +177,8 @@ test('serves public health and authenticated structured status beside legacy rou
   );
   expect(replay.status).toBe(201);
 
-  const recoveryMaterial = await unixFetch(
-    socketPath,
+  const recoveryMaterial = await tcpFetch(
+    server,
     '/v1/admin/wallet/recovery-material',
     plaintext,
     'POST',
@@ -199,8 +192,8 @@ test('serves public health and authenticated structured status beside legacy rou
       'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
   });
 
-  const start = await unixFetch(
-    socketPath,
+  const start = await tcpFetch(
+    server,
     '/v1/admin/session/start',
     plaintext,
     'POST',
@@ -213,7 +206,7 @@ test('serves public health and authenticated structured status beside legacy rou
   await startCompletion.promise;
   await Promise.resolve();
 
-  const stop = await unixFetch(socketPath, '/v1/admin/session/stop', plaintext, 'POST', '{}', {
+  const stop = await tcpFetch(server, '/v1/admin/session/stop', plaintext, 'POST', '{}', {
     'Content-Type': 'application/json',
   });
   expect(stop.status).toBe(202);
@@ -224,7 +217,6 @@ test('serves public health and authenticated structured status beside legacy rou
 test('commits accepted process shutdown before graceful listener closure completes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
   directories.push(directory);
-  const socketPath = join(directory, 'cocod.sock');
   const credentialDirectory = join(directory, 'credentials');
   const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
   const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
@@ -247,8 +239,7 @@ test('commits accepted process shutdown before graceful listener closure complet
   const availability = { isAcceptingWork: () => shutdown.isAcceptingWork() };
   const legacyFallback = buildFallbackHandler(runtime, credentials, undefined, availability);
 
-  server = Bun.serve({
-    unix: socketPath,
+  server = startTcpTestServer({
     routes: {
       ...buildRoutes(createRouteHandlers(runtime), runtime, credentials, undefined, availability),
       ...buildV1Routes(
@@ -261,27 +252,27 @@ test('commits accepted process shutdown before graceful listener closure complet
     fetch: buildV1FallbackHandler(credentials, legacyFallback),
   });
 
-  const response = await unixFetch(socketPath, '/v1/admin/process/stop', plaintext, 'POST', '{}', {
+  const response = await tcpFetch(server, '/v1/admin/process/stop', plaintext, 'POST', '{}', {
     'Content-Type': 'application/json',
+    Connection: 'close',
   });
 
   expect(response.status).toBe(202);
   expect(await response.json()).toEqual({ status: 'stopping' });
   expect(await shutdown.request('http_stop')).toBe(0);
   expect(exit).toHaveBeenCalledWith(0);
-  await expect(unixFetch(socketPath, '/health')).rejects.toThrow();
+  await expect(tcpFetch(server, '/health')).rejects.toThrow();
 });
 
-function unixFetch(
-  socketPath: string,
+function tcpFetch(
+  listener: ReturnType<typeof Bun.serve>,
   path: string,
   credential?: string,
   method = 'GET',
   body?: string,
   extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
-  return fetch(`http://localhost${path}`, {
-    unix: socketPath,
+  return fetch(new URL(path, listener.url), {
     method,
     headers: {
       ...(credential ? { Authorization: `Bearer ${credential}` } : {}),

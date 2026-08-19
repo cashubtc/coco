@@ -6,6 +6,9 @@ This document contains the detailed reference moved out of `README.md`.
 
 All commands are available under `cocod`.
 
+Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The global
+`--url <origin>` option and `COCOD_URL` select an existing endpoint and disable auto-start.
+
 ### Wallet
 
 - `status` - Check daemon and wallet status
@@ -58,13 +61,22 @@ conditions return a 400 before any proofs move.
 - `ping` - Check daemon connectivity
 - `daemon` - Start daemon in foreground
 - `stop` - Stop daemon
+- `logs` - Read this host's daemon log (host-local)
+- `credential rotate` - Rotate this host's administrative Client Credential (host-local)
 
 ## Daemon HTTP endpoints
 
-The CLI talks to the daemon over HTTP on a UNIX socket.
+The CLI talks to cocod over its single authenticated HTTP listener on TCP. The listener defaults to
+`127.0.0.1:62626`; set `COCOD_LISTEN_HOST` and `COCOD_LISTEN_PORT` explicitly to override it. The
+daemon validates both settings and does not inherit a generic `PORT` variable.
 
-- Socket path env var: `COCOD_SOCKET`
-- Default socket: `~/.cocod/cocod.sock`
+Listener overrides apply to an explicitly started `cocod daemon`. Auto-start always uses the local
+default; connect to a custom listener with `--url` or `COCOD_URL`, which never starts a process.
+
+Every route except `/health` and `/ping` requires `Authorization: Bearer <credential>`. The local
+client reads the credential from `~/.cocod/credentials/current/client`. Remote TLS belongs at a
+trusted proxy such as Caddy; cocod still authenticates the credential itself, ignores forwarded
+identity headers, and does not enable browser CORS.
 
 ### Response shape
 
@@ -92,6 +104,7 @@ The CLI talks to the daemon over HTTP on a UNIX socket.
 - `GET /events` (SSE stream)
 - `GET /npc/address`
 - `POST /npc/username`
-- `POST /stop`
+- `POST /v1/admin/process/stop` (authenticated; returns `202 { "status": "stopping" }`)
 
-For full request/response and status details, see `docs/daemon-api.json`.
+For full legacy request/response details, see `docs/daemon-api.json`. The generated structured
+lifecycle description is `docs/lifecycle-api-v1.json`.

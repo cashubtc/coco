@@ -3,8 +3,17 @@
   "version": "0.0.17",
   "transport": {
     "protocol": "http",
-    "unixSocketEnv": "COCOD_SOCKET",
-    "defaultUnixSocket": "~/.cocod/cocod.sock"
+    "network": "tcp",
+    "defaultUrl": "http://127.0.0.1:62626",
+    "listenHostEnv": "COCOD_LISTEN_HOST",
+    "listenPortEnv": "COCOD_LISTEN_PORT",
+    "clientUrlEnv": "COCOD_URL"
+  },
+  "authentication": {
+    "scheme": "bearer",
+    "publicPaths": ["/health", "/ping"],
+    "protectedPaths": "all other legacy and v1 routes",
+    "structuredLifecycleDescription": "lifecycle-api-v1.json"
   },
   "responseContract": {
     "success": {
@@ -234,14 +243,6 @@
         "400": "{ error: string }",
         "402": "{ error: string }",
         "500": "{ error: string }"
-      }
-    },
-    {
-      "path": "/stop",
-      "method": "POST",
-      "state": "any",
-      "responses": {
-        "200": "{ output: \"Daemon stopping\" }"
       }
     }
   ]
