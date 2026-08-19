@@ -5,10 +5,11 @@ import { join } from 'node:path';
 
 import {
   assertHostLocalOperation,
-  callDaemon,
   callDaemonStream,
+  createV1Client,
   ensureDaemonRunning,
   startDaemonProcess,
+  V1ClientError,
 } from './cli-shared';
 
 const originalFetch = globalThis.fetch;
@@ -23,32 +24,86 @@ afterEach(async () => {
   );
 });
 
-test('normal protected requests attach the file-backed bearer credential', async () => {
+test('typed v1 status requests attach the file-backed bearer credential', async () => {
   const credentialFile = await temporaryCredentialFile('a'.repeat(43));
   const authorizations: Array<string | null> = [];
   const requestedUrls: string[] = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     requestedUrls.push(input instanceof Request ? input.url : input.toString());
     authorizations.push(new Headers(init?.headers).get('authorization'));
-    return Response.json({ output: 'UNLOCKED' });
+    return Response.json(lifecycleStatus('stopped'));
   }) as unknown as typeof fetch;
 
-  await callDaemon('/status', { credentialFile, url: 'https://wallet.example.com' });
+  const status = await createV1Client({
+    credentialFile,
+    url: 'https://wallet.example.com',
+  }).status();
 
+  expect(status.cocoSession.state).toBe('stopped');
   expect(authorizations).toEqual([`Bearer ${'a'.repeat(43)}`]);
-  expect(requestedUrls).toEqual(['https://wallet.example.com/status']);
+  expect(requestedUrls).toEqual(['https://wallet.example.com/v1/status']);
 });
 
 test('the liveness request remains credential-free', async () => {
   const authorizations: Array<string | null> = [];
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     authorizations.push(new Headers(init?.headers).get('authorization'));
-    return Response.json({ output: 'pong' });
+    return Response.json({ status: 'ok', interfaceVersion: '1' });
   }) as unknown as typeof fetch;
 
-  await callDaemon('/ping', { credentialFile: '/missing/credential' });
+  await createV1Client({ credentialFile: '/missing/credential' }).health();
 
   expect(authorizations).toEqual([null]);
+});
+
+test('typed v1 requests expose structured error fields', async () => {
+  const credentialFile = await temporaryCredentialFile('e'.repeat(43));
+  globalThis.fetch = mock(async () =>
+    Response.json(
+      {
+        error: {
+          code: 'wallet_not_configured',
+          message: 'No Wallet is configured',
+          retryable: false,
+          details: { operation: 'session_start' },
+        },
+      },
+      { status: 409 },
+    ),
+  ) as unknown as typeof fetch;
+
+  try {
+    await createV1Client({ credentialFile }).startSession({});
+    throw new Error('expected v1 request to fail');
+  } catch (error) {
+    expect(error).toBeInstanceOf(V1ClientError);
+    expect(error).toMatchObject({
+      code: 'wallet_not_configured',
+      message: 'No Wallet is configured',
+      retryable: false,
+      details: { operation: 'session_start' },
+      status: 409,
+    });
+  }
+});
+
+test('Coco Session stop and Cocod Process stop use distinct v1 resources', async () => {
+  const credentialFile = await temporaryCredentialFile('f'.repeat(43));
+  const requestedPaths: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request) => {
+    const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+    requestedPaths.push(path);
+    if (path === '/v1/admin/process/stop') {
+      return Response.json({ status: 'stopping' }, { status: 202 });
+    }
+    return Response.json(lifecycleStatus('stopped'));
+  }) as unknown as typeof fetch;
+  const client = createV1Client({ credentialFile });
+
+  await client.stopSession();
+  await client.stopProcess();
+
+  expect(requestedPaths).toEqual(['/v1/admin/session/stop', '/v1/admin/process/stop']);
 });
 
 test('host-local operations reject an explicit remote endpoint', () => {
@@ -70,10 +125,10 @@ test('streaming requests attach the file-backed bearer credential', async () => 
       streamAuthorizations.push(new Headers(init?.headers).get('authorization'));
       return new Response('data: {"type":"ready"}\n\n');
     }
-    if (path === '/status') {
-      return Response.json({ output: 'UNLOCKED' });
+    if (path === '/v1/status') {
+      return Response.json(lifecycleStatus('running'));
     }
-    return Response.json({ output: 'pong' });
+    return Response.json({ status: 'ok', interfaceVersion: '1' });
   }) as unknown as typeof fetch;
 
   await callDaemonStream('/events', () => {}, {
@@ -83,48 +138,24 @@ test('streaming requests attach the file-backed bearer credential', async () => 
 
   expect(streamAuthorizations).toEqual([`Bearer ${'c'.repeat(43)}`]);
   expect(requestedUrls).toEqual([
-    'https://wallet.example.com/ping',
-    'https://wallet.example.com/status',
+    'https://wallet.example.com/health',
+    'https://wallet.example.com/v1/status',
     'https://wallet.example.com/events',
   ]);
 });
 
 describe('ensureDaemonRunning', () => {
-  test('waits for an already-running daemon to finish startup', async () => {
-    const credentialFile = await temporaryCredentialFile('b'.repeat(43));
+  test('only requires process health when an existing session is stopped', async () => {
     const requestedPaths: string[] = [];
-    const statusAuthorizations: Array<string | null> = [];
-    let statusRequests = 0;
-    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
       requestedPaths.push(url.pathname);
-
-      if (url.pathname === '/ping') {
-        return Response.json({ output: 'pong' });
-      }
-
-      statusRequests += 1;
-      statusAuthorizations.push(new Headers(init?.headers).get('authorization'));
-      return Response.json({ output: statusRequests === 1 ? 'STARTING' : 'UNLOCKED' });
+      return Response.json({ status: 'ok', interfaceVersion: '1' });
     }) as unknown as typeof fetch;
 
-    await ensureDaemonRunning({ credentialFile });
+    await ensureDaemonRunning({ credentialFile: '/missing/credential' });
 
-    expect(statusRequests).toBe(2);
-    expect(requestedPaths).toEqual(['/ping', '/status', '/status']);
-    expect(statusAuthorizations).toEqual([`Bearer ${'b'.repeat(43)}`, `Bearer ${'b'.repeat(43)}`]);
-  });
-
-  test('reports a missing local Client Credential for an existing daemon', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-cli-credential-'));
-    directories.push(directory);
-    globalThis.fetch = mock(async () =>
-      Response.json({ output: 'pong' }),
-    ) as unknown as typeof fetch;
-
-    await expect(
-      ensureDaemonRunning({ credentialFile: join(directory, 'missing-credential') }),
-    ).rejects.toThrow('Cocod Client Credential file is missing');
+    expect(requestedPaths).toEqual(['/health']);
   });
 
   test('reports a missing local Client Credential once an auto-started daemon is reachable', async () => {
@@ -134,12 +165,12 @@ describe('ensureDaemonRunning', () => {
       unref() {},
     })) as unknown as typeof Bun.spawn;
     globalThis.fetch = mock(async () =>
-      Response.json({ output: 'pong' }),
+      Response.json({ status: 'ok', interfaceVersion: '1' }),
     ) as unknown as typeof fetch;
 
     await expect(
       startDaemonProcess({ credentialFile: join(directory, 'missing-credential') }),
-    ).rejects.toThrow('Cocod Client Credential file is missing');
+    ).resolves.toBeUndefined();
   }, 7_000);
 
   test('never auto-starts when an explicit endpoint is unreachable', async () => {
@@ -157,6 +188,15 @@ describe('ensureDaemonRunning', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 });
+
+function lifecycleStatus(state: 'stopped' | 'running') {
+  return {
+    daemon: { version: '0.0.17', interfaceVersion: '1' as const },
+    wallet: null,
+    seedAccess: null,
+    cocoSession: { state, startedAt: null, lastFailure: null },
+  };
+}
 
 async function temporaryCredentialFile(credential: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-cli-credential-'));

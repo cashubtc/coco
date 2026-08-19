@@ -67,11 +67,8 @@ If the version does not match the pinned values in this file, update `cocod` bef
 ## Quick Start
 
 ```bash
-# Initialize your wallet (generates mnemonic automatically)
-cocod init
-
-# Or with a custom mint
-cocod init --mint-url https://mint.example.com
+# Initialize a Wallet and record the host-generated Wallet Recovery Material
+cocod wallet initialize
 
 # Check balance
 cocod balance
@@ -82,20 +79,21 @@ cocod balance
 ### Core Wallet
 
 ```bash
-# Check daemon and wallet status
+# Show Cocod Process, Wallet Seed Access, and Coco Session status
 cocod status
 
-# Initialize wallet with optional mnemonic
-cocod init [mnemonic] [--passphrase <passphrase>] [--mint-url <url>]
+# Initialize a Wallet with host-generated Wallet Recovery Material
+cocod wallet initialize [--passphrase <passphrase>]
 
-# Unlock encrypted wallet (only required when initialised with passphrase)
-cocod unlock <passphrase>
+# Start or stop the Coco Session without changing the Wallet
+cocod session start [--passphrase <passphrase>]
+cocod session stop
 
 # Get wallet balance
 cocod balance
 
-# Test daemon connection
-cocod ping
+# Check Cocod Process reachability
+cocod health
 ```
 
 ### Receiving Payments
@@ -195,16 +193,16 @@ cocod history --limit 50 --watch
 # Start the background daemon (started automatically when not running when required)
 cocod daemon
 
-# Stop the daemon
+# Stop the Cocod Process (distinct from stopping only the Coco Session)
 cocod stop
 ```
 
 ## Examples
 
-**Initialize with encryption:**
+**Initialize with protected Wallet Seed Access:**
 
 ```bash
-cocod init --passphrase "my-secret"
+cocod wallet initialize --passphrase "my-secret"
 ```
 
 **Receive via Lightning:**

@@ -10,12 +10,7 @@ import { AdministrativeCredential, loadClientCredential } from './credentials.js
 import { buildFallbackHandler, buildRoutes, createRouteHandlers } from './routes';
 import { startTcpTestServer } from '../test/helpers/tcp.js';
 import type { AppLogger } from './utils/logger.js';
-import {
-  CocodRuntimeError,
-  type CocodRuntime,
-  type CocodStatus,
-  type RunningCocoSession,
-} from './runtime';
+import { type CocodRuntime, type CocodStatus, type RunningCocoSession } from './runtime';
 
 // A creqB (TLV + bech32m) payment request for 21 sat carrying a P2PK NUT-10
 // spending condition, generated once with the workspace @cashu/cashu-ts.
@@ -44,17 +39,6 @@ function uninitializedRuntime(overrides: Partial<CocodRuntime> = {}): CocodRunti
     null,
     overrides,
   );
-}
-
-function lockedRuntime(): CocodRuntime {
-  return fakeRuntime({
-    wallet: {
-      configuredAt: '2026-08-16T00:00:00.000Z',
-      mintUrl: 'https://mint.example.com',
-    },
-    seedAccess: { state: 'locked', requiresPassphrase: true },
-    cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
-  });
 }
 
 function runningRuntime(manager?: unknown): CocodRuntime {
@@ -103,6 +87,15 @@ function credentialPaths(directory: string): {
 }
 
 describe('routes', () => {
+  test('does not expose superseded lifecycle command routes', () => {
+    const routes = createRouteHandlers(uninitializedRuntime());
+
+    expect(routes['/ping']).toBeUndefined();
+    expect(routes['/status']).toBeUndefined();
+    expect(routes['/init']).toBeUndefined();
+    expect(routes['/unlock']).toBeUndefined();
+  });
+
   test('rejects a protected route without a bearer credential', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cocod-routes-auth-'));
     try {
@@ -112,46 +105,11 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/status']!.GET!(new Request('http://localhost/status'));
+      const response = await routes['/balance']!.GET!(new Request('http://localhost/balance'));
 
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: 'Unauthorized' });
     } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test('enforces authentication through the TCP listener while leaving /ping open', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-auth-'));
-    let server: ReturnType<typeof Bun.serve> | undefined;
-    try {
-      const paths = credentialPaths(directory);
-      const credentials = await AdministrativeCredential.loadOrBootstrap(paths);
-      const plaintext = await loadClientCredential(paths.clientCredentialFile);
-      const runtime = uninitializedRuntime();
-      server = startTcpTestServer({
-        routes: buildRoutes(createRouteHandlers(runtime), runtime, credentials),
-        fetch: buildFallbackHandler(runtime, credentials),
-      });
-
-      const pingResponse = await fetch(new URL('/ping', server.url));
-      const unauthorizedResponse = await fetch(new URL('/status', server.url));
-      const authorizedResponse = await fetch(new URL('/status', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-      });
-      const unknownResponse = await fetch(new URL('/unknown', server.url));
-      const authorizedUnknownResponse = await fetch(new URL('/unknown', server.url), {
-        headers: { Authorization: `Bearer ${plaintext}` },
-      });
-
-      expect(pingResponse.status).toBe(200);
-      expect(unauthorizedResponse.status).toBe(401);
-      expect(authorizedResponse.status).toBe(200);
-      expect(await authorizedResponse.json()).toEqual({ output: 'UNINITIALIZED' });
-      expect(unknownResponse.status).toBe(401);
-      expect(authorizedUnknownResponse.status).toBe(404);
-    } finally {
-      await server?.stop(true);
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -165,6 +123,7 @@ describe('routes', () => {
       const plaintext = await loadClientCredential(paths.clientCredentialFile);
       let publishHistory: ((payload: unknown) => void) | undefined;
       const runtime = runningRuntime({
+        mint: { getAllTrustedMints: async () => [] },
         on: (_event: string, listener: (payload: unknown) => void) => {
           publishHistory = listener;
           return () => {};
@@ -175,7 +134,7 @@ describe('routes', () => {
         fetch: buildFallbackHandler(runtime, credentials),
       });
 
-      const normal = await fetch(new URL('/status', server.url), {
+      const normal = await fetch(new URL('/mints/list', server.url), {
         headers: { Authorization: `Bearer ${plaintext}` },
       });
       const unauthorizedStream = await fetch(new URL('/events', server.url));
@@ -186,7 +145,7 @@ describe('routes', () => {
       });
 
       expect(normal.status).toBe(200);
-      expect(await normal.json()).toEqual({ output: 'UNLOCKED' });
+      expect(await normal.json()).toEqual({ output: '' });
       expect(unauthorizedStream.status).toBe(401);
       for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
         await Bun.sleep(5);
@@ -219,8 +178,8 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/init']!.POST!(
-        new Request('http://localhost/init', {
+      const response = await routes['/receive/cashu']!.POST!(
+        new Request('http://localhost/receive/cashu', {
           method: 'POST',
           headers: { Authorization: `Bearer ${plaintext}` },
           body: '{}',
@@ -255,8 +214,8 @@ describe('routes', () => {
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
       const presentedCredential = 'z'.repeat(43);
 
-      const response = await routes['/status']!.GET!(
-        new Request('http://localhost/status', {
+      const response = await routes['/balance']!.GET!(
+        new Request('http://localhost/balance', {
           headers: { Authorization: `Bearer ${presentedCredential}` },
         }),
       );
@@ -282,8 +241,8 @@ describe('routes', () => {
         isAcceptingWork: () => false,
       });
 
-      const response = await routes['/status']!.GET!(
-        new Request('http://localhost/status', {
+      const response = await routes['/balance']!.GET!(
+        new Request('http://localhost/balance', {
           headers: { Authorization: `Bearer ${plaintext}` },
         }),
       );
@@ -294,90 +253,6 @@ describe('routes', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
-
-  test('/init validates invalid mnemonic', async () => {
-    const runtime = uninitializedRuntime({
-      initializeWallet: async () => {
-        throw new CocodRuntimeError('invalid_mnemonic', 'Invalid mnemonic');
-      },
-    });
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/init']!.POST!(
-      postJson('/init', { mnemonic: 'invalid mnemonic' }),
-    );
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Invalid mnemonic');
-  });
-
-  test('/init validates invalid mint URL', async () => {
-    const runtime = uninitializedRuntime({
-      initializeWallet: async () => {
-        throw new CocodRuntimeError('invalid_mint_url', 'Invalid mint URL');
-      },
-    });
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/init']!.POST!(postJson('/init', { mintUrl: 'not a URL' }));
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Invalid mint URL');
-  });
-
-  test('/init maps concurrent Wallet initialization to a conflict', async () => {
-    const runtime = uninitializedRuntime({
-      initializeWallet: async () => {
-        throw new CocodRuntimeError('wallet_already_configured', 'Wallet already initialized');
-      },
-    });
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/init']!.POST!(postJson('/init', {}));
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(409);
-    expect(body.error).toBe('Wallet already initialized');
-  });
-
-  test('/status reports a quarantined encrypted Session as an error', async () => {
-    const runtime = fakeRuntime({
-      wallet: {
-        configuredAt: '2026-08-16T00:00:00.000Z',
-        mintUrl: 'https://mint.example.com',
-      },
-      seedAccess: { state: 'locked', requiresPassphrase: true },
-      cocoSession: {
-        state: 'failed',
-        startedAt: null,
-        lastFailure: {
-          code: 'session_start_failed',
-          message: 'Coco Session failed to start',
-          occurredAt: '2026-08-16T00:00:01.000Z',
-        },
-      },
-    });
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/status']!.GET!(new Request('http://localhost/status'));
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toBe('ERROR');
-  });
-
-  test('/unlock requires passphrase', async () => {
-    const runtime = lockedRuntime();
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/unlock']!.POST!(postJson('/unlock', {}));
-
-    const body = (await response.json()) as { error?: string };
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('Passphrase required');
   });
 
   test('/x-cashu/parse requires request field', async () => {

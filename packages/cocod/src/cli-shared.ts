@@ -1,6 +1,21 @@
 import { program } from 'commander';
 
-import { ClientCredentialFileError, loadClientCredential } from './credentials.js';
+import { loadClientCredential } from './credentials.js';
+import {
+  healthSchema,
+  initializeWalletResponseSchema,
+  lifecycleStatusSchema,
+  processShutdownResponseSchema,
+  v1ErrorSchema,
+  type HealthDocument,
+  type InitializeWalletRequest,
+  type InitializeWalletResponseDocument,
+  type LifecycleStatusDocument,
+  type ProcessShutdownResponseDocument,
+  type RuntimeSchema,
+  type StartSessionRequest,
+  type V1ErrorCode,
+} from './v1/http.js';
 import {
   CLIENT_CREDENTIAL_FILE,
   DEFAULT_CLIENT_URL,
@@ -23,6 +38,29 @@ export interface DaemonCallOptions extends ClientCredentialOptions {
   body?: object;
 }
 
+export interface V1Client {
+  health(): Promise<HealthDocument>;
+  status(): Promise<LifecycleStatusDocument>;
+  initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
+  startSession(input: StartSessionRequest): Promise<LifecycleStatusDocument>;
+  stopSession(): Promise<LifecycleStatusDocument>;
+  stopProcess(): Promise<ProcessShutdownResponseDocument>;
+}
+
+export class V1ClientError extends Error {
+  override readonly name = 'V1ClientError';
+
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: V1ErrorCode,
+    readonly retryable: boolean,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
+
 export function assertHostLocalOperation(
   operation: string,
   commandUrl = program.opts<{ url?: string }>().url,
@@ -34,6 +72,54 @@ export function assertHostLocalOperation(
       `cocod ${operation} is host-local and cannot use the explicit Cocod endpoint ${endpoint.url}`,
     );
   }
+}
+
+/** Creates one typed client for the implemented v1 lifecycle interface. */
+export function createV1Client(options: ClientCredentialOptions = {}): V1Client {
+  const endpoint = configuredClientEndpoint(options.url);
+  const credentialFile = options.credentialFile;
+
+  return {
+    health: () => requestV1(endpoint, '/health', 'GET', undefined, healthSchema, credentialFile),
+    status: () =>
+      requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
+    initializeWallet: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/admin/wallet/initialize',
+        'POST',
+        input,
+        initializeWalletResponseSchema,
+        credentialFile,
+      ),
+    startSession: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/admin/session/start',
+        'POST',
+        input,
+        lifecycleStatusSchema,
+        credentialFile,
+      ),
+    stopSession: () =>
+      requestV1(
+        endpoint,
+        '/v1/admin/session/stop',
+        'POST',
+        {},
+        lifecycleStatusSchema,
+        credentialFile,
+      ),
+    stopProcess: () =>
+      requestV1(
+        endpoint,
+        '/v1/admin/process/stop',
+        'POST',
+        {},
+        processShutdownResponseSchema,
+        credentialFile,
+      ),
+  };
 }
 
 async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
@@ -49,7 +135,7 @@ async function callDaemon(path: string, options: DaemonCallOptions = {}): Promis
 }
 
 function isProtectedPath(path: string): boolean {
-  return new URL(path, DEFAULT_CLIENT_URL).pathname !== '/ping';
+  return new URL(path, DEFAULT_CLIENT_URL).pathname !== '/health';
 }
 
 async function buildRequestHeaders(
@@ -69,47 +155,22 @@ async function buildRequestHeaders(
 
 export async function isDaemonRunning(options: ClientCredentialOptions = {}): Promise<boolean> {
   try {
-    const endpoint = configuredClientEndpoint(options.url);
-    const response = await requestDaemon(endpoint, '/ping', { method: 'GET' });
-    return response.ok;
+    await createV1Client(options).health();
+    return true;
   } catch {
     return false;
   }
 }
 
-async function isDaemonReady(options: ClientCredentialOptions = {}): Promise<boolean> {
-  try {
-    const body = await callDaemon('/status', options);
-    return body.output !== 'STARTING' && body.output !== 'STOPPING';
-  } catch (error) {
-    if (error instanceof ClientCredentialFileError) {
-      throw error;
-    }
-    return false;
-  }
-}
-
-async function waitForDaemonReady(
-  options: ClientCredentialOptions = {},
-  retryMissingCredential = false,
-): Promise<void> {
+async function waitForDaemonReachable(options: ClientCredentialOptions = {}): Promise<void> {
   for (let i = 0; i < 50; i++) {
-    try {
-      if (await isDaemonReady(options)) {
-        return;
-      }
-    } catch (error) {
-      if (!(retryMissingCredential && error instanceof ClientCredentialFileError)) {
-        throw error;
-      }
-      if (await isDaemonRunning(options)) {
-        throw error;
-      }
+    if (await isDaemonRunning(options)) {
+      return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await Bun.sleep(100);
   }
 
-  throw new Error('Daemon failed to become ready within 5 seconds');
+  throw new Error('Cocod Process failed to become reachable within 5 seconds');
 }
 
 export async function startDaemonProcess(options: ClientCredentialOptions = {}): Promise<void> {
@@ -129,13 +190,12 @@ export async function startDaemonProcess(options: ClientCredentialOptions = {}):
     stdin: 'ignore',
   });
   proc.unref();
-  await waitForDaemonReady(options, true);
+  await waitForDaemonReachable(options);
 }
 
 export async function ensureDaemonRunning(options: ClientCredentialOptions = {}): Promise<void> {
   const endpoint = configuredClientEndpoint(options.url);
   if (await isDaemonRunning({ ...options, url: endpoint.url })) {
-    await waitForDaemonReady({ ...options, url: endpoint.url });
     return;
   }
 
@@ -143,8 +203,41 @@ export async function ensureDaemonRunning(options: ClientCredentialOptions = {})
     throw explicitEndpointUnavailable(endpoint.url);
   }
 
-  console.log('Starting daemon...');
+  console.log('Starting Cocod Process...');
   await startDaemonProcess({ ...options, url: undefined });
+}
+
+/** Polls only while a Coco Session lifecycle transition is still in progress. */
+export async function waitForSessionTransition(
+  client: V1Client,
+  initialStatus: LifecycleStatusDocument,
+): Promise<LifecycleStatusDocument> {
+  let status = initialStatus;
+  for (let i = 0; i < 50; i++) {
+    if (status.cocoSession.state !== 'starting' && status.cocoSession.state !== 'stopping') {
+      return status;
+    }
+    await Bun.sleep(100);
+    status = await client.status();
+  }
+
+  throw new Error('Coco Session transition did not finish within 5 seconds');
+}
+
+async function waitForOperationalSession(client: V1Client): Promise<void> {
+  await waitForSessionTransition(client, await client.status());
+}
+
+export async function handleV1Command<T>(
+  action: (client: V1Client) => Promise<T>,
+  options: ClientCredentialOptions = {},
+): Promise<T> {
+  try {
+    await ensureDaemonRunning(options);
+    return await action(createV1Client(options));
+  } catch (error) {
+    exitForClientError(error);
+  }
 }
 
 export async function handleDaemonCommand(
@@ -153,6 +246,7 @@ export async function handleDaemonCommand(
 ): Promise<CommandResponse> {
   try {
     await ensureDaemonRunning({ credentialFile: options.credentialFile, url: options.url });
+    await waitForOperationalSession(createV1Client(options));
     const result = await callDaemon(path, options);
 
     if (result.error) {
@@ -161,27 +255,12 @@ export async function handleDaemonCommand(
     }
 
     if (result.output !== undefined) {
-      if (typeof result.output === 'string') {
-        console.log(result.output);
-      } else {
-        try {
-          const formatted = JSON.stringify(result.output, null, 2);
-          console.log(formatted ?? String(result.output));
-        } catch {
-          console.log(String(result.output));
-        }
-      }
+      printValue(result.output);
     }
 
     return result;
   } catch (error) {
-    const message = (error as Error).message;
-    if (message?.includes('fetch failed') || message?.includes('Connection refused')) {
-      console.error('Daemon is not running and failed to auto-start');
-      process.exit(1);
-    }
-    console.error(message);
-    process.exit(1);
+    exitForClientError(error);
   }
 }
 
@@ -191,6 +270,7 @@ export async function callDaemonStream(
   options: ClientCredentialOptions = {},
 ): Promise<void> {
   await ensureDaemonRunning(options);
+  await waitForOperationalSession(createV1Client(options));
   const endpoint = configuredClientEndpoint(options.url);
   const response = await requestDaemon(endpoint, path, options);
 
@@ -213,18 +293,15 @@ export async function callDaemonStream(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          const jsonStr = line.slice(6);
           try {
-            const data = JSON.parse(jsonStr);
-            onData(data);
+            onData(JSON.parse(line.slice(6)));
           } catch {
-            // Skip malformed JSON
+            // Ignore malformed event data and continue reading the stream.
           }
         }
       }
@@ -250,6 +327,67 @@ async function requestDaemon(
     headers: await buildRequestHeaders(path, credentialFile, body !== undefined),
     body: body ? JSON.stringify(body) : undefined,
   });
+}
+
+async function requestV1<T>(
+  endpoint: ClientEndpoint,
+  path: string,
+  method: 'GET' | 'POST',
+  body: object | undefined,
+  schema: RuntimeSchema<T>,
+  credentialFile = CLIENT_CREDENTIAL_FILE,
+): Promise<T> {
+  const response = await requestDaemon(endpoint, path, { method, body, credentialFile });
+  const document: unknown = await response.json();
+
+  if (!response.ok) {
+    try {
+      const error = v1ErrorSchema.parse(document).error;
+      throw new V1ClientError(
+        error.message,
+        response.status,
+        error.code,
+        error.retryable,
+        error.details,
+      );
+    } catch (error) {
+      if (error instanceof V1ClientError) {
+        throw error;
+      }
+      throw new Error(`HTTP ${response.status}: invalid v1 error response`);
+    }
+  }
+
+  try {
+    return schema.parse(document);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid ${schema.name} response: ${message}`);
+  }
+}
+
+function printValue(value: unknown): void {
+  if (typeof value === 'string') {
+    console.log(value);
+    return;
+  }
+  try {
+    console.log(JSON.stringify(value, null, 2) ?? String(value));
+  } catch {
+    console.log(String(value));
+  }
+}
+
+function exitForClientError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('fetch failed') || message.includes('Connection refused')) {
+    console.error('Cocod Process is not running and failed to auto-start');
+  } else if (error instanceof V1ClientError) {
+    console.error(`${error.message} [${error.code}]`);
+  } else {
+    console.error(message);
+  }
+  process.exit(1);
 }
 
 function explicitEndpointUnavailable(url: string): Error {
