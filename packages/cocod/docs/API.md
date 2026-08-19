@@ -99,15 +99,18 @@ browser CORS.
 - `POST /v1/admin/session/stop`
 - `POST /v1/admin/process/stop`
 - `GET /v1/balances`
+- `GET /v1/mints`
+- `POST /v1/mints`
+- `GET /v1/mints/info?mintUrl={mintUrl}`
+- `POST /v1/mints/trust`
+- `POST /v1/mints/untrust`
+- `GET /v1/mints/payment-method-capabilities?mintUrl={mintUrl}`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
 - `POST /send/cashu`
 - `POST /send/bolt11`
 - `POST /x-cashu/parse`
 - `POST /x-cashu/handle`
-- `POST /mints/add`
-- `GET /mints/list`
-- `POST /mints/info`
 - `GET /history`
 - `GET /events` (SSE stream)
 - `GET /npc/address`

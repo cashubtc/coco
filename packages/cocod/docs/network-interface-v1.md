@@ -2,9 +2,10 @@
 
 Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
 lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance resources, and the legacy
-compatibility described here. The complete v1 resource surface is accepted as the target design;
-Mint, Quote, Operation, Payment Request, history, event, and machine-description resources remain
-proposed until their individual contracts and implementations land.
+compatibility described here. Known Mint resources are also implemented. The complete v1 resource
+surface is accepted as the target design; Quote, Operation, Payment Request, history, event, and
+machine-description resources remain proposed until their individual contracts and implementations
+land.
 
 This document specifies cocod's machine-oriented network interface. It distinguishes implemented
 resources from the accepted target surface so resources can land incrementally without inventing
@@ -465,7 +466,7 @@ reserved proofs.
 
 ### Mint resources
 
-These resources are proposed.
+These resources are implemented.
 
 | Method | Path                                                      | Purpose                                                           |
 | ------ | --------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -482,6 +483,16 @@ Wallet operations through that Mint until trust is granted explicitly.
 Mint information is a `GET` resource even though Coco may perform network I/O and update stale
 cached metadata while resolving it. Cocod does not add a forced-refresh command until Coco exposes
 one.
+
+Known Mint documents contain `mintUrl`, `name`, `trusted`, `createdAt`, and `updatedAt`. The URL is
+normalized through Coco and timestamps are RFC 3339 UTC strings. Registration returns `201` for a
+new Known Mint and `200` for an already-known Mint without changing its trust state. New Known Mints
+are untrusted; the human-oriented `mints add` CLI follows registration with an explicit trust
+command.
+
+Mint information responses contain the normalized `mintUrl` and an `info` object projected from
+Coco's Mint metadata. Payment-method capability responses contain `items` with `operation`, `nut`,
+`method`, `unit`, optional decimal-string `minAmount` and `maxAmount`, and optional `options`.
 
 ### Quote resources
 

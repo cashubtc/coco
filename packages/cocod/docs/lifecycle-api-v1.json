@@ -209,6 +209,99 @@
         }
       }
     },
+    "KnownMints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+            "properties": {
+              "mintUrl": { "type": "string" },
+              "name": { "type": "string" },
+              "trusted": { "type": "boolean" },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "KnownMint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mintUrl", "name", "trusted", "createdAt", "updatedAt"],
+      "properties": {
+        "mintUrl": { "type": "string" },
+        "name": { "type": "string" },
+        "trusted": { "type": "boolean" },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      }
+    },
+    "MintUrlRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mintUrl"],
+      "properties": { "mintUrl": { "type": "string" } }
+    },
+    "MintInformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mintUrl", "info"],
+      "properties": {
+        "mintUrl": { "type": "string" },
+        "info": { "type": "object", "additionalProperties": true, "required": [], "properties": {} }
+      }
+    },
+    "PaymentMethodCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operation", "nut", "method", "unit"],
+            "properties": {
+              "operation": { "enum": ["mint", "melt"] },
+              "nut": { "oneOf": [{ "const": 4 }, { "const": 5 }] },
+              "method": { "type": "string" },
+              "unit": { "type": "string" },
+              "minAmount": {
+                "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }]
+              },
+              "maxAmount": {
+                "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }]
+              },
+              "options": {}
+            }
+          }
+        }
+      }
+    },
     "InitializeWalletResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -422,6 +515,72 @@
       "capability": "wallet:read",
       "requestSchema": null,
       "responseSchema": "Balances",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/mints",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "KnownMints",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mints",
+      "capability": "wallet:admin",
+      "requestSchema": "MintUrlRequest",
+      "responseSchema": "KnownMint",
+      "errorSchema": "Error",
+      "successStatuses": [200, 201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mints/trust",
+      "capability": "wallet:admin",
+      "requestSchema": "MintUrlRequest",
+      "responseSchema": "KnownMint",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mints/untrust",
+      "capability": "wallet:admin",
+      "requestSchema": "MintUrlRequest",
+      "responseSchema": "KnownMint",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/mints/info",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MintInformation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/mints/payment-method-capabilities",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "PaymentMethodCapabilities",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": null,

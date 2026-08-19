@@ -223,47 +223,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
         }
       }),
     },
-    '/mints/add': {
-      capability: 'wallet:admin',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { url: string };
-          await state.manager.mint.addMint(body.url, { trusted: true });
-          return Response.json({ output: `Added mint: ${body.url}` });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Failed to add mint: ${message}` }, { status: 500 });
-        }
-      }),
-    },
-    '/mints/list': {
-      capability: 'wallet:read',
-      GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
-        try {
-          const mints = await state.manager.mint.getAllTrustedMints();
-          return Response.json({
-            output: mints.map((m) => m.mintUrl).join('\n'),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Failed to list mints: ${message}` }, { status: 500 });
-        }
-      }),
-    },
-    '/mints/info': {
-      capability: 'wallet:read',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { url: string };
-          const info = await state.manager.mint.getMintInfo(body.url);
-          return Response.json({ output: info });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Failed to get mint info: ${message}` }, { status: 500 });
-        }
-      }),
-    },
-
     '/history': {
       capability: 'wallet:read',
       GET: requireRunning(runtime, async (req, state: RunningCocoSession) => {

@@ -8,6 +8,7 @@ import {
   formatBalances,
   handleV1Command,
   handleWalletV1Command,
+  registerAndTrustMint,
   waitForSessionTransition,
 } from './cli-shared';
 import type { LifecycleStatusDocument } from './v1/http.js';
@@ -234,27 +235,24 @@ mintsCmd
   .command('add <url>')
   .description('Add a mint URL')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/add', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletV1Command((client) => registerAndTrustMint(client, url));
+    console.log(`Added mint: ${mint.mintUrl}`);
   });
 
 mintsCmd
   .command('list')
   .description('List configured mints')
   .action(async () => {
-    await handleDaemonCommand('/mints/list');
+    const mints = await handleWalletV1Command((client) => client.listMints({ trustedOnly: true }));
+    console.log(mints.items.map((mint) => mint.mintUrl).join('\n'));
   });
 
 mintsCmd
   .command('info <url>')
   .description('Get mint info')
   .action(async (url: string) => {
-    await handleDaemonCommand('/mints/info', {
-      method: 'POST',
-      body: { url },
-    });
+    const mint = await handleWalletV1Command((client) => client.getMintInfo(url));
+    console.log(JSON.stringify(mint.info, null, 2));
   });
 
 // NPC - nested subcommands

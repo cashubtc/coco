@@ -10,6 +10,7 @@ import {
   DEFAULT_SESSION_TRANSITION_TIMEOUT_MS,
   ensureDaemonRunning,
   formatBalances,
+  registerAndTrustMint,
   handleWalletV1Command,
   startDaemonProcess,
   V1ClientError,
@@ -79,6 +80,62 @@ test('typed v1 balance requests preserve repeatable filters and decimal strings'
   expect(balances.items[0]?.total).toBe('9007199254741000');
   expect(requestedUrls).toEqual([
     'https://wallet.example.com/v1/balances?mintUrl=https%3A%2F%2Fmint.example.com&mintUrl=https%3A%2F%2Fmint.other&unit=sat&unit=usd&trustedOnly=false',
+  ]);
+});
+
+test('typed v1 Mint requests use resource routes and the add flow explicitly grants trust', async () => {
+  const credentialFile = await temporaryCredentialFile('m'.repeat(43));
+  const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    requests.push({
+      path: `${url.pathname}${url.search}`,
+      method: init?.method ?? 'GET',
+      ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as unknown } : {}),
+    });
+    if (url.pathname === '/v1/mints' && (init?.method ?? 'GET') === 'GET') {
+      return Response.json({ items: [] });
+    }
+    if (url.pathname === '/v1/mints/info') {
+      return Response.json({
+        mintUrl: 'https://mint.example.com',
+        info: { name: 'Example Mint' },
+      });
+    }
+    return Response.json({
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      trusted: url.pathname.endsWith('/trust'),
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+  }) as unknown as typeof fetch;
+  const client = createV1Client({ credentialFile, url: 'https://wallet.example.com' });
+
+  const result = await registerAndTrustMint(client, 'https://mint.example.com/');
+  await client.listMints({ trustedOnly: true });
+  await client.getMintInfo('https://mint.example.com/');
+
+  expect(result.trusted).toBe(true);
+  expect(requests).toEqual([
+    {
+      path: '/v1/mints',
+      method: 'POST',
+      body: { mintUrl: 'https://mint.example.com/' },
+    },
+    {
+      path: '/v1/mints/trust',
+      method: 'POST',
+      body: { mintUrl: 'https://mint.example.com' },
+    },
+    {
+      path: '/v1/mints?trustedOnly=true',
+      method: 'GET',
+    },
+    {
+      path: '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+      method: 'GET',
+    },
   ]);
 });
 

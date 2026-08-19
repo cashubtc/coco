@@ -33,6 +33,354 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('registers a normalized Known Mint without granting trust', async () => {
+    const credential = await createCredential();
+    const addMint = mock(async (mintUrl: string, options?: { trusted?: boolean }) => ({
+      mint: {
+        mintUrl: 'https://mint.example.com',
+        name: 'Example Mint',
+        mintInfo: { name: 'Example Mint' },
+        trusted: false,
+        createdAt: 1_786_838_400,
+        updatedAt: 1_786_838_460,
+      },
+      keysets: [],
+    }));
+    const getAllMints = mock(async () => []);
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({ manager: { mint: { addMint, getAllMints } } }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints']!.POST!(
+      authorizedJsonRequest('/v1/mints', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBe(
+      '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com',
+    );
+    expect(await response.json()).toEqual({
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      trusted: false,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
+  });
+
+  test('lists Known Mints and preserves trust on duplicate registration', async () => {
+    const credential = await createCredential();
+    const knownMint = {
+      mintUrl: 'https://mint.example.com/',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: true,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    const getAllMints = mock(async () => [knownMint]);
+    const getAllTrustedMints = mock(async () => [knownMint]);
+    const addMint = mock(async () => {
+      throw new Error('duplicate registration must not change trust');
+    });
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { mint: { addMint, getAllMints, getAllTrustedMints } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const listed = await routes['/v1/mints']!.GET!(
+      authorizedRequest('/v1/mints?trustedOnly=true', credential.plaintext),
+    );
+    const duplicate = await routes['/v1/mints']!.POST!(
+      authorizedJsonRequest('/v1/mints', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+
+    expect(await listed.json()).toEqual({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          name: 'Example Mint',
+          trusted: true,
+          createdAt: '2026-08-16T00:00:00.000Z',
+          updatedAt: '2026-08-16T00:01:00.000Z',
+        },
+      ],
+    });
+    expect(getAllTrustedMints).toHaveBeenCalledTimes(1);
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({
+      mintUrl: 'https://mint.example.com',
+      trusted: true,
+    });
+    expect(addMint).not.toHaveBeenCalled();
+  });
+
+  test('changes trust only through explicit authenticated commands', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: { name: 'Example Mint' },
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    const getAllMints = mock(async () => [mint]);
+    const trustMint = mock(async () => {
+      mint.trusted = true;
+    });
+    const untrustMint = mock(async () => {
+      mint.trusted = false;
+    });
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: { mint: { getAllMints, trustMint, untrustMint } },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const unauthenticated = await routes['/v1/mints/trust']!.POST!(
+      new Request('http://localhost/v1/mints/trust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mintUrl: mint.mintUrl }),
+      }),
+    );
+    const trusted = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+      }),
+    );
+    const untrusted = await routes['/v1/mints/untrust']!.POST!(
+      authorizedJsonRequest('/v1/mints/untrust', credential.plaintext, {
+        mintUrl: mint.mintUrl,
+      }),
+    );
+
+    expect(unauthenticated.status).toBe(401);
+    expect(trustMint).toHaveBeenCalledWith('https://mint.example.com');
+    expect(await trusted.json()).toMatchObject({ trusted: true });
+    expect(untrustMint).toHaveBeenCalledWith('https://mint.example.com');
+    expect(await untrusted.json()).toMatchObject({ trusted: false });
+  });
+
+  test('returns refreshed Mint information and safely maps refresh failures', async () => {
+    const credential = await createCredential();
+    const getMintInfo = mock(async () => ({
+      name: 'Example Mint',
+      description: 'Fresh metadata',
+      nuts: { '4': { disabled: false, methods: [] } },
+    }));
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            getAllMints: async () => [
+              {
+                mintUrl: 'https://mint.example.com',
+                name: 'Example Mint',
+                trusted: false,
+                createdAt: 1_786_838_400,
+                updatedAt: 1_786_838_460,
+              },
+            ],
+            getMintInfo,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/info']!.GET!(
+      authorizedRequest(
+        '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toEqual({
+      mintUrl: 'https://mint.example.com',
+      info: {
+        name: 'Example Mint',
+        description: 'Fresh metadata',
+        nuts: { '4': { disabled: false, methods: [] } },
+      },
+    });
+    expect(getMintInfo).toHaveBeenCalledWith('https://mint.example.com');
+
+    getMintInfo.mockImplementation(async () => {
+      throw new Error('https://mint.example.com/private?token=secret');
+    });
+    const failed = await routes['/v1/mints/info']!.GET!(
+      authorizedRequest(
+        '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+    const failureDocument = await failed.json();
+    expect(failed.status).toBe(500);
+    expect(failureDocument).toMatchObject({
+      error: { code: 'coco_error', retryable: false },
+    });
+    expect(JSON.stringify(failureDocument)).not.toContain('token=secret');
+  });
+
+  test('lists lossless payment-method capabilities for a Known Mint', async () => {
+    const credential = await createCredential();
+    const listPaymentMethodCapabilities = mock(async () => [
+      {
+        operation: 'mint' as const,
+        nut: 4 as const,
+        method: 'bolt11',
+        unit: 'sat',
+        minAmount: toAmount(9_007_199_254_740_993n),
+        maxAmount: null,
+        options: { reusable: true },
+      },
+    ]);
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            getAllMints: async () => [
+              {
+                mintUrl: 'https://mint.example.com',
+                name: 'Example Mint',
+                trusted: false,
+                createdAt: 1_786_838_400,
+                updatedAt: 1_786_838_460,
+              },
+            ],
+            listPaymentMethodCapabilities,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/payment-method-capabilities']!.GET!(
+      authorizedRequest(
+        '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.example.com%2F&operation=mint&unit=SAT',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toEqual({
+      items: [
+        {
+          operation: 'mint',
+          nut: 4,
+          method: 'bolt11',
+          unit: 'sat',
+          minAmount: '9007199254740993',
+          maxAmount: null,
+          options: { reusable: true },
+        },
+      ],
+    });
+    expect(listPaymentMethodCapabilities).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      operation: 'mint',
+      unit: 'SAT',
+    });
+  });
+
+  test('rejects invalid Mint requests and unknown trust targets before mutation', async () => {
+    const credential = await createCredential();
+    const addMint = mock(async () => {
+      throw new Error('must not register invalid input');
+    });
+    const trustMint = mock(async () => {
+      throw new Error('must not trust unknown input');
+    });
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({
+        manager: {
+          mint: {
+            addMint,
+            getAllMints: async () => [],
+            getAllTrustedMints: async () => [],
+            getMintInfo: async () => ({}),
+            listPaymentMethodCapabilities: async () => [],
+            trustMint,
+          },
+        },
+      }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const invalidRequests = [
+      routes['/v1/mints']!.POST!(
+        authorizedJsonRequest('/v1/mints', credential.plaintext, { mintUrl: 'ftp://mint.test' }),
+      ),
+      routes['/v1/mints']!.GET!(
+        authorizedRequest('/v1/mints?trustedOnly=yes', credential.plaintext),
+      ),
+      routes['/v1/mints/info']!.GET!(
+        authorizedRequest(
+          '/v1/mints/info?mintUrl=https%3A%2F%2Fmint.test&extra=1',
+          credential.plaintext,
+        ),
+      ),
+      routes['/v1/mints/payment-method-capabilities']!.GET!(
+        authorizedRequest(
+          '/v1/mints/payment-method-capabilities?mintUrl=https%3A%2F%2Fmint.test&operation=swap',
+          credential.plaintext,
+        ),
+      ),
+    ];
+
+    for (const pending of invalidRequests) {
+      const response = await pending;
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: 'invalid_request', retryable: false },
+      });
+    }
+
+    const unknown = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: 'https://unknown.example.com',
+      }),
+    );
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(addMint).not.toHaveBeenCalled();
+    expect(trustMint).not.toHaveBeenCalled();
+  });
+
   test('returns filtered balances as lossless flat v1 resources', async () => {
     const credential = await createCredential();
     const byMintAndUnit = mock(async () => ({
@@ -302,6 +650,66 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'Balances',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/mints',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'KnownMints',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/mints',
+        capability: 'wallet:admin',
+        requestSchema: 'MintUrlRequest',
+        responseSchema: 'KnownMint',
+        successStatuses: [200, 201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/mints/trust',
+        capability: 'wallet:admin',
+        requestSchema: 'MintUrlRequest',
+        responseSchema: 'KnownMint',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/mints/untrust',
+        capability: 'wallet:admin',
+        requestSchema: 'MintUrlRequest',
+        responseSchema: 'KnownMint',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/mints/info',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintInformation',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/mints/payment-method-capabilities',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'PaymentMethodCapabilities',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,

@@ -95,6 +95,9 @@ describe('routes', () => {
     expect(routes['/status']).toBeUndefined();
     expect(routes['/init']).toBeUndefined();
     expect(routes['/unlock']).toBeUndefined();
+    expect(routes['/mints/add']).toBeUndefined();
+    expect(routes['/mints/list']).toBeUndefined();
+    expect(routes['/mints/info']).toBeUndefined();
   });
 
   test('rejects a protected route without a bearer credential', async () => {
@@ -106,9 +109,7 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/mints/list']!.GET!(
-        new Request('http://localhost/mints/list'),
-      );
+      const response = await routes['/history']!.GET!(new Request('http://localhost/history'));
 
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: 'Unauthorized' });
@@ -126,7 +127,7 @@ describe('routes', () => {
       const plaintext = await loadClientCredential(paths.clientCredentialFile);
       let publishHistory: ((payload: unknown) => void) | undefined;
       const runtime = runningRuntime({
-        mint: { getAllTrustedMints: async () => [] },
+        history: { getPaginatedHistory: async () => [] },
         on: (_event: string, listener: (payload: unknown) => void) => {
           publishHistory = listener;
           return () => {};
@@ -137,7 +138,7 @@ describe('routes', () => {
         fetch: buildFallbackHandler(runtime, credentials),
       });
 
-      const normal = await fetch(new URL('/mints/list', server.url), {
+      const normal = await fetch(new URL('/history', server.url), {
         headers: { Authorization: `Bearer ${plaintext}` },
       });
       const unauthorizedStream = await fetch(new URL('/events', server.url));
@@ -148,7 +149,7 @@ describe('routes', () => {
       });
 
       expect(normal.status).toBe(200);
-      expect(await normal.json()).toEqual({ output: '' });
+      expect(await normal.json()).toEqual({ output: [] });
       expect(unauthorizedStream.status).toBe(401);
       for (let attempt = 0; attempt < 20 && !publishHistory; attempt++) {
         await Bun.sleep(5);
@@ -217,8 +218,8 @@ describe('routes', () => {
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials, logger);
       const presentedCredential = 'z'.repeat(43);
 
-      const response = await routes['/mints/list']!.GET!(
-        new Request('http://localhost/mints/list', {
+      const response = await routes['/history']!.GET!(
+        new Request('http://localhost/history', {
           headers: { Authorization: `Bearer ${presentedCredential}` },
         }),
       );
@@ -244,8 +245,8 @@ describe('routes', () => {
         isAcceptingWork: () => false,
       });
 
-      const response = await routes['/mints/list']!.GET!(
-        new Request('http://localhost/mints/list', {
+      const response = await routes['/history']!.GET!(
+        new Request('http://localhost/history', {
           headers: { Authorization: `Bearer ${plaintext}` },
         }),
       );

@@ -110,39 +110,6 @@
       }
     },
     {
-      "path": "/mints/add",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "url": "string"
-      },
-      "responses": {
-        "200": "{ output: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
-      "path": "/mints/list",
-      "method": "GET",
-      "state": "cocoSession.running",
-      "responses": {
-        "200": "{ output: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
-      "path": "/mints/info",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "url": "string"
-      },
-      "responses": {
-        "200": "{ output: unknown }",
-        "500": "{ error: string }"
-      }
-    },
-    {
       "path": "/history",
       "method": "GET",
       "state": "cocoSession.running",

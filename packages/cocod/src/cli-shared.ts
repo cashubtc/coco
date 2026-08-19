@@ -5,7 +5,11 @@ import {
   balancesSchema,
   healthSchema,
   initializeWalletResponseSchema,
+  knownMintSchema,
+  knownMintsSchema,
   lifecycleStatusSchema,
+  mintInformationSchema,
+  paymentMethodCapabilitiesSchema,
   processShutdownResponseSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
@@ -13,7 +17,11 @@ import {
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
+  type KnownMintDocument,
+  type KnownMintsDocument,
   type LifecycleStatusDocument,
+  type MintInformationDocument,
+  type PaymentMethodCapabilitiesDocument,
   type ProcessShutdownResponseDocument,
   type RuntimeSchema,
   type StartSessionRequest,
@@ -58,10 +66,28 @@ export interface BalanceFilters {
   trustedOnly?: boolean;
 }
 
+export interface KnownMintFilters {
+  trustedOnly?: boolean;
+}
+
+export interface PaymentMethodCapabilityFilters {
+  operation?: 'mint' | 'melt';
+  unit?: string;
+}
+
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
   balances(filters?: BalanceFilters): Promise<BalancesDocument>;
+  listMints(filters?: KnownMintFilters): Promise<KnownMintsDocument>;
+  registerMint(mintUrl: string): Promise<KnownMintDocument>;
+  getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
+  trustMint(mintUrl: string): Promise<KnownMintDocument>;
+  untrustMint(mintUrl: string): Promise<KnownMintDocument>;
+  listPaymentMethodCapabilities(
+    mintUrl: string,
+    filters?: PaymentMethodCapabilityFilters,
+  ): Promise<PaymentMethodCapabilitiesDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
   getWalletRecoveryMaterial(
     input: WalletRecoveryMaterialRequest,
@@ -109,6 +135,46 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
       requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
     balances: (filters = {}) =>
       requestV1(endpoint, balancePath(filters), 'GET', undefined, balancesSchema, credentialFile),
+    listMints: (filters = {}) =>
+      requestV1(
+        endpoint,
+        mintListPath(filters),
+        'GET',
+        undefined,
+        knownMintsSchema,
+        credentialFile,
+      ),
+    registerMint: (mintUrl) =>
+      requestV1(endpoint, '/v1/mints', 'POST', { mintUrl }, knownMintSchema, credentialFile),
+    getMintInfo: (mintUrl) =>
+      requestV1(
+        endpoint,
+        mintResourcePath('/v1/mints/info', mintUrl),
+        'GET',
+        undefined,
+        mintInformationSchema,
+        credentialFile,
+      ),
+    trustMint: (mintUrl) =>
+      requestV1(endpoint, '/v1/mints/trust', 'POST', { mintUrl }, knownMintSchema, credentialFile),
+    untrustMint: (mintUrl) =>
+      requestV1(
+        endpoint,
+        '/v1/mints/untrust',
+        'POST',
+        { mintUrl },
+        knownMintSchema,
+        credentialFile,
+      ),
+    listPaymentMethodCapabilities: (mintUrl, filters = {}) =>
+      requestV1(
+        endpoint,
+        paymentMethodCapabilitiesPath(mintUrl, filters),
+        'GET',
+        undefined,
+        paymentMethodCapabilitiesSchema,
+        credentialFile,
+      ),
     initializeWallet: (input) =>
       requestV1(
         endpoint,
@@ -155,6 +221,35 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         credentialFile,
       ),
   };
+}
+
+/** Preserves the human `mints add` behavior while keeping registration and trust explicit. */
+export async function registerAndTrustMint(
+  client: V1Client,
+  mintUrl: string,
+): Promise<KnownMintDocument> {
+  const registered = await client.registerMint(mintUrl);
+  return registered.trusted ? registered : client.trustMint(registered.mintUrl);
+}
+
+function mintListPath(filters: KnownMintFilters): string {
+  return filters.trustedOnly === undefined
+    ? '/v1/mints'
+    : `/v1/mints?trustedOnly=${String(filters.trustedOnly)}`;
+}
+
+function mintResourcePath(path: string, mintUrl: string): string {
+  return `${path}?${new URLSearchParams({ mintUrl }).toString()}`;
+}
+
+function paymentMethodCapabilitiesPath(
+  mintUrl: string,
+  filters: PaymentMethodCapabilityFilters,
+): string {
+  const query = new URLSearchParams({ mintUrl });
+  if (filters.operation) query.set('operation', filters.operation);
+  if (filters.unit) query.set('unit', filters.unit);
+  return `/v1/mints/payment-method-capabilities?${query.toString()}`;
 }
 
 function balancePath(filters: BalanceFilters): string {

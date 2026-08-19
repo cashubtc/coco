@@ -113,6 +113,47 @@ export interface BalancesDocument {
   items: BalanceDocument[];
 }
 
+/** Body used by Known Mint registration and trust commands. */
+export interface MintUrlRequest {
+  mintUrl: string;
+}
+
+/** Safe cocod projection of Coco's Known Mint model. */
+export interface KnownMintDocument {
+  mintUrl: string;
+  name: string;
+  trusted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Collection of Known Mints. */
+export interface KnownMintsDocument {
+  items: KnownMintDocument[];
+}
+
+/** Mint metadata resolved through Coco and scoped to its normalized identity. */
+export interface MintInformationDocument {
+  mintUrl: string;
+  info: Record<string, unknown>;
+}
+
+/** Safe projection of one Coco Payment Method Capability. */
+export interface PaymentMethodCapabilityDocument {
+  operation: 'mint' | 'melt';
+  nut: 4 | 5;
+  method: string;
+  unit: string;
+  minAmount?: string | null;
+  maxAmount?: string | null;
+  options?: unknown;
+}
+
+/** Collection of capabilities advertised by one Known Mint. */
+export interface PaymentMethodCapabilitiesDocument {
+  items: PaymentMethodCapabilityDocument[];
+}
+
 const INTERFACE_VERSION = '1' as const;
 
 interface SchemaNode {
@@ -268,6 +309,57 @@ export const balancesSchema = namedSchema<BalancesDocument>(
   }),
 );
 
+const knownMintNode = objectNode({
+  mintUrl: stringNode(),
+  name: stringNode(),
+  trusted: booleanNode(),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+});
+
+/** Runtime and generated schema for a request identifying a Mint by URL. */
+export const mintUrlRequestSchema = namedSchema<MintUrlRequest>(
+  'MintUrlRequest',
+  objectNode({ mintUrl: stringNode() }),
+);
+
+/** Runtime and generated schema for one safe Known Mint resource. */
+export const knownMintSchema = namedSchema<KnownMintDocument>('KnownMint', knownMintNode);
+
+/** Runtime and generated schema for the Known Mint collection. */
+export const knownMintsSchema = namedSchema<KnownMintsDocument>(
+  'KnownMints',
+  objectNode({ items: arrayNode(knownMintNode) }),
+);
+
+/** Runtime and generated schema for refreshed Mint metadata. */
+export const mintInformationSchema = namedSchema<MintInformationDocument>(
+  'MintInformation',
+  objectNode({
+    mintUrl: stringNode(),
+    info: objectNode({}, { additionalProperties: true }),
+  }),
+);
+
+const paymentMethodCapabilityNode = objectNode(
+  {
+    operation: enumNode(['mint', 'melt']),
+    nut: unionNode([literalNode(4), literalNode(5)]),
+    method: stringNode(),
+    unit: stringNode(),
+    minAmount: nullableNode(decimalAmountNode),
+    maxAmount: nullableNode(decimalAmountNode),
+    options: anyNode(),
+  },
+  { optional: ['minAmount', 'maxAmount', 'options'] },
+);
+
+/** Runtime and generated schema for Mint and Melt payment-method capabilities. */
+export const paymentMethodCapabilitiesSchema = namedSchema<PaymentMethodCapabilitiesDocument>(
+  'PaymentMethodCapabilities',
+  objectNode({ items: arrayNode(paymentMethodCapabilityNode) }),
+);
+
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(
   status: CocodStatus,
@@ -291,7 +383,7 @@ function namedSchema<T>(name: string, node: SchemaNode): RuntimeSchema<T> {
   };
 }
 
-function literalNode<T extends string | null>(expected: T): SchemaNode {
+function literalNode<T extends string | number | null>(expected: T): SchemaNode {
   return {
     jsonSchema: expected === null ? { type: 'null' } : { const: expected },
     parse(value, path) {
@@ -299,6 +391,15 @@ function literalNode<T extends string | null>(expected: T): SchemaNode {
         throw new Error(`${path} must equal ${JSON.stringify(expected)}`);
       }
       return expected;
+    },
+  };
+}
+
+function anyNode(): SchemaNode {
+  return {
+    jsonSchema: {},
+    parse(value) {
+      return value;
     },
   };
 }
