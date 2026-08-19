@@ -44,6 +44,9 @@ cocod status
 # Create a Wallet and display its host-generated recovery material
 cocod wallet initialize
 
+# Display the recovery material again if the initialization response was lost
+cocod wallet recovery-material
+
 # Start a Coco Session for a passphrase-protected Wallet
 cocod session start --passphrase "your-passphrase"
 

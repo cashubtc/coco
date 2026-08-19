@@ -85,6 +85,9 @@ cocod status
 # Initialize a Wallet with host-generated Wallet Recovery Material
 cocod wallet initialize [--passphrase <passphrase>]
 
+# Retrieve Wallet Recovery Material again if the initialization response was lost
+cocod wallet recovery-material [--passphrase <passphrase>]
+
 # Start or stop the Coco Session without changing the Wallet
 cocod session start [--passphrase <passphrase>]
 cocod session stop

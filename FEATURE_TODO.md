@@ -10,6 +10,12 @@
 - [x] Update CLI help and daemon API documentation.
 - [x] Build, typecheck, and test `cocod`.
 
+## Review follow-up
+
+- [x] Fail lifecycle commands when their requested target state is not reached.
+- [x] Expose repeatable Wallet Recovery Material retrieval through the CLI.
+- [x] Poll lifecycle transitions beyond the server's default 30-second cleanup deadline.
+
 ## CLI naming
 
 - Use `health` for public Cocod Process liveness.

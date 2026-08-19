@@ -45,10 +45,19 @@ walletCmd
       client.initializeWallet({ passphrase: options.passphrase }),
     );
     console.log('Wallet initialized.');
-    console.log('\nIMPORTANT: Store this Wallet Recovery Material securely:');
-    console.log(result.generatedMnemonic);
-    console.log('\nAnyone with these words can control the Wallet.');
+    printWalletRecoveryMaterial(result.generatedMnemonic, true);
     printLifecycleStatus(result.status);
+  });
+
+walletCmd
+  .command('recovery-material')
+  .description('Retrieve the Wallet Recovery Material')
+  .option('--passphrase <passphrase>', 'Passphrase for protected Wallet Seed Access')
+  .action(async (options: { passphrase?: string }) => {
+    const result = await handleV1Command((client) =>
+      client.getWalletRecoveryMaterial({ passphrase: options.passphrase }),
+    );
+    printWalletRecoveryMaterial(result.mnemonic);
   });
 
 const sessionCmd = program.command('session').description('Coco Session lifecycle operations');
@@ -59,9 +68,12 @@ sessionCmd
   .option('--passphrase <passphrase>', 'Passphrase for protected Wallet Seed Access')
   .action(async (options: { passphrase?: string }) => {
     const status = await handleV1Command(async (client) =>
-      waitForSessionTransition(
-        client,
-        await client.startSession({ passphrase: options.passphrase }),
+      requireSessionState(
+        await waitForSessionTransition(
+          client,
+          await client.startSession({ passphrase: options.passphrase }),
+        ),
+        'running',
       ),
     );
     printLifecycleStatus(status);
@@ -72,7 +84,10 @@ sessionCmd
   .description('Stop the Coco Session without stopping the Cocod Process')
   .action(async () => {
     const status = await handleV1Command(async (client) =>
-      waitForSessionTransition(client, await client.stopSession()),
+      requireSessionState(
+        await waitForSessionTransition(client, await client.stopSession()),
+        'stopped',
+      ),
     );
     printLifecycleStatus(status);
   });
@@ -360,6 +375,24 @@ function requireHostLocalOperation(operation: string): void {
 
 function printLifecycleStatus(status: LifecycleStatusDocument): void {
   console.log(JSON.stringify(status, null, 2));
+}
+
+function printWalletRecoveryMaterial(mnemonic: string, leadingNewline = false): void {
+  console.log(
+    `${leadingNewline ? '\n' : ''}IMPORTANT: Store this Wallet Recovery Material securely:`,
+  );
+  console.log(mnemonic);
+  console.log('\nAnyone with these words can control the Wallet.');
+}
+
+function requireSessionState(
+  status: LifecycleStatusDocument,
+  expected: 'running' | 'stopped',
+): LifecycleStatusDocument {
+  if (status.cocoSession.state !== expected) {
+    throw new Error(`Coco Session did not reach ${expected}:\n${JSON.stringify(status, null, 2)}`);
+  }
+  return status;
 }
 
 export function cli(args: string[]) {

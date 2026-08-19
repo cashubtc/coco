@@ -7,6 +7,7 @@ import {
   lifecycleStatusSchema,
   processShutdownResponseSchema,
   v1ErrorSchema,
+  walletRecoveryMaterialResponseSchema,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
@@ -15,13 +16,19 @@ import {
   type RuntimeSchema,
   type StartSessionRequest,
   type V1ErrorCode,
+  type WalletRecoveryMaterialRequest,
+  type WalletRecoveryMaterialResponseDocument,
 } from './v1/http.js';
 import {
   CLIENT_CREDENTIAL_FILE,
   DEFAULT_CLIENT_URL,
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
   resolveClientEndpoint,
   type ClientEndpoint,
 } from './utils/config.js';
+
+const SESSION_TRANSITION_POLL_INTERVAL_MS = 100;
+export const DEFAULT_SESSION_TRANSITION_TIMEOUT_MS = DEFAULT_SHUTDOWN_TIMEOUT_MS + 5_000;
 
 export interface CommandResponse {
   output?: unknown;
@@ -38,10 +45,18 @@ export interface DaemonCallOptions extends ClientCredentialOptions {
   body?: object;
 }
 
+export interface SessionTransitionWaitOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
+  getWalletRecoveryMaterial(
+    input: WalletRecoveryMaterialRequest,
+  ): Promise<WalletRecoveryMaterialResponseDocument>;
   startSession(input: StartSessionRequest): Promise<LifecycleStatusDocument>;
   stopSession(): Promise<LifecycleStatusDocument>;
   stopProcess(): Promise<ProcessShutdownResponseDocument>;
@@ -90,6 +105,15 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         'POST',
         input,
         initializeWalletResponseSchema,
+        credentialFile,
+      ),
+    getWalletRecoveryMaterial: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/admin/wallet/recovery-material',
+        'POST',
+        input,
+        walletRecoveryMaterialResponseSchema,
         credentialFile,
       ),
     startSession: (input) =>
@@ -211,17 +235,31 @@ export async function ensureDaemonRunning(options: ClientCredentialOptions = {})
 export async function waitForSessionTransition(
   client: V1Client,
   initialStatus: LifecycleStatusDocument,
+  options: SessionTransitionWaitOptions = {},
 ): Promise<LifecycleStatusDocument> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SESSION_TRANSITION_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? SESSION_TRANSITION_POLL_INTERVAL_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('Session transition timeout must be a positive finite number');
+  }
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new Error('Session transition poll interval must be a positive finite number');
+  }
+
+  const startedAt = performance.now();
   let status = initialStatus;
-  for (let i = 0; i < 50; i++) {
-    if (status.cocoSession.state !== 'starting' && status.cocoSession.state !== 'stopping') {
-      return status;
+  while (status.cocoSession.state === 'starting' || status.cocoSession.state === 'stopping') {
+    const remainingMs = timeoutMs - (performance.now() - startedAt);
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Coco Session transition did not finish within ${Math.ceil(timeoutMs / 1_000)} seconds`,
+      );
     }
-    await Bun.sleep(100);
+    await Bun.sleep(Math.min(pollIntervalMs, remainingMs));
     status = await client.status();
   }
 
-  throw new Error('Coco Session transition did not finish within 5 seconds');
+  return status;
 }
 
 async function waitForOperationalSession(client: V1Client): Promise<void> {

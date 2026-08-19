@@ -7,9 +7,12 @@ import {
   assertHostLocalOperation,
   callDaemonStream,
   createV1Client,
+  DEFAULT_SESSION_TRANSITION_TIMEOUT_MS,
   ensureDaemonRunning,
   startDaemonProcess,
   V1ClientError,
+  waitForSessionTransition,
+  type V1Client,
 } from './cli-shared';
 
 const originalFetch = globalThis.fetch;
@@ -106,6 +109,23 @@ test('Coco Session stop and Cocod Process stop use distinct v1 resources', async
   expect(requestedPaths).toEqual(['/v1/admin/session/stop', '/v1/admin/process/stop']);
 });
 
+test('the lifecycle wait exceeds the server cleanup deadline', () => {
+  expect(DEFAULT_SESSION_TRANSITION_TIMEOUT_MS).toBeGreaterThan(30_000);
+});
+
+test('the lifecycle wait timing is configurable', async () => {
+  const client = {
+    status: async () => lifecycleStatus('starting'),
+  } as unknown as V1Client;
+
+  await expect(
+    waitForSessionTransition(client, lifecycleStatus('starting'), {
+      timeoutMs: 5,
+      pollIntervalMs: 1,
+    }),
+  ).rejects.toThrow('Coco Session transition did not finish within 1 seconds');
+});
+
 test('host-local operations reject an explicit remote endpoint', () => {
   expect(() => assertHostLocalOperation('logs', 'https://wallet.example.com')).toThrow(
     'cocod logs is host-local and cannot use the explicit Cocod endpoint https://wallet.example.com',
@@ -189,7 +209,7 @@ describe('ensureDaemonRunning', () => {
   });
 });
 
-function lifecycleStatus(state: 'stopped' | 'running') {
+function lifecycleStatus(state: 'stopped' | 'starting' | 'running') {
   return {
     daemon: { version: '0.0.17', interfaceVersion: '1' as const },
     wallet: null,

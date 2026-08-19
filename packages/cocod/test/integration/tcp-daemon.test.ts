@@ -183,6 +183,93 @@ test('Wallet initialization sends only a passphrase and prints generated recover
   }
 });
 
+test('Wallet recovery material can be retrieved after initialization response loss', async () => {
+  const home = await temporaryHome();
+  const credential = 'g'.repeat(43);
+  await writeClientCredential(home, credential);
+  const mnemonic =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const requests: Array<{ path: string; authorization: string | null; body?: unknown }> = [];
+  const server = startTcpTestServer({
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+      const body = request.method === 'POST' ? await request.json() : undefined;
+      requests.push({ path, authorization: request.headers.get('authorization'), body });
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      return Response.json({ mnemonic });
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, [
+      '--url',
+      endpoint,
+      'wallet',
+      'recovery-material',
+      '--passphrase',
+      'correct horse',
+    ]);
+
+    expect(await command.exited).toBe(0);
+    const output = await new Response(command.stdout as ReadableStream<Uint8Array>).text();
+    expect(output).toContain('IMPORTANT: Store this Wallet Recovery Material securely');
+    expect(output).toContain(mnemonic);
+    expect(requests).toEqual([
+      { path: '/health', authorization: null, body: undefined },
+      {
+        path: '/v1/admin/wallet/recovery-material',
+        authorization: `Bearer ${credential}`,
+        body: { passphrase: 'correct horse' },
+      },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('Coco Session start fails when the accepted transition does not reach running', async () => {
+  const home = await temporaryHome();
+  await writeClientCredential(home, 'e'.repeat(43));
+  const starting = lifecycleStatus('starting');
+  const failed = {
+    ...lifecycleStatus('stopped'),
+    cocoSession: {
+      state: 'stopped' as const,
+      startedAt: null,
+      lastFailure: {
+        code: 'session_start_failed',
+        message: 'Coco Session failed to start',
+        occurredAt: '2026-08-19T00:00:01.000Z',
+      },
+    },
+  };
+  const server = startTcpTestServer({
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      if (path === '/v1/admin/session/start') {
+        return Response.json(starting, { status: 202 });
+      }
+      return Response.json(failed);
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, ['--url', endpoint, 'session', 'start']);
+
+    expect(await command.exited).toBe(1);
+    const error = await new Response(command.stderr as ReadableStream<Uint8Array>).text();
+    expect(error).toContain('Coco Session did not reach running');
+    expect(error).toContain('session_start_failed');
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('a TCP bind failure exits clearly without replacing the active listener', async () => {
   const home = await temporaryHome();
   const blocker = startTcpTestServer({
@@ -255,6 +342,15 @@ async function writeClientCredential(home: string, credential: string): Promise<
   const directory = join(home, '.cocod', 'credentials', 'current');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await writeFile(join(directory, 'client'), `${credential}\n`, { mode: 0o600 });
+}
+
+function lifecycleStatus(state: 'stopped' | 'starting') {
+  return {
+    daemon: { version: '0.0.17', interfaceVersion: '1' as const },
+    wallet: { configuredAt: '2026-08-19T00:00:00.000Z' },
+    seedAccess: { state: 'available' as const, requiresPassphrase: false },
+    cocoSession: { state, startedAt: null, lastFailure: null },
+  };
 }
 
 function spawnDaemon(home: string, port: number, hostname: string): Bun.Subprocess {

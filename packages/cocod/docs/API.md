@@ -14,6 +14,8 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 - `status` - Show Cocod Process, Wallet Seed Access, and Coco Session status
 - `wallet initialize` - Create a Wallet and display its host-generated Wallet Recovery Material
   - `--passphrase <str>` protect Wallet Seed Access and require explicit Coco Session start
+- `wallet recovery-material` - Retrieve Wallet Recovery Material again after initialization
+  - `--passphrase <str>` required for protected Wallet Seed Access
 - `session start` - Start the Coco Session
   - `--passphrase <str>` supply the passphrase for protected Wallet Seed Access
 - `session stop` - Stop the Coco Session without stopping the Cocod Process
