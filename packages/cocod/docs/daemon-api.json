@@ -11,11 +11,12 @@
   },
   "authentication": {
     "scheme": "bearer",
-    "publicPaths": ["/health", "/ping"],
-    "protectedPaths": "all other legacy and v1 routes",
+    "publicPaths": ["/health"],
+    "protectedPaths": "all legacy routes and every /v1 route",
     "structuredLifecycleDescription": "lifecycle-api-v1.json"
   },
   "responseContract": {
+    "scope": "remaining operational legacy routes",
     "success": {
       "shape": {
         "output": "unknown"
@@ -29,56 +30,9 @@
   },
   "endpoints": [
     {
-      "path": "/ping",
-      "method": "GET",
-      "state": "any",
-      "responses": {
-        "200": "{ output: \"pong\" }"
-      }
-    },
-    {
-      "path": "/status",
-      "method": "GET",
-      "state": "any",
-      "responses": {
-        "200": "{ output: \"UNINITIALIZED\" | \"LOCKED\" | \"STARTING\" | \"UNLOCKED\" | \"STOPPING\" | \"ERROR\" }"
-      }
-    },
-    {
-      "path": "/init",
-      "method": "POST",
-      "state": "UNINITIALIZED",
-      "body": {
-        "mnemonic": "string (optional)",
-        "passphrase": "string (optional)",
-        "mintUrl": "string (optional)"
-      },
-      "responses": {
-        "200": "{ output: string }",
-        "400": "{ error: \"Invalid mnemonic\" }",
-        "409": "{ error: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
-      "path": "/unlock",
-      "method": "POST",
-      "state": "LOCKED",
-      "body": {
-        "passphrase": "string"
-      },
-      "responses": {
-        "200": "{ output: \"Unlocked\" }",
-        "400": "{ error: string }",
-        "401": "{ error: string }",
-        "409": "{ error: string }",
-        "503": "{ error: string }"
-      }
-    },
-    {
       "path": "/balance",
       "method": "GET",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "notes": "sats is the total balance (spendable + reserved), matching pre-v2 semantics; sat unit only. Mints with no proofs are omitted.",
       "responses": {
         "200": "{ output: Record<string, { sats: number }> }",
@@ -90,7 +44,7 @@
     {
       "path": "/receive/cashu",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "token": "string"
       },
@@ -102,7 +56,7 @@
     {
       "path": "/receive/bolt11",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "amount": "number",
         "mintUrl": "string (optional)"
@@ -115,7 +69,7 @@
     {
       "path": "/send/cashu",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "amount": "number",
         "mintUrl": "string (optional)"
@@ -128,7 +82,7 @@
     {
       "path": "/send/bolt11",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "invoice": "string",
         "mintUrl": "string (optional)"
@@ -141,7 +95,7 @@
     {
       "path": "/x-cashu/parse",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "request": "string"
       },
@@ -155,7 +109,7 @@
     {
       "path": "/x-cashu/handle",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "request": "string",
         "mintUrl": "string (optional)"
@@ -170,7 +124,7 @@
     {
       "path": "/mints/add",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "url": "string"
       },
@@ -182,7 +136,7 @@
     {
       "path": "/mints/list",
       "method": "GET",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "responses": {
         "200": "{ output: string }",
         "500": "{ error: string }"
@@ -191,7 +145,7 @@
     {
       "path": "/mints/info",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "url": "string"
       },
@@ -203,7 +157,7 @@
     {
       "path": "/history",
       "method": "GET",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "query": {
         "offset": "number (optional, default 0)",
         "limit": "number (optional, default 20, max 100)"
@@ -216,7 +170,7 @@
     {
       "path": "/events",
       "method": "GET",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "responses": {
         "200": "text/event-stream"
       }
@@ -224,7 +178,7 @@
     {
       "path": "/npc/address",
       "method": "GET",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "responses": {
         "200": "{ output: string }",
         "500": "{ error: string }"
@@ -233,7 +187,7 @@
     {
       "path": "/npc/username",
       "method": "POST",
-      "state": "UNLOCKED",
+      "state": "cocoSession.running",
       "body": {
         "username": "string",
         "confirm": "boolean (optional)"

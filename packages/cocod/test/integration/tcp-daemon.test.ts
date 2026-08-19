@@ -41,9 +41,9 @@ test('the implicit local default auto-starts and stops through the shared TCP re
   const command = spawnCli(home, ['status'], environment);
 
   expect(await command.exited).toBe(0);
-  expect(await new Response(command.stdout as ReadableStream<Uint8Array>).text()).toContain(
-    'UNINITIALIZED',
-  );
+  const output = await new Response(command.stdout as ReadableStream<Uint8Array>).text();
+  expect(output).toContain('"wallet": null');
+  expect(output).toContain('"state": "stopped"');
   expect((await waitForHealth(DEFAULT_CLIENT_URL)).status).toBe(200);
 
   const pid = Number(await readFile(join(home, '.cocod', 'cocod.pid'), 'utf8'));
@@ -73,7 +73,9 @@ test.each([
 
 test('COCOD_URL selects client-only mode and never auto-starts a process', async () => {
   const home = await temporaryHome();
-  const reservation = startTcpTestServer({ fetch: () => Response.json({ output: 'pong' }) });
+  const reservation = startTcpTestServer({
+    fetch: () => Response.json({ status: 'ok', interfaceVersion: '1' }),
+  });
   const endpoint = `http://127.0.0.1:${reservation.port}`;
   try {
     const command = spawnCli(home, ['status'], { COCOD_URL: endpoint });
@@ -104,9 +106,7 @@ test('one explicitly configured TCP listener serves local and remote authenticat
     join(home, '.cocod', 'credentials', 'current', 'client'),
   );
   const headers = { Authorization: `Bearer ${credential}` };
-  const legacyStatus = await fetch(`${endpoint}/status`, { headers });
   const v1Status = await fetch(`${endpoint}/v1/status`, { headers });
-  expect(await legacyStatus.json()).toEqual({ output: 'UNINITIALIZED' });
   expect(v1Status.status).toBe(200);
   expect(await v1Status.json()).toMatchObject({
     wallet: null,
@@ -120,6 +120,154 @@ test('one explicitly configured TCP listener serves local and remote authenticat
 
   const stateEntries = await readdir(join(home, '.cocod'));
   expect(stateEntries.some((entry) => entry.endsWith('.sock'))).toBeFalse();
+});
+
+test('Wallet initialization sends only a passphrase and prints generated recovery material', async () => {
+  const home = await temporaryHome();
+  const credential = 'd'.repeat(43);
+  await writeClientCredential(home, credential);
+  const requests: Array<{ path: string; authorization: string | null; body?: unknown }> = [];
+  const mnemonic =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const server = startTcpTestServer({
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+      const body = request.method === 'POST' ? await request.json() : undefined;
+      requests.push({
+        path,
+        authorization: request.headers.get('authorization'),
+        body,
+      });
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      return Response.json(
+        {
+          generatedMnemonic: mnemonic,
+          status: {
+            daemon: { version: '0.0.17', interfaceVersion: '1' },
+            wallet: { configuredAt: '2026-08-19T00:00:00.000Z' },
+            seedAccess: { state: 'locked', requiresPassphrase: true },
+            cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
+          },
+        },
+        { status: 201 },
+      );
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, [
+      '--url',
+      endpoint,
+      'wallet',
+      'initialize',
+      '--passphrase',
+      'correct horse',
+    ]);
+
+    expect(await command.exited).toBe(0);
+    const output = await new Response(command.stdout as ReadableStream<Uint8Array>).text();
+    expect(output).toContain('IMPORTANT: Store this Wallet Recovery Material securely');
+    expect(output).toContain(mnemonic);
+    expect(requests).toEqual([
+      { path: '/health', authorization: null, body: undefined },
+      {
+        path: '/v1/admin/wallet/initialize',
+        authorization: `Bearer ${credential}`,
+        body: { passphrase: 'correct horse' },
+      },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('Wallet recovery material can be retrieved after initialization response loss', async () => {
+  const home = await temporaryHome();
+  const credential = 'g'.repeat(43);
+  await writeClientCredential(home, credential);
+  const mnemonic =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+  const requests: Array<{ path: string; authorization: string | null; body?: unknown }> = [];
+  const server = startTcpTestServer({
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+      const body = request.method === 'POST' ? await request.json() : undefined;
+      requests.push({ path, authorization: request.headers.get('authorization'), body });
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      return Response.json({ mnemonic });
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, [
+      '--url',
+      endpoint,
+      'wallet',
+      'recovery-material',
+      '--passphrase',
+      'correct horse',
+    ]);
+
+    expect(await command.exited).toBe(0);
+    const output = await new Response(command.stdout as ReadableStream<Uint8Array>).text();
+    expect(output).toContain('IMPORTANT: Store this Wallet Recovery Material securely');
+    expect(output).toContain(mnemonic);
+    expect(requests).toEqual([
+      { path: '/health', authorization: null, body: undefined },
+      {
+        path: '/v1/admin/wallet/recovery-material',
+        authorization: `Bearer ${credential}`,
+        body: { passphrase: 'correct horse' },
+      },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('Coco Session start fails when the accepted transition does not reach running', async () => {
+  const home = await temporaryHome();
+  await writeClientCredential(home, 'e'.repeat(43));
+  const starting = lifecycleStatus('starting');
+  const failed = {
+    ...lifecycleStatus('stopped'),
+    cocoSession: {
+      state: 'stopped' as const,
+      startedAt: null,
+      lastFailure: {
+        code: 'session_start_failed',
+        message: 'Coco Session failed to start',
+        occurredAt: '2026-08-19T00:00:01.000Z',
+      },
+    },
+  };
+  const server = startTcpTestServer({
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === '/health') {
+        return Response.json({ status: 'ok', interfaceVersion: '1' });
+      }
+      if (path === '/v1/admin/session/start') {
+        return Response.json(starting, { status: 202 });
+      }
+      return Response.json(failed);
+    },
+  });
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const command = spawnCli(home, ['--url', endpoint, 'session', 'start']);
+
+    expect(await command.exited).toBe(1);
+    const error = await new Response(command.stderr as ReadableStream<Uint8Array>).text();
+    expect(error).toContain('Coco Session did not reach running');
+    expect(error).toContain('session_start_failed');
+  } finally {
+    await server.stop(true);
+  }
 });
 
 test('a TCP bind failure exits clearly without replacing the active listener', async () => {
@@ -188,6 +336,21 @@ async function temporaryHome(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-tcp-daemon-'));
   directories.push(directory);
   return directory;
+}
+
+async function writeClientCredential(home: string, credential: string): Promise<void> {
+  const directory = join(home, '.cocod', 'credentials', 'current');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(join(directory, 'client'), `${credential}\n`, { mode: 0o600 });
+}
+
+function lifecycleStatus(state: 'stopped' | 'starting') {
+  return {
+    daemon: { version: '0.0.17', interfaceVersion: '1' as const },
+    wallet: { configuredAt: '2026-08-19T00:00:00.000Z' },
+    seedAccess: { state: 'available' as const, requiresPassphrase: false },
+    cocoSession: { state, startedAt: null, lastFailure: null },
+  };
 }
 
 function spawnDaemon(home: string, port: number, hostname: string): Bun.Subprocess {

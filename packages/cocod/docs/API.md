@@ -11,11 +11,14 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 ### Wallet
 
-- `status` - Check daemon and wallet status
-- `init [mnemonic]` - Initialize wallet; generates mnemonic if omitted
-  - `--passphrase <str>` encrypt wallet at creation time
-  - `--mint-url <url>` set default mint URL
-- `unlock <passphrase>` - Unlock encrypted wallet
+- `status` - Show Cocod Process, Wallet Seed Access, and Coco Session status
+- `wallet initialize` - Create a Wallet and display its host-generated Wallet Recovery Material
+  - `--passphrase <str>` protect Wallet Seed Access and require explicit Coco Session start
+- `wallet recovery-material` - Retrieve Wallet Recovery Material again after initialization
+  - `--passphrase <str>` required for protected Wallet Seed Access
+- `session start` - Start the Coco Session
+  - `--passphrase <str>` supply the passphrase for protected Wallet Seed Access
+- `session stop` - Stop the Coco Session without stopping the Cocod Process
 - `balance` - Get wallet balances
 - `history` - List history entries
   - `--offset <number>` default `0`
@@ -58,9 +61,9 @@ conditions return a 400 before any proofs move.
 
 ### Daemon control
 
-- `ping` - Check daemon connectivity
+- `health` - Check Cocod Process reachability
 - `daemon` - Start daemon in foreground
-- `stop` - Stop daemon
+- `stop` - Stop the Cocod Process (distinct from `session stop`)
 - `logs` - Read this host's daemon log (host-local)
 - `credential rotate` - Rotate this host's administrative Client Credential (host-local)
 
@@ -73,23 +76,28 @@ daemon validates both settings and does not inherit a generic `PORT` variable.
 Listener overrides apply to an explicitly started `cocod daemon`. Auto-start always uses the local
 default; connect to a custom listener with `--url` or `COCOD_URL`, which never starts a process.
 
-Every route except `/health` and `/ping` requires `Authorization: Bearer <credential>`. The local
-client reads the credential from `~/.cocod/credentials/current/client`. Remote TLS belongs at a
-trusted proxy such as Caddy; cocod still authenticates the credential itself, ignores forwarded
-identity headers, and does not enable browser CORS.
+`GET /health` is public. Every `/v1/*` request and every remaining legacy route requires
+`Authorization: Bearer <credential>`. The local client reads the credential from
+`~/.cocod/credentials/current/client`. Remote TLS belongs at a trusted proxy such as Caddy; cocod
+still authenticates the credential itself, ignores forwarded identity headers, and does not enable
+browser CORS.
 
-### Response shape
+### Response shapes
 
-- Success: `{ "output": <value> }`
-- Error: `{ "error": "message" }`
+- The v1 lifecycle resources return typed documents directly. Their errors use
+  `{ "error": { "code": string, "message": string, "retryable": boolean, "details"?: object } }`.
+- The remaining operational legacy routes retain `{ "output": <value> }` success and
+  `{ "error": "message" }` error envelopes.
 
 ### Endpoint list
 
-- `GET /ping`
-- `GET /status`
-  - returns `STARTING` or `STOPPING` while a Coco Session lifecycle transition is in progress
-- `POST /init`
-- `POST /unlock`
+- `GET /health` (public)
+- `GET /v1/status`
+- `POST /v1/admin/wallet/initialize`
+- `POST /v1/admin/wallet/recovery-material`
+- `POST /v1/admin/session/start`
+- `POST /v1/admin/session/stop`
+- `POST /v1/admin/process/stop`
 - `GET /balance`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
@@ -104,7 +112,6 @@ identity headers, and does not enable browser CORS.
 - `GET /events` (SSE stream)
 - `GET /npc/address`
 - `POST /npc/username`
-- `POST /v1/admin/process/stop` (authenticated; returns `202 { "status": "stopping" }`)
 
-For full legacy request/response details, see `docs/daemon-api.json`. The generated structured
-lifecycle description is `docs/lifecycle-api-v1.json`.
+For the remaining operational legacy request/response details, see `docs/daemon-api.json`. The
+generated structured lifecycle description is `docs/lifecycle-api-v1.json`.

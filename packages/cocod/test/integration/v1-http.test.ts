@@ -29,7 +29,7 @@ afterEach(async () => {
   );
 });
 
-test('serves public health and authenticated structured status beside legacy routes', async () => {
+test('serves public health and authenticated structured status beside operational legacy routes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-listener-'));
   directories.push(directory);
   const credentialDirectory = join(directory, 'credentials');
@@ -119,7 +119,6 @@ test('serves public health and authenticated structured status beside legacy rou
   const unauthenticated = await tcpFetch(server, '/v1/status');
   const status = await tcpFetch(server, '/v1/status', plaintext);
   const unknown = await tcpFetch(server, '/v1/unknown', plaintext);
-  const legacy = await tcpFetch(server, '/status', plaintext);
 
   expect(health.status).toBe(200);
   expect(await health.json()).toEqual({ status: 'ok', interfaceVersion: '1' });
@@ -149,7 +148,6 @@ test('serves public health and authenticated structured status beside legacy rou
       retryable: false,
     },
   });
-  expect(await legacy.json()).toEqual({ output: 'UNINITIALIZED' });
 
   const initialize = await tcpFetch(
     server,

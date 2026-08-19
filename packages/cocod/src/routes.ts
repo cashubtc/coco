@@ -2,7 +2,7 @@ import { getEncodedToken, type PaymentRequestSpendingConditionRequirement } from
 import { nip19 } from 'nostr-tools';
 
 import { type AdministrativeCredential, type ClientCapability } from './credentials.js';
-import { CocodRuntimeError, type CocodRuntime, type RunningCocoSession } from './runtime.js';
+import { type CocodRuntime, type RunningCocoSession } from './runtime.js';
 import { serializeError } from './utils/logger.js';
 import type { AppLogger } from './utils/logger.js';
 
@@ -16,66 +16,6 @@ export interface RouteDefinition {
 
 export function createRouteHandlers(runtime: CocodRuntime): Record<string, RouteDefinition> {
   const routes: Record<string, RouteDefinition> = {
-    '/ping': {
-      capability: null,
-      GET: async () => Response.json({ output: 'pong' }),
-    },
-    '/status': {
-      capability: 'wallet:read',
-      GET: async () => {
-        return Response.json({ output: legacyStatus(runtime) });
-      },
-    },
-    '/init': {
-      capability: 'wallet:admin',
-      POST: requireUninitialized(runtime, async (req: Request) => {
-        try {
-          const body = (await req.json()) as {
-            mnemonic?: string;
-            passphrase?: string;
-            mintUrl?: string;
-          };
-
-          const result = await runtime.initializeWallet(body);
-          const output = result.requiresPassphrase
-            ? `Initialized (locked). Mnemonic: ${result.mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`
-            : `Initialized. Mnemonic: ${result.mnemonic}\nIMPORTANT: Write down this mnemonic and keep it safe!`;
-
-          return Response.json({ output });
-        } catch (error) {
-          if (
-            error instanceof CocodRuntimeError &&
-            (error.code === 'invalid_mnemonic' || error.code === 'invalid_mint_url')
-          ) {
-            return Response.json({ error: error.message }, { status: 400 });
-          }
-          if (error instanceof CocodRuntimeError && error.code === 'wallet_already_configured') {
-            return Response.json({ error: error.message }, { status: 409 });
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Init failed: ${message}` }, { status: 500 });
-        }
-      }),
-    },
-    '/unlock': {
-      capability: 'wallet:admin',
-      POST: requireLocked(runtime, async (req: Request) => {
-        try {
-          const body = (await req.json()) as { passphrase: string };
-
-          if (!body.passphrase) {
-            return Response.json({ error: 'Passphrase required' }, { status: 400 });
-          }
-
-          await runtime.startSession({ passphrase: body.passphrase }).completion;
-
-          return Response.json({ output: 'Unlocked' });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Unlock failed: ${message}` }, { status: 401 });
-        }
-      }),
-    },
     '/npc/address': {
       capability: 'wallet:read',
       GET: requireRunning(runtime, async (_req, state: RunningCocoSession) => {
@@ -444,7 +384,10 @@ function requireRunning(
     }
     if (status.seedAccess?.state === 'locked') {
       return Response.json(
-        { error: "Wallet is locked. Run 'cocod unlock <passphrase>' to decrypt." },
+        {
+          error:
+            "Wallet Seed Access is locked. Run 'cocod session start --passphrase <passphrase>'.",
+        },
         { status: 403 },
       );
     }
@@ -458,53 +401,11 @@ function requireRunning(
   };
 }
 
-function requireUninitialized(runtime: CocodRuntime, handler: RouteHandler): RouteHandler {
-  return async (req: Request) => {
-    if (runtime.getStatus().wallet) {
-      return Response.json(
-        { error: 'Wallet already initialized. Delete ~/.cocod/config.json to reset.' },
-        { status: 409 },
-      );
-    }
-    return handler(req);
-  };
-}
-
-function requireLocked(runtime: CocodRuntime, handler: RouteHandler): RouteHandler {
-  return async (req: Request) => {
-    const status = runtime.getStatus();
-    if (!status.wallet) {
-      return walletNotInitializedResponse();
-    }
-    if (status.seedAccess?.state !== 'locked') {
-      return Response.json({ error: 'Wallet is already unlocked' }, { status: 409 });
-    }
-    return handler(req);
-  };
-}
-
 function walletNotInitializedResponse(): Response {
   return Response.json(
-    { error: "Wallet not initialized. Run 'cocod init [mnemonic]' first." },
+    { error: "Wallet not initialized. Run 'cocod wallet initialize' first." },
     { status: 503 },
   );
-}
-
-function legacyStatus(runtime: CocodRuntime): string {
-  const status = runtime.getStatus();
-  if (!status.wallet) {
-    return 'UNINITIALIZED';
-  }
-  if (status.cocoSession.state === 'running') {
-    return 'UNLOCKED';
-  }
-  if (status.cocoSession.state === 'failed') {
-    return 'ERROR';
-  }
-  if (status.seedAccess?.state === 'locked') {
-    return 'LOCKED';
-  }
-  return status.cocoSession.state.toUpperCase();
 }
 
 export function buildRoutes(

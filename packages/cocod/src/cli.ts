@@ -5,7 +5,10 @@ import {
   program,
   handleDaemonCommand,
   callDaemonStream,
+  handleV1Command,
+  waitForSessionTransition,
 } from './cli-shared';
+import type { LifecycleStatusDocument } from './v1/http.js';
 import {
   DEFAULT_LOG_LINES,
   followLogFile,
@@ -24,42 +27,69 @@ program
   .version(cliVersion, '--version', 'output the version number')
   .option('--url <url>', 'Cocod HTTP endpoint (or COCOD_URL)');
 
-// Status - check daemon/wallet state
 program
   .command('status')
-  .description('Check daemon and wallet status')
+  .description('Show Cocod Process, Wallet Seed Access, and Coco Session status')
   .action(async () => {
-    await handleDaemonCommand('/status');
+    printLifecycleStatus(await handleV1Command((client) => client.status()));
   });
 
-// Init - initialize wallet
-program
-  .command('init [mnemonic]')
-  .description('Initialize wallet with optional mnemonic (generates one if not provided)')
-  .option('--passphrase <passphrase>', 'Encrypt wallet with passphrase')
-  .option('--mint-url <url>', 'Default mint URL (default: https://mint.minibits.cash/Bitcoin)')
-  .action(
-    async (mnemonic: string | undefined, options: { passphrase?: string; mintUrl?: string }) => {
-      await handleDaemonCommand('/init', {
-        method: 'POST',
-        body: {
-          mnemonic,
-          passphrase: options.passphrase,
-          mintUrl: options.mintUrl,
-        },
-      });
-    },
-  );
+const walletCmd = program.command('wallet').description('Wallet lifecycle operations');
 
-// Unlock - unlock encrypted wallet
-program
-  .command('unlock <passphrase>')
-  .description('Unlock encrypted wallet with passphrase')
-  .action(async (passphrase: string) => {
-    await handleDaemonCommand('/unlock', {
-      method: 'POST',
-      body: { passphrase },
-    });
+walletCmd
+  .command('initialize')
+  .description('Create a Wallet with host-generated Wallet Recovery Material')
+  .option('--passphrase <passphrase>', 'Protect Wallet Seed Access with a passphrase')
+  .action(async (options: { passphrase?: string }) => {
+    const result = await handleV1Command((client) =>
+      client.initializeWallet({ passphrase: options.passphrase }),
+    );
+    console.log('Wallet initialized.');
+    printWalletRecoveryMaterial(result.generatedMnemonic, true);
+    printLifecycleStatus(result.status);
+  });
+
+walletCmd
+  .command('recovery-material')
+  .description('Retrieve the Wallet Recovery Material')
+  .option('--passphrase <passphrase>', 'Passphrase for protected Wallet Seed Access')
+  .action(async (options: { passphrase?: string }) => {
+    const result = await handleV1Command((client) =>
+      client.getWalletRecoveryMaterial({ passphrase: options.passphrase }),
+    );
+    printWalletRecoveryMaterial(result.mnemonic);
+  });
+
+const sessionCmd = program.command('session').description('Coco Session lifecycle operations');
+
+sessionCmd
+  .command('start')
+  .description('Start the Coco Session')
+  .option('--passphrase <passphrase>', 'Passphrase for protected Wallet Seed Access')
+  .action(async (options: { passphrase?: string }) => {
+    const status = await handleV1Command(async (client) =>
+      requireSessionState(
+        await waitForSessionTransition(
+          client,
+          await client.startSession({ passphrase: options.passphrase }),
+        ),
+        'running',
+      ),
+    );
+    printLifecycleStatus(status);
+  });
+
+sessionCmd
+  .command('stop')
+  .description('Stop the Coco Session without stopping the Cocod Process')
+  .action(async () => {
+    const status = await handleV1Command(async (client) =>
+      requireSessionState(
+        await waitForSessionTransition(client, await client.stopSession()),
+        'stopped',
+      ),
+    );
+    printLifecycleStatus(status);
   });
 
 // Balance - simple GET command
@@ -119,12 +149,12 @@ sendCmd
     });
   });
 
-// Ping
 program
-  .command('ping')
-  .description('Test connection to the daemon')
+  .command('health')
+  .description('Check Cocod Process reachability')
   .action(async () => {
-    await handleDaemonCommand('/ping');
+    const health = await handleV1Command((client) => client.health());
+    console.log(JSON.stringify(health, null, 2));
   });
 
 // Logs
@@ -177,9 +207,10 @@ program
 // Stop
 program
   .command('stop')
-  .description('Stop the background daemon')
+  .description('Stop the Cocod Process')
   .action(async () => {
-    await handleDaemonCommand('/v1/admin/process/stop', { method: 'POST', body: {} });
+    await handleV1Command((client) => client.stopProcess());
+    console.log('Cocod Process is stopping.');
   });
 
 const credentialCmd = program.command('credential').description('Client Credential operations');
@@ -340,6 +371,28 @@ function requireHostLocalOperation(operation: string): void {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+function printLifecycleStatus(status: LifecycleStatusDocument): void {
+  console.log(JSON.stringify(status, null, 2));
+}
+
+function printWalletRecoveryMaterial(mnemonic: string, leadingNewline = false): void {
+  console.log(
+    `${leadingNewline ? '\n' : ''}IMPORTANT: Store this Wallet Recovery Material securely:`,
+  );
+  console.log(mnemonic);
+  console.log('\nAnyone with these words can control the Wallet.');
+}
+
+function requireSessionState(
+  status: LifecycleStatusDocument,
+  expected: 'running' | 'stopped',
+): LifecycleStatusDocument {
+  if (status.cocoSession.state !== expected) {
+    throw new Error(`Coco Session did not reach ${expected}:\n${JSON.stringify(status, null, 2)}`);
+  }
+  return status;
 }
 
 export function cli(args: string[]) {

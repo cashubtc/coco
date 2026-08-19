@@ -41,11 +41,14 @@ with a range peer.
 # Check daemon status
 cocod status
 
-# Create a wallet (auto-generates mnemonic)
-cocod init
+# Create a Wallet and display its host-generated recovery material
+cocod wallet initialize
 
-# If encrypted during init, unlock it
-cocod unlock "your-passphrase"
+# Display the recovery material again if the initialization response was lost
+cocod wallet recovery-material
+
+# Start a Coco Session for a passphrase-protected Wallet
+cocod session start --passphrase "your-passphrase"
 
 # Check balance
 cocod balance
@@ -144,8 +147,8 @@ Logging defaults:
 - Rotation keeps 5 files at 5 MiB each by default
 - Override with `COCOD_LOG_LEVEL`, `COCOD_LOG_MAX_BYTES`, and `COCOD_LOG_MAX_FILES`
 
-Every route except `/health` and the legacy `/ping` check requires the administrative bearer
-credential stored in the mode-`0600` client file under `~/.cocod/credentials/current/client`.
+Every route except `/health` requires the administrative bearer credential stored in the
+mode-`0600` client file under `~/.cocod/credentials/current/client`.
 `daemon`, `logs`, and `credential rotate` are host-local commands and reject an explicit endpoint;
 `stop` works against either the implicit local process or an explicit remote endpoint.
 
