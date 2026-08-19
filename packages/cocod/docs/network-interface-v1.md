@@ -8,8 +8,6 @@ This document specifies cocod's machine-oriented network interface. The implemen
 covers the Wallet and Coco Session lifecycle; later revisions will specify balances, mints, quotes,
 operations, history, and events.
 
-Implementation is organized as [focused delivery slices](./slices/README.md).
-
 Normative requirements use **MUST**, **MUST NOT**, **SHOULD**, and **MAY**.
 
 ## Goals
