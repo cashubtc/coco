@@ -37,6 +37,62 @@ import {
   MemoryPaymentRequestReceiveOperationRepository,
 } from './MemoryPaymentRequestReceiveRepository';
 
+type MutableContainer = Map<unknown, unknown> | unknown[];
+
+interface MutableContainerSnapshot {
+  repository: object;
+  property: string;
+  value: MutableContainer;
+}
+
+function cloneTransactionValue<T>(value: T, seen = new Map<object, unknown>()): T {
+  if (typeof value !== 'object' || value === null) return value;
+  if (seen.has(value)) return seen.get(value) as T;
+  if (value instanceof Uint8Array) return value.slice() as T;
+  if (value instanceof Map) {
+    const clone = new Map();
+    seen.set(value, clone);
+    for (const [key, item] of value) {
+      clone.set(cloneTransactionValue(key, seen), cloneTransactionValue(item, seen));
+    }
+    return clone as T;
+  }
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+    clone.push(...value.map((item) => cloneTransactionValue(item, seen)));
+    return clone as T;
+  }
+  const clone = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
+  seen.set(value, clone);
+  for (const [key, item] of Object.entries(value)) {
+    clone[key] = cloneTransactionValue(item, seen);
+  }
+  return clone as T;
+}
+
+function snapshotMutableContainers(repositories: object[]): MutableContainerSnapshot[] {
+  const snapshots: MutableContainerSnapshot[] = [];
+  for (const repository of new Set(repositories)) {
+    for (const [property, value] of Object.entries(repository)) {
+      if (value instanceof Map || Array.isArray(value)) {
+        snapshots.push({
+          repository,
+          property,
+          value: cloneTransactionValue(value),
+        });
+      }
+    }
+  }
+  return snapshots;
+}
+
+function restoreMutableContainers(snapshots: MutableContainerSnapshot[]): void {
+  for (const snapshot of snapshots) {
+    Reflect.set(snapshot.repository, snapshot.property, cloneTransactionValue(snapshot.value));
+  }
+}
+
 export class MemoryRepositories implements Repositories {
   mintRepository: MintRepository;
   keyRingRepository: KeyRingRepository;
@@ -54,6 +110,11 @@ export class MemoryRepositories implements Repositories {
   receiveOperationRepository: ReceiveOperationRepository;
   paymentRequestReceiveOperationRepository: PaymentRequestReceiveOperationRepository;
   paymentRequestReceiveAttemptRepository: PaymentRequestReceiveAttemptRepository;
+  private readonly transactionScope: RepositoryTransactionScope;
+  private transactionTail: Promise<void> = Promise.resolve();
+  private activeOperations = 0;
+  private operationsDrained: Promise<void> = Promise.resolve();
+  private releaseOperationsDrained?: () => void;
 
   constructor() {
     this.mintRepository = new MemoryMintRepository();
@@ -85,6 +146,46 @@ export class MemoryRepositories implements Repositories {
       new MemoryPaymentRequestReceiveOperationRepository();
     this.paymentRequestReceiveAttemptRepository =
       new MemoryPaymentRequestReceiveAttemptRepository();
+
+    this.transactionScope = {
+      mintRepository: this.mintRepository,
+      keyRingRepository: this.keyRingRepository,
+      counterRepository: this.counterRepository,
+      keysetRepository: this.keysetRepository,
+      proofRepository: this.proofRepository,
+      mintQuoteRepository: this.mintQuoteRepository,
+      legacyMintQuoteRepository: this.legacyMintQuoteRepository,
+      meltQuoteRepository: this.meltQuoteRepository,
+      historyRepository: this.historyRepository,
+      sendOperationRepository: this.sendOperationRepository,
+      meltOperationRepository: this.meltOperationRepository,
+      authSessionRepository: this.authSessionRepository,
+      mintOperationRepository: this.mintOperationRepository,
+      receiveOperationRepository: this.receiveOperationRepository,
+      paymentRequestReceiveOperationRepository: this.paymentRequestReceiveOperationRepository,
+      paymentRequestReceiveAttemptRepository: this.paymentRequestReceiveAttemptRepository,
+    };
+
+    this.mintRepository = this.serializeRepository(this.mintRepository);
+    this.keyRingRepository = this.serializeRepository(this.keyRingRepository);
+    this.counterRepository = this.serializeRepository(this.counterRepository);
+    this.keysetRepository = this.serializeRepository(this.keysetRepository);
+    this.proofRepository = this.serializeRepository(this.proofRepository);
+    this.mintQuoteRepository = this.serializeRepository(this.mintQuoteRepository);
+    this.legacyMintQuoteRepository = this.serializeRepository(this.legacyMintQuoteRepository);
+    this.meltQuoteRepository = this.serializeRepository(this.meltQuoteRepository);
+    this.historyRepository = this.serializeRepository(this.historyRepository);
+    this.sendOperationRepository = this.serializeRepository(this.sendOperationRepository);
+    this.meltOperationRepository = this.serializeRepository(this.meltOperationRepository);
+    this.authSessionRepository = this.serializeRepository(this.authSessionRepository);
+    this.mintOperationRepository = this.serializeRepository(this.mintOperationRepository);
+    this.receiveOperationRepository = this.serializeRepository(this.receiveOperationRepository);
+    this.paymentRequestReceiveOperationRepository = this.serializeRepository(
+      this.paymentRequestReceiveOperationRepository,
+    );
+    this.paymentRequestReceiveAttemptRepository = this.serializeRepository(
+      this.paymentRequestReceiveAttemptRepository,
+    );
   }
 
   async init(): Promise<void> {
@@ -92,6 +193,64 @@ export class MemoryRepositories implements Repositories {
   }
 
   async withTransaction<T>(fn: (repos: RepositoryTransactionScope) => Promise<T>): Promise<T> {
-    return fn(this);
+    const previousTransaction = this.transactionTail;
+    let releaseTransaction!: () => void;
+    const currentTransaction = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+    this.transactionTail = previousTransaction.then(() => currentTransaction);
+
+    await previousTransaction;
+    await this.operationsDrained;
+    try {
+      const snapshots = snapshotMutableContainers(
+        Object.values(this.transactionScope).filter(
+          (value): value is object => typeof value === 'object',
+        ),
+      );
+      try {
+        return await fn(this.transactionScope);
+      } catch (error) {
+        restoreMutableContainers(snapshots);
+        throw error;
+      }
+    } finally {
+      releaseTransaction();
+    }
+  }
+
+  private serializeRepository<T extends object>(repository: T): T {
+    return new Proxy(repository, {
+      get: (target, property, receiver) => {
+        const value = Reflect.get(target, property, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) =>
+          this.runRepositoryOperation(() => Reflect.apply(value, target, args) as unknown);
+      },
+    });
+  }
+
+  private async runRepositoryOperation<T>(fn: () => T | Promise<T>): Promise<T> {
+    while (true) {
+      const transaction = this.transactionTail;
+      await transaction;
+      if (transaction === this.transactionTail) break;
+    }
+
+    if (this.activeOperations === 0) {
+      this.operationsDrained = new Promise<void>((resolve) => {
+        this.releaseOperationsDrained = resolve;
+      });
+    }
+    this.activeOperations += 1;
+    try {
+      return await fn();
+    } finally {
+      this.activeOperations -= 1;
+      if (this.activeOperations === 0) {
+        this.releaseOperationsDrained?.();
+        this.releaseOperationsDrained = undefined;
+      }
+    }
   }
 }
