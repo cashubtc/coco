@@ -165,10 +165,10 @@ export class IdbMintOperationRepository implements MintOperationRepository {
     });
   }
 
-  async assignMintSwapParentIfUnparented(
+  async claimForMintSwap(
     operationId: string,
     expectedState: MintOperationState,
-    parent: MintSwapOperationParent,
+    mintSwapOperationId: string,
   ): Promise<boolean> {
     return this.db.runTransaction('rw', ['coco_cashu_mint_operations'], async (tx) => {
       const table = tx.table('coco_cashu_mint_operations');
@@ -177,7 +177,10 @@ export class IdbMintOperationRepository implements MintOperationRepository {
         return false;
       }
 
-      await table.update(operationId, { parent, updatedAt: getUnixTimeSeconds() });
+      await table.update(operationId, {
+        parent: { kind: 'mint-swap', id: mintSwapOperationId },
+        updatedAt: getUnixTimeSeconds(),
+      });
       return true;
     });
   }

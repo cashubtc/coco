@@ -998,11 +998,10 @@ export async function runMintOperationRepositoryContract(
         const staleOperation = createDummyMintOperation({ id: 'stale-mint-ownership' });
         await repositories.mintOperationRepository.create(staleOperation);
 
-        const parent = { kind: 'mint-swap' as const, id: 'concurrent-mint-swap' };
-        const claimed = await repositories.mintOperationRepository.assignMintSwapParentIfUnparented(
+        const claimed = await repositories.mintOperationRepository.claimForMintSwap(
           staleOperation.id,
           'pending',
-          parent,
+          'concurrent-mint-swap',
         );
         expect(claimed).toBe(true);
 
@@ -1013,8 +1012,8 @@ export async function runMintOperationRepositoryContract(
 
         const stored = await repositories.mintOperationRepository.getById(staleOperation.id);
         expect(stored?.state).toBe('executing');
-        expect(stored?.parent?.kind).toBe(parent.kind);
-        expect(stored?.parent?.id).toBe(parent.id);
+        expect(stored?.parent?.kind).toBe('mint-swap');
+        expect(stored?.parent?.id).toBe('concurrent-mint-swap');
       } finally {
         await dispose();
       }
@@ -1026,13 +1025,11 @@ export async function runMintOperationRepositoryContract(
         const operation = createDummyMintOperation({ id: 'conditional-mint-op' });
         await repositories.mintOperationRepository.create(operation);
 
-        const parent = { kind: 'mint-swap' as const, id: 'mint-swap-1' };
-        const claimedResult =
-          await repositories.mintOperationRepository.assignMintSwapParentIfUnparented(
-            operation.id,
-            'pending',
-            parent,
-          );
+        const claimedResult = await repositories.mintOperationRepository.claimForMintSwap(
+          operation.id,
+          'pending',
+          'mint-swap-1',
+        );
 
         expect(claimedResult).toBe(true);
 
@@ -1056,24 +1053,24 @@ export async function runMintOperationRepositoryContract(
         await repositories.mintOperationRepository.create(operation);
 
         expect(
-          await repositories.mintOperationRepository.assignMintSwapParentIfUnparented(
+          await repositories.mintOperationRepository.claimForMintSwap(
             operation.id,
             'executing',
-            parent,
+            'mint-swap-1',
           ),
         ).toBe(false);
         expect(
-          await repositories.mintOperationRepository.assignMintSwapParentIfUnparented(
+          await repositories.mintOperationRepository.claimForMintSwap(
             operation.id,
             'pending',
-            { kind: 'mint-swap', id: 'mint-swap-2' },
+            'mint-swap-2',
           ),
         ).toBe(false);
         expect(
-          await repositories.mintOperationRepository.assignMintSwapParentIfUnparented(
+          await repositories.mintOperationRepository.claimForMintSwap(
             operation.id,
             'pending',
-            { kind: 'mint-swap', id: 'mint-swap-3' },
+            'mint-swap-3',
           ),
         ).toBe(false);
 
@@ -1095,10 +1092,10 @@ export async function runMintOperationRepositoryContract(
         await expectThrows(
           () =>
             repositories.withTransaction(async (tx) => {
-              const updated = await tx.mintOperationRepository.assignMintSwapParentIfUnparented(
+              const updated = await tx.mintOperationRepository.claimForMintSwap(
                 operation.id,
                 'pending',
-                { kind: 'mint-swap', id: 'rolled-back-mint-swap' },
+                'rolled-back-mint-swap',
               );
               expect(updated).toBe(true);
               await tx.mintRepository.addOrUpdateMint({

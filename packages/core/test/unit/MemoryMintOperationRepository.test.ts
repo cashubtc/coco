@@ -25,36 +25,30 @@ describe('MemoryMintOperationRepository', () => {
     const staleOperation = createPendingOperation('stale-ownership');
     await repository.create(staleOperation);
 
-    const parent = { kind: 'mint-swap' as const, id: 'concurrent-mint-swap' };
     expect(
-      await repository.assignMintSwapParentIfUnparented(staleOperation.id, 'pending', parent),
+      await repository.claimForMintSwap(staleOperation.id, 'pending', 'concurrent-mint-swap'),
     ).toBe(true);
 
     await repository.update({ ...staleOperation, state: 'executing' });
 
     const stored = await repository.getById(staleOperation.id);
     expect(stored?.state).toBe('executing');
-    expect(stored?.parent).toEqual(parent);
+    expect(stored?.parent).toEqual({ kind: 'mint-swap', id: 'concurrent-mint-swap' });
   });
 
   it('rejects a duplicate Mint Swap claim for a parented operation', async () => {
     const repository = new MemoryMintOperationRepository();
     const operation = createPendingOperation('duplicate-mint-swap-claim');
     await repository.create(operation);
-    const parent = { kind: 'mint-swap' as const, id: 'first-mint-swap' };
-
-    expect(await repository.assignMintSwapParentIfUnparented(operation.id, 'pending', parent)).toBe(
+    expect(await repository.claimForMintSwap(operation.id, 'pending', 'first-mint-swap')).toBe(
       true,
     );
 
-    expect(
-      await repository.assignMintSwapParentIfUnparented(operation.id, 'pending', {
-        kind: 'mint-swap',
-        id: 'second-mint-swap',
-      }),
-    ).toBe(false);
+    expect(await repository.claimForMintSwap(operation.id, 'pending', 'second-mint-swap')).toBe(
+      false,
+    );
 
     const stored = await repository.getById(operation.id);
-    expect(stored?.parent).toEqual(parent);
+    expect(stored?.parent).toEqual({ kind: 'mint-swap', id: 'first-mint-swap' });
   });
 });

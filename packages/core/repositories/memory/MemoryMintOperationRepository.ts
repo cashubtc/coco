@@ -1,6 +1,5 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
-import type { MintSwapOperationParent } from '../../operations/OperationParent.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
   private readonly operations = new Map<string, MintOperation>();
@@ -24,17 +23,21 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
     });
   }
 
-  async assignMintSwapParentIfUnparented(
+  async claimForMintSwap(
     operationId: string,
     expectedState: MintOperationState,
-    parent: MintSwapOperationParent,
+    mintSwapOperationId: string,
   ): Promise<boolean> {
     const current = this.operations.get(operationId);
     if (!current || current.state !== expectedState || current.parent) {
       return false;
     }
 
-    this.operations.set(operationId, { ...current, parent, updatedAt: Date.now() });
+    this.operations.set(operationId, {
+      ...current,
+      parent: { kind: 'mint-swap', id: mintSwapOperationId },
+      updatedAt: Date.now(),
+    });
     return true;
   }
 

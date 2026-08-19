@@ -18,7 +18,7 @@ import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
 import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
-import type { MintSwapOperationParent } from '../OperationParent.ts';
+import type { MintSwapOperationParent } from '../MintSwapOperationParent.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;

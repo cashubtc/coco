@@ -195,16 +195,16 @@ export class SqliteMintOperationRepository implements MintOperationRepository {
     await this.updateWhere(operation, 'id = ?', [operation.id]);
   }
 
-  async assignMintSwapParentIfUnparented(
+  async claimForMintSwap(
     operationId: string,
     expectedState: MintOperationState,
-    parent: MintSwapOperationParent,
+    mintSwapOperationId: string,
   ): Promise<boolean> {
     const result = await this.db.run(
       `UPDATE coco_cashu_mint_operations
        SET parentKind = ?, parentId = ?, updatedAt = ?
        WHERE id = ? AND state = ? AND parentKind IS NULL AND parentId IS NULL`,
-      [parent.kind, parent.id, getUnixTimeSeconds(), operationId, expectedState],
+      ['mint-swap', mintSwapOperationId, getUnixTimeSeconds(), operationId, expectedState],
     );
     return result.changes > 0;
   }

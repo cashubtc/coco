@@ -32,7 +32,7 @@ import type { Amount } from '@cashu/cashu-ts';
 import { getSecretsFromSerializedOutputData, type SerializedOutputData } from '../../utils';
 import type { MeltMethod, MeltMethodData, MeltMethodMeta } from './MeltMethodHandler';
 import { DEFAULT_UNIT, normalizeUnit } from '../../amounts.ts';
-import type { MintSwapOperationParent } from '../OperationParent.ts';
+import type { MintSwapOperationParent } from '../MintSwapOperationParent.ts';
 
 // ============================================================================
 // Base and Data Interfaces

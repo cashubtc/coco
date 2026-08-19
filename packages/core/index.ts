@@ -83,7 +83,7 @@ export type {
   MeltMethodFinalizedData,
   TerminalMeltOperation,
 } from './operations/melt/MeltOperation.ts';
-export type { MintSwapOperationParent } from './operations/OperationParent.ts';
+export type { MintSwapOperationParent } from './operations/MintSwapOperationParent.ts';
 export type {
   ReceiveOperationSource,
   InitReceiveOperation,
