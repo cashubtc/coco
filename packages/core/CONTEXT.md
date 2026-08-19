@@ -13,6 +13,16 @@ _Avoid_: Manager, SDK wallet, account
 The secret root from which a wallet's deterministic Cashu secrets are derived.
 _Avoid_: Account, private key
 
+**Wallet Recovery Material**:
+A human-portable secret representation from which a Wallet Seed can be reconstructed. Cocod
+currently represents it as a BIP39 mnemonic.
+_Avoid_: Wallet Seed, passphrase, Client Credential
+
+**Wallet Import**:
+Initializing a Wallet from existing Wallet Recovery Material. Wallet Import establishes the Wallet
+before Coco Restore reconstructs its proofs.
+_Avoid_: Restore, new Wallet creation
+
 **Coco Session**:
 A running Coco instance through which an application uses a wallet. Ending a session does not end the wallet; starting again with the same wallet inputs creates a new session for the same wallet.
 _Avoid_: Wallet instance, app instance
@@ -129,7 +139,7 @@ _Avoid_: Subscriptions, processors
 
 **Restore**:
 The act of reconstructing a wallet's proofs for a mint from the wallet's deterministic secrets and the mint's state. Restore is distinct from operation recovery and does not create a persistent restored state.
-_Avoid_: Recovery, import, restored mint, restored wallet
+_Avoid_: Recovery, Wallet Import, restored mint, restored wallet
 
 **Operation Recovery**:
 The act of reconciling persisted in-flight wallet operations after interruption so local operation state, proof state, and mint state agree again.

@@ -5,9 +5,15 @@ import { dirname, join } from 'node:path';
 
 import type { Manager } from '@cashu/coco-core';
 
-import { CocodRuntime, CocodRuntimeError, type RunningCocoSession } from '../../src/runtime.js';
+import {
+  CocodRuntime,
+  CocodRuntimeError,
+  type CocoSessionState,
+  type RunningCocoSession,
+} from '../../src/runtime.js';
 import { CocoSessionStartupError } from '../../src/utils/wallet.js';
 import type { WalletConfig } from '../../src/utils/config.js';
+import { deferred } from '../helpers/deferred.js';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -29,6 +35,64 @@ describe('CocodRuntime', () => {
       seedAccess: null,
       cocoSession: { state: 'stopped', startedAt: null, lastFailure: null },
     });
+  });
+
+  test('retrieves unencrypted Wallet Recovery Material repeatably without changing status', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const runtime = await CocodRuntime.load(paths);
+    const initialStatus = runtime.getStatus();
+
+    expect(await runtime.getWalletRecoveryMaterial()).toBe(MNEMONIC);
+    expect(await runtime.getWalletRecoveryMaterial({ passphrase: 'ignored' })).toBe(MNEMONIC);
+    expect(runtime.getStatus()).toEqual(initialStatus);
+  });
+
+  test('rejects Wallet Recovery Material retrieval when no Wallet is configured', async () => {
+    const runtime = await CocodRuntime.load(await createPaths());
+
+    await expect(runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+      code: 'wallet_not_configured',
+    });
+  });
+
+  test('requires and validates the passphrase for protected Wallet Recovery Material', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load(paths);
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+    const initialStatus = runtime.getStatus();
+
+    await expect(runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+      code: 'passphrase_required',
+    });
+    await expect(
+      runtime.getWalletRecoveryMaterial({ passphrase: 'wrong horse' }),
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+    expect(await runtime.getWalletRecoveryMaterial({ passphrase: 'correct horse' })).toBe(MNEMONIC);
+    expect(runtime.getStatus()).toEqual(initialStatus);
+  });
+
+  test('retrieves protected Wallet Recovery Material in every Coco Session state', async () => {
+    const states: CocoSessionState[] = ['stopped', 'starting', 'running', 'stopping', 'failed'];
+
+    for (const state of states) {
+      const scenario = await protectedRuntimeInState(state);
+      const initialStatus = scenario.runtime.getStatus();
+      expect(initialStatus.cocoSession.state).toBe(state);
+
+      await expect(scenario.runtime.getWalletRecoveryMaterial()).rejects.toMatchObject({
+        code: 'passphrase_required',
+      });
+      await expect(
+        scenario.runtime.getWalletRecoveryMaterial({ passphrase: 'wrong horse' }),
+      ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+      expect(
+        await scenario.runtime.getWalletRecoveryMaterial({ passphrase: 'correct horse' }),
+      ).toBe(MNEMONIC);
+      expect(scenario.runtime.getStatus()).toEqual(initialStatus);
+
+      await scenario.settle();
+    }
   });
 
   test('initializes without a passphrase and starts a Coco Session', async () => {
@@ -95,9 +159,8 @@ describe('CocodRuntime', () => {
 
     const firstStart = runtime.startSession({ passphrase: 'correct horse' });
     const secondStart = runtime.startSession({ passphrase: 'correct horse' });
-    expect(secondStart).toBe(firstStart);
     expect(runtime.getStatus().seedAccess?.state).toBe('locked');
-    await Promise.all([startAccepted.promise, firstStart.accepted]);
+    await Promise.all([startAccepted.promise, firstStart.accepted, secondStart.accepted]);
     expect(initializeSession).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().seedAccess?.state).toBe('available');
 
@@ -109,6 +172,33 @@ describe('CocodRuntime', () => {
     expect(session.manager.dispose).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().seedAccess?.state).toBe('locked');
     expect(runtime.getStatus().cocoSession.state).toBe('stopped');
+  });
+
+  test('validates every protected start request while starting and running', async () => {
+    const paths = await createPaths();
+    const sessionReady = deferred<RunningCocoSession>();
+    const initializeSession = mock(async () => sessionReady.promise);
+    const runtime = await CocodRuntime.load({ ...paths, initializeSession });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+    const firstStart = runtime.startSession({ passphrase: 'correct horse' });
+    expect(() => runtime.startSession()).toThrow('Passphrase required');
+    await expect(
+      runtime.startSession({ passphrase: 'wrong horse' }).completion,
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+
+    sessionReady.resolve(fakeSession());
+    await firstStart.completion;
+    expect(initializeSession).toHaveBeenCalledTimes(1);
+
+    expect(() => runtime.startSession()).toThrow('Passphrase required');
+    await expect(
+      runtime.startSession({ passphrase: 'wrong horse' }).accepted,
+    ).rejects.toMatchObject({ code: 'wallet_unlock_failed' });
+    await expect(runtime.startSession({ passphrase: 'correct horse' }).completion).resolves.toBe(
+      undefined,
+    );
+    expect(initializeSession).toHaveBeenCalledTimes(1);
   });
 
   test('keeps Seed Access locked when the passphrase is invalid', async () => {
@@ -167,6 +257,111 @@ describe('CocodRuntime', () => {
 
     expect(session.manager.dispose).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus().cocoSession.state).toBe('stopped');
+  });
+
+  test('quarantines a Session when stop cleanup exceeds its deadline', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 5,
+      initializeSession: async () => ({
+        ...fakeSession(),
+        manager: {
+          dispose: mock(() => new Promise<void>(() => {})),
+        } as unknown as Manager,
+      }),
+    });
+    await runtime.startSession().completion;
+
+    await expect(runtime.stopSession()).rejects.toMatchObject({
+      code: 'session_restart_required',
+    });
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: {
+        code: 'session_stop_failed',
+        message: 'Coco Session failed to stop cleanly',
+      },
+    });
+  });
+
+  test('restores protected Seed Access policy when stop cleanup fails', async () => {
+    const paths = await createPaths();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      initializeSession: async () => ({
+        ...fakeSession(),
+        manager: {
+          dispose: mock(async () => {
+            throw new Error('dispose failed');
+          }),
+        } as unknown as Manager,
+      }),
+    });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+    await runtime.startSession({ passphrase: 'correct horse' }).completion;
+
+    await expect(runtime.stopSession()).rejects.toThrow('dispose failed');
+
+    expect(runtime.getStatus()).toMatchObject({
+      seedAccess: { state: 'locked', requiresPassphrase: true },
+      cocoSession: { state: 'failed' },
+    });
+  });
+
+  test('preserves timeout quarantine when an in-progress start later fails', async () => {
+    const paths = await createPaths();
+    await Bun.write(paths.configFile, JSON.stringify(walletConfig()));
+    const startup = deferred<RunningCocoSession>();
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 5,
+      initializeSession: async () => startup.promise,
+    });
+
+    const start = runtime.startSession();
+    const stop = runtime.stopSession();
+    await expect(stop).rejects.toMatchObject({ code: 'session_restart_required' });
+    startup.reject(new Error('late startup failure'));
+    await expect(start.completion).rejects.toThrow('late startup failure');
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: { code: 'session_stop_failed' },
+    });
+    expect(() => runtime.startSession()).toThrow('Cocod process restart required');
+  });
+
+  test('preserves timeout quarantine when encrypted Seed Access is acquired late', async () => {
+    const paths = await createPaths();
+    const initializeSession = mock(async () => fakeSession());
+    const runtime = await CocodRuntime.load({
+      ...paths,
+      stopTimeoutMs: 1,
+      initializeSession,
+    });
+    await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+    const start = runtime.startSession({ passphrase: 'correct horse' });
+    await expect(runtime.stopSession()).rejects.toMatchObject({
+      code: 'session_restart_required',
+    });
+    await start.completion.catch(() => {});
+
+    expect(runtime.getStatus().cocoSession).toMatchObject({
+      state: 'failed',
+      lastFailure: { code: 'session_stop_failed' },
+    });
+    expect(runtime.getStatus().seedAccess).toEqual({
+      state: 'locked',
+      requiresPassphrase: true,
+    });
+    expect(runtime.getRunningSession()).toBeNull();
+    expect(() => runtime.startSession({ passphrase: 'correct horse' })).toThrow(
+      'Cocod process restart required',
+    );
   });
 
   test('records a failed start and permits retry after confirmed cleanup', async () => {
@@ -362,16 +557,63 @@ function fakeSession(): RunningCocoSession {
   };
 }
 
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
+async function protectedRuntimeInState(state: CocoSessionState): Promise<{
+  runtime: CocodRuntime;
+  settle(): Promise<void>;
+}> {
+  const paths = await createPaths();
+  const sessionReady = deferred<RunningCocoSession>();
+  const disposal = deferred<void>();
+  const runtime = await CocodRuntime.load({
+    ...paths,
+    initializeSession: async () => sessionReady.promise,
   });
-  return { promise, resolve, reject };
+  await runtime.initializeWallet({ mnemonic: MNEMONIC, passphrase: 'correct horse' });
+
+  if (state === 'stopped') {
+    return { runtime, settle: async () => {} };
+  }
+
+  const start = runtime.startSession({ passphrase: 'correct horse' });
+  await start.accepted;
+  if (state === 'starting') {
+    return {
+      runtime,
+      settle: async () => {
+        sessionReady.resolve(fakeSession());
+        await start.completion;
+        await runtime.stopSession();
+      },
+    };
+  }
+
+  const session = fakeSession();
+  if (state === 'stopping') {
+    session.manager.dispose = mock(() => disposal.promise);
+  } else if (state === 'failed') {
+    session.manager.dispose = mock(async () => {
+      throw new Error('dispose failed');
+    });
+  }
+  sessionReady.resolve(session);
+  await start.completion;
+
+  if (state === 'running') {
+    return { runtime, settle: () => runtime.stopSession() };
+  }
+
+  const stop = runtime.stopSession();
+  if (state === 'stopping') {
+    void stop.catch(() => {});
+    return {
+      runtime,
+      settle: async () => {
+        disposal.resolve();
+        await stop;
+      },
+    };
+  }
+
+  await expect(stop).rejects.toThrow('dispose failed');
+  return { runtime, settle: async () => {} };
 }

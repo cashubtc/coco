@@ -40,10 +40,12 @@ const DEFAULT_SERVICE = 'cocod-daemon';
 const REDACTED_KEYS = new Set([
   'authorization',
   'encryptedMnemonic',
+  'generatedMnemonic',
   'invoice',
   'mnemonic',
   'passphrase',
   'request',
+  'recoveryMaterial',
   'seed',
   'token',
   'xCashuHeader',
@@ -233,6 +235,11 @@ export function serializeError(error: unknown): Record<string, unknown> {
   }
 
   return { message: String(error) };
+}
+
+/** Applies the logger's sensitive-field policy before data reaches any logging adapter. */
+export function redactLogValue(value: unknown): unknown {
+  return sanitizeValue(value);
 }
 
 function extractFields(meta: unknown[]): [Record<string, unknown>, unknown[]] {

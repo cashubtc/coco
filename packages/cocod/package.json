@@ -10,6 +10,8 @@
   "scripts": {
     "start": "bun src/index.ts",
     "daemon": "bun src/index.ts daemon",
+    "generate:interface": "bun scripts/generate-v1-interface.ts",
+    "check:interface": "bun scripts/generate-v1-interface.ts --check",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

@@ -51,6 +51,15 @@ cocod unlock "your-passphrase"
 cocod balance
 ```
 
+The CLI connects to `http://127.0.0.1:62626` by default and automatically starts a local Cocod
+Process when that implicit endpoint is unavailable. Use `cocod --url <origin> <command>` or set
+`COCOD_URL` to select an existing local or remote process; explicit endpoints are client-only and
+are never auto-started.
+
+Listener overrides apply when starting `cocod daemon` explicitly. An auto-started process always
+uses the implicit local default, so custom listeners should be started explicitly and paired with
+`--url` or `COCOD_URL` for clients.
+
 ## Most common commands
 
 ```bash
@@ -112,21 +121,45 @@ upgrading and delete the copy once you're settled.
 - CLI: `src/cli.ts`
 - Daemon: `src/daemon.ts`
 - Routes: `src/routes.ts`
-- IPC transport: HTTP over UNIX socket
+- Transport: authenticated HTTP over one TCP listener
 
 Defaults:
 
-- Socket: `~/.cocod/cocod.sock` (or `COCOD_SOCKET`)
+- Listener: `127.0.0.1:62626`
+- Listener overrides: `COCOD_LISTEN_HOST` and `COCOD_LISTEN_PORT`
+- Client endpoint override: `--url <origin>` or `COCOD_URL`
 - PID file: `~/.cocod/cocod.pid` (or `COCOD_PID`)
+- Process ownership lease: `~/.cocod/daemon-lock.sqlite`
 - Daemon log: `~/.cocod/daemon.log` (or `COCOD_LOG_FILE`)
 - Config: `~/.cocod/config.json`
 - Database: `~/.cocod/coco.db`
+
+The lease database contains no Wallet data. Cocod keeps one exclusive SQLite transaction open for
+the process lifetime, so a second process cannot share the state directory and process termination
+releases ownership automatically.
 
 Logging defaults:
 
 - Structured JSON logs are written to `~/.cocod/daemon.log`
 - Rotation keeps 5 files at 5 MiB each by default
 - Override with `COCOD_LOG_LEVEL`, `COCOD_LOG_MAX_BYTES`, and `COCOD_LOG_MAX_FILES`
+
+Every route except `/health` and the legacy `/ping` check requires the administrative bearer
+credential stored in the mode-`0600` client file under `~/.cocod/credentials/current/client`.
+`daemon`, `logs`, and `credential rotate` are host-local commands and reject an explicit endpoint;
+`stop` works against either the implicit local process or an explicit remote endpoint.
+
+For remote deployments, keep authentication in cocod and terminate TLS at a trusted proxy such as
+Caddy:
+
+```caddyfile
+wallet.example.com {
+  reverse_proxy 127.0.0.1:62626
+}
+```
+
+Cocod does not provide native TLS or browser CORS support. A proxy supplies transport security but
+does not replace the Cocod Client Credential, and forwarded identity headers are ignored.
 
 ## Development
 
@@ -150,7 +183,7 @@ bun test
 
 - [API and command reference](docs/API.md)
 - [Machine-readable daemon contract](docs/daemon-api.json)
-- [Proposed network interface v1](docs/network-interface-v1.md)
+- [Network interface v1](docs/network-interface-v1.md)
 
 ## License
 

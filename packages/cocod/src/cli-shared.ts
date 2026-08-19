@@ -1,27 +1,44 @@
 import { program } from 'commander';
 
-const CONFIG_DIR = `${process.env.HOME || process.env.USERPROFILE}/.cocod`;
-const SOCKET_PATH = process.env.COCOD_SOCKET || `${CONFIG_DIR}/cocod.sock`;
+import { ClientCredentialFileError, loadClientCredential } from './credentials.js';
+import {
+  CLIENT_CREDENTIAL_FILE,
+  DEFAULT_CLIENT_URL,
+  resolveClientEndpoint,
+  type ClientEndpoint,
+} from './utils/config.js';
 
 export interface CommandResponse {
   output?: unknown;
   error?: string;
 }
 
-async function callDaemon(
-  path: string,
-  options: { method?: 'GET' | 'POST'; body?: object } = {},
-): Promise<CommandResponse> {
-  const { method = 'GET', body } = options;
+export interface ClientCredentialOptions {
+  credentialFile?: string;
+  url?: string;
+}
 
-  const init: RequestInit & { unix: string } = {
-    unix: SOCKET_PATH,
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  } as RequestInit & { unix: string };
+export interface DaemonCallOptions extends ClientCredentialOptions {
+  method?: 'GET' | 'POST';
+  body?: object;
+}
 
-  const response = await fetch(`http://localhost${path}`, init);
+export function assertHostLocalOperation(
+  operation: string,
+  commandUrl = program.opts<{ url?: string }>().url,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const endpoint = resolveClientEndpoint(commandUrl, environment);
+  if (endpoint.explicit) {
+    throw new Error(
+      `cocod ${operation} is host-local and cannot use the explicit Cocod endpoint ${endpoint.url}`,
+    );
+  }
+}
+
+async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
+  const endpoint = configuredClientEndpoint(options.url);
+  const response = await requestDaemon(endpoint, path, options);
 
   if (!response.ok) {
     const errorData = (await response.json()) as { error?: string };
@@ -31,36 +48,63 @@ async function callDaemon(
   return response.json() as Promise<CommandResponse>;
 }
 
-export async function isDaemonRunning(): Promise<boolean> {
+function isProtectedPath(path: string): boolean {
+  return new URL(path, DEFAULT_CLIENT_URL).pathname !== '/ping';
+}
+
+async function buildRequestHeaders(
+  path: string,
+  credentialFile: string | undefined,
+  hasJsonBody = false,
+): Promise<Headers> {
+  const headers = new Headers();
+  if (hasJsonBody) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (isProtectedPath(path)) {
+    headers.set('Authorization', `Bearer ${await loadClientCredential(credentialFile)}`);
+  }
+  return headers;
+}
+
+export async function isDaemonRunning(options: ClientCredentialOptions = {}): Promise<boolean> {
   try {
-    const response = await fetch(`http://localhost/ping`, {
-      unix: SOCKET_PATH,
-    } as RequestInit);
+    const endpoint = configuredClientEndpoint(options.url);
+    const response = await requestDaemon(endpoint, '/ping', { method: 'GET' });
     return response.ok;
   } catch {
     return false;
   }
 }
 
-async function isDaemonReady(): Promise<boolean> {
+async function isDaemonReady(options: ClientCredentialOptions = {}): Promise<boolean> {
   try {
-    const response = await fetch(`http://localhost/status`, {
-      unix: SOCKET_PATH,
-    } as RequestInit);
-    if (!response.ok) {
-      return false;
-    }
-    const body = (await response.json()) as CommandResponse;
+    const body = await callDaemon('/status', options);
     return body.output !== 'STARTING' && body.output !== 'STOPPING';
-  } catch {
+  } catch (error) {
+    if (error instanceof ClientCredentialFileError) {
+      throw error;
+    }
     return false;
   }
 }
 
-async function waitForDaemonReady(): Promise<void> {
+async function waitForDaemonReady(
+  options: ClientCredentialOptions = {},
+  retryMissingCredential = false,
+): Promise<void> {
   for (let i = 0; i < 50; i++) {
-    if (await isDaemonReady()) {
-      return;
+    try {
+      if (await isDaemonReady(options)) {
+        return;
+      }
+    } catch (error) {
+      if (!(retryMissingCredential && error instanceof ClientCredentialFileError)) {
+        throw error;
+      }
+      if (await isDaemonRunning(options)) {
+        throw error;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -68,33 +112,47 @@ async function waitForDaemonReady(): Promise<void> {
   throw new Error('Daemon failed to become ready within 5 seconds');
 }
 
-export async function startDaemonProcess(): Promise<void> {
+export async function startDaemonProcess(options: ClientCredentialOptions = {}): Promise<void> {
+  const endpoint = configuredClientEndpoint(options.url);
+  if (endpoint.explicit) {
+    throw explicitEndpointUnavailable(endpoint.url);
+  }
   const proc = Bun.spawn({
     cmd: ['bun', 'run', `${import.meta.dir}/index.ts`, 'daemon'],
+    env: {
+      ...process.env,
+      COCOD_LISTEN_HOST: undefined,
+      COCOD_LISTEN_PORT: undefined,
+    },
     stdout: 'ignore',
     stderr: 'ignore',
     stdin: 'ignore',
   });
   proc.unref();
-  await waitForDaemonReady();
+  await waitForDaemonReady(options, true);
 }
 
-export async function ensureDaemonRunning(): Promise<void> {
-  if (await isDaemonRunning()) {
-    await waitForDaemonReady();
+export async function ensureDaemonRunning(options: ClientCredentialOptions = {}): Promise<void> {
+  const endpoint = configuredClientEndpoint(options.url);
+  if (await isDaemonRunning({ ...options, url: endpoint.url })) {
+    await waitForDaemonReady({ ...options, url: endpoint.url });
     return;
   }
 
+  if (endpoint.explicit) {
+    throw explicitEndpointUnavailable(endpoint.url);
+  }
+
   console.log('Starting daemon...');
-  await startDaemonProcess();
+  await startDaemonProcess({ ...options, url: undefined });
 }
 
 export async function handleDaemonCommand(
   path: string,
-  options: { method?: 'GET' | 'POST'; body?: object } = {},
+  options: DaemonCallOptions = {},
 ): Promise<CommandResponse> {
   try {
-    await ensureDaemonRunning();
+    await ensureDaemonRunning({ credentialFile: options.credentialFile, url: options.url });
     const result = await callDaemon(path, options);
 
     if (result.error) {
@@ -130,15 +188,11 @@ export async function handleDaemonCommand(
 export async function callDaemonStream(
   path: string,
   onData: (data: unknown) => void,
+  options: ClientCredentialOptions = {},
 ): Promise<void> {
-  await ensureDaemonRunning();
-
-  const init: RequestInit & { unix: string } = {
-    unix: SOCKET_PATH,
-    method: 'GET',
-  } as RequestInit & { unix: string };
-
-  const response = await fetch(`http://localhost${path}`, init);
+  await ensureDaemonRunning(options);
+  const endpoint = configuredClientEndpoint(options.url);
+  const response = await requestDaemon(endpoint, path, options);
 
   if (!response.ok) {
     const errorData = (await response.json()) as { error?: string };
@@ -178,6 +232,30 @@ export async function callDaemonStream(
   } finally {
     reader.releaseLock();
   }
+}
+
+function configuredClientEndpoint(url?: string): ClientEndpoint {
+  const commandUrl = url ?? program.opts<{ url?: string }>().url;
+  return resolveClientEndpoint(commandUrl);
+}
+
+async function requestDaemon(
+  endpoint: ClientEndpoint,
+  path: string,
+  options: DaemonCallOptions = {},
+): Promise<Response> {
+  const { method = 'GET', body, credentialFile = CLIENT_CREDENTIAL_FILE } = options;
+  return fetch(new URL(path, `${endpoint.url}/`), {
+    method,
+    headers: await buildRequestHeaders(path, credentialFile, body !== undefined),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+function explicitEndpointUnavailable(url: string): Error {
+  return new Error(
+    `Cannot connect to the explicit Cocod endpoint ${url}; no local process was started`,
+  );
 }
 
 export { program, callDaemon };
