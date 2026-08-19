@@ -228,6 +228,12 @@ import { type Repositories, serializeAmount } from '@cashu/coco-core/adapter';
 
 The package root exports `MemoryRepositories` as an in-memory test/example repository bundle.
 
+`KeyRingRepository.deriveAndPersistKeyPair(purpose, derive)` selects the next purpose-scoped
+derivation index, invokes the synchronous derivation callback, and atomically commits the keypair
+with its durable high-water mark. It returns the keypair only after commit. See the
+[storage adapter contract](../docs/pages/storage-adapters.md) for transaction and backup
+requirements.
+
 ## Public API surface
 
 ### Manager

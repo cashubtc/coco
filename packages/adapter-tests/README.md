@@ -18,6 +18,7 @@ contract suites into your test runner:
 import { describe, it, expect } from 'bun:test';
 import {
   runRepositoryTransactionContract,
+  runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
 } from '@cashu/coco-adapter-tests';
 import { MyAdapterRepositories } from './src';
@@ -49,6 +50,15 @@ runAuthSessionRepositoryContract(
   },
   { describe, it, expect },
 );
+
+runKeyRingDerivationRepositoryContract(
+  {
+    createRepositories: createFreshRepositories,
+    // Returns { first, second, dispose } using one physical store and independent roots.
+    createSharedRepositories: createTwoRootsForOneStore,
+  },
+  { describe, it, expect },
+);
 ```
 
 The factory is responsible for providing a fresh, isolated repositories
@@ -56,5 +66,9 @@ instance for every test and for cleaning up via `dispose()`.
 
 - `runRepositoryTransactionContract()` verifies transactional behavior across the
   repository set.
+- `runKeyRingDerivationRepositoryContract()` verifies purpose isolation, concurrency,
+  transactional rollback, committed-key deletion behavior, exhaustion, and—when
+  `createSharedRepositories` is supplied—coordination between independent roots sharing one
+  physical store.
 - `runAuthSessionRepositoryContract()` verifies the NUT-21/22 auth session
   persistence contract.

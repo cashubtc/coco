@@ -7,6 +7,10 @@ export interface SqlRunResult {
   readonly changes: number;
 }
 
+export interface SqlTransactionOptions {
+  mode?: 'deferred' | 'immediate';
+}
+
 export interface SqlDatabase {
   exec(sql: string): Promise<void>;
   run(sql: string, params?: SqlParams): Promise<SqlRunResult>;
@@ -18,7 +22,7 @@ export interface SqlDatabase {
     sql: string,
     params?: SqlParams,
   ): Promise<Row[]>;
-  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
+  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>, options?: SqlTransactionOptions): Promise<T>;
 }
 
 export {

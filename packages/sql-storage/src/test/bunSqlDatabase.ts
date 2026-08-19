@@ -1,5 +1,5 @@
 import type { Database, Statement } from 'bun:sqlite';
-import type { SqlDatabase, SqlParams, SqlRunResult } from '../index.ts';
+import type { SqlDatabase, SqlParams, SqlRunResult, SqlTransactionOptions } from '../index.ts';
 
 interface BunSqlDatabaseRootState {
   readonly database: Database;
@@ -85,7 +85,10 @@ export class BunSqlDatabase implements SqlDatabase {
     return this.getStatement(sql).all(...params) as Row[];
   }
 
-  async transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T> {
+  async transaction<T>(
+    fn: (tx: SqlDatabase) => Promise<T>,
+    options?: SqlTransactionOptions,
+  ): Promise<T> {
     const { root } = this;
 
     if (this.scopeToken && root.currentScope === this.scopeToken) {
@@ -112,7 +115,7 @@ export class BunSqlDatabase implements SqlDatabase {
 
       root.currentScope = scopeToken;
       root.scopeDepth = 1;
-      await scopedDatabase.exec('BEGIN');
+      await scopedDatabase.exec(options?.mode === 'immediate' ? 'BEGIN IMMEDIATE' : 'BEGIN');
 
       try {
         const result = await fn(scopedDatabase);

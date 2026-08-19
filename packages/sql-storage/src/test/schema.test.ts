@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite';
 import {
   ensureSchemaUpTo,
   MIGRATIONS,
+  SqliteKeyRingRepository,
   SqliteMintQuoteRepository,
   type SqlDatabase,
 } from '../index.ts';
@@ -49,7 +50,18 @@ const EXPECTED_MIGRATION_IDS = [
   '035_duplicate_quote_ids',
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
+  '038_keypair_derivation_allocations',
 ] as const;
+
+function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
+  return {
+    publicKeyHex:
+      (purpose === 'p2pk' ? '02' : '03') + derivationIndex.toString(16).padStart(64, '0'),
+    secretKey: new Uint8Array(32).fill((derivationIndex % 254) + 1),
+    derivationIndex,
+    purpose,
+  };
+}
 
 const RECEIVE_OPERATIONS_SQL = `
   CREATE TABLE IF NOT EXISTS coco_cashu_receive_operations (
@@ -186,6 +198,104 @@ describe('shared SQL schema migrations', () => {
     expect(ids).toEqual(
       [...EXPECTED_MIGRATION_IDS, '012_receive_operations', '013_send_operations_method'].sort(),
     );
+
+    const busyTimeout = await db.get<{ timeout: number }>('PRAGMA busy_timeout');
+    expect(busyTimeout?.timeout).toBe(5000);
+  });
+
+  itWithDatabase('backfills per-purpose keypair derivation allocations', async (db) => {
+    await ensureSchemaUpTo(db, '038_keypair_derivation_allocations');
+
+    const rows = [
+      ['p2pk-0', 0, 'p2pk'],
+      ['p2pk-6', 6, 'p2pk'],
+      ['quote-0', 0, 'nut20_mint_quote'],
+      ['quote-3', 3, 'nut20_mint_quote'],
+    ] as const;
+    for (const [publicKey, derivationIndex, purpose] of rows) {
+      await db.run(
+        `INSERT INTO coco_cashu_keypairs
+          (publicKey, secretKey, createdAt, derivationIndex, purpose)
+         VALUES (?, ?, ?, ?, ?)`,
+        [publicKey, '01'.repeat(32), derivationIndex, derivationIndex, purpose],
+      );
+    }
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.all<{ purpose: string; lastAllocatedIndex: number }>(
+        `SELECT purpose, lastAllocatedIndex
+         FROM coco_cashu_keypair_derivation_allocations
+         ORDER BY purpose`,
+      ),
+    ).toEqual([
+      { purpose: 'nut20_mint_quote', lastAllocatedIndex: 3 },
+      { purpose: 'p2pk', lastAllocatedIndex: 6 },
+    ]);
+
+    const repository = new SqliteKeyRingRepository(db);
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).resolves.toMatchObject({ derivationIndex: 7 });
+    await expect(
+      repository.deriveAndPersistKeyPair('nut20_mint_quote', (index) =>
+        deriveKeyPair(index, 'nut20_mint_quote'),
+      ),
+    ).resolves.toMatchObject({ derivationIndex: 4 });
+  });
+
+  itWithDatabase('normalizes pre-purpose keypairs before allocation backfill', async (db) => {
+    await ensureSchemaUpTo(db, '033_keypair_purpose');
+    await db.run(
+      `INSERT INTO coco_cashu_keypairs (publicKey, secretKey, createdAt, derivationIndex)
+       VALUES (?, ?, ?, ?)`,
+      ['legacy-p2pk', '02'.repeat(32), 1, 12],
+    );
+
+    await ensureSchemaUpTo(db);
+
+    expect(
+      await db.get<{ purpose: string; lastAllocatedIndex: number }>(
+        `SELECT purpose, lastAllocatedIndex
+         FROM coco_cashu_keypair_derivation_allocations
+         WHERE purpose = 'p2pk'`,
+      ),
+    ).toEqual({ purpose: 'p2pk', lastAllocatedIndex: 12 });
+    await expect(
+      new SqliteKeyRingRepository(db).deriveAndPersistKeyPair('p2pk', (index) =>
+        deriveKeyPair(index, 'p2pk'),
+      ),
+    ).resolves.toMatchObject({ derivationIndex: 13 });
+  });
+
+  itWithDatabase('rolls back a saved keypair when the high-water write fails', async (db) => {
+    await ensureSchemaUpTo(db);
+    await db.exec(`
+      CREATE TRIGGER fail_keypair_high_water
+      BEFORE INSERT ON coco_cashu_keypair_derivation_allocations
+      WHEN NEW.lastAllocatedIndex >= 0
+      BEGIN
+        SELECT RAISE(ABORT, 'forced high-water failure');
+      END;
+    `);
+
+    const repository = new SqliteKeyRingRepository(db);
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).rejects.toThrow('forced high-water failure');
+    expect(
+      await db.get(
+        `SELECT purpose FROM coco_cashu_keypair_derivation_allocations WHERE purpose = 'p2pk'`,
+      ),
+    ).toBeUndefined();
+
+    expect(await db.get(`SELECT publicKey FROM coco_cashu_keypairs LIMIT 1`)).toBeUndefined();
+
+    await db.exec('DROP TRIGGER fail_keypair_high_water');
+    await expect(
+      repository.deriveAndPersistKeyPair('p2pk', (index) => deriveKeyPair(index, 'p2pk')),
+    ).resolves.toMatchObject({ derivationIndex: 0 });
   });
 
   itWithDatabase(

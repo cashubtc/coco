@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   runRepositoryTransactionContract,
+  runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
   runMintOperationRepositoryContract,
@@ -92,6 +96,12 @@ class WebExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
 class NativeExpoSqliteDatabaseShim extends BunExpoSqliteDatabaseShim {
   exclusiveTransactionCalls = 0;
   transactionCalls = 0;
+  executedSql: string[] = [];
+
+  override async execAsync(sql: string): Promise<void> {
+    this.executedSql.push(sql);
+    await super.execAsync(sql);
+  }
 
   async withExclusiveTransactionAsync(fn: (txn: BunExpoSqliteDatabaseShim) => Promise<void>) {
     this.exclusiveTransactionCalls++;
@@ -132,6 +142,33 @@ async function createRepositories() {
   } as const;
 }
 
+async function createSharedRepositories() {
+  const directory = await mkdtemp(join(tmpdir(), 'coco-expo-sqlite-keyring-'));
+  const filename = join(directory, 'wallet.sqlite');
+  const firstDatabase = new NativeExpoSqliteDatabaseShim(filename);
+  const secondDatabase = new NativeExpoSqliteDatabaseShim(filename);
+  const first = new Repositories({
+    database: firstDatabase as unknown as SqliteRepositoriesOptions['database'],
+  });
+  const second = new Repositories({
+    database: secondDatabase as unknown as SqliteRepositoriesOptions['database'],
+  });
+  await first.init();
+  await second.init();
+  await firstDatabase.execAsync('PRAGMA busy_timeout = 10');
+  await secondDatabase.execAsync('PRAGMA busy_timeout = 10');
+
+  return {
+    first,
+    second,
+    dispose: async () => {
+      await firstDatabase.closeAsync();
+      await secondDatabase.closeAsync();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 runSqlDatabaseContract(
   {
     createDatabase() {
@@ -156,6 +193,11 @@ runRepositoryTransactionContract(
     createRepositories,
     testConcurrentRootOperationIsolation: true,
   },
+  { describe, it, expect },
+);
+
+runKeyRingDerivationRepositoryContract(
+  { createRepositories, createSharedRepositories },
   { describe, it, expect },
 );
 
@@ -228,6 +270,30 @@ describe('expo-sqlite native transaction compatibility', () => {
       expect(database.exclusiveTransactionCalls).toBe(1);
       expect(database.transactionCalls).toBe(0);
       await expect(repositories.mintRepository.getAllMints()).resolves.toHaveLength(1);
+    } finally {
+      await database.closeAsync();
+    }
+  });
+
+  it('uses BEGIN IMMEDIATE before reading when immediate mode is requested', async () => {
+    const database = new NativeExpoSqliteDatabaseShim();
+    const wrappedDatabase = new ExpoSqliteDb({
+      database: database as unknown as SqliteRepositoriesOptions['database'],
+    });
+
+    try {
+      await wrappedDatabase.transaction(
+        async (transaction) => {
+          await expect(transaction.get<{ value: number }>('SELECT 1 AS value')).resolves.toEqual({
+            value: 1,
+          });
+        },
+        { mode: 'immediate' },
+      );
+
+      expect(database.executedSql).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
+      expect(database.exclusiveTransactionCalls).toBe(0);
+      expect(database.transactionCalls).toBe(0);
     } finally {
       await database.closeAsync();
     }
