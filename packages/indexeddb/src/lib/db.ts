@@ -1,5 +1,6 @@
 import Dexie, { type Transaction as DexieTransaction } from 'dexie';
 import type { SerializedBlindedSignature } from '@cashu/cashu-ts';
+import type { MintSwapOperationParent } from '@cashu/coco-core/adapter';
 
 export interface IdbDbOptions {
   name?: string;
@@ -298,6 +299,7 @@ export interface MeltOperationRow {
   changeAmount?: string | number | null;
   effectiveFee?: string | number | null;
   finalizedDataJson?: string | null;
+  parent?: MintSwapOperationParent;
 }
 
 export interface AuthSessionRow {
@@ -328,4 +330,5 @@ export interface MintOperationRow {
   lastObservedRemoteStateAt?: number | null;
   terminalFailureJson?: string | null;
   outputDataJson?: string | null;
+  parent?: MintSwapOperationParent;
 }

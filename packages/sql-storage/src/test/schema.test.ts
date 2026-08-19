@@ -51,6 +51,7 @@ const EXPECTED_MIGRATION_IDS = [
   '036_quote_identity_unique_indexes',
   '037_mint_quote_accounting',
   '038_keypair_derivation_allocations',
+  '039_operation_ownership',
 ] as const;
 
 function deriveKeyPair(derivationIndex: number, purpose: 'p2pk' | 'nut20_mint_quote') {
@@ -189,6 +190,50 @@ function itWithDatabase(name: string, fn: (db: SqlDatabase) => Promise<void>): v
 }
 
 describe('shared SQL schema migrations', () => {
+  itWithDatabase('leaves existing operations unparented', async (db) => {
+    await ensureSchemaUpTo(db, '039_operation_ownership');
+    await db.run(
+      `INSERT INTO coco_cashu_mint_operations
+        (id, mintUrl, quoteId, state, createdAt, updatedAt, method, methodDataJson, amount, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'legacy-mint-operation-ownership',
+        'https://mint.test',
+        'legacy-mint-quote-ownership',
+        'init',
+        1,
+        1,
+        'bolt11',
+        '{}',
+        '1',
+        'sat',
+      ],
+    );
+    await insertMeltOperationRow(
+      db,
+      'legacy-melt-operation-ownership',
+      'legacy-melt-quote-ownership',
+    );
+
+    await ensureSchemaUpTo(db);
+
+    const mint = await db.get<{ parentKind: string | null; parentId: string | null }>(
+      `SELECT parentKind, parentId
+       FROM coco_cashu_mint_operations
+       WHERE id = ?`,
+      ['legacy-mint-operation-ownership'],
+    );
+    const melt = await db.get<{ parentKind: string | null; parentId: string | null }>(
+      `SELECT parentKind, parentId
+       FROM coco_cashu_melt_operations
+       WHERE id = ?`,
+      ['legacy-melt-operation-ownership'],
+    );
+
+    expect(mint).toEqual({ parentKind: null, parentId: null });
+    expect(melt).toEqual({ parentKind: null, parentId: null });
+  });
+
   itWithDatabase('preserves the migration list and applies all migration ids', async (db) => {
     expect(MIGRATIONS.map((migration) => migration.id)).toEqual(EXPECTED_MIGRATION_IDS);
 

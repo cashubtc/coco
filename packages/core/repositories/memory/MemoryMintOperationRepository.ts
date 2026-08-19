@@ -1,5 +1,6 @@
 import type { MintOperationRepository } from '..';
 import type { MintOperation, MintOperationState } from '../../operations/mint/MintOperation';
+import type { MintSwapOperationParent } from '../../operations/OperationParent.ts';
 
 export class MemoryMintOperationRepository implements MintOperationRepository {
   private readonly operations = new Map<string, MintOperation>();
@@ -12,10 +13,29 @@ export class MemoryMintOperationRepository implements MintOperationRepository {
   }
 
   async update(operation: MintOperation): Promise<void> {
-    if (!this.operations.has(operation.id)) {
+    const current = this.operations.get(operation.id);
+    if (!current) {
       throw new Error(`MintOperation with id ${operation.id} not found`);
     }
-    this.operations.set(operation.id, { ...operation, updatedAt: Date.now() });
+    this.operations.set(operation.id, {
+      ...operation,
+      parent: current.parent,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async assignMintSwapParentIfUnparented(
+    operationId: string,
+    expectedState: MintOperationState,
+    parent: MintSwapOperationParent,
+  ): Promise<boolean> {
+    const current = this.operations.get(operationId);
+    if (!current || current.state !== expectedState || current.parent) {
+      return false;
+    }
+
+    this.operations.set(operationId, { ...current, parent, updatedAt: Date.now() });
+    return true;
   }
 
   async getById(id: string): Promise<MintOperation | null> {

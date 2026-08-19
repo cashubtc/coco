@@ -1506,6 +1506,18 @@ const MIGRATIONS: readonly Migration[] = [
       GROUP BY purpose;
     `,
   },
+  {
+    id: '039_operation_ownership',
+    sql: `
+      ALTER TABLE coco_cashu_mint_operations
+        ADD COLUMN parentKind TEXT CHECK (parentKind IS NULL OR parentKind = 'mint-swap');
+      ALTER TABLE coco_cashu_mint_operations ADD COLUMN parentId TEXT;
+
+      ALTER TABLE coco_cashu_melt_operations
+        ADD COLUMN parentKind TEXT CHECK (parentKind IS NULL OR parentKind = 'mint-swap');
+      ALTER TABLE coco_cashu_melt_operations ADD COLUMN parentId TEXT;
+    `,
+  },
 ];
 
 // Export for testing

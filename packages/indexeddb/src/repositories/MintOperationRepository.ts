@@ -1,4 +1,4 @@
-import type { MintOperationRepository } from '@cashu/coco-core/adapter';
+import type { MintOperationRepository, MintSwapOperationParent } from '@cashu/coco-core/adapter';
 import { deserializeAmount, serializeAmount, stringifyJson } from '@cashu/coco-core/adapter';
 import type { IdbDb, MintOperationRow } from '../lib/db.ts';
 import { getUnixTimeSeconds } from '../lib/db.ts';
@@ -7,6 +7,15 @@ type MintOperation = NonNullable<Awaited<ReturnType<MintOperationRepository['get
 type MintOperationState = Parameters<MintOperationRepository['getByState']>[0];
 type MintMethodData = MintOperation['methodData'];
 type MintOperationFailure = NonNullable<MintOperation['terminalFailure']>;
+
+const parseParent = (row: MintOperationRow): MintSwapOperationParent | undefined => {
+  if (!row.parent) return undefined;
+  if (!row.parent.id || row.parent.kind !== 'mint-swap') {
+    throw new Error(`MintOperation ${row.id} has invalid parent metadata`);
+  }
+
+  return row.parent;
+};
 
 const persistedStates = ['pending', 'executing', 'finalized', 'failed'] as const;
 
@@ -30,6 +39,7 @@ const requireQuoteId = (row: MintOperationRow): string => {
 
 const rowToOperation = (row: MintOperationRow): MintOperation => {
   const quoteId = requireQuoteId(row);
+  const parent = parseParent(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -41,6 +51,7 @@ const rowToOperation = (row: MintOperationRow): MintOperation => {
     ...(row.terminalFailureJson
       ? { terminalFailure: JSON.parse(row.terminalFailureJson) as MintOperationFailure }
       : {}),
+    ...(parent ? { parent } : {}),
   };
 
   const intent = {
@@ -91,6 +102,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
         ? JSON.stringify(operation.terminalFailure)
         : null,
       outputDataJson: null,
+      ...(operation.parent ? { parent: operation.parent } : {}),
     };
   }
 
@@ -115,6 +127,7 @@ const operationToRow = (operation: MintOperation): MintOperationRow => {
       ? JSON.stringify(operation.terminalFailure)
       : null,
     outputDataJson: JSON.stringify(operation.outputData),
+    ...(operation.parent ? { parent: operation.parent } : {}),
   };
 };
 
@@ -145,8 +158,27 @@ export class IdbMintOperationRepository implements MintOperationRepository {
       }
 
       const row = operationToRow(operation);
+      if (existing.parent) row.parent = existing.parent;
+      else delete row.parent;
       row.updatedAt = getUnixTimeSeconds();
       await table.put(row);
+    });
+  }
+
+  async assignMintSwapParentIfUnparented(
+    operationId: string,
+    expectedState: MintOperationState,
+    parent: MintSwapOperationParent,
+  ): Promise<boolean> {
+    return this.db.runTransaction('rw', ['coco_cashu_mint_operations'], async (tx) => {
+      const table = tx.table('coco_cashu_mint_operations');
+      const existing = (await table.get(operationId)) as MintOperationRow | undefined;
+      if (!existing || existing.state !== expectedState || existing.parent) {
+        return false;
+      }
+
+      await table.update(operationId, { parent, updatedAt: getUnixTimeSeconds() });
+      return true;
     });
   }
 

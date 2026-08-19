@@ -1,4 +1,8 @@
-import type { MeltMethodInputData, MeltOperationRepository } from '@cashu/coco-core/adapter';
+import type {
+  MeltMethodInputData,
+  MeltOperationRepository,
+  MintSwapOperationParent,
+} from '@cashu/coco-core/adapter';
 import {
   deserializeAmount,
   normalizeMeltMethodData,
@@ -44,6 +48,8 @@ interface MeltOperationRow {
   changeAmount: string | number | null;
   effectiveFee: string | number | null;
   finalizedDataJson: string | null;
+  parentKind: string | null;
+  parentId: string | null;
 }
 
 const preparedStates: MeltOperationState[] = [
@@ -60,7 +66,17 @@ const isPreparedState = (state: MeltOperationState) => preparedStates.includes(s
 const parseMethodData = (row: MeltOperationRow): MeltMethodData =>
   normalizeMeltMethodData(JSON.parse(row.methodDataJson) as MeltMethodInputData);
 
+const parseParent = (row: MeltOperationRow): MintSwapOperationParent | undefined => {
+  if (row.parentKind === null && row.parentId === null) return undefined;
+  if (row.parentKind !== 'mint-swap' || !row.parentId) {
+    throw new Error(`MeltOperation ${row.id} has invalid parent metadata`);
+  }
+
+  return { kind: row.parentKind, id: row.parentId };
+};
+
 const rowToOperation = (row: MeltOperationRow): MeltOperation => {
+  const parent = parseParent(row);
   const base = {
     id: row.id,
     mintUrl: row.mintUrl,
@@ -70,6 +86,7 @@ const rowToOperation = (row: MeltOperationRow): MeltOperation => {
     createdAt: row.createdAt * 1000,
     updatedAt: row.updatedAt * 1000,
     error: row.error ?? undefined,
+    ...(parent ? { parent } : {}),
   };
 
   if (!isPreparedState(row.state)) {
@@ -140,6 +157,8 @@ const operationToParams = (operation: MeltOperation): SqlValue[] => {
       null,
       null,
       null,
+      operation.parent?.kind ?? null,
+      operation.parent?.id ?? null,
     ];
   }
 
@@ -179,6 +198,8 @@ const operationToParams = (operation: MeltOperation): SqlValue[] => {
     changeAmount,
     effectiveFee,
     finalizedDataJson,
+    operation.parent?.kind ?? null,
+    operation.parent?.id ?? null,
   ];
 };
 
@@ -207,8 +228,8 @@ export class SqliteMeltOperationRepository implements MeltOperationRepository {
     const params = operationToParams(operation);
     await this.db.run(
       `INSERT INTO coco_cashu_melt_operations
-         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, unit, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, mintUrl, state, createdAt, updatedAt, error, method, methodDataJson, quoteId, unit, amount, fee_reserve, swap_fee, needsSwap, inputAmount, inputProofSecretsJson, changeOutputDataJson, swapOutputDataJson, changeAmount, effectiveFee, finalizedDataJson, parentKind, parentId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }

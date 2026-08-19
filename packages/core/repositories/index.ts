@@ -6,6 +6,7 @@ import type { MintQuote } from '@core/models/MintQuote';
 import type { QuoteIdentity } from '@core/models/QuoteIdentity';
 import type { MeltOperation, MeltOperationState } from '@core/operations/melt/MeltOperation';
 import type { MintOperation, MintOperationState } from '@core/operations/mint/MintOperation';
+import type { MintSwapOperationParent } from '@core/operations/OperationParent';
 import type {
   ReceiveOperation,
   ReceiveOperationState,
@@ -253,7 +254,7 @@ export interface MeltOperationRepository {
   /** Create a new melt operation */
   create(operation: MeltOperation): Promise<void>;
 
-  /** Update an existing melt operation */
+  /** Update an existing melt operation while preserving its stored ownership metadata. */
   update(operation: MeltOperation): Promise<void>;
 
   /** Get a melt operation by ID */
@@ -288,8 +289,18 @@ export interface MintOperationRepository {
   /** Create a new mint operation */
   create(operation: MintOperation): Promise<void>;
 
-  /** Update an existing mint operation */
+  /** Update an existing mint operation while preserving its stored ownership metadata. */
   update(operation: MintOperation): Promise<void>;
+
+  /**
+   * Assign a Mint Swap parent only when the stored state still matches the expected value and the
+   * operation remains unparented.
+   */
+  assignMintSwapParentIfUnparented(
+    operationId: string,
+    expectedState: MintOperationState,
+    parent: MintSwapOperationParent,
+  ): Promise<boolean>;
 
   /** Get a mint operation by ID */
   getById(id: string): Promise<MintOperation | null>;

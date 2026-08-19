@@ -18,6 +18,7 @@ import type { SerializedOutputData } from '../../utils';
 import { getSecretsFromSerializedOutputData } from '../../utils';
 import type { MintMethod, MintMethodMeta } from './MintMethodHandler';
 import { normalizeUnit, type UnitAmount } from '../../amounts.ts';
+import type { MintSwapOperationParent } from '../OperationParent.ts';
 
 interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMethodMeta<M> {
   id: string;
@@ -26,6 +27,8 @@ interface MintOperationBase<M extends MintMethod = MintMethod> extends MintMetho
   updatedAt: number;
   error?: string;
   terminalFailure?: MintOperationFailure;
+  /** Durable Mint Swap Operation ownership assigned at creation or by a conditional claim. */
+  parent?: MintSwapOperationParent;
 }
 
 export interface MintOperationFailure {
