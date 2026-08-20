@@ -1,5 +1,7 @@
 import {
   normalizeMintUrl,
+  MintOperationNotFoundError,
+  MintOperationStateError,
   OperationInProgressError,
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
@@ -7,6 +9,7 @@ import {
   SendOperationStateError,
   type BalanceQuery,
   type Mint,
+  type MintOperation,
   type MintQuote,
   type MeltQuote,
   type ReceiveOperation,
@@ -26,6 +29,7 @@ import {
 } from './contract.js';
 import {
   balancesSchema,
+  createMintOperationRequestSchema,
   createMintQuoteRequestSchema,
   createMeltQuoteRequestSchema,
   createReceiveOperationRequestSchema,
@@ -38,6 +42,8 @@ import {
   knownMintsSchema,
   lifecycleStatusSchema,
   mintInformationSchema,
+  mintOperationSchema,
+  mintOperationsSchema,
   meltQuoteSchema,
   mintQuoteSchema,
   mintUrlRequestSchema,
@@ -59,6 +65,7 @@ import {
   walletRecoveryMaterialRequestSchema,
   walletRecoveryMaterialResponseSchema,
   type BalancesDocument,
+  type CreateMintOperationRequest,
   type CreateMintQuoteRequest,
   type CreateMeltQuoteRequest,
   type CreateReceiveOperationRequest,
@@ -71,6 +78,8 @@ import {
   type KnownMintsDocument,
   type LifecycleStatusDocument,
   type MintInformationDocument,
+  type MintOperationDocument,
+  type MintOperationsDocument,
   type MintQuoteDocument,
   type MeltQuoteDocument,
   type MintUrlRequest,
@@ -274,6 +283,71 @@ const REFRESH_MELT_QUOTE_ROUTE = {
   idempotencyKey: 'optional',
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
+
+const CREATE_MINT_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/mint',
+  capability: 'wallet:admin',
+  requestSchema: createMintOperationRequestSchema,
+  responseSchema: mintOperationSchema,
+  successStatuses: [201],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<CreateMintOperationRequest, MintOperationDocument>;
+
+const GET_MINT_OPERATION_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/mint/{operationId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: mintOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MintOperationDocument>;
+
+const LIST_PENDING_MINT_OPERATIONS_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/mint/pending',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: mintOperationsSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MintOperationsDocument>;
+
+const LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE = {
+  ...LIST_PENDING_MINT_OPERATIONS_ROUTE,
+  path: '/v1/operations/mint/in-flight',
+} as const satisfies V1RouteMetadata<null, MintOperationsDocument>;
+
+const EXECUTE_MINT_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/mint/{operationId}/execute',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: mintOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MintOperationDocument>;
+
+const REFRESH_MINT_OPERATION_ROUTE = {
+  ...EXECUTE_MINT_OPERATION_ROUTE,
+  path: '/v1/operations/mint/{operationId}/refresh',
+} as const satisfies V1RouteMetadata<null, MintOperationDocument>;
+
+const GET_MINT_OPERATION_RESULT_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/mint/{operationId}/result',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: noSuccessResponseSchema,
+  successStatuses: [],
+  idempotencyKey: null,
+  responseCacheControl: 'no-store',
+} as const satisfies V1RouteMetadata<null, never>;
 
 const CREATE_SEND_OPERATION_ROUTE = {
   method: 'POST',
@@ -510,6 +584,13 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     LIST_PENDING_MELT_QUOTES_ROUTE,
     GET_MELT_QUOTE_ROUTE,
     REFRESH_MELT_QUOTE_ROUTE,
+    CREATE_MINT_OPERATION_ROUTE,
+    LIST_PENDING_MINT_OPERATIONS_ROUTE,
+    LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE,
+    GET_MINT_OPERATION_ROUTE,
+    EXECUTE_MINT_OPERATION_ROUTE,
+    GET_MINT_OPERATION_RESULT_ROUTE,
+    REFRESH_MINT_OPERATION_ROUTE,
     CREATE_SEND_OPERATION_ROUTE,
     LIST_PREPARED_SEND_OPERATIONS_ROUTE,
     LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE,
@@ -816,6 +897,107 @@ export function createV1RouteDefinitions(
     refreshRoute: REFRESH_MELT_QUOTE_ROUTE,
     getAdapter: (session) => session.manager.quotes.melt,
     toDocument: toMeltQuoteDocument,
+  });
+  const createMintOperation = defineV1Route({
+    ...CREATE_MINT_OPERATION_ROUTE,
+    handler: async (input) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      try {
+        const quote = await session.manager.quotes.mint.get({
+          mintUrl,
+          quoteId: input.quoteId,
+        });
+        if (!quote) throw quoteNotFound('Mint');
+        const operation = await session.manager.ops.mint.prepare({
+          quote,
+          amount: input.amount,
+        });
+        return new V1HttpResponse(toMintOperationDocument(operation), 201);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw mintOperationCocoError('prepare the Mint Operation', error);
+      }
+    },
+  });
+  const getMintOperation = defineV1Route({
+    ...GET_MINT_OPERATION_ROUTE,
+    handler: async (_input, request) => {
+      const mint = requireRunningSession(runtime).manager.ops.mint;
+      const operationId = parseMintOperationId(request);
+      try {
+        const operation = await mint.get(operationId);
+        if (!operation) throw mintOperationNotFound();
+        return toMintOperationDocument(operation);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw mintOperationCocoError('return the Mint Operation', error);
+      }
+    },
+  });
+  const listMintOperations = (
+    route: typeof LIST_PENDING_MINT_OPERATIONS_ROUTE | typeof LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE,
+    kind: 'pending' | 'in-flight',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const mint = requireRunningSession(runtime).manager.ops.mint;
+        const { offset, limit } = parseMintOperationPageQuery(request, kind);
+        try {
+          const operations =
+            kind === 'pending' ? await mint.listPending() : await mint.listInFlight();
+          return {
+            items: operations
+              .toSorted(compareMintOperationsForPagination)
+              .slice(offset, offset + limit)
+              .map(toMintOperationDocument),
+            offset,
+            limit,
+          };
+        } catch (error) {
+          throw mintOperationCocoError(`list ${kind} Mint Operations`, error);
+        }
+      },
+    });
+  const listPendingMintOperations = listMintOperations(
+    LIST_PENDING_MINT_OPERATIONS_ROUTE,
+    'pending',
+  );
+  const listInFlightMintOperations = listMintOperations(
+    LIST_IN_FLIGHT_MINT_OPERATIONS_ROUTE,
+    'in-flight',
+  );
+  const mintOperationCommand = (
+    route: typeof EXECUTE_MINT_OPERATION_ROUTE | typeof REFRESH_MINT_OPERATION_ROUTE,
+    command: 'execute' | 'refresh',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const mint = requireRunningSession(runtime).manager.ops.mint;
+        const operationId = parseMintOperationId(request, command);
+        try {
+          return toMintOperationDocument(await mint[command](operationId));
+        } catch (error) {
+          throw mintOperationCocoError(`${command} the Mint Operation`, error);
+        }
+      },
+    });
+  const executeMintOperation = mintOperationCommand(EXECUTE_MINT_OPERATION_ROUTE, 'execute');
+  const refreshMintOperation = mintOperationCommand(REFRESH_MINT_OPERATION_ROUTE, 'refresh');
+  const getMintOperationResult = defineV1Route({
+    ...GET_MINT_OPERATION_RESULT_ROUTE,
+    handler: async (_input, request) => {
+      requireRunningSession(runtime);
+      parseMintOperationId(request, 'result');
+      throw new V1HttpError({
+        status: 404,
+        code: 'not_found',
+        message: 'Mint Operations do not expose a distinct result',
+        retryable: false,
+      });
+    },
   });
   const createSendOperation = defineV1Route({
     ...CREATE_SEND_OPERATION_ROUTE,
@@ -1128,6 +1310,13 @@ export function createV1RouteDefinitions(
     ...mintQuoteRoutes,
     createMeltQuote,
     ...meltQuoteRoutes,
+    createMintOperation,
+    listPendingMintOperations,
+    listInFlightMintOperations,
+    getMintOperation,
+    executeMintOperation,
+    getMintOperationResult,
+    refreshMintOperation,
     createSendOperation,
     listPreparedSendOperations,
     listInFlightSendOperations,
@@ -1429,6 +1618,112 @@ function compareQuotesForPagination(
   if (mintComparison !== 0) return mintComparison;
   const quoteComparison = left.quoteId.localeCompare(right.quoteId);
   return quoteComparison !== 0 ? quoteComparison : left.method.localeCompare(right.method);
+}
+
+function toMintOperationDocument(operation: MintOperation): MintOperationDocument {
+  const mintUrl = normalizeMintUrl(operation.mintUrl);
+  return {
+    id: operation.id,
+    type: 'mint',
+    state: operation.state,
+    mintUrl,
+    unit: operation.unit,
+    method: operation.method,
+    amount: operation.amount.toString(),
+    quote: { mintUrl, quoteId: operation.quoteId },
+    ...(operation.state !== 'init'
+      ? {
+          expiry:
+            operation.expiry === null ? null : new Date(operation.expiry * 1_000).toISOString(),
+        }
+      : {}),
+    ...(operation.terminalFailure
+      ? {
+          failure: {
+            reason: 'The Mint Operation failed',
+            ...(operation.terminalFailure.code !== undefined
+              ? { code: operation.terminalFailure.code }
+              : {}),
+            ...(operation.terminalFailure.retryable !== undefined
+              ? { retryable: operation.terminalFailure.retryable }
+              : {}),
+            observedAt: new Date(operation.terminalFailure.observedAt).toISOString(),
+          },
+        }
+      : {}),
+    createdAt: new Date(operation.createdAt).toISOString(),
+    updatedAt: new Date(operation.updatedAt).toISOString(),
+  };
+}
+
+function compareMintOperationsForPagination(left: MintOperation, right: MintOperation): number {
+  return left.createdAt !== right.createdAt
+    ? right.createdAt - left.createdAt
+    : left.id.localeCompare(right.id);
+}
+
+function parseMintOperationPageQuery(
+  request: Request,
+  kind: 'pending' | 'in-flight',
+): { offset: number; limit: number } {
+  const message = `The ${kind} Mint Operation filters are invalid`;
+  const query = parseQuery(request, ['offset', 'limit'], message);
+  return {
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+  };
+}
+
+function mintOperationCocoError(action: string, cause: unknown): V1HttpError {
+  if (cause instanceof MintOperationNotFoundError) return mintOperationNotFound(cause);
+  if (cause instanceof OperationInProgressError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'operation_in_progress',
+      message: 'The Mint Operation is already in progress',
+      retryable: true,
+      details: { type: 'mint', operationId: cause.operationId },
+      cause,
+    });
+  }
+  if (cause instanceof MintOperationStateError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'invalid_operation_state',
+      message: 'The Mint Operation command is unavailable in its current state',
+      retryable: false,
+      details: {
+        type: 'mint',
+        operationId: cause.operationId,
+        state: cause.state,
+        expectedStates: [...cause.expectedStates],
+      },
+      cause,
+    });
+  }
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
+}
+
+function mintOperationNotFound(cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: 'The Mint Operation does not exist',
+    retryable: false,
+    cause,
+  });
+}
+
+function parseMintOperationId(request: Request, command?: string): string {
+  const message = 'The Mint Operation identity is invalid';
+  parseQuery(request, [], message);
+  return parsePathIdentity(request, '/v1/operations/mint/', command ? `/${command}` : '', message);
 }
 
 function toSendOperationDocument(operation: SendOperation): SendOperationDocument {

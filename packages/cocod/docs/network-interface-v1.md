@@ -1,9 +1,9 @@
 # Cocod Network Interface v1
 
 Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
-lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance, Known Mint, Quote, Send
-Operation, and Receive Operation resources, plus the legacy compatibility described here. The
-complete v1 resource surface is accepted as the target design; other Operation types, Payment
+lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance, Known Mint, Quote, Send,
+Receive, and Mint Operation resources, plus the legacy compatibility described here. The complete
+v1 resource surface is accepted as the target design; other Operation types, Payment
 Request, history, event, and machine-description resources remain proposed until their individual
 contracts and implementations land.
 
@@ -275,10 +275,10 @@ NOT expose the shared administrative credential to browser storage or browser ap
 ## Legacy command compatibility
 
 The remaining unversioned command routes use the same TCP listener as `/v1`. They retain their
-current request and response shapes temporarily so the CLI's Lightning send and receive, history,
-NPC, and X-Cashu commands remain usable while their v1 resources are implemented. Balance, Known
-Mint, Cashu Send, and Cashu Receive commands already use v1 resources and their legacy routes have
-been removed.
+current request and response shapes temporarily so the CLI's Lightning send, history, NPC, and
+X-Cashu commands remain usable while their v1 resources are implemented. Balance, Known Mint,
+Lightning Receive, Cashu Send, and Cashu Receive commands already use v1 resources and their legacy
+routes have been removed.
 
 Every remaining unversioned route requires the same administrative Client Credential. Cocod does
 not run a Unix listener or a second compatibility transport. Later interface revisions replace
@@ -535,7 +535,7 @@ preimages, outpoints, blinded change, and any additional Coco model fields.
 
 ### Operation resources
 
-The Send and Receive resources in this table are implemented. Other Operation types remain
+The Send, Receive, and Mint resources in this table are implemented. Other Operation types remain
 proposed.
 
 | Method | Path                                          | Purpose                                                         |

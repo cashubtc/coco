@@ -266,6 +266,47 @@ export interface PendingMeltQuotesDocument {
   limit: number;
 }
 
+/** Quote-backed Mint Operation preparation input with a lossless decimal amount. */
+export interface CreateMintOperationRequest {
+  mintUrl: string;
+  quoteId: string;
+  amount: string;
+}
+
+/** Safe terminal failure information retained by a Mint Operation. */
+export interface MintOperationFailureDocument {
+  reason: string;
+  code?: string;
+  retryable?: boolean;
+  observedAt: string;
+}
+
+/** Explicit safe projection of one Coco Mint Operation. */
+export interface MintOperationDocument {
+  id: string;
+  type: 'mint';
+  state: 'init' | 'pending' | 'executing' | 'finalized' | 'failed';
+  mintUrl: string;
+  unit: string;
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  amount: string;
+  quote: {
+    mintUrl: string;
+    quoteId: string;
+  };
+  expiry?: string | null;
+  failure?: MintOperationFailureDocument;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Offset-paginated safe Mint Operations. */
+export interface MintOperationsDocument {
+  items: MintOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
 /** Cashu Send Operation preparation input with a lossless decimal amount. */
 export interface CreateSendOperationRequest {
   mintUrl?: string;
@@ -733,6 +774,60 @@ export const pendingMeltQuotesSchema = namedSchema<PendingMeltQuotesDocument>(
   'PendingMeltQuotes',
   objectNode({
     items: arrayNode(meltQuoteNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+/** Runtime and generated schema for quote-backed Mint Operation preparation. */
+export const createMintOperationRequestSchema = namedSchema<CreateMintOperationRequest>(
+  'CreateMintOperationRequest',
+  objectNode({
+    mintUrl: stringNode(),
+    quoteId: stringNode({ pattern: '\\S' }),
+    amount: decimalAmountNode,
+  }),
+);
+
+const mintOperationFailureNode = objectNode(
+  {
+    reason: stringNode(),
+    code: stringNode(),
+    retryable: booleanNode(),
+    observedAt: rfc3339UtcSchema,
+  },
+  { optional: ['code', 'retryable'] },
+);
+
+const mintOperationNode = objectNode(
+  {
+    id: stringNode(),
+    type: literalNode('mint'),
+    state: enumNode(['init', 'pending', 'executing', 'finalized', 'failed']),
+    mintUrl: stringNode(),
+    unit: stringNode(),
+    method: enumNode(['bolt11', 'bolt12', 'onchain']),
+    amount: decimalAmountNode,
+    quote: objectNode({ mintUrl: stringNode(), quoteId: stringNode() }),
+    expiry: nullableNode(rfc3339UtcSchema),
+    failure: mintOperationFailureNode,
+    createdAt: rfc3339UtcSchema,
+    updatedAt: rfc3339UtcSchema,
+  },
+  { optional: ['expiry', 'failure'] },
+);
+
+/** Runtime and generated schema for one safe Mint Operation. */
+export const mintOperationSchema = namedSchema<MintOperationDocument>(
+  'MintOperation',
+  mintOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Mint Operations. */
+export const mintOperationsSchema = namedSchema<MintOperationsDocument>(
+  'MintOperations',
+  objectNode({
+    items: arrayNode(mintOperationNode),
     offset: integerNode({ minimum: 0 }),
     limit: integerNode({ minimum: 1 }),
   }),

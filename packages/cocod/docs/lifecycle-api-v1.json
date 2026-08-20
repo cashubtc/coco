@@ -1016,6 +1016,161 @@
         "limit": { "type": "integer", "minimum": 1 }
       }
     },
+    "MintOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "state",
+        "mintUrl",
+        "unit",
+        "method",
+        "amount",
+        "quote",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "mint" },
+        "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
+        "mintUrl": { "type": "string" },
+        "unit": { "type": "string" },
+        "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+        "quote": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "quoteId"],
+          "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+        },
+        "expiry": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          ]
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "observedAt"],
+          "properties": {
+            "reason": { "type": "string" },
+            "code": { "type": "string" },
+            "retryable": { "type": "boolean" },
+            "observedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            }
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      }
+    },
+    "CreateMintOperationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mintUrl", "quoteId", "amount"],
+      "properties": {
+        "mintUrl": { "type": "string" },
+        "quoteId": { "type": "string", "pattern": "\\S" },
+        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+      }
+    },
+    "MintOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "type",
+              "state",
+              "mintUrl",
+              "unit",
+              "method",
+              "amount",
+              "quote",
+              "createdAt",
+              "updatedAt"
+            ],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "mint" },
+              "state": { "enum": ["init", "pending", "executing", "finalized", "failed"] },
+              "mintUrl": { "type": "string" },
+              "unit": { "type": "string" },
+              "method": { "enum": ["bolt11", "bolt12", "onchain"] },
+              "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+              "quote": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mintUrl", "quoteId"],
+                "properties": { "mintUrl": { "type": "string" }, "quoteId": { "type": "string" } }
+              },
+              "expiry": {
+                "anyOf": [
+                  { "type": "null" },
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ]
+              },
+              "failure": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reason", "observedAt"],
+                "properties": {
+                  "reason": { "type": "string" },
+                  "code": { "type": "string" },
+                  "retryable": { "type": "boolean" },
+                  "observedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                }
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "Never": { "not": {} },
     "SendOperation": {
       "oneOf": [
         {
@@ -1477,7 +1632,6 @@
         "limit": { "type": "integer", "minimum": 1 }
       }
     },
-    "Never": { "not": {} },
     "InitializeWalletResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -1845,6 +1999,83 @@
       "capability": "wallet:admin",
       "requestSchema": null,
       "responseSchema": "MeltQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/mint",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateMintOperationRequest",
+      "responseSchema": "MintOperation",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/mint/pending",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MintOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/mint/in-flight",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MintOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/mint/{operationId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MintOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/mint/{operationId}/execute",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MintOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/mint/{operationId}/result",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "Never",
+      "errorSchema": "Error",
+      "successStatuses": [],
+      "idempotencyKey": null,
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/mint/{operationId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MintOperation",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": "optional",

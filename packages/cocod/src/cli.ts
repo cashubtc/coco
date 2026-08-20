@@ -10,6 +10,7 @@ import {
   handleWalletV1Command,
   prepareAndExecuteCashuReceive,
   prepareAndExecuteCashuSend,
+  prepareBolt11Receive,
   registerAndTrustMint,
   waitForSessionTransition,
 } from './cli-shared';
@@ -121,12 +122,12 @@ receiveCmd
 receiveCmd
   .command('bolt11 <amount>')
   .description('Create Lightning invoice to receive tokens')
-  .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
+  .option('--mint-url <url>', 'Mint URL to use (defaults to the first trusted Mint)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/receive/bolt11', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    const invoice = await handleWalletV1Command((client) =>
+      prepareBolt11Receive(client, { amount, mintUrl: options.mintUrl }),
+    );
+    console.log(invoice);
   });
 
 // Send - nested subcommands

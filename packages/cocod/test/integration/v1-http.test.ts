@@ -397,6 +397,111 @@ test('serves Receive lifecycle responses without crossing the sensitive token bo
   expect(resultResponse.headers.get('cache-control')).toBe('no-store');
 });
 
+test('serves the Quote-to-Mint-Operation flow while unpaid execution remains pending', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-mint-listener-'));
+  directories.push(directory);
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const quote = {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'mint-quote-network',
+    quote: 'mint-quote-network',
+    request: 'lnbc250n1network',
+    amount: toAmount(25),
+    unit: 'sat',
+    expiry: 1_786_838_700,
+    reusable: false as const,
+    state: 'UNPAID' as const,
+    amountPaid: toAmount(0),
+    amountIssued: toAmount(0),
+    remoteUpdatedAt: null,
+    quoteData: { amount: toAmount(25) },
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+  };
+  const pending = {
+    id: 'mint-operation-network',
+    state: 'pending' as const,
+    mintUrl: quote.mintUrl,
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'bolt11' as const,
+    methodData: { ownedPublicKey: 'must-not-cross-the-network' },
+    quoteId: quote.quoteId,
+    request: quote.request,
+    expiry: quote.expiry,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    outputData: { mustNotCrossTheNetwork: true },
+  };
+  const createQuote = mock(async () => quote);
+  const getQuote = mock(async () => quote);
+  const prepare = mock(async () => pending);
+  const execute = mock(async () => pending);
+  const runtime = {
+    getStatus: () => ({
+      wallet: { configuredAt: '2026-08-16T00:00:00.000Z', mintUrl: quote.mintUrl },
+      seedAccess: { state: 'available' as const, requiresPassphrase: false },
+      cocoSession: {
+        state: 'running' as const,
+        startedAt: '2026-08-16T00:00:00.000Z',
+        lastFailure: null,
+      },
+    }),
+    getRunningSession: () => ({
+      mintUrl: quote.mintUrl,
+      manager: {
+        quotes: { mint: { create: createQuote, get: getQuote } },
+        ops: { mint: { prepare, execute } },
+      },
+    }),
+  } as unknown as V1Runtime;
+
+  server = startTcpTestServer({
+    routes: buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
+    fetch: buildV1FallbackHandler(credentials, async () => new Response(null, { status: 404 })),
+  });
+
+  const quoteResponse = await tcpFetch(
+    server,
+    '/v1/quotes/mint',
+    plaintext,
+    'POST',
+    JSON.stringify({ mintUrl: quote.mintUrl, method: 'bolt11', amount: '25', unit: 'sat' }),
+    { 'Content-Type': 'application/json' },
+  );
+  const operationResponse = await tcpFetch(
+    server,
+    '/v1/operations/mint',
+    plaintext,
+    'POST',
+    JSON.stringify({ mintUrl: quote.mintUrl, quoteId: quote.quoteId, amount: '25' }),
+    { 'Content-Type': 'application/json' },
+  );
+  const operationBody = await operationResponse.json();
+  const executeResponse = await tcpFetch(
+    server,
+    '/v1/operations/mint/mint-operation-network/execute',
+    plaintext,
+    'POST',
+  );
+
+  expect(quoteResponse.status).toBe(201);
+  expect(operationResponse.status).toBe(201);
+  expect(JSON.stringify(operationBody)).not.toContain('must-not-cross-the-network');
+  expect(operationBody).toMatchObject({
+    id: 'mint-operation-network',
+    state: 'pending',
+    quote: { mintUrl: quote.mintUrl, quoteId: quote.quoteId },
+  });
+  expect(getQuote).toHaveBeenCalledWith({ mintUrl: quote.mintUrl, quoteId: quote.quoteId });
+  expect(prepare).toHaveBeenCalledWith({ quote, amount: '25' });
+  expect(executeResponse.status).toBe(200);
+  expect(await executeResponse.json()).toMatchObject({ state: 'pending' });
+});
+
 test('commits accepted process shutdown before graceful listener closure completes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
   directories.push(directory);

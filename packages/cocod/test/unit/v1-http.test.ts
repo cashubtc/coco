@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  MintOperationNotFoundError,
+  MintOperationStateError,
   OperationInProgressError,
   ReceiveOperationNotFoundError,
   ReceiveOperationStateError,
@@ -39,6 +41,277 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('prepares a safe Mint Operation from the canonical methodless Quote identity', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({ mintUrl: 'https://mint.example.com' });
+    const operation = mintOperationFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/mint']!.POST!(
+      authorizedJsonRequest('/v1/operations/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        quoteId: 'mint-quote-1',
+        amount: '25',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'mint-operation-1',
+      type: 'mint',
+      state: 'pending',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'bolt11',
+      amount: '25',
+      quote: { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1' },
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(getQuote).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-1',
+    });
+    expect(prepare).toHaveBeenCalledWith({ quote, amount: '25' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('returns not found when Mint Operation preparation cannot resolve the canonical Quote', async () => {
+    const credential = await createCredential();
+    const getQuote = mock(async () => null);
+    const prepare = mock(async () => mintOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { prepare } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/mint']!.POST!(
+      authorizedJsonRequest('/v1/operations/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        quoteId: 'missing',
+        amount: '25',
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('inspects and paginates pending and in-flight Mint Operations from Coco', async () => {
+    const credential = await createCredential();
+    const operation = (id: string, createdAt: number, state: 'pending' | 'executing') =>
+      mintOperationFixture({ id, createdAt, updatedAt: createdAt, state });
+    const get = mock(async () =>
+      mintOperationFixture({
+        state: 'failed',
+        terminalFailure: {
+          reason: 'Missing NUT-20 mint quote key for pubkey 02must-not-leak',
+          code: 'missing_quote_pubkey',
+          retryable: false,
+          observedAt: 1_786_838_520_000,
+        },
+      }),
+    );
+    const listPending = mock(async () => [
+      operation('old', 1_786_838_400_000, 'pending'),
+      operation('new-b', 1_786_838_600_000, 'pending'),
+      operation('new-a', 1_786_838_600_000, 'pending'),
+    ]);
+    const listInFlight = mock(async () => [operation('executing', 1_786_838_500_000, 'executing')]);
+    const routes = createWalletTestRoutes(
+      { ops: { mint: { get, listPending, listInFlight } } },
+      credential.credentials,
+    );
+
+    const fetched = await routes['/v1/operations/mint/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/mint/mint-operation-1', credential.plaintext),
+    );
+    const pending = await routes['/v1/operations/mint/pending']!.GET!(
+      authorizedRequest('/v1/operations/mint/pending?offset=1&limit=1', credential.plaintext),
+    );
+    const inFlight = await routes['/v1/operations/mint/in-flight']!.GET!(
+      authorizedRequest('/v1/operations/mint/in-flight', credential.plaintext),
+    );
+    const fetchedDocument = await fetched.json();
+
+    expect(fetchedDocument).toMatchObject({
+      id: 'mint-operation-1',
+      state: 'failed',
+      failure: {
+        reason: 'The Mint Operation failed',
+        code: 'missing_quote_pubkey',
+        retryable: false,
+        observedAt: '2026-08-16T00:02:00.000Z',
+      },
+    });
+    expect(JSON.stringify(fetchedDocument)).not.toContain('02must-not-leak');
+    expect(JSON.stringify(fetchedDocument)).not.toContain('Missing NUT-20');
+    expect(await pending.json()).toMatchObject({
+      items: [{ id: 'new-b', state: 'pending' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(await inFlight.json()).toMatchObject({
+      items: [{ id: 'executing', state: 'executing' }],
+      offset: 0,
+      limit: 20,
+    });
+  });
+
+  test('executes and refreshes Mint Operations while keeping pending payment pending', async () => {
+    const credential = await createCredential();
+    const pending = mintOperationFixture();
+    const finalized = mintOperationFixture({ state: 'finalized' });
+    const execute = mock(async () => pending);
+    const refresh = mock(async () => finalized);
+    const routes = createWalletTestRoutes(
+      { ops: { mint: { execute, refresh } } },
+      credential.credentials,
+    );
+
+    const executed = await routes['/v1/operations/mint/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
+    );
+    const refreshed = await routes['/v1/operations/mint/:operationId/refresh']!.POST!(
+      authorizedPostRequest('/v1/operations/mint/mint-operation-1/refresh', credential.plaintext),
+    );
+
+    expect(await executed.json()).toMatchObject({ state: 'pending' });
+    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
+    expect(execute).toHaveBeenCalledWith('mint-operation-1');
+    expect(refresh).toHaveBeenCalledWith('mint-operation-1');
+  });
+
+  test('Mint Operations expose no distinct result resource', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => mintOperationFixture({ state: 'finalized' }));
+    const routes = createWalletTestRoutes({ ops: { mint: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/mint/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/mint/mint-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'not_found',
+        message: 'Mint Operations do not expose a distinct result',
+        retryable: false,
+      },
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  test('maps typed Mint lifecycle failures and preserves operation-in-progress retry semantics', async () => {
+    const credential = await createCredential();
+    const execute = mock()
+      .mockRejectedValueOnce(new MintOperationStateError('mint-operation-1', 'init', ['pending']))
+      .mockRejectedValueOnce(new OperationInProgressError('mint-operation-1'));
+    const routes = createWalletTestRoutes({ ops: { mint: { execute } } }, credential.credentials);
+    const request = () =>
+      routes['/v1/operations/mint/:operationId/execute']!.POST!(
+        authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
+      );
+
+    const invalid = await request();
+    const inProgress = await request();
+
+    expect(invalid.status).toBe(409);
+    expect(await invalid.json()).toMatchObject({
+      error: {
+        code: 'invalid_operation_state',
+        details: { type: 'mint', state: 'init', expectedStates: ['pending'] },
+      },
+    });
+    expect(inProgress.status).toBe(409);
+    expect(await inProgress.json()).toMatchObject({
+      error: { code: 'operation_in_progress', retryable: true },
+    });
+  });
+
+  test('maps untyped Coco Mint failures without exposing recovery diagnostics', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const routes = createWalletTestRoutes({ ops: { mint: { execute } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/mint/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/mint/mint-operation-1/execute', credential.plaintext),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not execute the Mint Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+  });
+
+  test('maps typed missing Mint Operations and protects authenticated idempotent preparation', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => {
+      throw new MintOperationNotFoundError('missing');
+    });
+    const quote = mintQuoteFixture();
+    const getQuote = mock(async () => quote);
+    const prepare = mock(async () => mintOperationFixture());
+    const routes = createWalletTestRoutes(
+      { quotes: { mint: { get: getQuote } }, ops: { mint: { get, prepare } } },
+      credential.credentials,
+    );
+
+    const missing = await routes['/v1/operations/mint/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/mint/missing', credential.plaintext),
+    );
+    const unauthenticated = await routes['/v1/operations/mint']!.POST!(
+      new Request('http://localhost/v1/operations/mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mintUrl: 'https://mint.example.com',
+          quoteId: 'mint-quote-1',
+          amount: '25',
+        }),
+      }),
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/mint',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', quoteId: 'mint-quote-1', amount: '25' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-mint-1' },
+      );
+    const first = await routes['/v1/operations/mint']!.POST!(request());
+    const replay = await routes['/v1/operations/mint']!.POST!(request());
+
+    expect(missing.status).toBe(404);
+    expect(unauthenticated.status).toBe(401);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(getQuote).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
   test('prepares a safe Send Operation without executing it', async () => {
     const credential = await createCredential();
     const operation = sendOperationFixture();
@@ -2201,6 +2474,76 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'POST',
+        path: '/v1/operations/mint',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateMintOperationRequest',
+        responseSchema: 'MintOperation',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/mint/pending',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/mint/in-flight',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/mint/{operationId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintOperation',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/mint/{operationId}/execute',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/mint/{operationId}/result',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'Never',
+        successStatuses: [],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/mint/{operationId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
         path: '/v1/operations/send',
         capability: 'wallet:admin',
         requestSchema: 'CreateSendOperationRequest',
@@ -3346,6 +3689,26 @@ function meltQuoteFixture(overrides: Record<string, unknown> = {}) {
     state: 'UNPAID' as const,
     createdAt: 1_786_838_400_000,
     updatedAt: 1_786_838_460_000,
+    ...overrides,
+  };
+}
+
+function mintOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'mint-operation-1',
+    state: 'pending' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'bolt11' as const,
+    methodData: { ownedPublicKey: 'must-not-leak' },
+    quoteId: 'mint-quote-1',
+    request: 'lnbc250n1must-not-leak',
+    expiry: 1_786_838_700,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    outputData: { keep: [{ secret: 'must-not-leak' }], send: [] },
+    error: 'must-not-leak',
     ...overrides,
   };
 }

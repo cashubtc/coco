@@ -3,6 +3,8 @@ import { program } from 'commander';
 import { loadClientCredential } from './credentials.js';
 import {
   balancesSchema,
+  createMintOperationRequestSchema,
+  createMintQuoteRequestSchema,
   createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
   executeSendOperationResponseSchema,
@@ -12,6 +14,8 @@ import {
   knownMintsSchema,
   lifecycleStatusSchema,
   mintInformationSchema,
+  mintOperationSchema,
+  mintQuoteSchema,
   paymentMethodCapabilitiesSchema,
   processShutdownResponseSchema,
   receiveOperationSchema,
@@ -19,6 +23,8 @@ import {
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
   type BalancesDocument,
+  type CreateMintOperationRequest,
+  type CreateMintQuoteRequest,
   type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
   type ExecuteSendOperationResponseDocument,
@@ -29,6 +35,8 @@ import {
   type KnownMintsDocument,
   type LifecycleStatusDocument,
   type MintInformationDocument,
+  type MintOperationDocument,
+  type MintQuoteDocument,
   type PaymentMethodCapabilitiesDocument,
   type ProcessShutdownResponseDocument,
   type ReceiveOperationDocument,
@@ -90,6 +98,8 @@ export interface V1Client {
   trustMint(mintUrl: string): Promise<KnownMintDocument>;
   untrustMint(mintUrl: string): Promise<KnownMintDocument>;
   listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
+  createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
+  prepareMint(input: CreateMintOperationRequest): Promise<MintOperationDocument>;
   prepareSend(input: CreateSendOperationRequest): Promise<SendOperationDocument>;
   executeSend(operationId: string): Promise<ExecuteSendOperationResponseDocument>;
   prepareReceive(input: CreateReceiveOperationRequest): Promise<ReceiveOperationDocument>;
@@ -179,6 +189,24 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         'GET',
         undefined,
         paymentMethodCapabilitiesSchema,
+        credentialFile,
+      ),
+    createMintQuote: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/quotes/mint',
+        'POST',
+        createMintQuoteRequestSchema.parse(input),
+        mintQuoteSchema,
+        credentialFile,
+      ),
+    prepareMint: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/mint',
+        'POST',
+        createMintOperationRequestSchema.parse(input),
+        mintOperationSchema,
         credentialFile,
       ),
     prepareSend: (input) =>
@@ -274,6 +302,26 @@ export async function registerAndTrustMint(
   return registered.trusted ? registered : client.trustMint(registered.mintUrl);
 }
 
+/** Creates a BOLT11 Mint Quote and prepares its pending Mint Operation through v1. */
+export async function prepareBolt11Receive(
+  client: V1Client,
+  input: { amount: string; mintUrl?: string },
+): Promise<string> {
+  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
+  const quote = await client.createMintQuote({
+    mintUrl,
+    method: 'bolt11',
+    amount: input.amount,
+    unit: 'sat',
+  });
+  await client.prepareMint({
+    mintUrl: quote.mintUrl,
+    quoteId: quote.quoteId,
+    amount: input.amount,
+  });
+  return quote.request;
+}
+
 /** Preserves the human one-shot Cashu-send flow over the explicit v1 lifecycle. */
 export async function prepareAndExecuteCashuSend(
   client: V1Client,
@@ -301,6 +349,14 @@ function mintListPath(filters: KnownMintFilters): string {
   return filters.trustedOnly === undefined
     ? '/v1/mints'
     : `/v1/mints?trustedOnly=${String(filters.trustedOnly)}`;
+}
+
+async function defaultTrustedMintUrl(client: V1Client): Promise<string> {
+  const mint = (await client.listMints({ trustedOnly: true })).items[0];
+  if (!mint) {
+    throw new Error('No trusted Mint is available; pass --mint-url or add a Mint first');
+  }
+  return mint.mintUrl;
 }
 
 function mintResourcePath(path: string, mintUrl: string): string {

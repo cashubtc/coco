@@ -179,8 +179,8 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/receive/bolt11']!.POST!(
-        new Request('http://localhost/receive/bolt11', {
+      const response = await routes['/send/bolt11']!.POST!(
+        new Request('http://localhost/send/bolt11', {
           method: 'POST',
           headers: { Authorization: `Bearer ${plaintext}` },
           body: '{}',
@@ -322,46 +322,6 @@ describe('routes', () => {
     expect(body.error).toContain('NUT-10');
     expect(body.error).toContain('HTLC');
     expect(prepareCalled).toBe(false);
-  });
-
-  test('/receive/bolt11 creates a canonical quote and prepares the mint operation with it', async () => {
-    const createdQuote = { quoteId: 'q1', request: 'lnbc210n1fake' };
-    let createInput: unknown;
-    let prepareInput: unknown;
-    const manager = {
-      quotes: {
-        mint: {
-          create: async (input: unknown) => {
-            createInput = input;
-            return createdQuote;
-          },
-        },
-      },
-      ops: {
-        mint: {
-          prepare: async (input: unknown) => {
-            prepareInput = input;
-            return {};
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/receive/bolt11']!.POST!(
-      postJson('/receive/bolt11', { amount: 21 }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(response.status).toBe(200);
-    expect(body.output).toBe('lnbc210n1fake');
-    expect(createInput).toEqual({
-      mintUrl: 'https://mint.example.com',
-      method: 'bolt11',
-      amount: 21,
-    });
-    expect(prepareInput).toEqual({ quote: createdQuote, amount: 21 });
   });
 
   test('/send/bolt11 creates a canonical melt quote and executes the prepared melt', async () => {

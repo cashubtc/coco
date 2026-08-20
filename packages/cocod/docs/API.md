@@ -29,7 +29,7 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 - `receive cashu <token>` - Receive a Cashu token
 - `receive bolt11 <amount>` - Create a Lightning invoice
-  - `--mint-url <url>` override default mint for this request
+  - `--mint-url <url>` choose a trusted Mint; otherwise the first trusted Mint is used
 
 ### Send
 
@@ -127,6 +127,13 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/quotes/melt/pending?method={method}&offset={offset}&limit={limit}`
 - `GET /v1/quotes/melt/{quoteId}?mintUrl={mintUrl}`
 - `POST /v1/quotes/melt/{quoteId}/refresh?mintUrl={mintUrl}`
+- `POST /v1/operations/mint`
+- `GET /v1/operations/mint/pending?offset={offset}&limit={limit}`
+- `GET /v1/operations/mint/in-flight?offset={offset}&limit={limit}`
+- `GET /v1/operations/mint/{operationId}`
+- `POST /v1/operations/mint/{operationId}/execute`
+- `GET /v1/operations/mint/{operationId}/result`
+- `POST /v1/operations/mint/{operationId}/refresh`
 - `POST /v1/operations/send`
 - `GET /v1/operations/send/prepared?offset={offset}&limit={limit}`
 - `GET /v1/operations/send/in-flight?offset={offset}&limit={limit}`
@@ -144,7 +151,6 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/operations/receive/{operationId}/result`
 - `POST /v1/operations/receive/{operationId}/cancel`
 - `POST /v1/operations/receive/{operationId}/refresh`
-- `POST /receive/bolt11`
 - `POST /send/bolt11`
 - `POST /x-cashu/parse`
 - `POST /x-cashu/handle`
@@ -188,6 +194,36 @@ Pending lists accept optional `method`, `offset`, and `limit` query parameters. 
 `0`; limit defaults to `20` and cannot exceed `100`. Cocod deterministically sorts the canonical
 pending set returned by Coco and selects the requested page in memory, so these requests currently
 load all pending Quotes before slicing.
+
+### Mint Operation resources
+
+`POST /v1/operations/mint` accepts `{ mintUrl, quoteId, amount }`, resolves that methodless public
+Mint Quote identity through Coco, and prepares a durable Mint Operation without executing it. The
+amount is an explicit lossless decimal string; Coco validates it against the canonical Quote and
+its stored unit. Preparation returns Coco's real `pending` state with `201 Created` and no
+`Location` header.
+
+The safe Mint Operation document contains `id`, `type`, `state`, normalized `mintUrl`, `unit`,
+`method`, lossless decimal `amount`, the methodless `quote` reference `{ mintUrl, quoteId }`, and
+`createdAt`/`updatedAt`. States after `init` also include nullable `expiry`. A structured terminal
+`failure`, when retained by Coco, contains a generic transport-safe `reason`, optional stable `code`
+and `retryable`, and `observedAt`. Raw recovery diagnostics are never exposed. The document omits
+`methodData`, the invoice or payment request snapshot,
+`outputData`, proof secrets, blinded output data, owned public keys, and raw recovery errors.
+
+Only Coco's `/pending` and `/in-flight` Mint collections are exposed. They accept `offset` and
+`limit`, defaulting to `0` and `20` with a maximum of `100`, and sort the complete canonical Coco
+set by newest creation time and then Operation ID before selecting a page. Mint has no synthetic
+`/prepared` collection.
+
+Execute and refresh are explicit `POST` commands with no request body. Both return the canonical
+safe Operation directly; an unpaid Quote can therefore leave execute in `pending`. Refresh maps to
+Coco's reconciliation behavior, including checking pending payment or recovering executing work.
+Mint produces no distinct value-bearing result, so the authenticated `/result` route always
+returns `404 Not Found` with `Cache-Control: no-store`.
+
+The human `receive bolt11` command composes Mint Quote creation and Mint Operation preparation,
+prints the invoice, and does not execute before payment is available.
 
 ### Send Operation resources
 

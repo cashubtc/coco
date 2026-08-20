@@ -74,25 +74,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
       }),
     },
 
-    '/receive/bolt11': {
-      capability: 'wallet:admin',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { amount: number; mintUrl?: string };
-          const mintUrl = body.mintUrl || state.mintUrl;
-          const quote = await state.manager.quotes.mint.create({
-            mintUrl,
-            method: 'bolt11',
-            amount: body.amount,
-          });
-          await state.manager.ops.mint.prepare({ quote, amount: body.amount });
-          return Response.json({ output: quote.request });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Failed to create invoice: ${message}` }, { status: 500 });
-        }
-      }),
-    },
     '/send/bolt11': {
       capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
