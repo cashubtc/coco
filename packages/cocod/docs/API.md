@@ -127,9 +127,17 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `GET /v1/quotes/melt/pending?method={method}&offset={offset}&limit={limit}`
 - `GET /v1/quotes/melt/{quoteId}?mintUrl={mintUrl}`
 - `POST /v1/quotes/melt/{quoteId}/refresh?mintUrl={mintUrl}`
+- `POST /v1/operations/send`
+- `GET /v1/operations/send/prepared?offset={offset}&limit={limit}`
+- `GET /v1/operations/send/in-flight?offset={offset}&limit={limit}`
+- `GET /v1/operations/send/{operationId}`
+- `POST /v1/operations/send/{operationId}/execute`
+- `GET /v1/operations/send/{operationId}/result`
+- `POST /v1/operations/send/{operationId}/cancel`
+- `POST /v1/operations/send/{operationId}/refresh`
+- `POST /v1/operations/send/{operationId}/reclaim`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
-- `POST /send/cashu`
 - `POST /send/bolt11`
 - `POST /x-cashu/parse`
 - `POST /x-cashu/handle`
@@ -173,3 +181,36 @@ Pending lists accept optional `method`, `offset`, and `limit` query parameters. 
 `0`; limit defaults to `20` and cannot exceed `100`. Cocod deterministically sorts the canonical
 pending set returned by Coco and selects the requested page in memory, so these requests currently
 load all pending Quotes before slicing.
+
+### Send Operation resources
+
+`POST /v1/operations/send` prepares a Cashu Send Operation without executing it. Its body is
+`{ amount, unit, mintUrl?, forceSwap? }`, where `amount` is a lossless decimal string. When
+`mintUrl` is omitted, cocod uses the Wallet's configured default Mint. Preparation returns
+`201 Created` with the safe Operation directly and no `Location` header.
+
+The safe Send Operation document contains `id`, `type`, `state`, normalized `mintUrl`, `unit`,
+`method`, `requestedAmount`, `createdAt`, and `updatedAt`. Every state after `init` also contains
+`inputAmount`, `fee`, and `needsSwap`. It never contains input proof secrets, method data,
+serialized output data, proofs, raw tokens, or other recovery internals.
+
+Only the collections supported by Coco's public Send interface are exposed: `/prepared` and
+`/in-flight`. The latter retains Coco's real in-flight states (`executing`, `pending`, and
+`rolling_back`) rather than renaming them. Both collections use `offset` and `limit`, defaulting to
+`0` and `20` with a maximum limit of `100`. Cocod sorts the complete canonical Coco set by newest
+creation time and then Operation ID before selecting the page.
+
+Execute, cancel, refresh, and reclaim are explicit `POST` commands with no request body. Commands
+await Coco rather than creating cocod jobs. Cancel, refresh, and reclaim then read and return the
+canonical safe Operation through Coco. Unsupported state transitions return
+`invalid_operation_state` with the current and expected states when Coco supplies its typed
+lifecycle error.
+
+Successful execute returns `{ operation, result: { token } }`. The authenticated result resource
+returns the same `{ token }` from the token already retained in Coco-owned Operation state; cocod
+does not persist a second result. Execute and result responses use `Cache-Control: no-store`. A
+result that is not yet available returns `409 Conflict` with `operation_result_not_available` and
+the current state.
+
+The human `send cashu` command preserves its one-shot behavior by preparing and then executing
+through these v1 resources and printing the encoded token.

@@ -8,6 +8,7 @@ import {
   formatBalances,
   handleV1Command,
   handleWalletV1Command,
+  prepareAndExecuteCashuSend,
   registerAndTrustMint,
   waitForSessionTransition,
 } from './cli-shared';
@@ -135,10 +136,10 @@ sendCmd
   .description('Create Cashu token to send')
   .option('--mint-url <url>', 'Mint URL to use (defaults to the mint URL configured during init)')
   .action(async (amount: string, options: { mintUrl?: string }) => {
-    await handleDaemonCommand('/send/cashu', {
-      method: 'POST',
-      body: { amount: parseInt(amount), mintUrl: options.mintUrl },
-    });
+    const token = await handleWalletV1Command((client) =>
+      prepareAndExecuteCashuSend(client, { amount, mintUrl: options.mintUrl }),
+    );
+    console.log(token);
   });
 
 sendCmd

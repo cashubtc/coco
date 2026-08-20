@@ -2,6 +2,7 @@ import { afterEach, expect, mock, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { toAmount } from '@cashu/coco-core';
 
 import { AdministrativeCredential, loadClientCredential } from '../../src/credentials.js';
 import { ProcessShutdownCoordinator } from '../../src/process-shutdown.js';
@@ -228,6 +229,90 @@ test('serves public health and authenticated structured status beside operationa
   expect(stop.status).toBe(202);
   expect(await stop.json()).toMatchObject({ cocoSession: { state: 'stopping' } });
   stopCompletion.resolve();
+});
+
+test('serves Send prepare and sensitive execute results across the TCP interface', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-send-listener-'));
+  directories.push(directory);
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const prepared = {
+    id: 'send-operation-network',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'default' as const,
+    methodData: {},
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee: toAmount(2),
+    inputAmount: toAmount(27),
+    inputProofSecrets: ['must-not-cross-the-network'],
+    outputData: { mustNotCrossTheNetwork: true },
+  };
+  const token = { mint: prepared.mintUrl, proofs: [] };
+  const pending = { ...prepared, state: 'pending' as const, token };
+  const prepare = mock(async () => prepared);
+  const execute = mock(async () => ({ operation: pending, token }));
+  const runtime = {
+    getStatus: () => ({
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'available' as const, requiresPassphrase: false },
+      cocoSession: {
+        state: 'running' as const,
+        startedAt: '2026-08-16T00:00:00.000Z',
+        lastFailure: null,
+      },
+    }),
+    getRunningSession: () => ({
+      mintUrl: prepared.mintUrl,
+      manager: {
+        ops: { send: { prepare, execute } },
+        wallet: { encodeToken: () => 'cashuBnetwork-result' },
+      },
+    }),
+  } as unknown as V1Runtime;
+
+  server = startTcpTestServer({
+    routes: buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
+    fetch: buildV1FallbackHandler(credentials, async () => new Response(null, { status: 404 })),
+  });
+
+  const prepareResponse = await tcpFetch(
+    server,
+    '/v1/operations/send',
+    plaintext,
+    'POST',
+    JSON.stringify({ amount: '25', unit: 'sat' }),
+    { 'Content-Type': 'application/json' },
+  );
+  const prepareBody = await prepareResponse.json();
+  const executeResponse = await tcpFetch(
+    server,
+    '/v1/operations/send/send-operation-network/execute',
+    plaintext,
+    'POST',
+  );
+
+  expect(prepareResponse.status).toBe(201);
+  expect(JSON.stringify(prepareBody)).not.toContain('must-not-cross-the-network');
+  expect(prepare).toHaveBeenCalledWith({
+    mintUrl: 'https://mint.example.com',
+    amount: '25',
+    unit: 'sat',
+  });
+  expect(executeResponse.status).toBe(200);
+  expect(executeResponse.headers.get('cache-control')).toBe('no-store');
+  expect(await executeResponse.json()).toMatchObject({
+    operation: { id: 'send-operation-network', state: 'pending' },
+    result: { token: 'cashuBnetwork-result' },
+  });
 });
 
 test('commits accepted process shutdown before graceful listener closure completes', async () => {

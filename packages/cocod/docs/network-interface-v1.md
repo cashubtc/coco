@@ -534,7 +534,7 @@ preimages, outpoints, blinded change, and any additional Coco model fields.
 
 ### Operation resources
 
-These resources are proposed.
+The Send resources in this table are implemented. Other Operation types remain proposed.
 
 | Method | Path                                          | Purpose                                                         |
 | ------ | --------------------------------------------- | --------------------------------------------------------------- |

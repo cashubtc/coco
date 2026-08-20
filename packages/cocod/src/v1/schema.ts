@@ -16,6 +16,8 @@ export const V1_ERROR_CODES = [
   'not_found',
   'method_not_allowed',
   'unsupported_behavior',
+  'invalid_operation_state',
+  'operation_result_not_available',
   'internal_error',
   'invalid_idempotency_key',
   'idempotency_key_conflict',
@@ -261,6 +263,61 @@ export interface PendingMeltQuotesDocument {
   items: MeltQuoteDocument[];
   offset: number;
   limit: number;
+}
+
+/** Cashu Send Operation preparation input with a lossless decimal amount. */
+export interface CreateSendOperationRequest {
+  mintUrl?: string;
+  amount: string;
+  unit: string;
+  forceSwap?: boolean;
+}
+
+interface SendOperationDocumentBase {
+  id: string;
+  type: 'send';
+  state:
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  method: 'default' | 'p2pk';
+  requestedAmount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Send Operation. */
+export type SendOperationDocument =
+  | (SendOperationDocumentBase & { state: 'init' })
+  | (SendOperationDocumentBase & {
+      state: 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+      inputAmount: string;
+      fee: string;
+      needsSwap: boolean;
+    });
+
+/** Offset-paginated safe Send Operations. */
+export interface SendOperationsDocument {
+  items: SendOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Sensitive, shareable result of a successfully executed Send Operation. */
+export interface SendResultDocument {
+  token: string;
+}
+
+/** Execute response pairing the safe canonical Operation with its sensitive result. */
+export interface ExecuteSendOperationResponseDocument {
+  operation: SendOperationDocument;
+  result: SendResultDocument;
 }
 
 const INTERFACE_VERSION = '1' as const;
@@ -633,6 +690,76 @@ export const pendingMeltQuotesSchema = namedSchema<PendingMeltQuotesDocument>(
     offset: integerNode({ minimum: 0 }),
     limit: integerNode({ minimum: 1 }),
   }),
+);
+
+/** Runtime and generated schema for Cashu Send Operation preparation. */
+export const createSendOperationRequestSchema = namedSchema<CreateSendOperationRequest>(
+  'CreateSendOperationRequest',
+  objectNode(
+    {
+      mintUrl: stringNode(),
+      amount: decimalAmountNode,
+      unit: stringNode({ pattern: '\\S' }),
+      forceSwap: booleanNode(),
+    },
+    { optional: ['mintUrl', 'forceSwap'] },
+  ),
+);
+
+const sendOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('send'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  method: enumNode(['default', 'p2pk']),
+  requestedAmount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const sendOperationNode = unionNode([
+  objectNode({ ...sendOperationBaseFields, state: literalNode('init') }),
+  objectNode({
+    ...sendOperationBaseFields,
+    state: enumNode([
+      'prepared',
+      'executing',
+      'pending',
+      'finalized',
+      'rolling_back',
+      'rolled_back',
+    ]),
+    inputAmount: decimalAmountNode,
+    fee: decimalAmountNode,
+    needsSwap: booleanNode(),
+  }),
+]);
+
+/** Runtime and generated schema for one safe Send Operation. */
+export const sendOperationSchema = namedSchema<SendOperationDocument>(
+  'SendOperation',
+  sendOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Send Operations. */
+export const sendOperationsSchema = namedSchema<SendOperationsDocument>(
+  'SendOperations',
+  objectNode({
+    items: arrayNode(sendOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+const sendResultNode = objectNode({ token: stringNode({ sensitive: true }) });
+
+/** Runtime and generated schema for a sensitive Send Operation result. */
+export const sendResultSchema = namedSchema<SendResultDocument>('SendResult', sendResultNode);
+
+/** Runtime and generated schema for Send Operation execution with its result. */
+export const executeSendOperationResponseSchema = namedSchema<ExecuteSendOperationResponseDocument>(
+  'ExecuteSendOperationResponse',
+  objectNode({ operation: sendOperationNode, result: sendResultNode }),
 );
 
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { toAmount } from '@cashu/coco-core';
+import { SendOperationStateError, toAmount } from '@cashu/coco-core';
 
 import {
   AdministrativeCredential,
@@ -33,6 +33,347 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('prepares a safe Send Operation without executing it', async () => {
+    const credential = await createCredential();
+    const operation = sendOperationFixture();
+    const prepare = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createSendTestRoutes(
+      { ops: { send: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        amount: '25',
+        unit: 'sat',
+        forceSwap: true,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      id: 'send-operation-1',
+      type: 'send',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'default',
+      requestedAmount: '25',
+      inputAmount: '27',
+      fee: '2',
+      needsSwap: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(prepare).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      amount: '25',
+      unit: 'sat',
+      forceSwap: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('rejects a blank Send Operation unit as invalid request input', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => sendOperationFixture());
+    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        amount: '25',
+        unit: '   ',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'invalid_request',
+        message: 'The request does not match the expected schema',
+        retryable: false,
+      },
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('inspects a Send Operation without exposing its token or recovery data', async () => {
+    const credential = await createCredential();
+    const operation = sendOperationFixture({
+      state: 'pending' as const,
+      token: { mint: 'https://mint.example.com', proofs: [{ secret: 'must-not-leak' }] },
+    });
+    const get = mock(async () => operation);
+    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1', credential.plaintext),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id: 'send-operation-1',
+      type: 'send',
+      state: 'pending',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      method: 'default',
+      requestedAmount: '25',
+      inputAmount: '27',
+      fee: '2',
+      needsSwap: true,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(get).toHaveBeenCalledWith('send-operation-1');
+  });
+
+  test('paginates prepared and in-flight Send Operation collections from Coco', async () => {
+    const credential = await createCredential();
+    const operation = (id: string, createdAt: number, state: 'prepared' | 'pending') =>
+      sendOperationFixture({ id, createdAt, updatedAt: createdAt, state });
+    const listPrepared = mock(async () => [
+      operation('old', 1_786_838_400_000, 'prepared'),
+      operation('new-b', 1_786_838_600_000, 'prepared'),
+      operation('new-a', 1_786_838_600_000, 'prepared'),
+    ]);
+    const listInFlight = mock(async () => [operation('pending', 1_786_838_500_000, 'pending')]);
+    const routes = createSendTestRoutes(
+      { ops: { send: { listPrepared, listInFlight } } },
+      credential.credentials,
+    );
+
+    const prepared = await routes['/v1/operations/send/prepared']!.GET!(
+      authorizedRequest('/v1/operations/send/prepared?offset=1&limit=1', credential.plaintext),
+    );
+    const inFlight = await routes['/v1/operations/send/in-flight']!.GET!(
+      authorizedRequest('/v1/operations/send/in-flight', credential.plaintext),
+    );
+
+    expect(await prepared.json()).toMatchObject({
+      items: [{ id: 'new-b', state: 'prepared' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(await inFlight.json()).toMatchObject({
+      items: [{ id: 'pending', state: 'pending' }],
+      offset: 0,
+      limit: 20,
+    });
+    expect(listPrepared).toHaveBeenCalledWith();
+    expect(listInFlight).toHaveBeenCalledWith();
+  });
+
+  test('executes a Send Operation and returns its sensitive encoded result', async () => {
+    const credential = await createCredential();
+    const token = { mint: 'https://mint.example.com', proofs: [] };
+    const operation = sendOperationFixture({ state: 'pending' as const, token });
+    const execute = mock(async () => ({ operation, token }));
+    const encodeToken = mock(() => 'cashuBpGF0gaJhaUgA');
+    const routes = createSendTestRoutes(
+      { ops: { send: { execute } }, wallet: { encodeToken } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      operation: {
+        id: 'send-operation-1',
+        type: 'send',
+        state: 'pending',
+        mintUrl: 'https://mint.example.com',
+        unit: 'sat',
+        method: 'default',
+        requestedAmount: '25',
+        inputAmount: '27',
+        fee: '2',
+        needsSwap: true,
+        createdAt: '2026-08-16T00:00:00.000Z',
+        updatedAt: '2026-08-16T00:01:00.000Z',
+      },
+      result: { token: 'cashuBpGF0gaJhaUgA' },
+    });
+    expect(execute).toHaveBeenCalledWith('send-operation-1');
+    expect(encodeToken).toHaveBeenCalledWith(token);
+  });
+
+  test('recovers an encoded Send result from Coco-owned Operation state', async () => {
+    const credential = await createCredential();
+    const token = { mint: 'https://mint.example.com', proofs: [] };
+    const operation = sendOperationFixture({ state: 'finalized' as const, token });
+    const get = mock(async () => operation);
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const encodeToken = mock(() => 'cashuBrecovered');
+    const routes = createSendTestRoutes(
+      { ops: { send: { get, execute } }, wallet: { encodeToken } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/send/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ token: 'cashuBrecovered' });
+    expect(get).toHaveBeenCalledWith('send-operation-1');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('returns canonical Coco state after Send cancel, refresh, and reclaim commands', async () => {
+    const credential = await createCredential();
+    const cancel = mock(async () => {});
+    const refresh = mock(async () => sendOperationFixture({ state: 'finalized' as const }));
+    const reclaim = mock(async () => {});
+    const get = mock()
+      .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }))
+      .mockResolvedValueOnce(sendOperationFixture({ state: 'finalized' as const }))
+      .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }));
+    const routes = createSendTestRoutes(
+      { ops: { send: { cancel, refresh, reclaim, get } } },
+      credential.credentials,
+    );
+
+    const command = async (name: 'cancel' | 'refresh' | 'reclaim') =>
+      routes[`/v1/operations/send/:operationId/${name}`]!.POST!(
+        authorizedPostRequest(`/v1/operations/send/send-operation-1/${name}`, credential.plaintext),
+      );
+    const cancelled = await command('cancel');
+    const refreshed = await command('refresh');
+    const reclaimed = await command('reclaim');
+
+    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
+    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
+    expect(await reclaimed.json()).toMatchObject({ state: 'rolled_back' });
+    expect(cancel).toHaveBeenCalledWith('send-operation-1');
+    expect(refresh).toHaveBeenCalledWith('send-operation-1');
+    expect(reclaim).toHaveBeenCalledWith('send-operation-1');
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  test('maps Coco typed Send lifecycle failures to an invalid-state conflict', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => {
+      throw new SendOperationStateError('send-operation-1', 'pending', ['prepared']);
+    });
+    const routes = createSendTestRoutes({ ops: { send: { execute } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'invalid_operation_state',
+        message: 'The Send Operation command is unavailable in its current state',
+        retryable: false,
+        details: {
+          type: 'send',
+          operationId: 'send-operation-1',
+          state: 'pending',
+          expectedStates: ['prepared'],
+        },
+      },
+    });
+  });
+
+  test('returns a conflict while a Send result is not yet available', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => sendOperationFixture({ state: 'executing' as const }));
+    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'operation_result_not_available',
+        message: 'The Send Operation result is not available',
+        retryable: true,
+        details: { state: 'executing' },
+      },
+    });
+  });
+
+  test('replays idempotent Send preparation without creating another Operation', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => sendOperationFixture());
+    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/send',
+        credential.plaintext,
+        { mintUrl: 'https://mint.example.com', amount: '25', unit: 'sat' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-send-1' },
+      );
+
+    const first = await routes['/v1/operations/send']!.POST!(request());
+    const replay = await routes['/v1/operations/send']!.POST!(request());
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(await replay.json()).toMatchObject({ id: 'send-operation-1' });
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  test('authenticates Send Operation resources before calling Coco', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => sendOperationFixture());
+    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId']!.GET!(
+      new Request('http://localhost/v1/operations/send/send-operation-1'),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  test('maps untyped Coco Send failures without exposing their message', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send']!.POST!(
+      authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not prepare the Send Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+  });
+
   test('creates a BOLT11 Mint Quote without preparing an Operation', async () => {
     const credential = await createCredential();
     const quote = mintQuoteFixture({
@@ -1495,6 +1836,96 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'POST',
+        path: '/v1/operations/send',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateSendOperationRequest',
+        responseSchema: 'SendOperation',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/send/prepared',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/send/in-flight',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/send/{operationId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperation',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/send/{operationId}/execute',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'ExecuteSendOperationResponse',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/send/{operationId}/result',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendResult',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/send/{operationId}/cancel',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/send/{operationId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/send/{operationId}/reclaim',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'SendOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
         path: '/v1/admin/wallet/initialize',
         capability: 'wallet:admin',
         requestSchema: 'InitializeWalletRequest',
@@ -2474,6 +2905,26 @@ function meltQuoteFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function sendOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'send-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    method: 'default' as const,
+    methodData: { mustNotLeak: 'method-data' },
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    needsSwap: true,
+    fee: toAmount(2),
+    inputAmount: toAmount(27),
+    inputProofSecrets: ['must-not-leak'],
+    outputData: { mustNotLeak: 'output-data' },
+    ...overrides,
+  };
+}
+
 function createQuoteTestRoutes(manager: unknown, credential: AdministrativeCredential) {
   const runtime = {
     ...lifecycleRuntime(() => configuredStatus('running')),
@@ -2481,6 +2932,8 @@ function createQuoteTestRoutes(manager: unknown, credential: AdministrativeCrede
   } as unknown as V1Runtime;
   return buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credential);
 }
+
+const createSendTestRoutes = createQuoteTestRoutes;
 
 function lifecycleRuntime(
   getStatus: () => CocodStatus,

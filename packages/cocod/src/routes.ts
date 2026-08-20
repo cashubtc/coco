@@ -110,22 +110,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
         }
       }),
     },
-    '/send/cashu': {
-      capability: 'wallet:admin',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { amount: number; mintUrl?: string };
-          const mintUrl = body.mintUrl || state.mintUrl;
-          const prepared = await state.manager.ops.send.prepare({ mintUrl, amount: body.amount });
-          const result = await state.manager.ops.send.execute(prepared);
-          const token = state.manager.wallet.encodeToken(result.token);
-          return Response.json({ output: token });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return Response.json({ error: `Send failed: ${message}` }, { status: 500 });
-        }
-      }),
-    },
     '/send/bolt11': {
       capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {

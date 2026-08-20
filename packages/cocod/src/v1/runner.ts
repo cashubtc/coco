@@ -231,6 +231,9 @@ async function runV1Route(
     return response;
   } catch (error) {
     const response = mapError(error, requestId);
+    if (definition.responseCacheControl) {
+      response.headers.set('Cache-Control', definition.responseCacheControl);
+    }
     const fields = {
       durationMs: Math.round(performance.now() - startedAt),
       error: { name: error instanceof Error ? error.name : 'UnknownError' },

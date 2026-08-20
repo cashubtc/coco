@@ -21,6 +21,8 @@
                 "not_found",
                 "method_not_allowed",
                 "unsupported_behavior",
+                "invalid_operation_state",
+                "operation_result_not_available",
                 "internal_error",
                 "invalid_idempotency_key",
                 "idempotency_key_conflict",
@@ -1013,6 +1015,309 @@
         "limit": { "type": "integer", "minimum": 1 }
       }
     },
+    "SendOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "method",
+            "requestedAmount",
+            "createdAt",
+            "updatedAt",
+            "state"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "send" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "method": { "enum": ["default", "p2pk"] },
+            "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": { "const": "init" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "method",
+            "requestedAmount",
+            "createdAt",
+            "updatedAt",
+            "state",
+            "inputAmount",
+            "fee",
+            "needsSwap"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "send" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "method": { "enum": ["default", "p2pk"] },
+            "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": {
+              "enum": [
+                "prepared",
+                "executing",
+                "pending",
+                "finalized",
+                "rolling_back",
+                "rolled_back"
+              ]
+            },
+            "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "needsSwap": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "CreateSendOperationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "unit"],
+      "properties": {
+        "mintUrl": { "type": "string" },
+        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+        "unit": { "type": "string", "pattern": "\\S" },
+        "forceSwap": { "type": "boolean" }
+      }
+    },
+    "SendOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "method",
+                  "requestedAmount",
+                  "createdAt",
+                  "updatedAt",
+                  "state"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "send" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "enum": ["default", "p2pk"] },
+                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": { "const": "init" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "method",
+                  "requestedAmount",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "inputAmount",
+                  "fee",
+                  "needsSwap"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "send" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "method": { "enum": ["default", "p2pk"] },
+                  "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": {
+                    "enum": [
+                      "prepared",
+                      "executing",
+                      "pending",
+                      "finalized",
+                      "rolling_back",
+                      "rolled_back"
+                    ]
+                  },
+                  "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "needsSwap": { "type": "boolean" }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ExecuteSendOperationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "result"],
+      "properties": {
+        "operation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "mintUrl",
+                "unit",
+                "method",
+                "requestedAmount",
+                "createdAt",
+                "updatedAt",
+                "state"
+              ],
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "const": "send" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string" },
+                "method": { "enum": ["default", "p2pk"] },
+                "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "state": { "const": "init" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "mintUrl",
+                "unit",
+                "method",
+                "requestedAmount",
+                "createdAt",
+                "updatedAt",
+                "state",
+                "inputAmount",
+                "fee",
+                "needsSwap"
+              ],
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "const": "send" },
+                "mintUrl": { "type": "string" },
+                "unit": { "type": "string" },
+                "method": { "enum": ["default", "p2pk"] },
+                "requestedAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                },
+                "state": {
+                  "enum": [
+                    "prepared",
+                    "executing",
+                    "pending",
+                    "finalized",
+                    "rolling_back",
+                    "rolled_back"
+                  ]
+                },
+                "inputAmount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                "needsSwap": { "type": "boolean" }
+              }
+            }
+          ]
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["token"],
+          "properties": { "token": { "type": "string", "x-sensitive": true } }
+        }
+      }
+    },
+    "SendResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": { "token": { "type": "string", "x-sensitive": true } }
+    },
     "InitializeWalletResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -1380,6 +1685,105 @@
       "capability": "wallet:admin",
       "requestSchema": null,
       "responseSchema": "MeltQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/send",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateSendOperationRequest",
+      "responseSchema": "SendOperation",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/send/prepared",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "SendOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/send/in-flight",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "SendOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/send/{operationId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "SendOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/send/{operationId}/execute",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "ExecuteSendOperationResponse",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/send/{operationId}/result",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "SendResult",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/send/{operationId}/cancel",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "SendOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/send/{operationId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "SendOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/send/{operationId}/reclaim",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "SendOperation",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": "optional",

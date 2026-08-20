@@ -1,9 +1,12 @@
 import {
   normalizeMintUrl,
+  SendOperationNotFoundError,
+  SendOperationStateError,
   type BalanceQuery,
   type Mint,
   type MintQuote,
   type MeltQuote,
+  type SendOperation,
 } from '@cashu/coco-core';
 
 import { CocodRuntimeError } from '../runtime-error.js';
@@ -21,6 +24,8 @@ import {
   balancesSchema,
   createMintQuoteRequestSchema,
   createMeltQuoteRequestSchema,
+  createSendOperationRequestSchema,
+  executeSendOperationResponseSchema,
   healthSchema,
   initializeWalletRequestSchema,
   initializeWalletResponseSchema,
@@ -37,6 +42,9 @@ import {
   pendingMeltQuotesSchema,
   processShutdownRequestSchema,
   processShutdownResponseSchema,
+  sendOperationSchema,
+  sendOperationsSchema,
+  sendResultSchema,
   startSessionRequestSchema,
   stopSessionRequestSchema,
   toLifecycleStatusDocument,
@@ -45,6 +53,8 @@ import {
   type BalancesDocument,
   type CreateMintQuoteRequest,
   type CreateMeltQuoteRequest,
+  type CreateSendOperationRequest,
+  type ExecuteSendOperationResponseDocument,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
@@ -60,6 +70,9 @@ import {
   type PendingMeltQuotesDocument,
   type ProcessShutdownRequest,
   type ProcessShutdownResponseDocument,
+  type SendOperationDocument,
+  type SendOperationsDocument,
+  type SendResultDocument,
   type StartSessionRequest,
   type StopSessionRequest,
   type WalletRecoveryMaterialRequest,
@@ -251,6 +264,87 @@ const REFRESH_MELT_QUOTE_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
 
+const CREATE_SEND_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/send',
+  capability: 'wallet:admin',
+  requestSchema: createSendOperationRequestSchema,
+  responseSchema: sendOperationSchema,
+  successStatuses: [201],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<CreateSendOperationRequest, SendOperationDocument>;
+
+const GET_SEND_OPERATION_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/send/{operationId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: sendOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, SendOperationDocument>;
+
+const LIST_PREPARED_SEND_OPERATIONS_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/send/prepared',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: sendOperationsSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, SendOperationsDocument>;
+
+const LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE = {
+  ...LIST_PREPARED_SEND_OPERATIONS_ROUTE,
+  path: '/v1/operations/send/in-flight',
+} as const satisfies V1RouteMetadata<null, SendOperationsDocument>;
+
+const EXECUTE_SEND_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/send/{operationId}/execute',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: executeSendOperationResponseSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: 'no-store',
+} as const satisfies V1RouteMetadata<null, ExecuteSendOperationResponseDocument>;
+
+const GET_SEND_OPERATION_RESULT_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/send/{operationId}/result',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: sendResultSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: 'no-store',
+} as const satisfies V1RouteMetadata<null, SendResultDocument>;
+
+const CANCEL_SEND_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/send/{operationId}/cancel',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: sendOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, SendOperationDocument>;
+
+const REFRESH_SEND_OPERATION_ROUTE = {
+  ...CANCEL_SEND_OPERATION_ROUTE,
+  path: '/v1/operations/send/{operationId}/refresh',
+} as const satisfies V1RouteMetadata<null, SendOperationDocument>;
+
+const RECLAIM_SEND_OPERATION_ROUTE = {
+  ...CANCEL_SEND_OPERATION_ROUTE,
+  path: '/v1/operations/send/{operationId}/reclaim',
+} as const satisfies V1RouteMetadata<null, SendOperationDocument>;
+
 const INITIALIZE_WALLET_ROUTE = {
   method: 'POST',
   path: '/v1/admin/wallet/initialize',
@@ -329,6 +423,15 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     LIST_PENDING_MELT_QUOTES_ROUTE,
     GET_MELT_QUOTE_ROUTE,
     REFRESH_MELT_QUOTE_ROUTE,
+    CREATE_SEND_OPERATION_ROUTE,
+    LIST_PREPARED_SEND_OPERATIONS_ROUTE,
+    LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE,
+    GET_SEND_OPERATION_ROUTE,
+    EXECUTE_SEND_OPERATION_ROUTE,
+    GET_SEND_OPERATION_RESULT_ROUTE,
+    CANCEL_SEND_OPERATION_ROUTE,
+    REFRESH_SEND_OPERATION_ROUTE,
+    RECLAIM_SEND_OPERATION_ROUTE,
     INITIALIZE_WALLET_ROUTE,
     WALLET_RECOVERY_MATERIAL_ROUTE,
     START_SESSION_ROUTE,
@@ -619,6 +722,144 @@ export function createV1RouteDefinitions(
     getAdapter: (session) => session.manager.quotes.melt,
     toDocument: toMeltQuoteDocument,
   });
+  const createSendOperation = defineV1Route({
+    ...CREATE_SEND_OPERATION_ROUTE,
+    handler: async (input) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl =
+        input.mintUrl === undefined
+          ? session.mintUrl
+          : parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      try {
+        const operation = await session.manager.ops.send.prepare({
+          mintUrl,
+          amount: input.amount,
+          unit: input.unit,
+          ...(input.forceSwap !== undefined ? { forceSwap: input.forceSwap } : {}),
+        });
+        return new V1HttpResponse(toSendOperationDocument(operation), 201);
+      } catch (error) {
+        throw sendOperationCocoError('prepare the Send Operation', error);
+      }
+    },
+  });
+  const getSendOperation = defineV1Route({
+    ...GET_SEND_OPERATION_ROUTE,
+    handler: async (_input, request) => {
+      const session = requireRunningSession(runtime);
+      const operationId = parseSendOperationId(request);
+      try {
+        const operation = await session.manager.ops.send.get(operationId);
+        if (!operation) throw sendOperationNotFound();
+        return toSendOperationDocument(operation);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw sendOperationCocoError('return the Send Operation', error);
+      }
+    },
+  });
+  const listSendOperations = (
+    route: typeof LIST_PREPARED_SEND_OPERATIONS_ROUTE | typeof LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE,
+    kind: 'prepared' | 'in-flight',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const send = requireRunningSession(runtime).manager.ops.send;
+        const { offset, limit } = parseSendOperationPageQuery(request, kind);
+        try {
+          const operations =
+            kind === 'prepared' ? await send.listPrepared() : await send.listInFlight();
+          return {
+            items: operations
+              .toSorted(compareSendOperationsForPagination)
+              .slice(offset, offset + limit)
+              .map(toSendOperationDocument),
+            offset,
+            limit,
+          };
+        } catch (error) {
+          throw sendOperationCocoError(`list ${kind} Send Operations`, error);
+        }
+      },
+    });
+  const listPreparedSendOperations = listSendOperations(
+    LIST_PREPARED_SEND_OPERATIONS_ROUTE,
+    'prepared',
+  );
+  const listInFlightSendOperations = listSendOperations(
+    LIST_IN_FLIGHT_SEND_OPERATIONS_ROUTE,
+    'in-flight',
+  );
+  const executeSendOperation = defineV1Route({
+    ...EXECUTE_SEND_OPERATION_ROUTE,
+    handler: async (_input, request) => {
+      const session = requireRunningSession(runtime);
+      const operationId = parseSendOperationId(request, 'execute');
+      try {
+        const { operation, token } = await session.manager.ops.send.execute(operationId);
+        return {
+          operation: toSendOperationDocument(operation),
+          result: { token: session.manager.wallet.encodeToken(token) },
+        };
+      } catch (error) {
+        throw sendOperationCocoError('execute the Send Operation', error);
+      }
+    },
+  });
+  const getSendOperationResult = defineV1Route({
+    ...GET_SEND_OPERATION_RESULT_ROUTE,
+    handler: async (_input, request) => {
+      const session = requireRunningSession(runtime);
+      const operationId = parseSendOperationId(request, 'result');
+      try {
+        const operation = await session.manager.ops.send.get(operationId);
+        if (!operation) throw sendOperationNotFound();
+        if (
+          (operation.state !== 'pending' && operation.state !== 'finalized') ||
+          !operation.token
+        ) {
+          throw new V1HttpError({
+            status: 409,
+            code: 'operation_result_not_available',
+            message: 'The Send Operation result is not available',
+            retryable: operation.state === 'executing',
+            details: { state: operation.state },
+          });
+        }
+        return { token: session.manager.wallet.encodeToken(operation.token) };
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw sendOperationCocoError('return the Send Operation result', error);
+      }
+    },
+  });
+  const sendOperationCommand = (
+    route:
+      | typeof CANCEL_SEND_OPERATION_ROUTE
+      | typeof REFRESH_SEND_OPERATION_ROUTE
+      | typeof RECLAIM_SEND_OPERATION_ROUTE,
+    command: 'cancel' | 'refresh' | 'reclaim',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const send = requireRunningSession(runtime).manager.ops.send;
+        const operationId = parseSendOperationId(request, command);
+        try {
+          await send[command](operationId);
+          const operation = await send.get(operationId);
+          if (!operation) throw sendOperationNotFound();
+          return toSendOperationDocument(operation);
+        } catch (error) {
+          if (error instanceof V1HttpError) throw error;
+          throw sendOperationCocoError(`${command} the Send Operation`, error);
+        }
+      },
+    });
+  const cancelSendOperation = sendOperationCommand(CANCEL_SEND_OPERATION_ROUTE, 'cancel');
+  const refreshSendOperation = sendOperationCommand(REFRESH_SEND_OPERATION_ROUTE, 'refresh');
+  const reclaimSendOperation = sendOperationCommand(RECLAIM_SEND_OPERATION_ROUTE, 'reclaim');
   const initializeWallet = defineV1Route({
     ...INITIALIZE_WALLET_ROUTE,
     handler: async (input) => {
@@ -680,6 +921,15 @@ export function createV1RouteDefinitions(
     ...mintQuoteRoutes,
     createMeltQuote,
     ...meltQuoteRoutes,
+    createSendOperation,
+    listPreparedSendOperations,
+    listInFlightSendOperations,
+    getSendOperation,
+    executeSendOperation,
+    getSendOperationResult,
+    cancelSendOperation,
+    refreshSendOperation,
+    reclaimSendOperation,
     initializeWallet,
     walletRecoveryMaterial,
     startSession,
@@ -966,6 +1216,87 @@ function compareQuotesForPagination(
   return quoteComparison !== 0 ? quoteComparison : left.method.localeCompare(right.method);
 }
 
+function toSendOperationDocument(operation: SendOperation): SendOperationDocument {
+  const base = {
+    id: operation.id,
+    type: 'send' as const,
+    mintUrl: normalizeMintUrl(operation.mintUrl),
+    unit: operation.unit,
+    method: operation.method,
+    requestedAmount: operation.amount.toString(),
+    createdAt: new Date(operation.createdAt).toISOString(),
+    updatedAt: new Date(operation.updatedAt).toISOString(),
+  };
+  if (operation.state === 'init') return { ...base, state: operation.state };
+  return {
+    ...base,
+    state: operation.state,
+    inputAmount: operation.inputAmount.toString(),
+    fee: operation.fee.toString(),
+    needsSwap: operation.needsSwap,
+  };
+}
+
+function compareSendOperationsForPagination(left: SendOperation, right: SendOperation): number {
+  return left.createdAt !== right.createdAt
+    ? right.createdAt - left.createdAt
+    : left.id.localeCompare(right.id);
+}
+
+function parseSendOperationPageQuery(
+  request: Request,
+  kind: 'prepared' | 'in-flight',
+): { offset: number; limit: number } {
+  const message = `The ${kind} Send Operation filters are invalid`;
+  const query = parseQuery(request, ['offset', 'limit'], message);
+  return {
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+  };
+}
+
+function sendOperationCocoError(action: string, cause: unknown): V1HttpError {
+  if (cause instanceof SendOperationNotFoundError) return sendOperationNotFound(cause);
+  if (cause instanceof SendOperationStateError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'invalid_operation_state',
+      message: 'The Send Operation command is unavailable in its current state',
+      retryable: false,
+      details: {
+        type: 'send',
+        operationId: cause.operationId,
+        state: cause.state,
+        expectedStates: [...cause.expectedStates],
+      },
+      cause,
+    });
+  }
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
+}
+
+function sendOperationNotFound(cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: 'The Send Operation does not exist',
+    retryable: false,
+    cause,
+  });
+}
+
+function parseSendOperationId(request: Request, command?: string): string {
+  const message = 'The Send Operation identity is invalid';
+  parseQuery(request, [], message);
+  return parsePathIdentity(request, '/v1/operations/send/', command ? `/${command}` : '', message);
+}
+
 function knownMintNotFound(): V1HttpError {
   return new V1HttpError({
     status: 404,
@@ -985,19 +1316,27 @@ function quoteNotFound(type: 'Mint' | 'Melt'): V1HttpError {
 }
 
 function parseQuoteIdPath(request: Request, type: 'mint' | 'melt', refresh: boolean): string {
-  const path = new URL(request.url).pathname;
   const prefix = `/v1/quotes/${type}/`;
   const suffix = refresh ? '/refresh' : '';
-  if (!path.startsWith(prefix) || !path.endsWith(suffix)) {
-    throw invalidQuery(`The ${type === 'mint' ? 'Mint' : 'Melt'} Quote identity is invalid`);
-  }
+  const message = `The ${type === 'mint' ? 'Mint' : 'Melt'} Quote identity is invalid`;
+  return parsePathIdentity(request, prefix, suffix, message);
+}
+
+function parsePathIdentity(
+  request: Request,
+  prefix: string,
+  suffix: string,
+  message: string,
+): string {
+  const path = new URL(request.url).pathname;
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) throw invalidQuery(message);
   const encoded = path.slice(prefix.length, suffix.length === 0 ? undefined : -suffix.length);
   try {
-    const quoteId = decodeURIComponent(encoded);
-    if (quoteId.length === 0 || quoteId.includes('/')) throw new Error('Invalid Quote ID');
-    return quoteId;
+    const identity = decodeURIComponent(encoded);
+    if (identity.length === 0 || identity.includes('/')) throw new Error('Invalid identity');
+    return identity;
   } catch (error) {
-    throw invalidQuery(`The ${type === 'mint' ? 'Mint' : 'Melt'} Quote identity is invalid`, error);
+    throw invalidQuery(message, error);
   }
 }
 

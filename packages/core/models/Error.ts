@@ -1,3 +1,4 @@
+import type { SendOperationState } from '../operations/send/SendOperation.ts';
 import type { KeypairPurpose } from './Keypair.ts';
 
 export { HttpResponseError, MintOperationError, NetworkError } from '@cashu/cashu-ts';
@@ -122,6 +123,30 @@ export class OperationInProgressError extends Error {
     super(`Operation ${operationId} is already in progress`);
     this.name = 'OperationInProgressError';
     this.operationId = operationId;
+  }
+}
+
+/** Raised when a requested Send Operation does not exist. */
+export class SendOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'SendOperationNotFoundError';
+  }
+}
+
+/** Raised when a Send lifecycle command is unavailable in the current state. */
+export class SendOperationStateError extends Error {
+  readonly expectedStates: readonly SendOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: SendOperationState,
+    expectedStates: readonly SendOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'SendOperationStateError';
+    this.expectedStates = [...expectedStates];
   }
 }
 

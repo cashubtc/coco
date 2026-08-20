@@ -55,19 +55,6 @@
       }
     },
     {
-      "path": "/send/cashu",
-      "method": "POST",
-      "state": "cocoSession.running",
-      "body": {
-        "amount": "number",
-        "mintUrl": "string (optional)"
-      },
-      "responses": {
-        "200": "{ output: string }",
-        "500": "{ error: string }"
-      }
-    },
-    {
       "path": "/send/bolt11",
       "method": "POST",
       "state": "cocoSession.running",
