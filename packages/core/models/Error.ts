@@ -1,3 +1,4 @@
+import type { MintOperationState } from '../operations/mint/MintOperation.ts';
 import type { SendOperationState } from '../operations/send/SendOperation.ts';
 import type { ReceiveOperationState } from '../operations/receive/ReceiveOperation.ts';
 import type { KeypairPurpose } from './Keypair.ts';
@@ -124,6 +125,30 @@ export class OperationInProgressError extends Error {
     super(`Operation ${operationId} is already in progress`);
     this.name = 'OperationInProgressError';
     this.operationId = operationId;
+  }
+}
+
+/** Raised when a requested Mint Operation does not exist. */
+export class MintOperationNotFoundError extends Error {
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} not found`);
+    this.name = 'MintOperationNotFoundError';
+  }
+}
+
+/** Raised when a Mint lifecycle command is unavailable in the current state. */
+export class MintOperationStateError extends Error {
+  readonly expectedStates: readonly MintOperationState[];
+
+  constructor(
+    readonly operationId: string,
+    readonly state: MintOperationState,
+    expectedStates: readonly MintOperationState[],
+  ) {
+    const expected = expectedStates.map((expectedState) => `'${expectedState}'`).join(' or ');
+    super(`Cannot modify operation in state '${state}'. Expected ${expected}.`);
+    this.name = 'MintOperationStateError';
+    this.expectedStates = [...expectedStates];
   }
 }
 
