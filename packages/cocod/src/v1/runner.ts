@@ -192,6 +192,9 @@ async function runV1Route(
           requestId,
           headers: status === 401 ? { 'WWW-Authenticate': 'Bearer' } : undefined,
         });
+        if (definition.responseCacheControl) {
+          response.headers.set('Cache-Control', definition.responseCacheControl);
+        }
         logCompleted(requestLogger, startedAt, response.status);
         return response;
       }

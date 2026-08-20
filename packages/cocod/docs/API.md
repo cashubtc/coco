@@ -204,7 +204,8 @@ Execute, cancel, refresh, and reclaim are explicit `POST` commands with no reque
 await Coco rather than creating cocod jobs. Cancel, refresh, and reclaim then read and return the
 canonical safe Operation through Coco. Unsupported state transitions return
 `invalid_operation_state` with the current and expected states when Coco supplies its typed
-lifecycle error.
+lifecycle error. A concurrent command for an operation already locked by Coco returns
+`operation_in_progress` with `retryable: true`.
 
 Successful execute returns `{ operation, result: { token } }`. The authenticated result resource
 returns the same `{ token }` from the token already retained in Coco-owned Operation state; cocod

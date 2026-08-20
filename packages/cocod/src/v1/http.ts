@@ -1,5 +1,6 @@
 import {
   normalizeMintUrl,
+  OperationInProgressError,
   SendOperationNotFoundError,
   SendOperationStateError,
   type BalanceQuery,
@@ -1257,6 +1258,16 @@ function parseSendOperationPageQuery(
 
 function sendOperationCocoError(action: string, cause: unknown): V1HttpError {
   if (cause instanceof SendOperationNotFoundError) return sendOperationNotFound(cause);
+  if (cause instanceof OperationInProgressError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'operation_in_progress',
+      message: 'The Send Operation is already in progress',
+      retryable: true,
+      details: { type: 'send', operationId: cause.operationId },
+      cause,
+    });
+  }
   if (cause instanceof SendOperationStateError) {
     return new V1HttpError({
       status: 409,

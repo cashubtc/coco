@@ -17,6 +17,7 @@ export const V1_ERROR_CODES = [
   'method_not_allowed',
   'unsupported_behavior',
   'invalid_operation_state',
+  'operation_in_progress',
   'operation_result_not_available',
   'internal_error',
   'invalid_idempotency_key',

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SendOperationStateError, toAmount } from '@cashu/coco-core';
+import { OperationInProgressError, SendOperationStateError, toAmount } from '@cashu/coco-core';
 
 import {
   AdministrativeCredential,
@@ -40,7 +40,7 @@ describe('v1 HTTP route interface', () => {
     const execute = mock(async () => {
       throw new Error('execute was not expected');
     });
-    const routes = createSendTestRoutes(
+    const routes = createWalletTestRoutes(
       { ops: { send: { prepare, execute } } },
       credential.credentials,
     );
@@ -82,7 +82,7 @@ describe('v1 HTTP route interface', () => {
   test('rejects a blank Send Operation unit as invalid request input', async () => {
     const credential = await createCredential();
     const prepare = mock(async () => sendOperationFixture());
-    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send']!.POST!(
       authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
@@ -109,7 +109,7 @@ describe('v1 HTTP route interface', () => {
       token: { mint: 'https://mint.example.com', proofs: [{ secret: 'must-not-leak' }] },
     });
     const get = mock(async () => operation);
-    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send/:operationId']!.GET!(
       authorizedRequest('/v1/operations/send/send-operation-1', credential.plaintext),
@@ -143,7 +143,7 @@ describe('v1 HTTP route interface', () => {
       operation('new-a', 1_786_838_600_000, 'prepared'),
     ]);
     const listInFlight = mock(async () => [operation('pending', 1_786_838_500_000, 'pending')]);
-    const routes = createSendTestRoutes(
+    const routes = createWalletTestRoutes(
       { ops: { send: { listPrepared, listInFlight } } },
       credential.credentials,
     );
@@ -175,7 +175,7 @@ describe('v1 HTTP route interface', () => {
     const operation = sendOperationFixture({ state: 'pending' as const, token });
     const execute = mock(async () => ({ operation, token }));
     const encodeToken = mock(() => 'cashuBpGF0gaJhaUgA');
-    const routes = createSendTestRoutes(
+    const routes = createWalletTestRoutes(
       { ops: { send: { execute } }, wallet: { encodeToken } },
       credential.credentials,
     );
@@ -216,7 +216,7 @@ describe('v1 HTTP route interface', () => {
       throw new Error('execute was not expected');
     });
     const encodeToken = mock(() => 'cashuBrecovered');
-    const routes = createSendTestRoutes(
+    const routes = createWalletTestRoutes(
       { ops: { send: { get, execute } }, wallet: { encodeToken } },
       credential.credentials,
     );
@@ -241,7 +241,7 @@ describe('v1 HTTP route interface', () => {
       .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }))
       .mockResolvedValueOnce(sendOperationFixture({ state: 'finalized' as const }))
       .mockResolvedValueOnce(sendOperationFixture({ state: 'rolled_back' as const }));
-    const routes = createSendTestRoutes(
+    const routes = createWalletTestRoutes(
       { ops: { send: { cancel, refresh, reclaim, get } } },
       credential.credentials,
     );
@@ -268,13 +268,14 @@ describe('v1 HTTP route interface', () => {
     const execute = mock(async () => {
       throw new SendOperationStateError('send-operation-1', 'pending', ['prepared']);
     });
-    const routes = createSendTestRoutes({ ops: { send: { execute } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { execute } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
       authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
     );
 
     expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({
       error: {
         code: 'invalid_operation_state',
@@ -290,10 +291,33 @@ describe('v1 HTTP route interface', () => {
     });
   });
 
+  test('preserves retry semantics when a Send Operation command is already in progress', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => {
+      throw new OperationInProgressError('send-operation-1');
+    });
+    const routes = createWalletTestRoutes({ ops: { send: { execute } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/send/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'operation_in_progress',
+        message: 'The Send Operation is already in progress',
+        retryable: true,
+        details: { type: 'send', operationId: 'send-operation-1' },
+      },
+    });
+  });
+
   test('returns a conflict while a Send result is not yet available', async () => {
     const credential = await createCredential();
     const get = mock(async () => sendOperationFixture({ state: 'executing' as const }));
-    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send/:operationId/result']!.GET!(
       authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
@@ -314,7 +338,7 @@ describe('v1 HTTP route interface', () => {
   test('replays idempotent Send preparation without creating another Operation', async () => {
     const credential = await createCredential();
     const prepare = mock(async () => sendOperationFixture());
-    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
     const request = () =>
       authorizedJsonRequest(
         '/v1/operations/send',
@@ -336,7 +360,7 @@ describe('v1 HTTP route interface', () => {
   test('authenticates Send Operation resources before calling Coco', async () => {
     const credential = await createCredential();
     const get = mock(async () => sendOperationFixture());
-    const routes = createSendTestRoutes({ ops: { send: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { get } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send/:operationId']!.GET!(
       new Request('http://localhost/v1/operations/send/send-operation-1'),
@@ -347,12 +371,59 @@ describe('v1 HTTP route interface', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  test('marks authentication failures from sensitive Send routes as non-cacheable', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const get = mock(async () => {
+      throw new Error('get was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { ops: { send: { execute, get } } },
+      credential.credentials,
+    );
+
+    const responses = await Promise.all([
+      routes['/v1/operations/send/:operationId/execute']!.POST!(
+        new Request('http://localhost/v1/operations/send/send-operation-1/execute', {
+          method: 'POST',
+        }),
+      ),
+      routes['/v1/operations/send/:operationId/result']!.GET!(
+        new Request('http://localhost/v1/operations/send/send-operation-1/result'),
+      ),
+    ]);
+
+    for (const response of responses) {
+      expect(response.status).toBe(401);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+
+    await setCapabilities(credential.verifierFile, ['wallet:read']);
+    const forbiddenExecute = await routes['/v1/operations/send/:operationId/execute']!.POST!(
+      authorizedPostRequest('/v1/operations/send/send-operation-1/execute', credential.plaintext),
+    );
+    expect(forbiddenExecute.status).toBe(403);
+    expect(forbiddenExecute.headers.get('cache-control')).toBe('no-store');
+
+    await setCapabilities(credential.verifierFile, ['wallet:admin']);
+    const forbiddenResult = await routes['/v1/operations/send/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/send/send-operation-1/result', credential.plaintext),
+    );
+    expect(forbiddenResult.status).toBe(403);
+    expect(forbiddenResult.headers.get('cache-control')).toBe('no-store');
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+  });
+
   test('maps untyped Coco Send failures without exposing their message', async () => {
     const credential = await createCredential();
     const prepare = mock(async () => {
       throw new Error('proof secret must-not-leak');
     });
-    const routes = createSendTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ ops: { send: { prepare } } }, credential.credentials);
 
     const response = await routes['/v1/operations/send']!.POST!(
       authorizedJsonRequest('/v1/operations/send', credential.plaintext, {
@@ -380,7 +451,7 @@ describe('v1 HTTP route interface', () => {
       blindedSignatures: [{ C_: 'must-not-leak' }],
     });
     const create = mock(async () => quote);
-    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/mint']!.POST!(
       authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
@@ -430,7 +501,7 @@ describe('v1 HTTP route interface', () => {
       amountPaid: toAmount(25),
     });
     const get = mock(async () => quote);
-    const routes = createQuoteTestRoutes({ quotes: { mint: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { mint: { get } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/mint/:quoteId']!.GET!(
       authorizedRequest(
@@ -470,7 +541,7 @@ describe('v1 HTTP route interface', () => {
       quote('middle', 'https://mint.example.com', 1_786_838_500_000),
       quote('new-a', 'https://mint-a.example.com', 1_786_838_600_000),
     ]);
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { mint: { listPending } } },
       credential.credentials,
     );
@@ -503,7 +574,7 @@ describe('v1 HTTP route interface', () => {
       remoteUpdatedAt: 1_786_838_460,
     });
     const refresh = mock(async () => quote);
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { mint: { get: async () => quote, refresh } } },
       credential.credentials,
     );
@@ -547,7 +618,7 @@ describe('v1 HTTP route interface', () => {
       lastObservedRemoteStateAt: 1_786_838_460_000,
     });
     const create = mock(async () => quote);
-    const routes = createQuoteTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/melt']!.POST!(
       authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
@@ -592,7 +663,7 @@ describe('v1 HTTP route interface', () => {
       state: 'PENDING' as const,
     });
     const get = mock(async () => quote);
-    const routes = createQuoteTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
       authorizedRequest(
@@ -628,7 +699,7 @@ describe('v1 HTTP route interface', () => {
       quote('new', 1_786_838_600_000),
       quote('middle', 1_786_838_500_000),
     ]);
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { melt: { listPending } } },
       credential.credentials,
     );
@@ -655,7 +726,7 @@ describe('v1 HTTP route interface', () => {
       payment_preimage: 'must-not-leak',
     });
     const refresh = mock(async () => quote);
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { melt: { get: async () => quote, refresh } } },
       credential.credentials,
     );
@@ -710,7 +781,7 @@ describe('v1 HTTP route interface', () => {
     const create = mock(async (input: Record<string, unknown> & { method: string }) =>
       input.method === 'onchain' ? onchain : bolt12,
     );
-    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
 
     const onchainResponse = await routes['/v1/quotes/mint']!.POST!(
       authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
@@ -792,7 +863,7 @@ describe('v1 HTTP route interface', () => {
     const create = mock(async (input: Record<string, unknown> & { method: string }) =>
       input.method === 'bolt12' ? bolt12 : onchain,
     );
-    const routes = createQuoteTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
 
     const bolt12Response = await routes['/v1/quotes/melt']!.POST!(
       authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
@@ -852,7 +923,7 @@ describe('v1 HTTP route interface', () => {
     const create = mock(async () => {
       throw new Error('Coco should not be called');
     });
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { mint: { create }, melt: { create } } },
       credential.credentials,
     );
@@ -900,7 +971,7 @@ describe('v1 HTTP route interface', () => {
     const refresh = mock(async () => {
       throw new Error('refresh should not run');
     });
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { mint: { get, refresh } } },
       credential.credentials,
     );
@@ -922,7 +993,7 @@ describe('v1 HTTP route interface', () => {
     const create = mock(async () => {
       throw new Error('Coco should not be called');
     });
-    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/mint']!.POST!(
       new Request('http://localhost/v1/quotes/mint', {
@@ -946,7 +1017,7 @@ describe('v1 HTTP route interface', () => {
     const credential = await createCredential();
     const get = mock(async () => null);
     const listPending = mock(async () => []);
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { mint: { get, listPending } } },
       credential.credentials,
     );
@@ -974,7 +1045,7 @@ describe('v1 HTTP route interface', () => {
   test('returns not found for an absent singular Quote', async () => {
     const credential = await createCredential();
     const get = mock(async () => null);
-    const routes = createQuoteTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+    const routes = createWalletTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
 
     const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
       authorizedRequest(
@@ -992,7 +1063,7 @@ describe('v1 HTTP route interface', () => {
     const listPending = mock(async () => {
       throw new Error('private mint diagnostic');
     });
-    const routes = createQuoteTestRoutes(
+    const routes = createWalletTestRoutes(
       { quotes: { melt: { listPending } } },
       credential.credentials,
     );
@@ -2925,15 +2996,13 @@ function sendOperationFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createQuoteTestRoutes(manager: unknown, credential: AdministrativeCredential) {
+function createWalletTestRoutes(manager: unknown, credential: AdministrativeCredential) {
   const runtime = {
     ...lifecycleRuntime(() => configuredStatus('running')),
     getRunningSession: () => ({ manager }),
   } as unknown as V1Runtime;
   return buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credential);
 }
-
-const createSendTestRoutes = createQuoteTestRoutes;
 
 function lifecycleRuntime(
   getStatus: () => CocodStatus,
