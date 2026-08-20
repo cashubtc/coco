@@ -1,4 +1,5 @@
 import type { CocodStatus } from '../runtime.js';
+import { V1HttpError } from './contract.js';
 
 /** Runtime validator paired with the JSON Schema emitted for the same document. */
 export interface RuntimeSchema<T> {
@@ -14,6 +15,7 @@ export const V1_ERROR_CODES = [
   'invalid_request',
   'not_found',
   'method_not_allowed',
+  'unsupported_behavior',
   'internal_error',
   'invalid_idempotency_key',
   'idempotency_key_conflict',
@@ -152,6 +154,113 @@ export interface PaymentMethodCapabilityDocument {
 /** Collection of capabilities advertised by one Known Mint. */
 export interface PaymentMethodCapabilitiesDocument {
   items: PaymentMethodCapabilityDocument[];
+}
+
+/** Method-specific Mint Quote creation input with lossless decimal amounts. */
+export type CreateMintQuoteRequest =
+  | {
+      mintUrl: string;
+      method: 'bolt11';
+      amount: string;
+      unit: string;
+      locked?: boolean;
+    }
+  | { mintUrl: string; method: 'onchain'; unit: string }
+  | {
+      mintUrl: string;
+      method: 'bolt12';
+      unit: string;
+      amount?: string;
+      description?: string;
+    };
+
+interface MintQuoteDocumentBase {
+  type: 'mint';
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  mintUrl: string;
+  quoteId: string;
+  request: string;
+  unit: string;
+  amountPaid: string;
+  amountIssued: string;
+  expiry: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Safe cocod projection of one canonical Mint Quote. */
+export type MintQuoteDocument =
+  | (MintQuoteDocumentBase & {
+      method: 'bolt11';
+      amount: string;
+      reusable: false;
+      state: 'UNPAID' | 'PAID' | 'ISSUED';
+    })
+  | (MintQuoteDocumentBase & {
+      method: 'bolt12';
+      amount?: string;
+      reusable: true;
+    })
+  | (MintQuoteDocumentBase & { method: 'onchain'; reusable: true });
+
+/** Offset-paginated canonical Mint Quotes. */
+export interface PendingMintQuotesDocument {
+  items: MintQuoteDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Method-specific Melt Quote creation input with lossless decimal amounts. */
+export type CreateMeltQuoteRequest =
+  | {
+      mintUrl: string;
+      method: 'bolt11';
+      invoice: string;
+      amount?: string;
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'bolt12';
+      offer: string;
+      amount?: string;
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'onchain';
+      address: string;
+      amount: string;
+      unit?: string;
+    };
+
+interface MeltQuoteDocumentBase {
+  type: 'melt';
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  mintUrl: string;
+  quoteId: string;
+  request: string;
+  unit: string;
+  amount: string;
+  state: 'UNPAID' | 'PENDING' | 'PAID';
+  expiry: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Safe cocod projection of one canonical Melt Quote. */
+export type MeltQuoteDocument =
+  | (MeltQuoteDocumentBase & { method: 'bolt11' | 'bolt12'; feeReserve: string })
+  | (MeltQuoteDocumentBase & {
+      method: 'onchain';
+      feeOptions: Array<{ feeIndex: number; feeReserve: string; estimatedBlocks: number }>;
+    });
+
+/** Offset-paginated canonical Melt Quotes. */
+export interface PendingMeltQuotesDocument {
+  items: MeltQuoteDocument[];
+  offset: number;
+  limit: number;
 }
 
 const INTERFACE_VERSION = '1' as const;
@@ -360,6 +469,172 @@ export const paymentMethodCapabilitiesSchema = namedSchema<PaymentMethodCapabili
   objectNode({ items: arrayNode(paymentMethodCapabilityNode) }),
 );
 
+/** Runtime and generated schema for method-specific Mint Quote creation. */
+export const createMintQuoteRequestSchema = namedSchema<CreateMintQuoteRequest>(
+  'CreateMintQuoteRequest',
+  quoteMethodUnionNode('mint', [
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt11'),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+        locked: booleanNode(),
+      },
+      { optional: ['locked'] },
+    ),
+    objectNode({
+      mintUrl: stringNode(),
+      method: literalNode('onchain'),
+      unit: stringNode(),
+    }),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt12'),
+        unit: stringNode(),
+        amount: decimalAmountNode,
+        description: stringNode(),
+      },
+      { optional: ['amount', 'description'] },
+    ),
+  ]),
+);
+
+const mintQuoteBaseFields = {
+  type: literalNode('mint'),
+  mintUrl: stringNode(),
+  quoteId: stringNode(),
+  request: stringNode(),
+  unit: stringNode(),
+  amountPaid: decimalAmountNode,
+  amountIssued: decimalAmountNode,
+  expiry: nullableNode(rfc3339UtcSchema),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const mintQuoteNode = unionNode([
+  objectNode({
+    ...mintQuoteBaseFields,
+    method: literalNode('bolt11'),
+    amount: decimalAmountNode,
+    reusable: literalNode(false),
+    state: enumNode(['UNPAID', 'PAID', 'ISSUED']),
+  }),
+  objectNode(
+    {
+      ...mintQuoteBaseFields,
+      method: literalNode('bolt12'),
+      amount: decimalAmountNode,
+      reusable: literalNode(true),
+    },
+    { optional: ['amount'] },
+  ),
+  objectNode({
+    ...mintQuoteBaseFields,
+    method: literalNode('onchain'),
+    reusable: literalNode(true),
+  }),
+]);
+
+/** Runtime and generated schema for one safe canonical Mint Quote. */
+export const mintQuoteSchema = namedSchema<MintQuoteDocument>('MintQuote', mintQuoteNode);
+
+/** Runtime and generated schema for pending canonical Mint Quotes. */
+export const pendingMintQuotesSchema = namedSchema<PendingMintQuotesDocument>(
+  'PendingMintQuotes',
+  objectNode({
+    items: arrayNode(mintQuoteNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+/** Runtime and generated schema for method-specific Melt Quote creation. */
+export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
+  'CreateMeltQuoteRequest',
+  quoteMethodUnionNode('melt', [
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt11'),
+        invoice: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['amount', 'unit'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt12'),
+        offer: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['amount', 'unit'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('onchain'),
+        address: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['unit'] },
+    ),
+  ]),
+);
+
+const meltQuoteBaseFields = {
+  type: literalNode('melt'),
+  mintUrl: stringNode(),
+  quoteId: stringNode(),
+  request: stringNode(),
+  unit: stringNode(),
+  amount: decimalAmountNode,
+  state: enumNode(['UNPAID', 'PENDING', 'PAID']),
+  expiry: rfc3339UtcSchema,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const boltMeltQuoteFields = {
+  ...meltQuoteBaseFields,
+  feeReserve: decimalAmountNode,
+};
+
+const meltQuoteNode = unionNode([
+  objectNode({ ...boltMeltQuoteFields, method: literalNode('bolt11') }),
+  objectNode({ ...boltMeltQuoteFields, method: literalNode('bolt12') }),
+  objectNode({
+    ...meltQuoteBaseFields,
+    method: literalNode('onchain'),
+    feeOptions: arrayNode(
+      objectNode({
+        feeIndex: integerNode({ minimum: 0 }),
+        feeReserve: decimalAmountNode,
+        estimatedBlocks: integerNode({ minimum: 0 }),
+      }),
+    ),
+  }),
+]);
+
+/** Runtime and generated schema for one safe canonical Melt Quote. */
+export const meltQuoteSchema = namedSchema<MeltQuoteDocument>('MeltQuote', meltQuoteNode);
+
+/** Runtime and generated schema for pending canonical Melt Quotes. */
+export const pendingMeltQuotesSchema = namedSchema<PendingMeltQuotesDocument>(
+  'PendingMeltQuotes',
+  objectNode({
+    items: arrayNode(meltQuoteNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(
   status: CocodStatus,
@@ -383,7 +658,7 @@ function namedSchema<T>(name: string, node: SchemaNode): RuntimeSchema<T> {
   };
 }
 
-function literalNode<T extends string | number | null>(expected: T): SchemaNode {
+function literalNode<T extends string | number | boolean | null>(expected: T): SchemaNode {
   return {
     jsonSchema: expected === null ? { type: 'null' } : { const: expected },
     parse(value, path) {
@@ -444,6 +719,27 @@ function booleanNode(): SchemaNode {
   };
 }
 
+function integerNode(options: { minimum?: number; maximum?: number } = {}): SchemaNode {
+  return {
+    jsonSchema: {
+      type: 'integer',
+      ...(options.minimum !== undefined ? { minimum: options.minimum } : {}),
+      ...(options.maximum !== undefined ? { maximum: options.maximum } : {}),
+    },
+    parse(value, path) {
+      if (
+        typeof value !== 'number' ||
+        !Number.isSafeInteger(value) ||
+        (options.minimum !== undefined && value < options.minimum) ||
+        (options.maximum !== undefined && value > options.maximum)
+      ) {
+        throw new Error(`${path} must be an integer in the allowed range`);
+      }
+      return value;
+    },
+  };
+}
+
 function arrayNode(item: SchemaNode): SchemaNode {
   return {
     jsonSchema: { type: 'array', items: item.jsonSchema },
@@ -464,6 +760,28 @@ function enumNode<const T extends readonly string[]>(values: T): SchemaNode {
         throw new Error(`${path} must be one of ${values.join(', ')}`);
       }
       return value;
+    },
+  };
+}
+
+function quoteMethodUnionNode(type: 'mint' | 'melt', nodes: readonly SchemaNode[]): SchemaNode {
+  const supportedMethods = ['bolt11', 'bolt12', 'onchain'];
+  const supportedUnion = unionNode(nodes);
+  return {
+    jsonSchema: supportedUnion.jsonSchema,
+    parse(value, path) {
+      const record = requireRecord(value, path);
+      const method = record.method;
+      if (typeof method === 'string' && !supportedMethods.includes(method)) {
+        throw new V1HttpError({
+          status: 409,
+          code: 'unsupported_behavior',
+          message: `The ${type === 'mint' ? 'Mint' : 'Melt'} Quote method is unsupported`,
+          retryable: false,
+          details: { type, method },
+        });
+      }
+      return supportedUnion.parse(value, path);
     },
   };
 }
@@ -518,6 +836,7 @@ function unionNode(nodes: readonly SchemaNode[], keyword: 'oneOf' | 'anyOf' = 'o
         try {
           matches.push(node.parse(value, path));
         } catch (error) {
+          if (error instanceof V1HttpError) throw error;
           errors.push(error);
         }
       }

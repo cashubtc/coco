@@ -120,6 +120,14 @@ test('serves public health and authenticated structured status beside operationa
   const unauthenticated = await tcpFetch(server, '/v1/status');
   const status = await tcpFetch(server, '/v1/status', plaintext);
   const unknown = await tcpFetch(server, '/v1/unknown', plaintext);
+  const unsupportedQuoteType = await tcpFetch(
+    server,
+    '/v1/quotes/custom',
+    plaintext,
+    'POST',
+    JSON.stringify({ amount: '25', unit: 'sat' }),
+    { 'Content-Type': 'application/json' },
+  );
 
   expect(health.status).toBe(200);
   expect(await health.json()).toEqual({ status: 'ok', interfaceVersion: '1' });
@@ -147,6 +155,15 @@ test('serves public health and authenticated structured status beside operationa
       code: 'not_found',
       message: 'The requested resource does not exist',
       retryable: false,
+    },
+  });
+  expect(unsupportedQuoteType.status).toBe(409);
+  expect(await unsupportedQuoteType.json()).toEqual({
+    error: {
+      code: 'unsupported_behavior',
+      message: 'The Quote type is unsupported',
+      retryable: false,
+      details: { type: 'custom' },
     },
   });
 

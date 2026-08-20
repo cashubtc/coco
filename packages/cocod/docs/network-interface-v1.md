@@ -499,7 +499,7 @@ Coco's Mint metadata. Payment-method capability responses contain `items` with `
 
 ### Quote resources
 
-These resources are proposed.
+These resources are implemented.
 
 | Method | Path                                                    | Purpose                                               |
 | ------ | ------------------------------------------------------- | ----------------------------------------------------- |
@@ -515,8 +515,22 @@ The singular Quote route exists because a Quote has an evolving lifecycle and mu
 after creation. It is not a creation redirect: Quote creation already returns the Quote document,
 including the direct Coco identity needed to construct later lookup and refresh requests.
 
-Creating or refreshing a Quote MUST NOT create or execute an Operation. Quote responses expose
-remote terms and canonical accounting but omit blinded signatures and other proof-bearing fields.
+Creating a Quote or reconciling its canonical state through `/refresh` MUST NOT create or execute
+an Operation. Quote responses expose remote terms and canonical accounting but omit blinded
+signatures and other proof-bearing fields. Quote reconciliation requests have no body.
+
+Pending Quote lists default to `offset=0` and `limit=20`, with a maximum limit of `100`. Cocod asks
+Coco for the canonical pending set, orders it by newest creation time and then by Quote identity,
+and applies the requested page in memory. Coco Core remains the authority for pending status and
+does not expose HTTP pagination. Consequently, pending-list requests currently load the complete
+pending set before selecting a page.
+
+Mint Quote creation supports `bolt11`, `bolt12`, and `onchain`. Melt Quote creation supports those
+same built-in methods with method-specific invoice, offer, or address inputs. Request and response
+amounts are decimal strings. Mint documents expose canonical `amountPaid` and `amountIssued`;
+BOLT11 Mint documents also expose their fixed amount and state. Melt documents expose either a
+single `feeReserve` or on-chain `feeOptions`. Quote documents omit owned public keys, payment
+preimages, outpoints, blinded change, and any additional Coco model fields.
 
 ### Operation resources
 

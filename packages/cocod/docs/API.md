@@ -119,6 +119,14 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /v1/mints/trust`
 - `POST /v1/mints/untrust`
 - `GET /v1/mints/payment-method-capabilities?mintUrl={mintUrl}`
+- `POST /v1/quotes/mint`
+- `GET /v1/quotes/mint/pending?method={method}&offset={offset}&limit={limit}`
+- `GET /v1/quotes/mint/{quoteId}?mintUrl={mintUrl}`
+- `POST /v1/quotes/mint/{quoteId}/refresh?mintUrl={mintUrl}`
+- `POST /v1/quotes/melt`
+- `GET /v1/quotes/melt/pending?method={method}&offset={offset}&limit={limit}`
+- `GET /v1/quotes/melt/{quoteId}?mintUrl={mintUrl}`
+- `POST /v1/quotes/melt/{quoteId}/refresh?mintUrl={mintUrl}`
 - `POST /receive/cashu`
 - `POST /receive/bolt11`
 - `POST /send/cashu`
@@ -137,3 +145,31 @@ and legacy replacement map; resources marked as proposed there are not callable 
 The [implemented v1 contract](lifecycle-api-v1.json) is generated from runtime schemas.
 The [remaining legacy operational contract](daemon-api.json) describes the unversioned routes that
 have not yet migrated to v1.
+
+### Quote resources
+
+Quote creation and the `/refresh` reconciliation commands use Coco's public Quote interface and
+never prepare or execute an Operation. Creation returns `201 Created` with the Quote document
+directly and no `Location` header. Lookup and reconciliation identify a Quote by its type-specific
+namespace, normalized `mintUrl`, and Coco `quoteId`. Reconciliation commands have no request body.
+
+Mint Quote creation bodies use one of these method-specific shapes:
+
+- `bolt11`: `{ mintUrl, method, amount, unit, locked? }`
+- `bolt12`: `{ mintUrl, method, unit, amount?, description? }`
+- `onchain`: `{ mintUrl, method, unit }`
+
+Melt Quote creation bodies use one of these shapes:
+
+- `bolt11`: `{ mintUrl, method, invoice, amount?, unit? }`
+- `bolt12`: `{ mintUrl, method, offer, amount?, unit? }`
+- `onchain`: `{ mintUrl, method, address, amount, unit? }`
+
+Every amount is a lossless decimal string. Ordinary Quote documents contain explicit safe fields
+only. They omit public-key derivation data, payment preimages, outpoints, blinded signatures,
+blinded change, and unrecognized Coco model fields.
+
+Pending lists accept optional `method`, `offset`, and `limit` query parameters. Offset defaults to
+`0`; limit defaults to `20` and cannot exceed `100`. Cocod deterministically sorts the canonical
+pending set returned by Coco and selects the requested page in memory, so these requests currently
+load all pending Quotes before slicing.

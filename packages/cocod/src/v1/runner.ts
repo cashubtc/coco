@@ -45,7 +45,8 @@ export function buildV1Routes(
     if (definition.path.startsWith('/v1/') && definition.capability === null) {
       throw new Error(`V1 route ${definition.method} ${definition.path} must require a capability`);
     }
-    const handlers = (routes[definition.path] ??= {});
+    const runtimePath = definition.path.replaceAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, ':$1');
+    const handlers = (routes[runtimePath] ??= {});
     handlers[definition.method] = (request) =>
       runV1Route(definition, request, credentials, logger, {
         idempotency,
@@ -83,6 +84,26 @@ export function buildV1FallbackHandler(
       });
     },
   });
+  const unsupportedQuoteTypeRoute = defineV1Route<null, never>({
+    method: 'GET',
+    path: '/v1/quotes/{type}',
+    capability: 'wallet:read',
+    requestSchema: noBodySchema,
+    responseSchema: noSuccessResponseSchema,
+    handler: (_input, request) => {
+      const type = unsupportedQuoteType(new URL(request.url).pathname);
+      if (type === null) {
+        throw new Error('Unsupported Quote type route received a supported path');
+      }
+      throw new V1HttpError({
+        status: 409,
+        code: 'unsupported_behavior',
+        message: 'The Quote type is unsupported',
+        retryable: false,
+        details: { type },
+      });
+    },
+  });
   const methodNotAllowedRoute = defineV1Route<null, never>({
     method: 'POST',
     path: '/health',
@@ -109,13 +130,28 @@ export function buildV1FallbackHandler(
       });
     }
     if (path === '/v1' || path.startsWith('/v1/')) {
-      return runV1Route(notFoundRoute, request, credentials, logger, {
+      const route = unsupportedQuoteType(path) === null ? notFoundRoute : unsupportedQuoteTypeRoute;
+      return runV1Route(route, request, credentials, logger, {
         requestPath: path,
         skipRequestParsing: true,
       });
     }
     return legacyFallback(request);
   };
+}
+
+function unsupportedQuoteType(path: string): string | null {
+  const prefix = '/v1/quotes/';
+  if (!path.startsWith(prefix)) return null;
+  const encodedType = path.slice(prefix.length).split('/', 1)[0];
+  if (!encodedType) return null;
+  let type: string;
+  try {
+    type = decodeURIComponent(encodedType);
+  } catch {
+    type = encodedType;
+  }
+  return type === 'mint' || type === 'melt' ? null : type;
 }
 
 async function runV1Route(
@@ -298,9 +334,16 @@ async function executeIdempotent<T>(
       retryable: false,
     });
   }
+  const url = new URL(request.url);
+  const query = Array.from(url.searchParams.entries()).toSorted(
+    ([leftKey, leftValue], [rightKey, rightValue]) => {
+      const keyComparison = leftKey.localeCompare(rightKey);
+      return keyComparison !== 0 ? keyComparison : leftValue.localeCompare(rightValue);
+    },
+  );
   return idempotency.execute(
     key,
-    { method: definition.method, path: definition.path, input },
+    { method: definition.method, path: url.pathname, query, input },
     operation,
   );
 }

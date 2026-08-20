@@ -1,4 +1,10 @@
-import { normalizeMintUrl, type BalanceQuery, type Mint } from '@cashu/coco-core';
+import {
+  normalizeMintUrl,
+  type BalanceQuery,
+  type Mint,
+  type MintQuote,
+  type MeltQuote,
+} from '@cashu/coco-core';
 
 import { CocodRuntimeError } from '../runtime-error.js';
 import type { ProcessShutdownCoordinator } from '../process-shutdown.js';
@@ -13,6 +19,8 @@ import {
 } from './contract.js';
 import {
   balancesSchema,
+  createMintQuoteRequestSchema,
+  createMeltQuoteRequestSchema,
   healthSchema,
   initializeWalletRequestSchema,
   initializeWalletResponseSchema,
@@ -20,9 +28,13 @@ import {
   knownMintsSchema,
   lifecycleStatusSchema,
   mintInformationSchema,
+  meltQuoteSchema,
+  mintQuoteSchema,
   mintUrlRequestSchema,
   paymentMethodCapabilitiesSchema,
   noBodySchema,
+  pendingMintQuotesSchema,
+  pendingMeltQuotesSchema,
   processShutdownRequestSchema,
   processShutdownResponseSchema,
   startSessionRequestSchema,
@@ -31,6 +43,8 @@ import {
   walletRecoveryMaterialRequestSchema,
   walletRecoveryMaterialResponseSchema,
   type BalancesDocument,
+  type CreateMintQuoteRequest,
+  type CreateMeltQuoteRequest,
   type HealthDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
@@ -38,8 +52,12 @@ import {
   type KnownMintsDocument,
   type LifecycleStatusDocument,
   type MintInformationDocument,
+  type MintQuoteDocument,
+  type MeltQuoteDocument,
   type MintUrlRequest,
   type PaymentMethodCapabilitiesDocument,
+  type PendingMintQuotesDocument,
+  type PendingMeltQuotesDocument,
   type ProcessShutdownRequest,
   type ProcessShutdownResponseDocument,
   type StartSessionRequest,
@@ -145,6 +163,94 @@ const PAYMENT_METHOD_CAPABILITIES_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, PaymentMethodCapabilitiesDocument>;
 
+const CREATE_MINT_QUOTE_ROUTE = {
+  method: 'POST',
+  path: '/v1/quotes/mint',
+  capability: 'wallet:admin',
+  requestSchema: createMintQuoteRequestSchema,
+  responseSchema: mintQuoteSchema,
+  successStatuses: [201],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<CreateMintQuoteRequest, MintQuoteDocument>;
+
+const GET_MINT_QUOTE_ROUTE = {
+  method: 'GET',
+  path: '/v1/quotes/mint/{quoteId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: mintQuoteSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
+
+const LIST_PENDING_MINT_QUOTES_ROUTE = {
+  method: 'GET',
+  path: '/v1/quotes/mint/pending',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: pendingMintQuotesSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, PendingMintQuotesDocument>;
+
+const REFRESH_MINT_QUOTE_ROUTE = {
+  method: 'POST',
+  path: '/v1/quotes/mint/{quoteId}/refresh',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: mintQuoteSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MintQuoteDocument>;
+
+const CREATE_MELT_QUOTE_ROUTE = {
+  method: 'POST',
+  path: '/v1/quotes/melt',
+  capability: 'wallet:admin',
+  requestSchema: createMeltQuoteRequestSchema,
+  responseSchema: meltQuoteSchema,
+  successStatuses: [201],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<CreateMeltQuoteRequest, MeltQuoteDocument>;
+
+const GET_MELT_QUOTE_ROUTE = {
+  method: 'GET',
+  path: '/v1/quotes/melt/{quoteId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: meltQuoteSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
+
+const LIST_PENDING_MELT_QUOTES_ROUTE = {
+  method: 'GET',
+  path: '/v1/quotes/melt/pending',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: pendingMeltQuotesSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, PendingMeltQuotesDocument>;
+
+const REFRESH_MELT_QUOTE_ROUTE = {
+  method: 'POST',
+  path: '/v1/quotes/melt/{quoteId}/refresh',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: meltQuoteSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, MeltQuoteDocument>;
+
 const INITIALIZE_WALLET_ROUTE = {
   method: 'POST',
   path: '/v1/admin/wallet/initialize',
@@ -215,6 +321,14 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     UNTRUST_MINT_ROUTE,
     MINT_INFO_ROUTE,
     PAYMENT_METHOD_CAPABILITIES_ROUTE,
+    CREATE_MINT_QUOTE_ROUTE,
+    LIST_PENDING_MINT_QUOTES_ROUTE,
+    GET_MINT_QUOTE_ROUTE,
+    REFRESH_MINT_QUOTE_ROUTE,
+    CREATE_MELT_QUOTE_ROUTE,
+    LIST_PENDING_MELT_QUOTES_ROUTE,
+    GET_MELT_QUOTE_ROUTE,
+    REFRESH_MELT_QUOTE_ROUTE,
     INITIALIZE_WALLET_ROUTE,
     WALLET_RECOVERY_MATERIAL_ROUTE,
     START_SESSION_ROUTE,
@@ -412,6 +526,99 @@ export function createV1RouteDefinitions(
       }
     },
   });
+  const createMintQuote = defineV1Route({
+    ...CREATE_MINT_QUOTE_ROUTE,
+    handler: async (input) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      try {
+        const quote = await session.manager.quotes.mint.create(
+          input.method === 'bolt11'
+            ? {
+                mintUrl,
+                method: input.method,
+                amount: input.amount,
+                unit: input.unit,
+                ...(input.locked === true ? { locked: true } : {}),
+              }
+            : input.method === 'bolt12'
+              ? {
+                  mintUrl,
+                  method: input.method,
+                  unit: input.unit,
+                  ...(input.amount !== undefined ? { amount: input.amount } : {}),
+                  ...(input.description !== undefined ? { description: input.description } : {}),
+                }
+              : { mintUrl, method: input.method, unit: input.unit },
+        );
+        return new V1HttpResponse(toMintQuoteDocument(quote), 201);
+      } catch (error) {
+        throw new V1HttpError({
+          status: 500,
+          code: 'coco_error',
+          message: 'Coco could not create the Mint Quote',
+          retryable: false,
+          cause: error,
+        });
+      }
+    },
+  });
+  const mintQuoteRoutes = createQuoteReadRouteDefinitions({
+    runtime,
+    type: 'mint',
+    label: 'Mint',
+    listRoute: LIST_PENDING_MINT_QUOTES_ROUTE,
+    getRoute: GET_MINT_QUOTE_ROUTE,
+    refreshRoute: REFRESH_MINT_QUOTE_ROUTE,
+    getAdapter: (session) => session.manager.quotes.mint,
+    toDocument: toMintQuoteDocument,
+  });
+  const createMeltQuote = defineV1Route({
+    ...CREATE_MELT_QUOTE_ROUTE,
+    handler: async (input) => {
+      const session = requireRunningSession(runtime);
+      const mintUrl = parseMintUrl(input.mintUrl, 'The Mint URL is invalid');
+      try {
+        const methodData =
+          input.method === 'bolt11'
+            ? {
+                invoice: input.invoice,
+                ...(input.amount !== undefined ? { amountSats: input.amount } : {}),
+              }
+            : input.method === 'bolt12'
+              ? {
+                  offer: input.offer,
+                  ...(input.amount !== undefined ? { amountSats: input.amount } : {}),
+                }
+              : { address: input.address, amountSats: input.amount };
+        const quote = await session.manager.quotes.melt.create({
+          mintUrl,
+          method: input.method,
+          methodData,
+          ...(input.unit !== undefined ? { unit: input.unit } : {}),
+        } as Parameters<typeof session.manager.quotes.melt.create>[0]);
+        return new V1HttpResponse(toMeltQuoteDocument(quote), 201);
+      } catch (error) {
+        throw new V1HttpError({
+          status: 500,
+          code: 'coco_error',
+          message: 'Coco could not create the Melt Quote',
+          retryable: false,
+          cause: error,
+        });
+      }
+    },
+  });
+  const meltQuoteRoutes = createQuoteReadRouteDefinitions({
+    runtime,
+    type: 'melt',
+    label: 'Melt',
+    listRoute: LIST_PENDING_MELT_QUOTES_ROUTE,
+    getRoute: GET_MELT_QUOTE_ROUTE,
+    refreshRoute: REFRESH_MELT_QUOTE_ROUTE,
+    getAdapter: (session) => session.manager.quotes.melt,
+    toDocument: toMeltQuoteDocument,
+  });
   const initializeWallet = defineV1Route({
     ...INITIALIZE_WALLET_ROUTE,
     handler: async (input) => {
@@ -469,12 +676,109 @@ export function createV1RouteDefinitions(
     untrustMint,
     mintInfo,
     paymentMethodCapabilities,
+    createMintQuote,
+    ...mintQuoteRoutes,
+    createMeltQuote,
+    ...meltQuoteRoutes,
     initializeWallet,
     walletRecoveryMaterial,
     startSession,
     stopSession,
     stopProcess,
   ];
+}
+
+type QuoteIdentityInput = { mintUrl: string; quoteId: string };
+type BuiltInQuoteMethod = 'bolt11' | 'bolt12' | 'onchain';
+type PaginatedQuote = { createdAt: number; mintUrl: string; quoteId: string; method: string };
+type RunningSession = NonNullable<ReturnType<V1Runtime['getRunningSession']>>;
+
+interface QuoteReadAdapter<TQuote> {
+  get(identity: QuoteIdentityInput): Promise<TQuote | null>;
+  listPending(input?: { method?: BuiltInQuoteMethod }): Promise<TQuote[]>;
+  refresh(identity: QuoteIdentityInput): Promise<TQuote>;
+}
+
+function createQuoteReadRouteDefinitions<TQuote extends PaginatedQuote, TDocument>(options: {
+  runtime: V1Runtime;
+  type: 'mint' | 'melt';
+  label: 'Mint' | 'Melt';
+  listRoute: V1RouteMetadata<null, { items: TDocument[]; offset: number; limit: number }>;
+  getRoute: V1RouteMetadata<null, TDocument>;
+  refreshRoute: V1RouteMetadata<null, TDocument>;
+  getAdapter(session: RunningSession): QuoteReadAdapter<TQuote>;
+  toDocument(quote: TQuote): TDocument;
+}): Array<V1RouteDefinition> {
+  const { runtime, type, label, getAdapter, toDocument } = options;
+  const list = defineV1Route({
+    ...options.listRoute,
+    handler: async (_input, request) => {
+      const adapter = getAdapter(requireRunningSession(runtime));
+      const { method, offset, limit } = parsePendingQuoteQuery(request, type);
+      try {
+        const quotes = method ? await adapter.listPending({ method }) : await adapter.listPending();
+        const items = quotes
+          .toSorted(compareQuotesForPagination)
+          .slice(offset, offset + limit)
+          .map(toDocument);
+        return { items, offset, limit };
+      } catch (error) {
+        throw quoteCocoError(`list pending ${label} Quotes`, error);
+      }
+    },
+  });
+  const get = defineV1Route({
+    ...options.getRoute,
+    handler: async (_input, request) => {
+      const adapter = getAdapter(requireRunningSession(runtime));
+      const identity = parseQuoteIdentity(request, type, false);
+      try {
+        const quote = await adapter.get(identity);
+        if (!quote) throw quoteNotFound(label);
+        return toDocument(quote);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw quoteCocoError(`return the ${label} Quote`, error);
+      }
+    },
+  });
+  const refresh = defineV1Route({
+    ...options.refreshRoute,
+    handler: async (_input, request) => {
+      const adapter = getAdapter(requireRunningSession(runtime));
+      const identity = parseQuoteIdentity(request, type, true);
+      try {
+        if (!(await adapter.get(identity))) throw quoteNotFound(label);
+        return toDocument(await adapter.refresh(identity));
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw quoteCocoError(`reconcile the ${label} Quote`, error);
+      }
+    },
+  });
+  return [list, get, refresh];
+}
+
+function parseQuoteIdentity(
+  request: Request,
+  type: 'mint' | 'melt',
+  refresh: boolean,
+): QuoteIdentityInput {
+  const label = type === 'mint' ? 'Mint' : 'Melt';
+  return {
+    mintUrl: parseSingleMintUrlQuery(request, `The ${label} Quote identity is invalid`),
+    quoteId: parseQuoteIdPath(request, type, refresh),
+  };
+}
+
+function quoteCocoError(action: string, cause: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
 }
 
 function parseSingleMintUrlQuery(request: Request, message: string): string {
@@ -511,6 +815,51 @@ function parseTrustedOnly(request: Request, message: string): boolean {
   return values[0] === 'true';
 }
 
+const DEFAULT_QUOTE_PAGE_LIMIT = 20;
+const MAX_QUOTE_PAGE_LIMIT = 100;
+
+function parsePendingQuoteQuery(
+  request: Request,
+  type: 'mint' | 'melt',
+): { method?: 'bolt11' | 'bolt12' | 'onchain'; offset: number; limit: number } {
+  const message = `The pending ${type === 'mint' ? 'Mint' : 'Melt'} Quote filters are invalid`;
+  const query = parseQuery(request, ['method', 'offset', 'limit'], message);
+  const methods = query.getAll('method');
+  if (
+    methods.length > 1 ||
+    methods.some((method) => method !== 'bolt11' && method !== 'bolt12' && method !== 'onchain')
+  ) {
+    throw invalidQuery(message);
+  }
+  return {
+    ...(methods[0] ? { method: methods[0] as 'bolt11' | 'bolt12' | 'onchain' } : {}),
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(
+      query.getAll('limit'),
+      1,
+      MAX_QUOTE_PAGE_LIMIT,
+      DEFAULT_QUOTE_PAGE_LIMIT,
+      message,
+    ),
+  };
+}
+
+function parsePageInteger(
+  values: string[],
+  minimum: number,
+  maximum: number,
+  defaultValue: number,
+  message: string,
+): number {
+  if (values.length === 0) return defaultValue;
+  if (values.length !== 1 || !/^(0|[1-9]\d*)$/.test(values[0]!)) throw invalidQuery(message);
+  const value = Number(values[0]);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw invalidQuery(message);
+  }
+  return value;
+}
+
 function parseMintUrl(value: string, message: string): string {
   try {
     if (value.length === 0) {
@@ -542,6 +891,81 @@ function toKnownMintDocument(mint: Mint): KnownMintDocument {
   };
 }
 
+function toMintQuoteDocument(quote: MintQuote): MintQuoteDocument {
+  const base = {
+    type: 'mint' as const,
+    mintUrl: normalizeMintUrl(quote.mintUrl),
+    quoteId: quote.quoteId,
+    request: quote.request,
+    unit: quote.unit,
+    amountPaid: quote.amountPaid.toString(),
+    amountIssued: quote.amountIssued.toString(),
+    expiry: quote.expiry === null ? null : new Date(quote.expiry * 1_000).toISOString(),
+    createdAt: new Date(quote.createdAt).toISOString(),
+    updatedAt: new Date(quote.updatedAt).toISOString(),
+  };
+
+  if (quote.method === 'bolt11') {
+    return {
+      ...base,
+      method: quote.method,
+      amount: quote.amount.toString(),
+      reusable: false,
+      state: quote.state,
+    };
+  }
+  if (quote.method === 'bolt12') {
+    return {
+      ...base,
+      method: quote.method,
+      ...(quote.amount !== undefined ? { amount: quote.amount.toString() } : {}),
+      reusable: true,
+    };
+  }
+  return { ...base, method: quote.method, reusable: true };
+}
+
+function toMeltQuoteDocument(quote: MeltQuote): MeltQuoteDocument {
+  const base = {
+    type: 'melt' as const,
+    mintUrl: normalizeMintUrl(quote.mintUrl),
+    quoteId: quote.quoteId,
+    request: quote.request,
+    unit: quote.unit,
+    amount: quote.amount.toString(),
+    state: quote.state,
+    expiry: new Date(quote.expiry * 1_000).toISOString(),
+    createdAt: new Date(quote.createdAt).toISOString(),
+    updatedAt: new Date(quote.updatedAt).toISOString(),
+  };
+
+  if (quote.method === 'onchain') {
+    return {
+      ...base,
+      method: quote.method,
+      feeOptions: quote.fee_options.map((option) => ({
+        feeIndex: option.fee_index,
+        feeReserve: option.fee_reserve.toString(),
+        estimatedBlocks: option.estimated_blocks,
+      })),
+    };
+  }
+  return { ...base, method: quote.method, feeReserve: quote.fee_reserve.toString() };
+}
+
+function compareQuotesForPagination(
+  left: { createdAt: number; mintUrl: string; quoteId: string; method: string },
+  right: { createdAt: number; mintUrl: string; quoteId: string; method: string },
+): number {
+  if (left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
+  const mintComparison = normalizeMintUrl(left.mintUrl).localeCompare(
+    normalizeMintUrl(right.mintUrl),
+  );
+  if (mintComparison !== 0) return mintComparison;
+  const quoteComparison = left.quoteId.localeCompare(right.quoteId);
+  return quoteComparison !== 0 ? quoteComparison : left.method.localeCompare(right.method);
+}
+
 function knownMintNotFound(): V1HttpError {
   return new V1HttpError({
     status: 404,
@@ -549,6 +973,32 @@ function knownMintNotFound(): V1HttpError {
     message: 'The Known Mint does not exist',
     retryable: false,
   });
+}
+
+function quoteNotFound(type: 'Mint' | 'Melt'): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: `The ${type} Quote does not exist`,
+    retryable: false,
+  });
+}
+
+function parseQuoteIdPath(request: Request, type: 'mint' | 'melt', refresh: boolean): string {
+  const path = new URL(request.url).pathname;
+  const prefix = `/v1/quotes/${type}/`;
+  const suffix = refresh ? '/refresh' : '';
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) {
+    throw invalidQuery(`The ${type === 'mint' ? 'Mint' : 'Melt'} Quote identity is invalid`);
+  }
+  const encoded = path.slice(prefix.length, suffix.length === 0 ? undefined : -suffix.length);
+  try {
+    const quoteId = decodeURIComponent(encoded);
+    if (quoteId.length === 0 || quoteId.includes('/')) throw new Error('Invalid Quote ID');
+    return quoteId;
+  } catch (error) {
+    throw invalidQuery(`The ${type === 'mint' ? 'Mint' : 'Melt'} Quote identity is invalid`, error);
+  }
 }
 
 function parseQuery(request: Request, allowedKeys: readonly string[], message: string) {

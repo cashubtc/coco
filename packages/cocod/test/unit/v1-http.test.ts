@@ -33,6 +33,639 @@ afterEach(async () => {
 });
 
 describe('v1 HTTP route interface', () => {
+  test('creates a BOLT11 Mint Quote without preparing an Operation', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      blindedSignatures: [{ C_: 'must-not-leak' }],
+    });
+    const create = mock(async () => quote);
+    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        method: 'bolt11',
+        amount: '25',
+        unit: 'sat',
+        locked: true,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      type: 'mint',
+      method: 'bolt11',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-1',
+      request: 'lnbc250n1quote',
+      unit: 'sat',
+      amount: '25',
+      amountPaid: '0',
+      amountIssued: '0',
+      reusable: false,
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      method: 'bolt11',
+      amount: '25',
+      unit: 'sat',
+      locked: true,
+    });
+  });
+
+  test('looks up an evolving Mint Quote by its normalized Coco identity', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      quoteId: 'mint-quote-lookup',
+      quote: 'mint-quote-lookup',
+      request: 'lnbc250n1lookup',
+      expiry: null,
+      state: 'PAID' as const,
+      amountPaid: toAmount(25),
+    });
+    const get = mock(async () => quote);
+    const routes = createQuoteTestRoutes({ quotes: { mint: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/mint-quote-lookup?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: 'mint',
+      quoteId: 'mint-quote-lookup',
+      state: 'PAID',
+      amountPaid: '25',
+    });
+    expect(get).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-lookup',
+    });
+  });
+
+  test('paginates pending Mint Quotes deterministically after reading them from Coco', async () => {
+    const credential = await createCredential();
+    const quote = (quoteId: string, mintUrl: string, createdAt: number) =>
+      mintQuoteFixture({
+        mintUrl,
+        quoteId,
+        quote: quoteId,
+        request: `lnbc1${quoteId}`,
+        expiry: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    const listPending = mock(async () => [
+      quote('old', 'https://mint.example.com', 1_786_838_400_000),
+      quote('new-b', 'https://mint-b.example.com', 1_786_838_600_000),
+      quote('middle', 'https://mint.example.com', 1_786_838_500_000),
+      quote('new-a', 'https://mint-a.example.com', 1_786_838_600_000),
+    ]);
+    const routes = createQuoteTestRoutes(
+      { quotes: { mint: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/mint/pending']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/pending?method=bolt11&offset=1&limit=2',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      items: [{ quoteId: 'new-b' }, { quoteId: 'middle' }],
+      offset: 1,
+      limit: 2,
+    });
+    expect(listPending).toHaveBeenCalledWith({ method: 'bolt11' });
+  });
+
+  test('refreshes a Mint Quote without creating or executing an Operation', async () => {
+    const credential = await createCredential();
+    const quote = mintQuoteFixture({
+      quoteId: 'mint-quote-refresh',
+      quote: 'mint-quote-refresh',
+      request: 'lnbc250n1refresh',
+      expiry: null,
+      state: 'PAID' as const,
+      amountPaid: toAmount(25),
+      remoteUpdatedAt: 1_786_838_460,
+    });
+    const refresh = mock(async () => quote);
+    const routes = createQuoteTestRoutes(
+      { quotes: { mint: { get: async () => quote, refresh } } },
+      credential.credentials,
+    );
+    const request = (quoteId = 'mint-quote-refresh') =>
+      authorizedPostRequest(
+        `/v1/quotes/mint/${quoteId}/refresh?mintUrl=https%3A%2F%2Fmint.example.com%2F`,
+        credential.plaintext,
+        { 'Idempotency-Key': 'refresh-mint-quote' },
+      );
+
+    const first = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(request());
+    const replay = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(request());
+    const conflict = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(
+      request('different-quote'),
+    );
+
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      quoteId: 'mint-quote-refresh',
+      state: 'PAID',
+      amountPaid: '25',
+    });
+    expect(await replay.json()).toMatchObject({ quoteId: 'mint-quote-refresh' });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: 'idempotency_key_conflict' },
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-quote-refresh',
+    });
+  });
+
+  test('creates a BOLT11 Melt Quote without exposing settlement or blinded fields', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      payment_preimage: 'must-not-leak',
+      change: [{ C_: 'must-not-leak' }],
+      lastObservedRemoteState: 'UNPAID' as const,
+      lastObservedRemoteStateAt: 1_786_838_460_000,
+    });
+    const create = mock(async () => quote);
+    const routes = createQuoteTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com/',
+        method: 'bolt11',
+        invoice: 'lnbc250n1pay',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({
+      type: 'melt',
+      method: 'bolt11',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-1',
+      request: 'lnbc250n1pay',
+      unit: 'sat',
+      amount: '25',
+      feeReserve: '2',
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      method: 'bolt11',
+      methodData: { invoice: 'lnbc250n1pay', amountSats: '25' },
+      unit: 'sat',
+    });
+  });
+
+  test('looks up a Melt Quote by its normalized Coco identity', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      quoteId: 'melt-quote-lookup',
+      quote: 'melt-quote-lookup',
+      request: 'lnbc250n1lookup',
+      state: 'PENDING' as const,
+    });
+    const get = mock(async () => quote);
+    const routes = createQuoteTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/melt/melt-quote-lookup?mintUrl=https%3A%2F%2Fmint.example.com%2F',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: 'melt',
+      quoteId: 'melt-quote-lookup',
+      state: 'PENDING',
+    });
+    expect(get).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-lookup',
+    });
+  });
+
+  test('paginates pending Melt Quotes after reading them from Coco', async () => {
+    const credential = await createCredential();
+    const quote = (quoteId: string, createdAt: number) =>
+      meltQuoteFixture({
+        quoteId,
+        quote: quoteId,
+        request: `lnbc1${quoteId}`,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    const listPending = mock(async () => [
+      quote('old', 1_786_838_400_000),
+      quote('new', 1_786_838_600_000),
+      quote('middle', 1_786_838_500_000),
+    ]);
+    const routes = createQuoteTestRoutes(
+      { quotes: { melt: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/pending']!.GET!(
+      authorizedRequest('/v1/quotes/melt/pending?offset=1&limit=1', credential.plaintext),
+    );
+
+    expect(await response.json()).toMatchObject({
+      items: [{ quoteId: 'middle' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(listPending).toHaveBeenCalledWith();
+  });
+
+  test('refreshes a Melt Quote through Coco', async () => {
+    const credential = await createCredential();
+    const quote = meltQuoteFixture({
+      quoteId: 'melt-quote-refresh',
+      quote: 'melt-quote-refresh',
+      request: 'lnbc250n1refresh',
+      state: 'PAID' as const,
+      payment_preimage: 'must-not-leak',
+    });
+    const refresh = mock(async () => quote);
+    const routes = createQuoteTestRoutes(
+      { quotes: { melt: { get: async () => quote, refresh } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/:quoteId/refresh']!.POST!(
+      authorizedPostRequest(
+        '/v1/quotes/melt/melt-quote-refresh/refresh?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await response.json()).toMatchObject({
+      quoteId: 'melt-quote-refresh',
+      state: 'PAID',
+    });
+    expect(refresh).toHaveBeenCalledWith({
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-quote-refresh',
+    });
+  });
+
+  test('creates reusable onchain and BOLT12 Mint Quote documents', async () => {
+    const credential = await createCredential();
+    const base = {
+      mintUrl: 'https://mint.example.com',
+      request: 'payment-request',
+      unit: 'sat',
+      expiry: null,
+      reusable: true as const,
+      amountPaid: toAmount(100),
+      amountIssued: toAmount(25),
+      remoteUpdatedAt: 1_786_838_460,
+      createdAt: 1_786_838_400_000,
+      updatedAt: 1_786_838_460_000,
+    };
+    const onchain = {
+      ...base,
+      method: 'onchain' as const,
+      quoteId: 'mint-onchain',
+      quote: 'mint-onchain',
+      quoteData: { pubkey: 'must-not-leak' },
+      pubkey: 'must-not-leak',
+    };
+    const bolt12 = {
+      ...base,
+      method: 'bolt12' as const,
+      quoteId: 'mint-bolt12',
+      quote: 'mint-bolt12',
+      amount: toAmount(50),
+      quoteData: { pubkey: 'must-not-leak', amount: toAmount(50) },
+    };
+    const create = mock(async (input: Record<string, unknown> & { method: string }) =>
+      input.method === 'onchain' ? onchain : bolt12,
+    );
+    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+
+    const onchainResponse = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        unit: 'sat',
+      }),
+    );
+    const bolt12Response = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        unit: 'sat',
+        amount: '50',
+        description: 'coffee',
+      }),
+    );
+
+    expect(await onchainResponse.json()).toEqual({
+      type: 'mint',
+      method: 'onchain',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'mint-onchain',
+      request: 'payment-request',
+      unit: 'sat',
+      amountPaid: '100',
+      amountIssued: '25',
+      reusable: true,
+      expiry: null,
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(await bolt12Response.json()).toMatchObject({
+      method: 'bolt12',
+      amount: '50',
+      reusable: true,
+    });
+    expect(create.mock.calls.map(([input]) => input)).toEqual([
+      { mintUrl: 'https://mint.example.com', method: 'onchain', unit: 'sat' },
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        unit: 'sat',
+        amount: '50',
+        description: 'coffee',
+      },
+    ]);
+  });
+
+  test('creates BOLT12 and onchain Melt Quote documents with safe fee terms', async () => {
+    const credential = await createCredential();
+    const base = {
+      mintUrl: 'https://mint.example.com',
+      request: 'payment-target',
+      amount: toAmount(75),
+      unit: 'sat',
+      expiry: 1_786_838_700,
+      state: 'UNPAID' as const,
+      createdAt: 1_786_838_400_000,
+      updatedAt: 1_786_838_460_000,
+    };
+    const bolt12 = {
+      ...base,
+      method: 'bolt12' as const,
+      quoteId: 'melt-bolt12',
+      quote: 'melt-bolt12',
+      fee_reserve: toAmount(3),
+      payment_preimage: 'must-not-leak',
+    };
+    const onchain = {
+      ...base,
+      method: 'onchain' as const,
+      quoteId: 'melt-onchain',
+      quote: 'melt-onchain',
+      fee_options: [{ fee_index: 4, fee_reserve: toAmount(8), estimated_blocks: 2 }],
+      outpoint: 'must-not-leak',
+      change: [{ C_: 'must-not-leak' }],
+    };
+    const create = mock(async (input: Record<string, unknown> & { method: string }) =>
+      input.method === 'bolt12' ? bolt12 : onchain,
+    );
+    const routes = createQuoteTestRoutes({ quotes: { melt: { create } } }, credential.credentials);
+
+    const bolt12Response = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        offer: 'lno1offer',
+        amount: '75',
+        unit: 'sat',
+      }),
+    );
+    const onchainResponse = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        address: 'bc1qaddress',
+        amount: '75',
+        unit: 'sat',
+      }),
+    );
+
+    expect(await bolt12Response.json()).toMatchObject({
+      method: 'bolt12',
+      feeReserve: '3',
+    });
+    expect(await onchainResponse.json()).toEqual({
+      type: 'melt',
+      method: 'onchain',
+      mintUrl: 'https://mint.example.com',
+      quoteId: 'melt-onchain',
+      request: 'payment-target',
+      unit: 'sat',
+      amount: '75',
+      feeOptions: [{ feeIndex: 4, feeReserve: '8', estimatedBlocks: 2 }],
+      state: 'UNPAID',
+      expiry: '2026-08-16T00:05:00.000Z',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(create.mock.calls.map(([input]) => input)).toEqual([
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'bolt12',
+        methodData: { offer: 'lno1offer', amountSats: '75' },
+        unit: 'sat',
+      },
+      {
+        mintUrl: 'https://mint.example.com',
+        method: 'onchain',
+        methodData: { address: 'bc1qaddress', amountSats: '75' },
+        unit: 'sat',
+      },
+    ]);
+  });
+
+  test('returns a typed unsupported error for unavailable Quote methods', async () => {
+    const credential = await createCredential();
+    const create = mock(async () => {
+      throw new Error('Coco should not be called');
+    });
+    const routes = createQuoteTestRoutes(
+      { quotes: { mint: { create }, melt: { create } } },
+      credential.credentials,
+    );
+
+    const mintResponse = await routes['/v1/quotes/mint']!.POST!(
+      authorizedJsonRequest('/v1/quotes/mint', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'custom',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+    const meltResponse = await routes['/v1/quotes/melt']!.POST!(
+      authorizedJsonRequest('/v1/quotes/melt', credential.plaintext, {
+        mintUrl: 'https://mint.example.com',
+        method: 'custom',
+        invoice: 'lnbc250n1pay',
+        amount: '25',
+        unit: 'sat',
+      }),
+    );
+
+    expect(mintResponse.status).toBe(409);
+    expect(await mintResponse.json()).toMatchObject({
+      error: {
+        code: 'unsupported_behavior',
+        retryable: false,
+        details: { type: 'mint', method: 'custom' },
+      },
+    });
+    expect(meltResponse.status).toBe(409);
+    expect(await meltResponse.json()).toMatchObject({
+      error: {
+        code: 'unsupported_behavior',
+        retryable: false,
+        details: { type: 'melt', method: 'custom' },
+      },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  test('returns not found before refreshing an absent Quote', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const refresh = mock(async () => {
+      throw new Error('refresh should not run');
+    });
+    const routes = createQuoteTestRoutes(
+      { quotes: { mint: { get, refresh } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/mint/:quoteId/refresh']!.POST!(
+      authorizedPostRequest(
+        '/v1/quotes/mint/missing/refresh?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  test('authenticates Quote resources before calling Coco', async () => {
+    const credential = await createCredential();
+    const create = mock(async () => {
+      throw new Error('Coco should not be called');
+    });
+    const routes = createQuoteTestRoutes({ quotes: { mint: { create } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/mint']!.POST!(
+      new Request('http://localhost/v1/quotes/mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mintUrl: 'https://mint.example.com',
+          method: 'bolt11',
+          amount: '25',
+          unit: 'sat',
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: 'unauthenticated' } });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  test('rejects malformed Quote identities and pagination before calling Coco', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const listPending = mock(async () => []);
+    const routes = createQuoteTestRoutes(
+      { quotes: { mint: { get, listPending } } },
+      credential.credentials,
+    );
+
+    const missingMintUrl = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest('/v1/quotes/mint/quote-1', credential.plaintext),
+    );
+    const invalidQuoteId = await routes['/v1/quotes/mint/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/mint/quote%2F1?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+    const invalidPage = await routes['/v1/quotes/mint/pending']!.GET!(
+      authorizedRequest('/v1/quotes/mint/pending?offset=-1&limit=101', credential.plaintext),
+    );
+
+    expect([missingMintUrl.status, invalidQuoteId.status, invalidPage.status]).toEqual([
+      400, 400, 400,
+    ]);
+    expect(get).not.toHaveBeenCalled();
+    expect(listPending).not.toHaveBeenCalled();
+  });
+
+  test('returns not found for an absent singular Quote', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => null);
+    const routes = createQuoteTestRoutes({ quotes: { melt: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/quotes/melt/:quoteId']!.GET!(
+      authorizedRequest(
+        '/v1/quotes/melt/missing?mintUrl=https%3A%2F%2Fmint.example.com',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'not_found' } });
+  });
+
+  test('maps Coco Quote failures without exposing their diagnostic text', async () => {
+    const credential = await createCredential();
+    const listPending = mock(async () => {
+      throw new Error('private mint diagnostic');
+    });
+    const routes = createQuoteTestRoutes(
+      { quotes: { melt: { listPending } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/quotes/melt/pending']!.GET!(
+      authorizedRequest('/v1/quotes/melt/pending', credential.plaintext),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toMatchObject({ error: { code: 'coco_error', retryable: false } });
+    expect(JSON.stringify(body)).not.toContain('private mint diagnostic');
+  });
+
   test('registers a normalized Known Mint without granting trust', async () => {
     const credential = await createCredential();
     const mint = {
@@ -778,6 +1411,86 @@ describe('v1 HTTP route interface', () => {
         responseSchema: 'PaymentMethodCapabilities',
         successStatuses: [200],
         idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/quotes/mint',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateMintQuoteRequest',
+        responseSchema: 'MintQuote',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/quotes/mint/pending',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'PendingMintQuotes',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/quotes/mint/{quoteId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintQuote',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/quotes/mint/{quoteId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MintQuote',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/quotes/melt',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateMeltQuoteRequest',
+        responseSchema: 'MeltQuote',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/quotes/melt/pending',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'PendingMeltQuotes',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/quotes/melt/{quoteId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltQuote',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/quotes/melt/{quoteId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'MeltQuote',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
         responseCacheControl: null,
       },
       {
@@ -1721,6 +2434,54 @@ function statusRuntime(status: CocodStatus): V1Runtime {
   return lifecycleRuntime(() => status);
 }
 
+function mintQuoteFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'mint-quote-1',
+    quote: 'mint-quote-1',
+    request: 'lnbc250n1quote',
+    amount: toAmount(25),
+    unit: 'sat',
+    expiry: 1_786_838_700,
+    reusable: false as const,
+    state: 'UNPAID' as const,
+    amountPaid: toAmount(0),
+    amountIssued: toAmount(0),
+    remoteUpdatedAt: null,
+    quoteData: { amount: toAmount(25) },
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    ...overrides,
+  };
+}
+
+function meltQuoteFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    mintUrl: 'https://mint.example.com',
+    method: 'bolt11' as const,
+    quoteId: 'melt-quote-1',
+    quote: 'melt-quote-1',
+    request: 'lnbc250n1pay',
+    amount: toAmount(25),
+    unit: 'sat',
+    fee_reserve: toAmount(2),
+    expiry: 1_786_838_700,
+    state: 'UNPAID' as const,
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    ...overrides,
+  };
+}
+
+function createQuoteTestRoutes(manager: unknown, credential: AdministrativeCredential) {
+  const runtime = {
+    ...lifecycleRuntime(() => configuredStatus('running')),
+    getRunningSession: () => ({ manager }),
+  } as unknown as V1Runtime;
+  return buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credential);
+}
+
 function lifecycleRuntime(
   getStatus: () => CocodStatus,
   overrides: Partial<V1Runtime> = {},
@@ -1800,6 +2561,17 @@ async function setCapabilities(path: string, capabilities: ClientCapability[]): 
 function authorizedRequest(path: string, credential: string): Request {
   return new Request(`http://localhost${path}`, {
     headers: { Authorization: `Bearer ${credential}` },
+  });
+}
+
+function authorizedPostRequest(
+  path: string,
+  credential: string,
+  headers?: Record<string, string>,
+): Request {
+  return new Request(`http://localhost${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${credential}`, ...headers },
   });
 }
 

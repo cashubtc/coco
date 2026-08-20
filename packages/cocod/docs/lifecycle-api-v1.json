@@ -20,6 +20,7 @@
                 "invalid_request",
                 "not_found",
                 "method_not_allowed",
+                "unsupported_behavior",
                 "internal_error",
                 "invalid_idempotency_key",
                 "idempotency_key_conflict",
@@ -300,6 +301,716 @@
             }
           }
         }
+      }
+    },
+    "MintQuote": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amountPaid",
+            "amountIssued",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "method",
+            "amount",
+            "reusable",
+            "state"
+          ],
+          "properties": {
+            "type": { "const": "mint" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "expiry": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "method": { "const": "bolt11" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "reusable": { "const": false },
+            "state": { "enum": ["UNPAID", "PAID", "ISSUED"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amountPaid",
+            "amountIssued",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "method",
+            "reusable"
+          ],
+          "properties": {
+            "type": { "const": "mint" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "expiry": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "method": { "const": "bolt12" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "reusable": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amountPaid",
+            "amountIssued",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "method",
+            "reusable"
+          ],
+          "properties": {
+            "type": { "const": "mint" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "expiry": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "method": { "const": "onchain" },
+            "reusable": { "const": true }
+          }
+        }
+      ]
+    },
+    "CreateMintQuoteRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "amount", "unit"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "bolt11" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string" },
+            "locked": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "unit"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "onchain" },
+            "unit": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "unit"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "bolt12" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "description": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "PendingMintQuotes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amountPaid",
+                  "amountIssued",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "method",
+                  "amount",
+                  "reusable",
+                  "state"
+                ],
+                "properties": {
+                  "type": { "const": "mint" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "expiry": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "method": { "const": "bolt11" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "reusable": { "const": false },
+                  "state": { "enum": ["UNPAID", "PAID", "ISSUED"] }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amountPaid",
+                  "amountIssued",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "method",
+                  "reusable"
+                ],
+                "properties": {
+                  "type": { "const": "mint" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "expiry": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "method": { "const": "bolt12" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "reusable": { "const": true }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amountPaid",
+                  "amountIssued",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "method",
+                  "reusable"
+                ],
+                "properties": {
+                  "type": { "const": "mint" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amountPaid": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "amountIssued": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "expiry": {
+                    "anyOf": [
+                      { "type": "null" },
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "method": { "const": "onchain" },
+                  "reusable": { "const": true }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "MeltQuote": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amount",
+            "state",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "feeReserve",
+            "method"
+          ],
+          "properties": {
+            "type": { "const": "melt" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+            "expiry": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "method": { "const": "bolt11" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amount",
+            "state",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "feeReserve",
+            "method"
+          ],
+          "properties": {
+            "type": { "const": "melt" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+            "expiry": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "method": { "const": "bolt12" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "mintUrl",
+            "quoteId",
+            "request",
+            "unit",
+            "amount",
+            "state",
+            "expiry",
+            "createdAt",
+            "updatedAt",
+            "method",
+            "feeOptions"
+          ],
+          "properties": {
+            "type": { "const": "melt" },
+            "mintUrl": { "type": "string" },
+            "quoteId": { "type": "string" },
+            "request": { "type": "string" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+            "expiry": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "method": { "const": "onchain" },
+            "feeOptions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+                "properties": {
+                  "feeIndex": { "type": "integer", "minimum": 0 },
+                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "estimatedBlocks": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CreateMeltQuoteRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "invoice"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "bolt11" },
+            "invoice": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "offer"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "bolt12" },
+            "offer": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mintUrl", "method", "address", "amount"],
+          "properties": {
+            "mintUrl": { "type": "string" },
+            "method": { "const": "onchain" },
+            "address": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "unit": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "PendingMeltQuotes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amount",
+                  "state",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "feeReserve",
+                  "method"
+                ],
+                "properties": {
+                  "type": { "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                  "expiry": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "method": { "const": "bolt11" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amount",
+                  "state",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "feeReserve",
+                  "method"
+                ],
+                "properties": {
+                  "type": { "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                  "expiry": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "method": { "const": "bolt12" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "mintUrl",
+                  "quoteId",
+                  "request",
+                  "unit",
+                  "amount",
+                  "state",
+                  "expiry",
+                  "createdAt",
+                  "updatedAt",
+                  "method",
+                  "feeOptions"
+                ],
+                "properties": {
+                  "type": { "const": "melt" },
+                  "mintUrl": { "type": "string" },
+                  "quoteId": { "type": "string" },
+                  "request": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "state": { "enum": ["UNPAID", "PENDING", "PAID"] },
+                  "expiry": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "method": { "const": "onchain" },
+                  "feeOptions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["feeIndex", "feeReserve", "estimatedBlocks"],
+                      "properties": {
+                        "feeIndex": { "type": "integer", "minimum": 0 },
+                        "feeReserve": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                        "estimatedBlocks": { "type": "integer", "minimum": 0 }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
       }
     },
     "InitializeWalletResponse": {
@@ -584,6 +1295,94 @@
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/quotes/mint",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateMintQuoteRequest",
+      "responseSchema": "MintQuote",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/quotes/mint/pending",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "PendingMintQuotes",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/quotes/mint/{quoteId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MintQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/quotes/mint/{quoteId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MintQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/quotes/melt",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateMeltQuoteRequest",
+      "responseSchema": "MeltQuote",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/quotes/melt/pending",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "PendingMeltQuotes",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/quotes/melt/{quoteId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "MeltQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/quotes/melt/{quoteId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "MeltQuote",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
       "responseCacheControl": null
     },
     {
