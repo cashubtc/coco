@@ -74,23 +74,6 @@ export function createRouteHandlers(runtime: CocodRuntime): Record<string, Route
       }),
     },
 
-    '/receive/cashu': {
-      capability: 'wallet:admin',
-      POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {
-        try {
-          const body = (await req.json()) as { token: string };
-          const token = body.token;
-          const preparedOp = await state.manager.ops.receive.prepare({ token });
-          await state.manager.ops.receive.execute(preparedOp);
-          return Response.json({ output: `Received ${preparedOp.amount.toNumber()}` });
-        } catch (error) {
-          if (error instanceof Error) {
-            return Response.json({ error: error.message });
-          }
-          return Response.json({ error: 'Receive failed' });
-        }
-      }),
-    },
     '/receive/bolt11': {
       capability: 'wallet:admin',
       POST: requireRunning(runtime, async (req, state: RunningCocoSession) => {

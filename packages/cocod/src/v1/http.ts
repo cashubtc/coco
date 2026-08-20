@@ -1,12 +1,15 @@
 import {
   normalizeMintUrl,
   OperationInProgressError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
   SendOperationNotFoundError,
   SendOperationStateError,
   type BalanceQuery,
   type Mint,
   type MintQuote,
   type MeltQuote,
+  type ReceiveOperation,
   type SendOperation,
 } from '@cashu/coco-core';
 
@@ -25,6 +28,7 @@ import {
   balancesSchema,
   createMintQuoteRequestSchema,
   createMeltQuoteRequestSchema,
+  createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
   executeSendOperationResponseSchema,
   healthSchema,
@@ -37,12 +41,15 @@ import {
   meltQuoteSchema,
   mintQuoteSchema,
   mintUrlRequestSchema,
+  noSuccessResponseSchema,
   paymentMethodCapabilitiesSchema,
   noBodySchema,
   pendingMintQuotesSchema,
   pendingMeltQuotesSchema,
   processShutdownRequestSchema,
   processShutdownResponseSchema,
+  receiveOperationSchema,
+  receiveOperationsSchema,
   sendOperationSchema,
   sendOperationsSchema,
   sendResultSchema,
@@ -54,6 +61,7 @@ import {
   type BalancesDocument,
   type CreateMintQuoteRequest,
   type CreateMeltQuoteRequest,
+  type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
   type ExecuteSendOperationResponseDocument,
   type HealthDocument,
@@ -71,6 +79,8 @@ import {
   type PendingMeltQuotesDocument,
   type ProcessShutdownRequest,
   type ProcessShutdownResponseDocument,
+  type ReceiveOperationDocument,
+  type ReceiveOperationsDocument,
   type SendOperationDocument,
   type SendOperationsDocument,
   type SendResultDocument,
@@ -346,6 +356,82 @@ const RECLAIM_SEND_OPERATION_ROUTE = {
   path: '/v1/operations/send/{operationId}/reclaim',
 } as const satisfies V1RouteMetadata<null, SendOperationDocument>;
 
+const CREATE_RECEIVE_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/receive',
+  capability: 'wallet:admin',
+  requestSchema: createReceiveOperationRequestSchema,
+  responseSchema: receiveOperationSchema,
+  successStatuses: [201],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<CreateReceiveOperationRequest, ReceiveOperationDocument>;
+
+const GET_RECEIVE_OPERATION_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/receive/{operationId}',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: receiveOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
+
+const LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/receive/prepared',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: receiveOperationsSchema,
+  successStatuses: [200],
+  idempotencyKey: null,
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, ReceiveOperationsDocument>;
+
+const LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE = {
+  ...LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE,
+  path: '/v1/operations/receive/in-flight',
+} as const satisfies V1RouteMetadata<null, ReceiveOperationsDocument>;
+
+const EXECUTE_RECEIVE_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/receive/{operationId}/execute',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: receiveOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
+
+const GET_RECEIVE_OPERATION_RESULT_ROUTE = {
+  method: 'GET',
+  path: '/v1/operations/receive/{operationId}/result',
+  capability: 'wallet:read',
+  requestSchema: noBodySchema,
+  responseSchema: noSuccessResponseSchema,
+  successStatuses: [],
+  idempotencyKey: null,
+  responseCacheControl: 'no-store',
+} as const satisfies V1RouteMetadata<null, never>;
+
+const CANCEL_RECEIVE_OPERATION_ROUTE = {
+  method: 'POST',
+  path: '/v1/operations/receive/{operationId}/cancel',
+  capability: 'wallet:admin',
+  requestSchema: noBodySchema,
+  responseSchema: receiveOperationSchema,
+  successStatuses: [200],
+  idempotencyKey: 'optional',
+  responseCacheControl: null,
+} as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
+
+const REFRESH_RECEIVE_OPERATION_ROUTE = {
+  ...CANCEL_RECEIVE_OPERATION_ROUTE,
+  path: '/v1/operations/receive/{operationId}/refresh',
+} as const satisfies V1RouteMetadata<null, ReceiveOperationDocument>;
+
 const INITIALIZE_WALLET_ROUTE = {
   method: 'POST',
   path: '/v1/admin/wallet/initialize',
@@ -433,6 +519,14 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     CANCEL_SEND_OPERATION_ROUTE,
     REFRESH_SEND_OPERATION_ROUTE,
     RECLAIM_SEND_OPERATION_ROUTE,
+    CREATE_RECEIVE_OPERATION_ROUTE,
+    LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE,
+    LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE,
+    GET_RECEIVE_OPERATION_ROUTE,
+    EXECUTE_RECEIVE_OPERATION_ROUTE,
+    GET_RECEIVE_OPERATION_RESULT_ROUTE,
+    CANCEL_RECEIVE_OPERATION_ROUTE,
+    REFRESH_RECEIVE_OPERATION_ROUTE,
     INITIALIZE_WALLET_ROUTE,
     WALLET_RECOVERY_MATERIAL_ROUTE,
     START_SESSION_ROUTE,
@@ -861,6 +955,118 @@ export function createV1RouteDefinitions(
   const cancelSendOperation = sendOperationCommand(CANCEL_SEND_OPERATION_ROUTE, 'cancel');
   const refreshSendOperation = sendOperationCommand(REFRESH_SEND_OPERATION_ROUTE, 'refresh');
   const reclaimSendOperation = sendOperationCommand(RECLAIM_SEND_OPERATION_ROUTE, 'reclaim');
+  const createReceiveOperation = defineV1Route({
+    ...CREATE_RECEIVE_OPERATION_ROUTE,
+    handler: async (input) => {
+      const receive = requireRunningSession(runtime).manager.ops.receive;
+      try {
+        const operation = await receive.prepare({ token: input.token });
+        return new V1HttpResponse(toReceiveOperationDocument(operation), 201);
+      } catch (error) {
+        throw receiveOperationCocoError('prepare the Receive Operation', error);
+      }
+    },
+  });
+  const getReceiveOperation = defineV1Route({
+    ...GET_RECEIVE_OPERATION_ROUTE,
+    handler: async (_input, request) => {
+      const receive = requireRunningSession(runtime).manager.ops.receive;
+      const operationId = parseReceiveOperationId(request);
+      try {
+        const operation = await receive.get(operationId);
+        if (!operation) throw receiveOperationNotFound();
+        return toReceiveOperationDocument(operation);
+      } catch (error) {
+        if (error instanceof V1HttpError) throw error;
+        throw receiveOperationCocoError('return the Receive Operation', error);
+      }
+    },
+  });
+  const listReceiveOperations = (
+    route:
+      | typeof LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE
+      | typeof LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE,
+    kind: 'prepared' | 'in-flight',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const receive = requireRunningSession(runtime).manager.ops.receive;
+        const { offset, limit } = parseReceiveOperationPageQuery(request, kind);
+        try {
+          const operations =
+            kind === 'prepared' ? await receive.listPrepared() : await receive.listInFlight();
+          return {
+            items: operations
+              .toSorted(compareReceiveOperationsForPagination)
+              .slice(offset, offset + limit)
+              .map(toReceiveOperationDocument),
+            offset,
+            limit,
+          };
+        } catch (error) {
+          throw receiveOperationCocoError(`list ${kind} Receive Operations`, error);
+        }
+      },
+    });
+  const listPreparedReceiveOperations = listReceiveOperations(
+    LIST_PREPARED_RECEIVE_OPERATIONS_ROUTE,
+    'prepared',
+  );
+  const listInFlightReceiveOperations = listReceiveOperations(
+    LIST_IN_FLIGHT_RECEIVE_OPERATIONS_ROUTE,
+    'in-flight',
+  );
+  const executeReceiveOperation = defineV1Route({
+    ...EXECUTE_RECEIVE_OPERATION_ROUTE,
+    handler: async (_input, request) => {
+      const receive = requireRunningSession(runtime).manager.ops.receive;
+      const operationId = parseReceiveOperationId(request, 'execute');
+      try {
+        return toReceiveOperationDocument(await receive.execute(operationId));
+      } catch (error) {
+        throw receiveOperationCocoError('execute the Receive Operation', error);
+      }
+    },
+  });
+  const getReceiveOperationResult = defineV1Route({
+    ...GET_RECEIVE_OPERATION_RESULT_ROUTE,
+    handler: async (_input, request) => {
+      requireRunningSession(runtime);
+      parseReceiveOperationId(request, 'result');
+      throw new V1HttpError({
+        status: 404,
+        code: 'not_found',
+        message: 'Receive Operations do not expose a distinct result',
+        retryable: false,
+      });
+    },
+  });
+  const receiveOperationCommand = (
+    route: typeof CANCEL_RECEIVE_OPERATION_ROUTE | typeof REFRESH_RECEIVE_OPERATION_ROUTE,
+    command: 'cancel' | 'refresh',
+  ) =>
+    defineV1Route({
+      ...route,
+      handler: async (_input, request) => {
+        const receive = requireRunningSession(runtime).manager.ops.receive;
+        const operationId = parseReceiveOperationId(request, command);
+        try {
+          await receive[command](operationId);
+          const operation = await receive.get(operationId);
+          if (!operation) throw receiveOperationNotFound();
+          return toReceiveOperationDocument(operation);
+        } catch (error) {
+          if (error instanceof V1HttpError) throw error;
+          throw receiveOperationCocoError(`${command} the Receive Operation`, error);
+        }
+      },
+    });
+  const cancelReceiveOperation = receiveOperationCommand(CANCEL_RECEIVE_OPERATION_ROUTE, 'cancel');
+  const refreshReceiveOperation = receiveOperationCommand(
+    REFRESH_RECEIVE_OPERATION_ROUTE,
+    'refresh',
+  );
   const initializeWallet = defineV1Route({
     ...INITIALIZE_WALLET_ROUTE,
     handler: async (input) => {
@@ -931,6 +1137,14 @@ export function createV1RouteDefinitions(
     cancelSendOperation,
     refreshSendOperation,
     reclaimSendOperation,
+    createReceiveOperation,
+    listPreparedReceiveOperations,
+    listInFlightReceiveOperations,
+    getReceiveOperation,
+    executeReceiveOperation,
+    getReceiveOperationResult,
+    cancelReceiveOperation,
+    refreshReceiveOperation,
     initializeWallet,
     walletRecoveryMaterial,
     startSession,
@@ -1306,6 +1520,98 @@ function parseSendOperationId(request: Request, command?: string): string {
   const message = 'The Send Operation identity is invalid';
   parseQuery(request, [], message);
   return parsePathIdentity(request, '/v1/operations/send/', command ? `/${command}` : '', message);
+}
+
+function toReceiveOperationDocument(operation: ReceiveOperation): ReceiveOperationDocument {
+  const base = {
+    id: operation.id,
+    type: 'receive' as const,
+    mintUrl: normalizeMintUrl(operation.mintUrl),
+    unit: operation.unit,
+    amount: operation.amount.toString(),
+    createdAt: new Date(operation.createdAt).toISOString(),
+    updatedAt: new Date(operation.updatedAt).toISOString(),
+  };
+  if (operation.state === 'init') return { ...base, state: operation.state };
+  return { ...base, state: operation.state, fee: operation.fee.toString() };
+}
+
+function compareReceiveOperationsForPagination(
+  left: ReceiveOperation,
+  right: ReceiveOperation,
+): number {
+  return left.createdAt !== right.createdAt
+    ? right.createdAt - left.createdAt
+    : left.id.localeCompare(right.id);
+}
+
+function parseReceiveOperationPageQuery(
+  request: Request,
+  kind: 'prepared' | 'in-flight',
+): { offset: number; limit: number } {
+  const message = `The ${kind} Receive Operation filters are invalid`;
+  const query = parseQuery(request, ['offset', 'limit'], message);
+  return {
+    offset: parsePageInteger(query.getAll('offset'), 0, Number.MAX_SAFE_INTEGER, 0, message),
+    limit: parsePageInteger(query.getAll('limit'), 1, 100, 20, message),
+  };
+}
+
+function receiveOperationCocoError(action: string, cause: unknown): V1HttpError {
+  if (cause instanceof ReceiveOperationNotFoundError) return receiveOperationNotFound(cause);
+  if (cause instanceof OperationInProgressError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'operation_in_progress',
+      message: 'The Receive Operation is already in progress',
+      retryable: true,
+      details: { type: 'receive', operationId: cause.operationId },
+      cause,
+    });
+  }
+  if (cause instanceof ReceiveOperationStateError) {
+    return new V1HttpError({
+      status: 409,
+      code: 'invalid_operation_state',
+      message: 'The Receive Operation command is unavailable in its current state',
+      retryable: false,
+      details: {
+        type: 'receive',
+        operationId: cause.operationId,
+        state: cause.state,
+        expectedStates: [...cause.expectedStates],
+      },
+      cause,
+    });
+  }
+  return new V1HttpError({
+    status: 500,
+    code: 'coco_error',
+    message: `Coco could not ${action}`,
+    retryable: false,
+    cause,
+  });
+}
+
+function receiveOperationNotFound(cause?: unknown): V1HttpError {
+  return new V1HttpError({
+    status: 404,
+    code: 'not_found',
+    message: 'The Receive Operation does not exist',
+    retryable: false,
+    cause,
+  });
+}
+
+function parseReceiveOperationId(request: Request, command?: string): string {
+  const message = 'The Receive Operation identity is invalid';
+  parseQuery(request, [], message);
+  return parsePathIdentity(
+    request,
+    '/v1/operations/receive/',
+    command ? `/${command}` : '',
+    message,
+  );
 }
 
 function knownMintNotFound(): V1HttpError {

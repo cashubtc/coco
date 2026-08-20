@@ -321,6 +321,37 @@ export interface ExecuteSendOperationResponseDocument {
   result: SendResultDocument;
 }
 
+/** Cashu Receive Operation preparation input containing an encoded token. */
+export interface CreateReceiveOperationRequest {
+  token: string;
+}
+
+interface ReceiveOperationDocumentBase {
+  id: string;
+  type: 'receive';
+  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  amount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Receive Operation. */
+export type ReceiveOperationDocument =
+  | (ReceiveOperationDocumentBase & { state: 'init' })
+  | (ReceiveOperationDocumentBase & {
+      state: 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+      fee: string;
+    });
+
+/** Offset-paginated safe Receive Operations. */
+export interface ReceiveOperationsDocument {
+  items: ReceiveOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
 const INTERFACE_VERSION = '1' as const;
 
 interface SchemaNode {
@@ -374,6 +405,20 @@ const sensitivePassphraseRequestNode = objectNode(
 
 /** Runtime schema for a route that accepts no request body. */
 export const noBodySchema = namedSchema<null>('NoBody', literalNode(null));
+
+/** Schema marker for an implemented route that has no successful response. */
+export const noSuccessResponseSchema: RuntimeSchema<never> = {
+  name: 'Never',
+  jsonSchema: { not: {} },
+  parse() {
+    throw new V1HttpError({
+      status: 500,
+      code: 'internal_error',
+      message: 'This resource does not return a successful response',
+      retryable: false,
+    });
+  },
+};
 
 /** Runtime and generated schema for `GET /health`. */
 export const healthSchema = namedSchema<HealthDocument>(
@@ -761,6 +806,47 @@ export const sendResultSchema = namedSchema<SendResultDocument>('SendResult', se
 export const executeSendOperationResponseSchema = namedSchema<ExecuteSendOperationResponseDocument>(
   'ExecuteSendOperationResponse',
   objectNode({ operation: sendOperationNode, result: sendResultNode }),
+);
+
+/** Runtime and generated schema for Cashu Receive Operation preparation. */
+export const createReceiveOperationRequestSchema = namedSchema<CreateReceiveOperationRequest>(
+  'CreateReceiveOperationRequest',
+  objectNode({ token: stringNode({ pattern: '\\S', sensitive: true }) }),
+);
+
+const receiveOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('receive'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  amount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const receiveOperationNode = unionNode([
+  objectNode({ ...receiveOperationBaseFields, state: literalNode('init') }),
+  objectNode({
+    ...receiveOperationBaseFields,
+    state: enumNode(['prepared', 'executing', 'finalized', 'rolled_back']),
+    fee: decimalAmountNode,
+  }),
+]);
+
+/** Runtime and generated schema for one safe Receive Operation. */
+export const receiveOperationSchema = namedSchema<ReceiveOperationDocument>(
+  'ReceiveOperation',
+  receiveOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Receive Operations. */
+export const receiveOperationsSchema = namedSchema<ReceiveOperationsDocument>(
+  'ReceiveOperations',
+  objectNode({
+    items: arrayNode(receiveOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
 );
 
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */

@@ -315,6 +315,88 @@ test('serves Send prepare and sensitive execute results across the TCP interface
   });
 });
 
+test('serves Receive lifecycle responses without crossing the sensitive token boundary', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-receive-listener-'));
+  directories.push(directory);
+  const credentialDirectory = join(directory, 'credentials');
+  const credentials = await AdministrativeCredential.loadOrBootstrap({ credentialDirectory });
+  const plaintext = await loadClientCredential(join(credentialDirectory, 'current', 'client'));
+  const prepared = {
+    id: 'receive-operation-network',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    inputProofs: [{ amount: 25, id: 'keyset', secret: 'must-not-cross', C: 'point' }],
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    fee: toAmount(2),
+    outputData: { mustNotCrossTheNetwork: true },
+    source: { type: 'manual-token' as const },
+  };
+  const finalized = { ...prepared, state: 'finalized' as const };
+  const prepare = mock(async () => prepared);
+  const execute = mock(async () => finalized);
+  const runtime = {
+    getStatus: () => ({
+      wallet: {
+        configuredAt: '2026-08-16T00:00:00.000Z',
+        mintUrl: 'https://mint.example.com',
+      },
+      seedAccess: { state: 'available' as const, requiresPassphrase: false },
+      cocoSession: {
+        state: 'running' as const,
+        startedAt: '2026-08-16T00:00:00.000Z',
+        lastFailure: null,
+      },
+    }),
+    getRunningSession: () => ({
+      mintUrl: prepared.mintUrl,
+      manager: { ops: { receive: { prepare, execute } } },
+    }),
+  } as unknown as V1Runtime;
+
+  server = startTcpTestServer({
+    routes: buildV1Routes(createLifecycleTestRouteDefinitions(runtime, '0.0.17'), credentials),
+    fetch: buildV1FallbackHandler(credentials, async () => new Response(null, { status: 404 })),
+  });
+
+  const prepareResponse = await tcpFetch(
+    server,
+    '/v1/operations/receive',
+    plaintext,
+    'POST',
+    JSON.stringify({ token: 'cashuBmust-not-cross' }),
+    { 'Content-Type': 'application/json' },
+  );
+  const prepareBody = await prepareResponse.json();
+  const executeResponse = await tcpFetch(
+    server,
+    '/v1/operations/receive/receive-operation-network/execute',
+    plaintext,
+    'POST',
+  );
+  const resultResponse = await tcpFetch(
+    server,
+    '/v1/operations/receive/receive-operation-network/result',
+    plaintext,
+  );
+
+  expect(prepareResponse.status).toBe(201);
+  expect(JSON.stringify(prepareBody)).not.toContain('must-not-cross');
+  expect(prepare).toHaveBeenCalledWith({ token: 'cashuBmust-not-cross' });
+  expect(executeResponse.status).toBe(200);
+  expect(executeResponse.headers.get('cache-control')).toBeNull();
+  expect(await executeResponse.json()).toMatchObject({
+    id: 'receive-operation-network',
+    state: 'finalized',
+    amount: '25',
+    fee: '2',
+  });
+  expect(resultResponse.status).toBe(404);
+  expect(resultResponse.headers.get('cache-control')).toBe('no-store');
+});
+
 test('commits accepted process shutdown before graceful listener closure completes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cocod-v1-process-stop-'));
   directories.push(directory);

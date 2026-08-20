@@ -179,8 +179,8 @@ describe('routes', () => {
       const runtime = uninitializedRuntime();
       const routes = buildRoutes(createRouteHandlers(runtime), runtime, credentials);
 
-      const response = await routes['/receive/cashu']!.POST!(
-        new Request('http://localhost/receive/cashu', {
+      const response = await routes['/receive/bolt11']!.POST!(
+        new Request('http://localhost/receive/bolt11', {
           method: 'POST',
           headers: { Authorization: `Bearer ${plaintext}` },
           body: '{}',
@@ -322,30 +322,6 @@ describe('routes', () => {
     expect(body.error).toContain('NUT-10');
     expect(body.error).toContain('HTLC');
     expect(prepareCalled).toBe(false);
-  });
-
-  test('/receive/cashu reports the received amount as a number', async () => {
-    let executed = false;
-    const manager = {
-      ops: {
-        receive: {
-          prepare: async () => ({ amount: toAmount(5) }),
-          execute: async () => {
-            executed = true;
-          },
-        },
-      },
-    };
-    const runtime = runningRuntime(manager);
-    const routes = createRouteHandlers(runtime);
-
-    const response = await routes['/receive/cashu']!.POST!(
-      postJson('/receive/cashu', { token: 'cashuB-fake' }),
-    );
-
-    const body = (await response.json()) as { output?: string };
-    expect(body.output).toBe('Received 5');
-    expect(executed).toBe(true);
   });
 
   test('/receive/bolt11 creates a canonical quote and prepares the mint operation with it', async () => {

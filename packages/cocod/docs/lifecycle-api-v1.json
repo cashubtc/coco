@@ -1319,6 +1319,165 @@
       "required": ["token"],
       "properties": { "token": { "type": "string", "x-sensitive": true } }
     },
+    "ReceiveOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "state"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "receive" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": { "const": "init" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "mintUrl",
+            "unit",
+            "amount",
+            "createdAt",
+            "updatedAt",
+            "state",
+            "fee"
+          ],
+          "properties": {
+            "id": { "type": "string" },
+            "type": { "const": "receive" },
+            "mintUrl": { "type": "string" },
+            "unit": { "type": "string" },
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+            },
+            "state": { "enum": ["prepared", "executing", "finalized", "rolled_back"] },
+            "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+          }
+        }
+      ]
+    },
+    "CreateReceiveOperationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": { "token": { "type": "string", "pattern": "\\S", "x-sensitive": true } }
+    },
+    "ReceiveOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "offset", "limit"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "state"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "receive" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": { "const": "init" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "type",
+                  "mintUrl",
+                  "unit",
+                  "amount",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "fee"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "type": { "const": "receive" },
+                  "mintUrl": { "type": "string" },
+                  "unit": { "type": "string" },
+                  "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  },
+                  "state": { "enum": ["prepared", "executing", "finalized", "rolled_back"] },
+                  "fee": { "type": "string", "pattern": "^(0|[1-9]\\d*)$" }
+                }
+              }
+            ]
+          }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "Never": { "not": {} },
     "InitializeWalletResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -1785,6 +1944,94 @@
       "capability": "wallet:admin",
       "requestSchema": null,
       "responseSchema": "SendOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/receive",
+      "capability": "wallet:admin",
+      "requestSchema": "CreateReceiveOperationRequest",
+      "responseSchema": "ReceiveOperation",
+      "errorSchema": "Error",
+      "successStatuses": [201],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/receive/prepared",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/receive/in-flight",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperations",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/receive/{operationId}",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": null,
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/receive/{operationId}/execute",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "GET",
+      "path": "/v1/operations/receive/{operationId}/result",
+      "capability": "wallet:read",
+      "requestSchema": null,
+      "responseSchema": "Never",
+      "errorSchema": "Error",
+      "successStatuses": [],
+      "idempotencyKey": null,
+      "responseCacheControl": "no-store"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/receive/{operationId}/cancel",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperation",
+      "errorSchema": "Error",
+      "successStatuses": [200],
+      "idempotencyKey": "optional",
+      "responseCacheControl": null
+    },
+    {
+      "method": "POST",
+      "path": "/v1/operations/receive/{operationId}/refresh",
+      "capability": "wallet:admin",
+      "requestSchema": null,
+      "responseSchema": "ReceiveOperation",
       "errorSchema": "Error",
       "successStatuses": [200],
       "idempotencyKey": "optional",

@@ -8,6 +8,7 @@ import {
   formatBalances,
   handleV1Command,
   handleWalletV1Command,
+  prepareAndExecuteCashuReceive,
   prepareAndExecuteCashuSend,
   registerAndTrustMint,
   waitForSessionTransition,
@@ -111,10 +112,10 @@ receiveCmd
   .command('cashu <token>')
   .description('Receive Cashu token')
   .action(async (token: string) => {
-    await handleDaemonCommand('/receive/cashu', {
-      method: 'POST',
-      body: { token },
-    });
+    const output = await handleWalletV1Command((client) =>
+      prepareAndExecuteCashuReceive(client, token),
+    );
+    console.log(output);
   });
 
 receiveCmd

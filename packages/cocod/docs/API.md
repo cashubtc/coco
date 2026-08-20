@@ -136,7 +136,14 @@ no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These
 - `POST /v1/operations/send/{operationId}/cancel`
 - `POST /v1/operations/send/{operationId}/refresh`
 - `POST /v1/operations/send/{operationId}/reclaim`
-- `POST /receive/cashu`
+- `POST /v1/operations/receive`
+- `GET /v1/operations/receive/prepared?offset={offset}&limit={limit}`
+- `GET /v1/operations/receive/in-flight?offset={offset}&limit={limit}`
+- `GET /v1/operations/receive/{operationId}`
+- `POST /v1/operations/receive/{operationId}/execute`
+- `GET /v1/operations/receive/{operationId}/result`
+- `POST /v1/operations/receive/{operationId}/cancel`
+- `POST /v1/operations/receive/{operationId}/refresh`
 - `POST /receive/bolt11`
 - `POST /send/bolt11`
 - `POST /x-cashu/parse`
@@ -215,3 +222,28 @@ the current state.
 
 The human `send cashu` command preserves its one-shot behavior by preparing and then executing
 through these v1 resources and printing the encoded token.
+
+### Receive Operation resources
+
+`POST /v1/operations/receive` accepts `{ token }` and prepares a Cashu Receive Operation without
+executing it. The encoded token is sensitive: cocod redacts it from request logs and never includes
+it in an Operation response. Preparation returns `201 Created` with no `Location` header.
+
+The safe Receive Operation document contains only `id`, `type`, `state`, normalized `mintUrl`,
+`unit`, lossless decimal `amount`, `createdAt`, and `updatedAt`. Every state after `init` also
+contains the lossless decimal `fee`. It omits the encoded token, input proofs, output data, proof
+secrets, source metadata, errors, and all other raw Coco fields.
+
+Only Coco's `/prepared` and `/in-flight` Receive collections are exposed. They accept `offset` and
+`limit`, defaulting to `0` and `20` with a maximum limit of `100`, and sort the canonical Coco set
+by newest creation time and then Operation ID before selecting a page. There is no separate
+Receive `/pending` collection.
+
+Execute returns the finalized safe Receive Operation directly because Coco produces no distinct
+value-bearing Receive result. Accordingly, the authenticated `/result` route always returns
+`404 Not Found` with `Cache-Control: no-store`; cocod does not invent a result or result store.
+Cancel and refresh await Coco and return the latest safe Operation through Coco. Receive does not
+expose reclaim or any other command absent from `manager.ops.receive`.
+
+The human `receive cashu` command preserves its one-shot behavior by preparing and then executing
+through these v1 resources and printing the received amount.

@@ -3,6 +3,7 @@ import { program } from 'commander';
 import { loadClientCredential } from './credentials.js';
 import {
   balancesSchema,
+  createReceiveOperationRequestSchema,
   createSendOperationRequestSchema,
   executeSendOperationResponseSchema,
   healthSchema,
@@ -13,10 +14,12 @@ import {
   mintInformationSchema,
   paymentMethodCapabilitiesSchema,
   processShutdownResponseSchema,
+  receiveOperationSchema,
   sendOperationSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
   type BalancesDocument,
+  type CreateReceiveOperationRequest,
   type CreateSendOperationRequest,
   type ExecuteSendOperationResponseDocument,
   type HealthDocument,
@@ -28,6 +31,7 @@ import {
   type MintInformationDocument,
   type PaymentMethodCapabilitiesDocument,
   type ProcessShutdownResponseDocument,
+  type ReceiveOperationDocument,
   type RuntimeSchema,
   type SendOperationDocument,
   type StartSessionRequest,
@@ -88,6 +92,8 @@ export interface V1Client {
   listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
   prepareSend(input: CreateSendOperationRequest): Promise<SendOperationDocument>;
   executeSend(operationId: string): Promise<ExecuteSendOperationResponseDocument>;
+  prepareReceive(input: CreateReceiveOperationRequest): Promise<ReceiveOperationDocument>;
+  executeReceive(operationId: string): Promise<ReceiveOperationDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
   getWalletRecoveryMaterial(
     input: WalletRecoveryMaterialRequest,
@@ -193,6 +199,24 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         executeSendOperationResponseSchema,
         credentialFile,
       ),
+    prepareReceive: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/receive',
+        'POST',
+        createReceiveOperationRequestSchema.parse(input),
+        receiveOperationSchema,
+        credentialFile,
+      ),
+    executeReceive: (operationId) =>
+      requestV1(
+        endpoint,
+        `/v1/operations/receive/${encodeURIComponent(operationId)}/execute`,
+        'POST',
+        undefined,
+        receiveOperationSchema,
+        credentialFile,
+      ),
     initializeWallet: (input) =>
       requestV1(
         endpoint,
@@ -261,6 +285,16 @@ export async function prepareAndExecuteCashuSend(
     unit: 'sat',
   });
   return (await client.executeSend(operation.id)).result.token;
+}
+
+/** Preserves the human one-shot Cashu-receive flow over the explicit v1 lifecycle. */
+export async function prepareAndExecuteCashuReceive(
+  client: V1Client,
+  token: string,
+): Promise<string> {
+  const prepared = await client.prepareReceive({ token });
+  const finalized = await client.executeReceive(prepared.id);
+  return `Received ${finalized.amount}`;
 }
 
 function mintListPath(filters: KnownMintFilters): string {

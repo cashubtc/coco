@@ -2,7 +2,13 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OperationInProgressError, SendOperationStateError, toAmount } from '@cashu/coco-core';
+import {
+  OperationInProgressError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
+  SendOperationStateError,
+  toAmount,
+} from '@cashu/coco-core';
 
 import {
   AdministrativeCredential,
@@ -443,6 +449,294 @@ describe('v1 HTTP route interface', () => {
       },
     });
     expect(JSON.stringify(body)).not.toContain('must-not-leak');
+  });
+
+  test('prepares a safe Receive Operation without executing or exposing the token', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => receiveOperationFixture());
+    const execute = mock(async () => {
+      throw new Error('execute was not expected');
+    });
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { prepare, execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/receive']!.POST!(
+      authorizedJsonRequest('/v1/operations/receive', credential.plaintext, {
+        token: 'cashuBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('location')).toBeNull();
+    expect(body).toEqual({
+      id: 'receive-operation-1',
+      type: 'receive',
+      state: 'prepared',
+      mintUrl: 'https://mint.example.com',
+      unit: 'sat',
+      amount: '25',
+      fee: '2',
+      createdAt: '2026-08-16T00:00:00.000Z',
+      updatedAt: '2026-08-16T00:01:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(prepare).toHaveBeenCalledWith({ token: 'cashuBmust-not-leak' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('inspects and paginates safe Receive Operations from Coco', async () => {
+    const credential = await createCredential();
+    const operation = (id: string, createdAt: number, state: 'prepared' | 'executing') =>
+      receiveOperationFixture({ id, createdAt, updatedAt: createdAt, state });
+    const get = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
+    const listPrepared = mock(async () => [
+      operation('old', 1_786_838_400_000, 'prepared'),
+      operation('new-b', 1_786_838_600_000, 'prepared'),
+      operation('new-a', 1_786_838_600_000, 'prepared'),
+    ]);
+    const listInFlight = mock(async () => [operation('executing', 1_786_838_500_000, 'executing')]);
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { get, listPrepared, listInFlight } } },
+      credential.credentials,
+    );
+
+    const fetched = await routes['/v1/operations/receive/:operationId']!.GET!(
+      authorizedRequest('/v1/operations/receive/receive-operation-1', credential.plaintext),
+    );
+    const prepared = await routes['/v1/operations/receive/prepared']!.GET!(
+      authorizedRequest('/v1/operations/receive/prepared?offset=1&limit=1', credential.plaintext),
+    );
+    const inFlight = await routes['/v1/operations/receive/in-flight']!.GET!(
+      authorizedRequest('/v1/operations/receive/in-flight', credential.plaintext),
+    );
+
+    expect(await fetched.json()).toMatchObject({
+      id: 'receive-operation-1',
+      state: 'finalized',
+      amount: '25',
+      fee: '2',
+    });
+    expect(await prepared.json()).toMatchObject({
+      items: [{ id: 'new-b', state: 'prepared' }],
+      offset: 1,
+      limit: 1,
+    });
+    expect(await inFlight.json()).toMatchObject({
+      items: [{ id: 'executing', state: 'executing' }],
+      offset: 0,
+      limit: 20,
+    });
+    expect(get).toHaveBeenCalledWith('receive-operation-1');
+    expect(listPrepared).toHaveBeenCalledWith();
+    expect(listInFlight).toHaveBeenCalledWith();
+  });
+
+  test('executes a Receive Operation and returns the finalized safe Operation directly', async () => {
+    const credential = await createCredential();
+    const execute = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { execute } } },
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/operations/receive/:operationId/execute']!.POST!(
+      authorizedPostRequest(
+        '/v1/operations/receive/receive-operation-1/execute',
+        credential.plaintext,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBeNull();
+    expect(await response.json()).toMatchObject({
+      id: 'receive-operation-1',
+      type: 'receive',
+      state: 'finalized',
+      amount: '25',
+      fee: '2',
+    });
+    expect(execute).toHaveBeenCalledWith('receive-operation-1');
+  });
+
+  test('returns canonical Coco state after Receive cancel and refresh commands', async () => {
+    const credential = await createCredential();
+    const cancel = mock(async () => {});
+    const refresh = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
+    const get = mock()
+      .mockResolvedValueOnce(receiveOperationFixture({ state: 'rolled_back' as const }))
+      .mockResolvedValueOnce(receiveOperationFixture({ state: 'finalized' as const }));
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { cancel, refresh, get } } },
+      credential.credentials,
+    );
+
+    const cancelled = await routes['/v1/operations/receive/:operationId/cancel']!.POST!(
+      authorizedPostRequest(
+        '/v1/operations/receive/receive-operation-1/cancel',
+        credential.plaintext,
+      ),
+    );
+    const refreshed = await routes['/v1/operations/receive/:operationId/refresh']!.POST!(
+      authorizedPostRequest(
+        '/v1/operations/receive/receive-operation-1/refresh',
+        credential.plaintext,
+      ),
+    );
+
+    expect(await cancelled.json()).toMatchObject({ state: 'rolled_back' });
+    expect(await refreshed.json()).toMatchObject({ state: 'finalized' });
+    expect(cancel).toHaveBeenCalledWith('receive-operation-1');
+    expect(refresh).toHaveBeenCalledWith('receive-operation-1');
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  test('reports that Receive Operations have no distinct result resource', async () => {
+    const credential = await createCredential();
+    const get = mock(async () => receiveOperationFixture({ state: 'finalized' as const }));
+    const routes = createWalletTestRoutes({ ops: { receive: { get } } }, credential.credentials);
+
+    const response = await routes['/v1/operations/receive/:operationId/result']!.GET!(
+      authorizedRequest('/v1/operations/receive/receive-operation-1/result', credential.plaintext),
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'not_found',
+        message: 'Receive Operations do not expose a distinct result',
+        retryable: false,
+      },
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  test('maps typed Receive lifecycle failures and retryable operation locks', async () => {
+    const credential = await createCredential();
+    const execute = mock()
+      .mockRejectedValueOnce(
+        new ReceiveOperationStateError('receive-operation-1', 'executing', ['prepared']),
+      )
+      .mockRejectedValueOnce(new OperationInProgressError('receive-operation-1'))
+      .mockRejectedValueOnce(new ReceiveOperationNotFoundError('receive-operation-1'));
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { execute } } },
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedPostRequest(
+        '/v1/operations/receive/receive-operation-1/execute',
+        credential.plaintext,
+      );
+
+    const invalidState =
+      await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
+    const inProgress =
+      await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
+    const missing = await routes['/v1/operations/receive/:operationId/execute']!.POST!(request());
+
+    expect(invalidState.status).toBe(409);
+    expect(await invalidState.json()).toEqual({
+      error: {
+        code: 'invalid_operation_state',
+        message: 'The Receive Operation command is unavailable in its current state',
+        retryable: false,
+        details: {
+          type: 'receive',
+          operationId: 'receive-operation-1',
+          state: 'executing',
+          expectedStates: ['prepared'],
+        },
+      },
+    });
+    expect(inProgress.status).toBe(409);
+    expect(await inProgress.json()).toMatchObject({
+      error: {
+        code: 'operation_in_progress',
+        retryable: true,
+        details: { type: 'receive', operationId: 'receive-operation-1' },
+      },
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({
+      error: {
+        code: 'not_found',
+        message: 'The Receive Operation does not exist',
+        retryable: false,
+      },
+    });
+  });
+
+  test('replays idempotent Receive preparation and authenticates before calling Coco', async () => {
+    const credential = await createCredential();
+    const prepare = mock(async () => receiveOperationFixture());
+    const routes = createWalletTestRoutes(
+      { ops: { receive: { prepare } } },
+      credential.credentials,
+    );
+    const request = () =>
+      authorizedJsonRequest(
+        '/v1/operations/receive',
+        credential.plaintext,
+        { token: 'cashuBidempotent' },
+        undefined,
+        { 'Idempotency-Key': 'prepare-receive-1' },
+      );
+
+    const first = await routes['/v1/operations/receive']!.POST!(request());
+    const replay = await routes['/v1/operations/receive']!.POST!(request());
+    const unauthenticated = await routes['/v1/operations/receive']!.POST!(
+      new Request('http://localhost/v1/operations/receive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: 'cashuBunauthenticated' }),
+      }),
+    );
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(unauthenticated.status).toBe(401);
+  });
+
+  test('redacts Receive tokens from request logs and untyped Coco failures', async () => {
+    const credential = await createCredential();
+    const debug = mock(() => {});
+    const logger = createTestLogger({ debug });
+    const prepare = mock(async () => {
+      throw new Error('proof secret must-not-leak');
+    });
+    const definitions = createLifecycleTestRouteDefinitions(
+      {
+        ...lifecycleRuntime(() => configuredStatus('running')),
+        getRunningSession: () => ({ manager: { ops: { receive: { prepare } } } }) as never,
+      },
+      '0.0.17',
+      logger,
+    );
+    const routes = buildV1Routes(definitions, credential.credentials, logger);
+
+    const response = await routes['/v1/operations/receive']!.POST!(
+      authorizedJsonRequest('/v1/operations/receive', credential.plaintext, {
+        token: 'cashuBmust-not-leak',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: 'coco_error',
+        message: 'Coco could not prepare the Receive Operation',
+        retryable: false,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('cashuBmust-not-leak');
+    expect(debug).toHaveBeenCalledWith('request.received', { input: { token: '[REDACTED]' } });
   });
 
   test('creates a BOLT11 Mint Quote without preparing an Operation', async () => {
@@ -1997,6 +2291,86 @@ describe('v1 HTTP route interface', () => {
       },
       {
         method: 'POST',
+        path: '/v1/operations/receive',
+        capability: 'wallet:admin',
+        requestSchema: 'CreateReceiveOperationRequest',
+        responseSchema: 'ReceiveOperation',
+        successStatuses: [201],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/receive/prepared',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/receive/in-flight',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperations',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/receive/{operationId}',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperation',
+        successStatuses: [200],
+        idempotencyKey: null,
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/receive/{operationId}/execute',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'GET',
+        path: '/v1/operations/receive/{operationId}/result',
+        capability: 'wallet:read',
+        requestSchema: 'NoBody',
+        responseSchema: 'Never',
+        successStatuses: [],
+        idempotencyKey: null,
+        responseCacheControl: 'no-store',
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/receive/{operationId}/cancel',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
+        path: '/v1/operations/receive/{operationId}/refresh',
+        capability: 'wallet:admin',
+        requestSchema: 'NoBody',
+        responseSchema: 'ReceiveOperation',
+        successStatuses: [200],
+        idempotencyKey: 'optional',
+        responseCacheControl: null,
+      },
+      {
+        method: 'POST',
         path: '/v1/admin/wallet/initialize',
         capability: 'wallet:admin',
         requestSchema: 'InitializeWalletRequest',
@@ -2992,6 +3366,24 @@ function sendOperationFixture(overrides: Record<string, unknown> = {}) {
     inputAmount: toAmount(27),
     inputProofSecrets: ['must-not-leak'],
     outputData: { mustNotLeak: 'output-data' },
+    ...overrides,
+  };
+}
+
+function receiveOperationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'receive-operation-1',
+    state: 'prepared' as const,
+    mintUrl: 'https://mint.example.com',
+    amount: toAmount(25),
+    unit: 'sat',
+    inputProofs: [{ amount: 25, id: 'keyset', secret: 'must-not-leak', C: 'point' }],
+    createdAt: 1_786_838_400_000,
+    updatedAt: 1_786_838_460_000,
+    fee: toAmount(2),
+    outputData: { mustNotLeak: 'output-data' },
+    source: { type: 'payment-request', memo: 'private-source-metadata' },
+    error: 'private-error',
     ...overrides,
   };
 }

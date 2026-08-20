@@ -1,11 +1,11 @@
 # Cocod Network Interface v1
 
 Status: accepted and implemented for the authenticated TCP transport, Wallet and Coco Session
-lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance resources, and the legacy
-compatibility described here. Known Mint resources are also implemented. The complete v1 resource
-surface is accepted as the target design; Quote, Operation, Payment Request, history, event, and
-machine-description resources remain proposed until their individual contracts and implementations
-land.
+lifecycle, Wallet Recovery Material, Cocod Process shutdown, balance, Known Mint, Quote, Send
+Operation, and Receive Operation resources, plus the legacy compatibility described here. The
+complete v1 resource surface is accepted as the target design; other Operation types, Payment
+Request, history, event, and machine-description resources remain proposed until their individual
+contracts and implementations land.
 
 This document specifies cocod's machine-oriented network interface. It distinguishes implemented
 resources from the accepted target surface so resources can land incrementally without inventing
@@ -275,9 +275,10 @@ NOT expose the shared administrative credential to browser storage or browser ap
 ## Legacy command compatibility
 
 The remaining unversioned command routes use the same TCP listener as `/v1`. They retain their
-current request and response shapes temporarily so the CLI's send, receive, history, NPC, and
-X-Cashu commands remain usable while their v1 resources are implemented. Balance and Known Mint
-commands already use v1 resources and their legacy routes have been removed.
+current request and response shapes temporarily so the CLI's Lightning send and receive, history,
+NPC, and X-Cashu commands remain usable while their v1 resources are implemented. Balance, Known
+Mint, Cashu Send, and Cashu Receive commands already use v1 resources and their legacy routes have
+been removed.
 
 Every remaining unversioned route requires the same administrative Client Credential. Cocod does
 not run a Unix listener or a second compatibility transport. Later interface revisions replace
@@ -534,7 +535,8 @@ preimages, outpoints, blinded change, and any additional Coco model fields.
 
 ### Operation resources
 
-The Send resources in this table are implemented. Other Operation types remain proposed.
+The Send and Receive resources in this table are implemented. Other Operation types remain
+proposed.
 
 | Method | Path                                          | Purpose                                                         |
 | ------ | --------------------------------------------- | --------------------------------------------------------------- |
@@ -682,7 +684,6 @@ same delivery slice.
 | `POST /receive/bolt11` | Create a Mint Quote, then prepare a Mint Operation.                      |
 | `POST /send/bolt11`    | Create a Melt Quote, prepare a Melt Operation, then execute explicitly.  |
 | `POST /send/cashu`     | Prepare a Send Operation, then execute explicitly.                       |
-| `POST /receive/cashu`  | Prepare a Receive Operation, then execute explicitly.                    |
 | `POST /x-cashu/parse`  | Evaluate the Payment Request.                                            |
 | `POST /x-cashu/handle` | Evaluate the request, prepare a Send Operation, then execute explicitly. |
 | `GET /history`         | `GET /v1/history`                                                        |
