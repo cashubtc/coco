@@ -151,10 +151,10 @@ Typical flow:
 ### Mints
 
 ```bash
-# Add a mint URL
+# Register and trust a Known Mint
 cocod mints add <url>
 
-# List configured mints
+# List trusted Known Mints
 cocod mints list
 
 # Get mint information

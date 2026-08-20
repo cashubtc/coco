@@ -13,7 +13,7 @@ If you like simple tools: run commands in your terminal, and let the daemon hand
 - Send and receive Cashu tokens
 - Send and receive Lightning payments (BOLT11)
 - Handle HTTP 402 payments with `X-Cashu`
-- Manage trusted mints
+- Register Known Mints and manage their trust state
 
 ## Install
 
@@ -76,7 +76,10 @@ cocod send cashu 500
 cocod send bolt11 "lnbc..."
 
 # Mints
+# Register and trust a Known Mint
 cocod mints add https://mint.example.com/Bitcoin
+
+# List trusted Known Mints
 cocod mints list
 
 # History
@@ -187,7 +190,7 @@ bun test
 ## Docs
 
 - [API and command reference](docs/API.md)
-- [Implemented v1 lifecycle contract](docs/lifecycle-api-v1.json)
+- [Implemented v1 contract](docs/lifecycle-api-v1.json)
 - [Remaining legacy operational contract](docs/daemon-api.json)
 - [Accepted network interface v1](docs/network-interface-v1.md)
 

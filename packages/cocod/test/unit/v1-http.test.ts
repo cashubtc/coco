@@ -66,9 +66,7 @@ describe('v1 HTTP route interface', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(response.headers.get('location')).toBe(
-      '/v1/mints/by-url?mintUrl=https%3A%2F%2Fmint.example.com',
-    );
+    expect(response.headers.get('location')).toBeNull();
     expect(await response.json()).toEqual({
       mintUrl: 'https://mint.example.com',
       name: 'Example Mint',
@@ -77,17 +75,6 @@ describe('v1 HTTP route interface', () => {
       updatedAt: '2026-08-16T00:01:00.000Z',
     });
     expect(addMint).toHaveBeenCalledWith('https://mint.example.com');
-
-    const canonical = await routes['/v1/mints/by-url']!.GET!(
-      authorizedRequest(response.headers.get('location')!, credential.plaintext),
-    );
-    expect(await canonical.json()).toEqual({
-      mintUrl: 'https://mint.example.com',
-      name: 'Example Mint',
-      trusted: false,
-      createdAt: '2026-08-16T00:00:00.000Z',
-      updatedAt: '2026-08-16T00:01:00.000Z',
-    });
   });
 
   test('lists Known Mints and preserves trust on duplicate registration', async () => {
@@ -231,6 +218,38 @@ describe('v1 HTTP route interface', () => {
     expect(await trusted.json()).toMatchObject({ trusted: true });
     expect(untrustMint).toHaveBeenCalledWith('https://mint.example.com');
     expect(await untrusted.json()).toMatchObject({ trusted: false });
+  });
+
+  test('does not synthesize Known Mint state when the post-trust Coco read is missing', async () => {
+    const credential = await createCredential();
+    const mint = {
+      mintUrl: 'https://mint.example.com',
+      name: 'Example Mint',
+      mintInfo: {},
+      trusted: false,
+      createdAt: 1_786_838_400,
+      updatedAt: 1_786_838_460,
+    };
+    let reads = 0;
+    const getAllMints = mock(async () => (reads++ === 0 ? [mint] : []));
+    const trustMint = mock(async () => undefined);
+    const runtime = {
+      ...lifecycleRuntime(() => configuredStatus('running')),
+      getRunningSession: () => ({ manager: { mint: { getAllMints, trustMint } } }),
+    } as unknown as V1Runtime;
+    const routes = buildV1Routes(
+      createLifecycleTestRouteDefinitions(runtime, '0.0.17'),
+      credential.credentials,
+    );
+
+    const response = await routes['/v1/mints/trust']!.POST!(
+      authorizedJsonRequest('/v1/mints/trust', credential.plaintext, {
+        mintUrl: mint.mintUrl,
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: { code: 'coco_error' } });
   });
 
   test('returns refreshed Mint information and safely maps refresh failures', async () => {
@@ -707,16 +726,6 @@ describe('v1 HTTP route interface', () => {
         capability: 'wallet:read',
         requestSchema: 'NoBody',
         responseSchema: 'KnownMints',
-        successStatuses: [200],
-        idempotencyKey: null,
-        responseCacheControl: null,
-      },
-      {
-        method: 'GET',
-        path: '/v1/mints/by-url',
-        capability: 'wallet:read',
-        requestSchema: 'NoBody',
-        responseSchema: 'KnownMint',
         successStatuses: [200],
         idempotencyKey: null,
         responseCacheControl: null,

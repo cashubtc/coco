@@ -107,17 +107,6 @@ const LIST_MINTS_ROUTE = {
   responseCacheControl: null,
 } as const satisfies V1RouteMetadata<null, KnownMintsDocument>;
 
-const GET_MINT_ROUTE = {
-  method: 'GET',
-  path: '/v1/mints/by-url',
-  capability: 'wallet:read',
-  requestSchema: noBodySchema,
-  responseSchema: knownMintSchema,
-  successStatuses: [200],
-  idempotencyKey: null,
-  responseCacheControl: null,
-} as const satisfies V1RouteMetadata<null, KnownMintDocument>;
-
 const TRUST_MINT_ROUTE = {
   method: 'POST',
   path: '/v1/mints/trust',
@@ -221,7 +210,6 @@ export function createV1RouteMetadata(): Array<V1RouteMetadata> {
     STATUS_ROUTE,
     BALANCES_ROUTE,
     LIST_MINTS_ROUTE,
-    GET_MINT_ROUTE,
     CREATE_MINT_ROUTE,
     TRUST_MINT_ROUTE,
     UNTRUST_MINT_ROUTE,
@@ -288,9 +276,7 @@ export function createV1RouteDefinitions(
 
       try {
         const { mint, created } = await session.manager.mint.addMint(mintUrl);
-        return new V1HttpResponse(toKnownMintDocument(mint), created ? 201 : 200, {
-          Location: knownMintLocation(mint.mintUrl),
-        });
+        return new V1HttpResponse(toKnownMintDocument(mint), created ? 201 : 200);
       } catch (error) {
         throw new V1HttpError({
           status: 500,
@@ -323,29 +309,6 @@ export function createV1RouteDefinitions(
       }
     },
   });
-  const getMint = defineV1Route({
-    ...GET_MINT_ROUTE,
-    handler: async (_input, request) => {
-      const session = requireRunningSession(runtime);
-      const mintUrl = parseSingleMintUrlQuery(request, 'The Known Mint query is invalid');
-      try {
-        const mint = await findKnownMint(session.manager.mint, mintUrl);
-        if (!mint) {
-          throw knownMintNotFound();
-        }
-        return toKnownMintDocument(mint);
-      } catch (error) {
-        if (error instanceof V1HttpError) throw error;
-        throw new V1HttpError({
-          status: 500,
-          code: 'coco_error',
-          message: 'Coco could not return the Known Mint',
-          retryable: false,
-          cause: error,
-        });
-      }
-    },
-  });
   const changeMintTrust = (
     route: typeof TRUST_MINT_ROUTE | typeof UNTRUST_MINT_ROUTE,
     trusted: boolean,
@@ -366,7 +329,10 @@ export function createV1RouteDefinitions(
             await session.manager.mint.untrustMint(mintUrl);
           }
           const updated = await findKnownMint(session.manager.mint, mintUrl);
-          return toKnownMintDocument(updated ?? { ...existing, trusted });
+          if (!updated) {
+            throw new Error('Coco did not return the Known Mint after changing trust');
+          }
+          return toKnownMintDocument(updated);
         } catch (error) {
           if (error instanceof V1HttpError) throw error;
           throw new V1HttpError({
@@ -498,7 +464,6 @@ export function createV1RouteDefinitions(
     status,
     balances,
     listMints,
-    getMint,
     createMint,
     trustMint,
     untrustMint,
@@ -575,10 +540,6 @@ function toKnownMintDocument(mint: Mint): KnownMintDocument {
     createdAt: new Date(mint.createdAt * 1_000).toISOString(),
     updatedAt: new Date(mint.updatedAt * 1_000).toISOString(),
   };
-}
-
-function knownMintLocation(mintUrl: string): string {
-  return `/v1/mints/by-url?mintUrl=${encodeURIComponent(normalizeMintUrl(mintUrl))}`;
 }
 
 function knownMintNotFound(): V1HttpError {

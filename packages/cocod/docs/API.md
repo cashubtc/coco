@@ -40,8 +40,8 @@ Use the implicit `http://127.0.0.1:62626` endpoint for local auto-start. The glo
 
 ### Mints
 
-- `mints add <url>` - Add mint URL
-- `mints list` - List configured mints
+- `mints add <url>` - Register and explicitly trust a Known Mint
+- `mints list` - List trusted Known Mints
 - `mints info <url>` - Fetch mint metadata
 
 ### NPC
@@ -89,6 +89,20 @@ browser CORS.
 - The remaining operational legacy routes retain `{ "output": <value> }` success and
   `{ "error": "message" }` error envelopes.
 
+### HTTP header policy
+
+- `Authorization: Bearer <credential>` is the only required application-level request header.
+- Mutation requests may use `Idempotency-Key` for process-local retry deduplication. It is optional
+  and does not survive a Cocod Process restart.
+- The CLI sends `Content-Type: application/json` for JSON bodies. Cocod does not use `Accept` for
+  representation negotiation.
+- Resource creation returns the resource document directly. Cocod does not use `Location` headers
+  or add lookup routes solely for resource discovery.
+- Responses use ordinary protocol headers where applicable: `Content-Type`, `Cache-Control:
+no-store`, `Retry-After`, `WWW-Authenticate`, `X-Request-ID`, and `Allow`. These headers do not
+  carry Wallet state or resource identity.
+- Cocod does not use cookies, CORS, forwarded identity headers, `ETag`, or `Last-Event-ID`.
+
 ### Endpoint list
 
 - `GET /health` (public)
@@ -100,7 +114,6 @@ browser CORS.
 - `POST /v1/admin/process/stop`
 - `GET /v1/balances`
 - `GET /v1/mints`
-- `GET /v1/mints/by-url?mintUrl={mintUrl}`
 - `POST /v1/mints`
 - `GET /v1/mints/info?mintUrl={mintUrl}`
 - `POST /v1/mints/trust`

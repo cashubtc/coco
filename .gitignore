@@ -33,5 +33,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # local Codex workspace data
 .codex
 
+# local implementation planning
+.scratch/
+
 # Finder (MacOS) folder config
 .DS_Store

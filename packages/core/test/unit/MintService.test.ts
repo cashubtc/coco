@@ -832,12 +832,30 @@ describe('MintService', () => {
     });
 
     it('reports one creation for concurrent registration', async () => {
+      const otherService = new MintService(mintRepo, keysetRepo, mockAdapter, undefined, eventBus);
       const results = await Promise.all([
         service.addMintByUrl(testMintUrl),
-        service.addMintByUrl(testMintUrl),
+        otherService.addMintByUrl(testMintUrl),
       ]);
 
       expect(results.map((result) => result.created).sort()).toEqual([false, true]);
+    });
+
+    it('preserves trust when concurrent default registration loses the creation race', async () => {
+      const trustedService = new MintService(
+        mintRepo,
+        keysetRepo,
+        mockAdapter,
+        undefined,
+        eventBus,
+      );
+      const results = await Promise.all([
+        service.addMintByUrl(testMintUrl, { trusted: true }),
+        trustedService.addMintByUrl(testMintUrl),
+      ]);
+
+      expect(results.filter((result) => result.created)).toHaveLength(1);
+      expect((await mintRepo.getMintByUrl(testMintUrl)).trusted).toBe(true);
     });
 
     it('should fetch and store mint info', async () => {
@@ -1025,6 +1043,15 @@ describe('MintService', () => {
   });
 
   describe('error handling', () => {
+    it('propagates repository failures instead of treating them as an unknown Mint', async () => {
+      mintRepo.getMintByUrl = mock(async () => {
+        throw new Error('storage unavailable');
+      });
+
+      await expect(service.addMintByUrl(testMintUrl)).rejects.toThrow('storage unavailable');
+      expect(mockAdapter.fetchMintInfo).not.toHaveBeenCalled();
+    });
+
     it('should throw MintFetchError when fetchMintInfo fails', async () => {
       const mockAdapter = (service as any).mintAdapter;
       mockAdapter.fetchMintInfo = mock(() => Promise.reject(new Error('Network error')));

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
   runRepositoryTransactionContract,
+  runMintRepositoryContract,
   runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
@@ -78,6 +79,8 @@ runRepositoryTransactionContract(
   },
   { describe, it, expect },
 );
+
+runMintRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },

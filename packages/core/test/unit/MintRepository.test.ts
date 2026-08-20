@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, expect } from 'bun:test';
 import { MemoryMintRepository } from '../../repositories/memory/MemoryMintRepository';
+import { UnknownMintError } from '../../models/Error';
 import type { MintRepository } from '../../repositories';
 import type { Mint } from '../../models/Mint';
 
@@ -89,8 +90,9 @@ export function testMintRepository(name: string, createRepository: () => Promise
     describe('addOrUpdateMint', () => {
       it('should add new mint as untrusted', async () => {
         const mint = createTestMint('https://new.mint', false);
-        await repo.addOrUpdateMint(mint);
+        const created = await repo.addOrUpdateMint(mint);
 
+        expect(created).toBe(true);
         const retrieved = await repo.getMintByUrl(mint.mintUrl);
         expect(retrieved.trusted).toBe(false);
       });
@@ -109,10 +111,27 @@ export function testMintRepository(name: string, createRepository: () => Promise
 
         mint.trusted = true;
         mint.updatedAt = Math.floor(Date.now() / 1000) + 1;
-        await repo.addOrUpdateMint(mint);
+        const created = await repo.addOrUpdateMint(mint);
 
+        expect(created).toBe(false);
         const retrieved = await repo.getMintByUrl(mint.mintUrl);
         expect(retrieved.trusted).toBe(true);
+      });
+
+      it('can preserve existing trust while refreshing an existing mint', async () => {
+        const mint = createTestMint('https://existing.mint', true);
+        await repo.addOrUpdateMint(mint);
+
+        const created = await repo.addOrUpdateMint(
+          { ...mint, name: 'Refreshed Mint', trusted: false, updatedAt: mint.updatedAt + 1 },
+          { preserveExistingTrust: true },
+        );
+
+        expect(created).toBe(false);
+        expect(await repo.getMintByUrl(mint.mintUrl)).toMatchObject({
+          name: 'Refreshed Mint',
+          trusted: true,
+        });
       });
 
       it('should preserve createdAt on update', async () => {
@@ -262,7 +281,9 @@ export function testMintRepository(name: string, createRepository: () => Promise
       });
 
       it('should throw when mint does not exist', async () => {
-        await expect(repo.getMintByUrl('https://non-existent.mint')).rejects.toThrow();
+        await expect(repo.getMintByUrl('https://non-existent.mint')).rejects.toBeInstanceOf(
+          UnknownMintError,
+        );
       });
     });
 

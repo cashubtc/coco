@@ -265,18 +265,19 @@ invalidates every copied credential.
 - Clients send the opaque credential in the `Authorization: Bearer` header.
 - Client credentials MUST be read from a mode-`0600` file rather than command arguments.
 
-Authentication proves which client is calling cocod. It does not by itself grant Wallet Seed
-Access.
+Authentication proves that the credential bearer has Cocod Owner authority. Because v1 consumers
+share one credential, it does not identify which Cocod Client is calling. It also does not by
+itself grant Wallet Seed Access.
 
 Browser clients are outside v1 scope. Cocod does not emit permissive CORS headers and clients MUST
 NOT expose the shared administrative credential to browser storage or browser application code.
 
 ## Legacy command compatibility
 
-The existing unversioned command routes move from the Unix socket to the same TCP listener as
-`/v1`. They retain their current request and response shapes temporarily so the CLI's balance,
-send, receive, mint, history, NPC, and X-Cashu commands remain usable while their v1 resources are
-specified.
+The remaining unversioned command routes use the same TCP listener as `/v1`. They retain their
+current request and response shapes temporarily so the CLI's send, receive, history, NPC, and
+X-Cashu commands remain usable while their v1 resources are implemented. Balance and Known Mint
+commands already use v1 resources and their legacy routes have been removed.
 
 Every remaining unversioned route requires the same administrative Client Credential. Cocod does
 not run a Unix listener or a second compatibility transport. Later interface revisions replace
@@ -359,8 +360,9 @@ concurrent writes may shift later pages.
 
 ### Resource creation and commands
 
-- Successful resource creation returns `201 Created`, the resource document, and a `Location`
-  header containing its canonical path.
+- Successful resource creation returns `201 Created` and the resource document directly. Cocod
+  does not use `Location` headers or add lookup routes solely to identify a just-created resource;
+  clients derive later requests from the Coco identities in the response document.
 - `GET` requests MUST NOT initiate financial transitions. Mint information reads MAY let Coco
   refresh stale Mint metadata as part of resolving the response.
 - Quote and Operation reconciliation is an explicit `POST` command named `refresh`.
@@ -471,7 +473,6 @@ These resources are implemented.
 | Method | Path                                                      | Purpose                                                           |
 | ------ | --------------------------------------------------------- | ----------------------------------------------------------------- |
 | `GET`  | `/v1/mints`                                               | List Known Mints, optionally limited to trusted Mints.            |
-| `GET`  | `/v1/mints/by-url?mintUrl={mintUrl}`                      | Retrieve one Known Mint by its normalized URL.                    |
 | `POST` | `/v1/mints`                                               | Discover and persist a Known Mint without implicitly trusting it. |
 | `GET`  | `/v1/mints/info?mintUrl={mintUrl}`                        | Resolve Mint information through Coco.                            |
 | `POST` | `/v1/mints/trust`                                         | Mark the body-supplied `mintUrl` as trusted.                      |
@@ -489,7 +490,8 @@ Known Mint documents contain `mintUrl`, `name`, `trusted`, `createdAt`, and `upd
 normalized through Coco and timestamps are RFC 3339 UTC strings. Registration returns `201` for a
 new Known Mint and `200` for an already-known Mint without changing its trust state. New Known Mints
 are untrusted; the human-oriented `mints add` CLI follows registration with an explicit trust
-command. A newly registered Mint's `Location` identifies its `/v1/mints/by-url` resource.
+command. Registration returns the Known Mint document directly and does not add a separate lookup
+resource.
 
 Mint information responses contain the normalized `mintUrl` and an `info` object projected from
 Coco's Mint metadata. Payment-method capability responses contain `items` with `operation`, `nut`,
@@ -508,6 +510,10 @@ These resources are proposed.
 
 `type` is `mint` or `melt`. These routes map to Coco's separate Mint and Melt Quote interfaces;
 cocod does not add a generic cross-type Quote query.
+
+The singular Quote route exists because a Quote has an evolving lifecycle and must be retrieved
+after creation. It is not a creation redirect: Quote creation already returns the Quote document,
+including the direct Coco identity needed to construct later lookup and refresh requests.
 
 Creating or refreshing a Quote MUST NOT create or execute an Operation. Quote responses expose
 remote terms and canonical accounting but omit blinded signatures and other proof-bearing fields.
@@ -627,6 +633,10 @@ current state. Cocod projects only events Coco already exposes and MUST NOT infe
 transitions. `balance.updated` may be derived from Coco proof-change events, but cocod forwards only
 the Mint URL and never the proofs, secrets, counters, or raw event payload.
 
+Because v1 deliberately has no singular Known Mint lookup route, `mint.updated` causes consumers to
+refetch `GET /v1/mints` and select the matching normalized `mintUrl`. Quote and Operation events may
+refetch their singular lifecycle resources using the direct Coco identities carried by the event.
+
 V1 does not promise complete transition coverage, event IDs, or replay across a disconnect or
 Cocod Process restart. Consumers establish initial state through the resource endpoints before
 listening. Complete Operation transition coverage requires a unified post-persistence event in Coco
@@ -652,7 +662,7 @@ same delivery slice.
 | Legacy route           | V1 replacement                                                           |
 | ---------------------- | ------------------------------------------------------------------------ |
 | `GET /balance`         | `GET /v1/balances`                                                       |
-| `POST /mints/add`      | Create a Known Mint, then explicitly trust it.                           |
+| `POST /mints/add`      | `POST /v1/mints`, then `POST /v1/mints/trust`.                           |
 | `GET /mints/list`      | `GET /v1/mints`                                                          |
 | `POST /mints/info`     | `GET /v1/mints/info?mintUrl={mintUrl}`                                   |
 | `POST /receive/bolt11` | Create a Mint Quote, then prepare a Mint Operation.                      |

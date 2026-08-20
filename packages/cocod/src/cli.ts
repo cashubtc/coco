@@ -233,7 +233,7 @@ const mintsCmd = program.command('mints').description('Mints operations');
 
 mintsCmd
   .command('add <url>')
-  .description('Add a mint URL')
+  .description('Register and trust a Known Mint')
   .action(async (url: string) => {
     const mint = await handleWalletV1Command((client) => registerAndTrustMint(client, url));
     console.log(`Known Mint registered and trusted: ${mint.mintUrl}`);
@@ -241,7 +241,7 @@ mintsCmd
 
 mintsCmd
   .command('list')
-  .description('List configured mints')
+  .description('List trusted Known Mints')
   .action(async () => {
     const mints = await handleWalletV1Command((client) => client.listMints({ trustedOnly: true }));
     console.log(mints.items.map((mint) => mint.mintUrl).join('\n'));
