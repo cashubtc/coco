@@ -1,0 +1,30 @@
+meta {
+  name: Start Session (Unattended)
+  type: http
+  seq: 5
+  tags: [
+    mutation
+    lifecycle
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/session/start
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {}
+}
+
+docs {
+  Start the Coco Session for a Wallet without a passphrase.
+
+  Implemented v1 contract. Expected success status: 200, 202.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Health
+  type: http
+  seq: 1
+  tags: [
+    safe
+    public
+  ]
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  Public process-liveness check. It intentionally reveals no Wallet state.
+
+  Implemented v1 contract. Expected success status: 200.
+}

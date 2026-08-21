@@ -1,0 +1,19 @@
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{clientCredential}}
+}
+
+headers {
+  Accept: application/json
+}
+
+docs {
+  # Cocod Network Interface v1
+
+  Requests inherit the administrative Client Credential from the selected environment. The public
+  health request overrides authentication. Mutation requests carry a disabled, random
+  Idempotency-Key header that can be enabled when retry semantics are needed.
+}

@@ -1,0 +1,29 @@
+meta {
+  name: Get Recovery Material (Unattended)
+  type: http
+  seq: 3
+  tags: [
+    sensitive
+    lifecycle
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/wallet/recovery-material
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {}
+}
+
+docs {
+  Retrieve Wallet Recovery Material for a Wallet without a passphrase.
+
+  Implemented v1 contract. Expected success status: 200. Response cache policy: no-store.
+}

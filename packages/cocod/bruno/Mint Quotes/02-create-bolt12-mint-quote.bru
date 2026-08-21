@@ -1,0 +1,40 @@
+meta {
+  name: Create BOLT12 Mint Quote
+  type: http
+  seq: 2
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/quotes/mint
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}",
+    "method": "bolt12",
+    "unit": "{{unit}}",
+    "amount": "{{amount}}",
+    "description": "{{quoteDescription}}"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) bru.setVar('mintQuoteId', res.body.quoteId);
+}
+
+docs {
+  Create a BOLT12 Mint Quote. This does not create a Mint Operation.
+
+  Implemented v1 contract. Expected success status: 201.
+}

@@ -1,0 +1,33 @@
+meta {
+  name: Initialize Wallet (Protected)
+  type: http
+  seq: 2
+  tags: [
+    mutation
+    lifecycle
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/wallet/initialize
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "passphrase": "{{walletPassphrase}}"
+  }
+}
+
+docs {
+  Generate a passphrase-protected Wallet and return its mnemonic.
+
+  Implemented v1 contract. Expected success status: 201, 202. Response cache policy: no-store.
+}

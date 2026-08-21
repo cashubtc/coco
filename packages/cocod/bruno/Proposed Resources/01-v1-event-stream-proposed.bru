@@ -1,0 +1,21 @@
+meta {
+  name: V1 Event Stream (Proposed)
+  type: http
+  seq: 1
+  tags: [
+    proposed
+    stream
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/events
+  body: none
+  auth: inherit
+}
+
+docs {
+  Target SSE invalidation stream. This resource is not implemented yet.
+
+  Accepted target surface; currently proposed. Expected success status: not part of the implemented v1 contract.
+}

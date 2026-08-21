@@ -1,0 +1,26 @@
+meta {
+  name: List Prepared Send Operations
+  type: http
+  seq: 4
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/send/prepared
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List prepared Send Operations.
+
+  Implemented v1 contract. Expected success status: 200.
+}

@@ -1,0 +1,39 @@
+meta {
+  name: Create BOLT11 Melt Quote
+  type: http
+  seq: 1
+  tags: [
+    mutation
+    financial
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/quotes/melt
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}",
+    "method": "bolt11",
+    "invoice": "{{bolt11Invoice}}"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) bru.setVar('meltQuoteId', res.body.quoteId);
+}
+
+docs {
+  Create a BOLT11 Melt Quote without preparing or executing a Melt Operation.
+
+  Implemented v1 contract. Expected success status: 201.
+}

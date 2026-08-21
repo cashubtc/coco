@@ -1,0 +1,21 @@
+meta {
+  name: Get History Entry
+  type: http
+  seq: 2
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/history/{{historyEntryId}}
+  body: none
+  auth: inherit
+}
+
+docs {
+  Return one safe History Entry by its direct Coco identity.
+
+  Implemented v1 contract. Expected success status: 200.
+}

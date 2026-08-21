@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "Cocod Network Interface v1",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

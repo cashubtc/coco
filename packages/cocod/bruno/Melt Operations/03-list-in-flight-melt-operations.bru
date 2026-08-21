@@ -1,0 +1,26 @@
+meta {
+  name: List In-flight Melt Operations
+  type: http
+  seq: 3
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/melt/in-flight
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List executing and pending Melt Operations exposed by Coco.
+
+  Implemented v1 contract. Expected success status: 200.
+}

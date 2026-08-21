@@ -1,0 +1,30 @@
+meta {
+  name: List History
+  type: http
+  seq: 1
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/history
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+script:post-response {
+  if (res.status === 200 && res.body.items?.[0]?.id) bru.setVar('historyEntryId', res.body.items[0].id);
+}
+
+docs {
+  Return an offset-paginated, newest-first projection of safe Wallet history.
+
+  Implemented v1 contract. Expected success status: 200.
+}

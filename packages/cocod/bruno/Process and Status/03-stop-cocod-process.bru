@@ -1,0 +1,31 @@
+meta {
+  name: Stop Cocod Process
+  type: http
+  seq: 3
+  tags: [
+    mutation
+    lifecycle
+    shutdown
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/process/stop
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {}
+}
+
+docs {
+  Request graceful process termination. A supervisor may restart it.
+
+  Implemented v1 contract. Expected success status: 202.
+}

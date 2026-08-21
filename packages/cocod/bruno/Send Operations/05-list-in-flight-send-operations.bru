@@ -1,0 +1,26 @@
+meta {
+  name: List In-flight Send Operations
+  type: http
+  seq: 5
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/send/in-flight
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List in-flight Send Operations.
+
+  Implemented v1 contract. Expected success status: 200.
+}

@@ -1,0 +1,25 @@
+meta {
+  name: Execute Receive Operation
+  type: http
+  seq: 5
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/receive/{{receiveOperationId}}/execute
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Execute or resume a prepared Receive Operation.
+
+  Implemented v1 contract. Expected success status: 200.
+}

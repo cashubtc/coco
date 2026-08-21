@@ -1,0 +1,31 @@
+meta {
+  name: Evaluate Payment Request
+  type: http
+  seq: 1
+  tags: [
+    safe
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/payment-requests/evaluate
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "request": "{{paymentRequest}}"
+  }
+}
+
+docs {
+  Parse an outgoing Payment Request without preparing or executing a payment.
+
+  Implemented v1 contract. Expected success status: 200.
+}

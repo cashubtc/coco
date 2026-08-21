@@ -1,0 +1,25 @@
+meta {
+  name: List Known Mints
+  type: http
+  seq: 1
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/mints
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~trustedOnly: {{trustedOnly}}
+}
+
+docs {
+  List Known Mints, optionally limiting the response to trusted Mints.
+
+  Implemented v1 contract. Expected success status: 200.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Get Send Operation
+  type: http
+  seq: 6
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/send/{{sendOperationId}}
+  body: none
+  auth: inherit
+}
+
+docs {
+  Inspect safe state and preparation data for a Send Operation.
+
+  Implemented v1 contract. Expected success status: 200.
+}

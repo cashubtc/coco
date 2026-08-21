@@ -1,0 +1,32 @@
+meta {
+  name: Untrust Known Mint
+  type: http
+  seq: 4
+  tags: [
+    mutation
+    wallet
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/mints/untrust
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}"
+  }
+}
+
+docs {
+  Remove trust from a Known Mint without forgetting it.
+
+  Implemented v1 contract. Expected success status: 200.
+}

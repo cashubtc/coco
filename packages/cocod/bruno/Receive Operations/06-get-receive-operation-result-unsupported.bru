@@ -1,0 +1,21 @@
+meta {
+  name: Get Receive Operation Result (Unsupported)
+  type: http
+  seq: 6
+  tags: [
+    safe
+    unsupported
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/receive/{{receiveOperationId}}/result
+  body: none
+  auth: inherit
+}
+
+docs {
+  Receive has no distinct result resource in v1; this route returns not_found.
+
+  Implemented v1 contract. Expected success status: no success status; specified as not_found. Response cache policy: no-store.
+}

@@ -1,0 +1,29 @@
+meta {
+  name: Refresh Melt Quote
+  type: http
+  seq: 6
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/quotes/melt/{{meltQuoteId}}/refresh
+  body: none
+  auth: inherit
+}
+
+params:query {
+  mintUrl: {{mintUrl}}
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Explicitly reconcile a Melt Quote with its Mint.
+
+  Implemented v1 contract. Expected success status: 200.
+}

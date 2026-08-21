@@ -1,0 +1,26 @@
+meta {
+  name: Execute Send Operation
+  type: http
+  seq: 7
+  tags: [
+    mutation
+    financial
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/send/{{sendOperationId}}/execute
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Execute a prepared Send and return its sensitive outgoing token.
+
+  Implemented v1 contract. Expected success status: 200. Response cache policy: no-store.
+}

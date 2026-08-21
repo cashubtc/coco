@@ -1,0 +1,21 @@
+meta {
+  name: Legacy Event Stream
+  type: http
+  seq: 1
+  tags: [
+    legacy
+    stream
+  ]
+}
+
+get {
+  url: {{baseUrl}}/events
+  body: none
+  auth: inherit
+}
+
+docs {
+  Authenticated legacy SSE stream retained until /v1/events is implemented.
+
+  Authenticated legacy compatibility surface. Expected success status: not part of the implemented v1 contract.
+}

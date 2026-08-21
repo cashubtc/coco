@@ -1,0 +1,31 @@
+meta {
+  name: Get Recovery Material (Protected)
+  type: http
+  seq: 4
+  tags: [
+    sensitive
+    lifecycle
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/wallet/recovery-material
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "passphrase": "{{walletPassphrase}}"
+  }
+}
+
+docs {
+  Decrypt and retrieve Wallet Recovery Material for this response only.
+
+  Implemented v1 contract. Expected success status: 200. Response cache policy: no-store.
+}

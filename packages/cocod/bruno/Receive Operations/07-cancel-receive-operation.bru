@@ -1,0 +1,25 @@
+meta {
+  name: Cancel Receive Operation
+  type: http
+  seq: 7
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/receive/{{receiveOperationId}}/cancel
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Cancel a Receive Operation before irreversible execution when supported.
+
+  Implemented v1 contract. Expected success status: 200.
+}

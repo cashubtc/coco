@@ -1,0 +1,21 @@
+meta {
+  name: NPC Address
+  type: http
+  seq: 2
+  tags: [
+    legacy
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/npc/address
+  body: none
+  auth: inherit
+}
+
+docs {
+  Legacy NPC extension route outside the v1 migration scope.
+
+  Authenticated legacy compatibility surface. Expected success status: not part of the implemented v1 contract.
+}

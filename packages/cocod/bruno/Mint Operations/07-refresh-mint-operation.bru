@@ -1,0 +1,25 @@
+meta {
+  name: Refresh Mint Operation
+  type: http
+  seq: 7
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/mint/{{mintOperationId}}/refresh
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Reconcile persisted, Wallet, and remote Mint Operation state.
+
+  Implemented v1 contract. Expected success status: 200.
+}

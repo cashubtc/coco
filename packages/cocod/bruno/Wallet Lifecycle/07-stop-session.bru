@@ -1,0 +1,30 @@
+meta {
+  name: Stop Session
+  type: http
+  seq: 7
+  tags: [
+    mutation
+    lifecycle
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/session/stop
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {}
+}
+
+docs {
+  Stop Wallet work and dispose the Coco Session.
+
+  Implemented v1 contract. Expected success status: 200, 202.
+}
