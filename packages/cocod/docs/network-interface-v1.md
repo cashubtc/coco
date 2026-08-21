@@ -554,6 +554,11 @@ The Send, Receive, Mint, and Melt resources in this table are implemented.
 types whose public Coco interface exposes that behavior. Cocod does not add a generic cross-type
 Operation query or reach into Operation repositories.
 
+The Melt `/in-flight` collection currently reflects Coco's public Melt query and therefore contains
+`executing` and `pending` Operations only. A `rolling_back` Melt Operation remains inspectable by
+its Operation ID, but is not discoverable through this collection until Coco exposes it through the
+public query. Cocod does not reach into the repository to widen the result.
+
 Ordinary Operation documents are explicit, type-specific safe projections rather than serialized
 Coco objects. They share `id`, `type`, `state`, `mintUrl`, `unit`, `createdAt`, and `updatedAt`, then
 add safe type-specific fields such as method, requested amount, input amount, fees, swap need, and

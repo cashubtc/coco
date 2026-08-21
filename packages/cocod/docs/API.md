@@ -251,7 +251,9 @@ outpoints, raw errors, and all other recovery internals.
 Only Coco's `/prepared` and `/in-flight` Melt collections are exposed. They accept `offset` and
 `limit`, defaulting to `0` and `20` with a maximum of `100`, and sort the complete canonical Coco
 set by newest creation time and then Operation ID before selecting a page. The in-flight collection
-retains Coco's `executing`, `pending`, and `rolling_back` states.
+currently contains Coco's `executing` and `pending` states. `rolling_back` Operations remain
+inspectable by ID, but are not included because Coco's public Melt query does not currently return
+them.
 
 Execute, cancel, refresh, and reclaim are explicit `POST` commands with no request body. Commands
 await Coco rather than creating cocod jobs. Execute returns `{ operation, result? }`; pending work
