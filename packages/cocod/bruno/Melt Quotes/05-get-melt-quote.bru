@@ -1,0 +1,25 @@
+meta {
+  name: Get Melt Quote
+  type: http
+  seq: 5
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/quotes/melt/{{meltQuoteId}}
+  body: none
+  auth: inherit
+}
+
+params:query {
+  mintUrl: {{mintUrl}}
+}
+
+docs {
+  Read canonical local state for a Melt Quote.
+
+  Implemented v1 contract. Expected success status: 200.
+}

@@ -1,4 +1,5 @@
 import type { CocodStatus } from '../runtime.js';
+import { V1HttpError } from './contract.js';
 
 /** Runtime validator paired with the JSON Schema emitted for the same document. */
 export interface RuntimeSchema<T> {
@@ -14,6 +15,10 @@ export const V1_ERROR_CODES = [
   'invalid_request',
   'not_found',
   'method_not_allowed',
+  'unsupported_behavior',
+  'invalid_operation_state',
+  'operation_in_progress',
+  'operation_result_not_available',
   'internal_error',
   'invalid_idempotency_key',
   'idempotency_key_conflict',
@@ -24,6 +29,9 @@ export const V1_ERROR_CODES = [
   'wallet_unlock_failed',
   'session_transition_in_progress',
   'session_restart_required',
+  'wallet_locked',
+  'session_stopped',
+  'coco_error',
   'process_shutting_down',
 ] as const;
 
@@ -96,6 +104,421 @@ export interface ProcessShutdownResponseDocument {
   status: 'stopping';
 }
 
+/** Safe balance projection for one Known Mint and unit. */
+export interface BalanceDocument {
+  mintUrl: string;
+  unit: string;
+  spendable: string;
+  reserved: string;
+  total: string;
+}
+
+/** Flat collection of Wallet balances without cross-unit aggregation. */
+export interface BalancesDocument {
+  items: BalanceDocument[];
+}
+
+interface HistoryDocumentBase {
+  id: string;
+  source: 'operation' | 'legacy';
+  operationId?: string;
+  state: string;
+  mintUrl: string;
+  unit: string;
+  amount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco history entry. */
+export type HistoryDocument =
+  | (HistoryDocumentBase & { type: 'mint'; quoteId?: string })
+  | (HistoryDocumentBase & { type: 'melt'; quoteId?: string })
+  | (HistoryDocumentBase & { type: 'send' })
+  | (HistoryDocumentBase & { type: 'receive' });
+
+/** Offset-paginated safe Wallet history. */
+export interface HistoryPageDocument {
+  items: HistoryDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Body used by Known Mint registration and trust commands. */
+export interface MintUrlRequest {
+  mintUrl: string;
+}
+
+/** Safe cocod projection of Coco's Known Mint model. */
+export interface KnownMintDocument {
+  mintUrl: string;
+  name: string;
+  trusted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Collection of Known Mints. */
+export interface KnownMintsDocument {
+  items: KnownMintDocument[];
+}
+
+/** Mint metadata resolved through Coco and scoped to its normalized identity. */
+export interface MintInformationDocument {
+  mintUrl: string;
+  info: Record<string, unknown>;
+}
+
+/** Safe projection of one Coco Payment Method Capability. */
+export interface PaymentMethodCapabilityDocument {
+  operation: 'mint' | 'melt';
+  nut: 4 | 5;
+  method: string;
+  unit: string;
+  minAmount?: string | null;
+  maxAmount?: string | null;
+  options?: unknown;
+}
+
+/** Collection of capabilities advertised by one Known Mint. */
+export interface PaymentMethodCapabilitiesDocument {
+  items: PaymentMethodCapabilityDocument[];
+}
+
+/** Encoded outgoing Payment Request supplied for non-mutating evaluation. */
+export interface EvaluatePaymentRequestRequest {
+  request: string;
+}
+
+/** Safe spending-condition requirement exposed by outgoing Payment Request evaluation. */
+export type PaymentRequestSpendingConditionDocument =
+  | { kind: 'P2PK' }
+  | { kind: 'unsupported'; nut10Kind: string }
+  | { kind: 'malformed'; nut10Kind: string };
+
+/** Safe, non-durable evaluation of an outgoing Payment Request. */
+export interface PaymentRequestEvaluationDocument {
+  amount?: string;
+  unit: string;
+  transport: { type: 'inband' | 'http' | 'nostr' };
+  allowedMints: string[];
+  payableMints: string[];
+  spendingCondition?: PaymentRequestSpendingConditionDocument;
+}
+
+/** Method-specific Mint Quote creation input with lossless decimal amounts. */
+export type CreateMintQuoteRequest =
+  | {
+      mintUrl: string;
+      method: 'bolt11';
+      amount: string;
+      unit: string;
+      locked?: boolean;
+    }
+  | { mintUrl: string; method: 'onchain'; unit: string }
+  | {
+      mintUrl: string;
+      method: 'bolt12';
+      unit: string;
+      amount?: string;
+      description?: string;
+    };
+
+interface MintQuoteDocumentBase {
+  type: 'mint';
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  mintUrl: string;
+  quoteId: string;
+  request: string;
+  unit: string;
+  amountPaid: string;
+  amountIssued: string;
+  expiry: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Safe cocod projection of one canonical Mint Quote. */
+export type MintQuoteDocument =
+  | (MintQuoteDocumentBase & {
+      method: 'bolt11';
+      amount: string;
+      reusable: false;
+      state: 'UNPAID' | 'PAID' | 'ISSUED';
+    })
+  | (MintQuoteDocumentBase & {
+      method: 'bolt12';
+      amount?: string;
+      reusable: true;
+    })
+  | (MintQuoteDocumentBase & { method: 'onchain'; reusable: true });
+
+/** Offset-paginated canonical Mint Quotes. */
+export interface PendingMintQuotesDocument {
+  items: MintQuoteDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Method-specific Melt Quote creation input with lossless decimal amounts. */
+export type CreateMeltQuoteRequest =
+  | {
+      mintUrl: string;
+      method: 'bolt11';
+      invoice: string;
+      amount?: string;
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'bolt12';
+      offer: string;
+      amount?: string;
+      unit?: string;
+    }
+  | {
+      mintUrl: string;
+      method: 'onchain';
+      address: string;
+      amount: string;
+      unit?: string;
+    };
+
+interface MeltQuoteDocumentBase {
+  type: 'melt';
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  mintUrl: string;
+  quoteId: string;
+  request: string;
+  unit: string;
+  amount: string;
+  state: 'UNPAID' | 'PENDING' | 'PAID';
+  expiry: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Safe cocod projection of one canonical Melt Quote. */
+export type MeltQuoteDocument =
+  | (MeltQuoteDocumentBase & { method: 'bolt11' | 'bolt12'; feeReserve: string })
+  | (MeltQuoteDocumentBase & {
+      method: 'onchain';
+      feeOptions: Array<{ feeIndex: number; feeReserve: string; estimatedBlocks: number }>;
+    });
+
+/** Offset-paginated canonical Melt Quotes. */
+export interface PendingMeltQuotesDocument {
+  items: MeltQuoteDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Quote-backed Mint Operation preparation input with a lossless decimal amount. */
+export interface CreateMintOperationRequest {
+  mintUrl: string;
+  quoteId: string;
+  amount: string;
+}
+
+/** Safe terminal failure information retained by a Mint Operation. */
+export interface MintOperationFailureDocument {
+  reason: string;
+  code?: string;
+  retryable?: boolean;
+  observedAt: string;
+}
+
+/** Explicit safe projection of one Coco Mint Operation. */
+export interface MintOperationDocument {
+  id: string;
+  type: 'mint';
+  state: 'init' | 'pending' | 'executing' | 'finalized' | 'failed';
+  mintUrl: string;
+  unit: string;
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  amount: string;
+  quote: {
+    mintUrl: string;
+    quoteId: string;
+  };
+  expiry?: string | null;
+  failure?: MintOperationFailureDocument;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Offset-paginated safe Mint Operations. */
+export interface MintOperationsDocument {
+  items: MintOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Quote-backed Melt Operation preparation input. */
+export interface CreateMeltOperationRequest {
+  mintUrl: string;
+  quoteId: string;
+  feeIndex?: number;
+}
+
+interface MeltOperationDocumentBase {
+  id: string;
+  type: 'melt';
+  state:
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'failed'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  method: 'bolt11' | 'bolt12' | 'onchain';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Melt Operation. */
+export type MeltOperationDocument =
+  | (MeltOperationDocumentBase & {
+      state: 'init';
+      quote?: { mintUrl: string; quoteId: string };
+    })
+  | (MeltOperationDocumentBase & {
+      state:
+        | 'prepared'
+        | 'executing'
+        | 'pending'
+        | 'failed'
+        | 'finalized'
+        | 'rolling_back'
+        | 'rolled_back';
+      amount: string;
+      quote: { mintUrl: string; quoteId: string };
+      feeReserve: string;
+      swapFee: string;
+      inputAmount: string;
+      needsSwap: boolean;
+      feeIndex?: number;
+      changeAmount?: string;
+      effectiveFee?: string;
+    });
+
+/** Offset-paginated safe Melt Operations. */
+export interface MeltOperationsDocument {
+  items: MeltOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Sensitive settlement result retained by a finalized Melt Operation. */
+export type MeltResultDocument = { preimage: string } | { outpoint: string };
+
+/** Execute response pairing the safe Melt Operation with any available settlement result. */
+export interface ExecuteMeltOperationResponseDocument {
+  operation: MeltOperationDocument;
+  result?: MeltResultDocument;
+}
+
+/** Cashu Send Operation preparation input, optionally sourced from a Payment Request. */
+export type CreateSendOperationRequest =
+  | {
+      mintUrl?: string;
+      amount: string;
+      unit: string;
+      forceSwap?: boolean;
+    }
+  | ({
+      mintUrl?: string;
+      source: { type: 'payment-request'; request: string };
+    } & (
+      | { amount?: never; unit?: never }
+      | {
+          amount: string;
+          unit?: string;
+        }
+    ));
+
+interface SendOperationDocumentBase {
+  id: string;
+  type: 'send';
+  state:
+    | 'init'
+    | 'prepared'
+    | 'executing'
+    | 'pending'
+    | 'finalized'
+    | 'rolling_back'
+    | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  method: 'default' | 'p2pk';
+  requestedAmount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Send Operation. */
+export type SendOperationDocument =
+  | (SendOperationDocumentBase & { state: 'init' })
+  | (SendOperationDocumentBase & {
+      state: 'prepared' | 'executing' | 'pending' | 'finalized' | 'rolling_back' | 'rolled_back';
+      inputAmount: string;
+      fee: string;
+      needsSwap: boolean;
+    });
+
+/** Offset-paginated safe Send Operations. */
+export interface SendOperationsDocument {
+  items: SendOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
+/** Sensitive, shareable result of a successfully executed Send Operation. */
+export interface SendResultDocument {
+  token: string;
+}
+
+/** Execute response pairing the safe canonical Operation with its sensitive result. */
+export interface ExecuteSendOperationResponseDocument {
+  operation: SendOperationDocument;
+  result: SendResultDocument;
+}
+
+/** Cashu Receive Operation preparation input containing an encoded token. */
+export interface CreateReceiveOperationRequest {
+  token: string;
+}
+
+interface ReceiveOperationDocumentBase {
+  id: string;
+  type: 'receive';
+  state: 'init' | 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+  mintUrl: string;
+  unit: string;
+  amount: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Explicit safe projection of one Coco Receive Operation. */
+export type ReceiveOperationDocument =
+  | (ReceiveOperationDocumentBase & { state: 'init' })
+  | (ReceiveOperationDocumentBase & {
+      state: 'prepared' | 'executing' | 'finalized' | 'rolled_back';
+      fee: string;
+    });
+
+/** Offset-paginated safe Receive Operations. */
+export interface ReceiveOperationsDocument {
+  items: ReceiveOperationDocument[];
+  offset: number;
+  limit: number;
+}
+
 const INTERFACE_VERSION = '1' as const;
 
 interface SchemaNode {
@@ -149,6 +572,20 @@ const sensitivePassphraseRequestNode = objectNode(
 
 /** Runtime schema for a route that accepts no request body. */
 export const noBodySchema = namedSchema<null>('NoBody', literalNode(null));
+
+/** Schema marker for an implemented route that has no successful response. */
+export const noSuccessResponseSchema: RuntimeSchema<never> = {
+  name: 'Never',
+  jsonSchema: { not: {} },
+  parse() {
+    throw new V1HttpError({
+      status: 500,
+      code: 'internal_error',
+      message: 'This resource does not return a successful response',
+      retryable: false,
+    });
+  },
+};
 
 /** Runtime and generated schema for `GET /health`. */
 export const healthSchema = namedSchema<HealthDocument>(
@@ -233,6 +670,584 @@ export const processShutdownResponseSchema = namedSchema<ProcessShutdownResponse
   objectNode({ status: literalNode('stopping') }),
 );
 
+const decimalAmountNode = stringNode({ pattern: '^(0|[1-9]\\d*)$' });
+
+/** Runtime and generated schema for safe Wallet balances. */
+export const balancesSchema = namedSchema<BalancesDocument>(
+  'Balances',
+  objectNode({
+    items: arrayNode(
+      objectNode({
+        mintUrl: stringNode(),
+        unit: stringNode(),
+        spendable: decimalAmountNode,
+        reserved: decimalAmountNode,
+        total: decimalAmountNode,
+      }),
+    ),
+  }),
+);
+
+const historyBaseFields = {
+  id: stringNode({ pattern: '\\S' }),
+  source: enumNode(['operation', 'legacy']),
+  operationId: stringNode({ pattern: '\\S' }),
+  state: stringNode({ pattern: '\\S' }),
+  mintUrl: stringNode({ pattern: '\\S' }),
+  unit: stringNode({ pattern: '\\S' }),
+  amount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const historyDocumentNode = unionNode([
+  objectNode(
+    { ...historyBaseFields, type: literalNode('mint'), quoteId: stringNode({ pattern: '\\S' }) },
+    { optional: ['operationId', 'quoteId'] },
+  ),
+  objectNode(
+    { ...historyBaseFields, type: literalNode('melt'), quoteId: stringNode({ pattern: '\\S' }) },
+    { optional: ['operationId', 'quoteId'] },
+  ),
+  objectNode({ ...historyBaseFields, type: literalNode('send') }, { optional: ['operationId'] }),
+  objectNode({ ...historyBaseFields, type: literalNode('receive') }, { optional: ['operationId'] }),
+]);
+
+/** Runtime and generated schema for one safe Wallet history entry. */
+export const historySchema = namedSchema<HistoryDocument>('History', historyDocumentNode);
+
+/** Runtime and generated schema for offset-paginated safe Wallet history. */
+export const historyPageSchema = namedSchema<HistoryPageDocument>(
+  'HistoryPage',
+  objectNode({
+    items: arrayNode(historyDocumentNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1, maximum: 100 }),
+  }),
+);
+
+const knownMintNode = objectNode({
+  mintUrl: stringNode(),
+  name: stringNode(),
+  trusted: booleanNode(),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+});
+
+/** Runtime and generated schema for a request identifying a Mint by URL. */
+export const mintUrlRequestSchema = namedSchema<MintUrlRequest>(
+  'MintUrlRequest',
+  objectNode({ mintUrl: stringNode() }),
+);
+
+/** Runtime and generated schema for one safe Known Mint resource. */
+export const knownMintSchema = namedSchema<KnownMintDocument>('KnownMint', knownMintNode);
+
+/** Runtime and generated schema for the Known Mint collection. */
+export const knownMintsSchema = namedSchema<KnownMintsDocument>(
+  'KnownMints',
+  objectNode({ items: arrayNode(knownMintNode) }),
+);
+
+/** Runtime and generated schema for refreshed Mint metadata. */
+export const mintInformationSchema = namedSchema<MintInformationDocument>(
+  'MintInformation',
+  objectNode({
+    mintUrl: stringNode(),
+    info: objectNode({}, { additionalProperties: true }),
+  }),
+);
+
+const paymentMethodCapabilityNode = objectNode(
+  {
+    operation: enumNode(['mint', 'melt']),
+    nut: unionNode([literalNode(4), literalNode(5)]),
+    method: stringNode(),
+    unit: stringNode(),
+    minAmount: nullableNode(decimalAmountNode),
+    maxAmount: nullableNode(decimalAmountNode),
+    options: anyNode(),
+  },
+  { optional: ['minAmount', 'maxAmount', 'options'] },
+);
+
+/** Runtime and generated schema for Mint and Melt payment-method capabilities. */
+export const paymentMethodCapabilitiesSchema = namedSchema<PaymentMethodCapabilitiesDocument>(
+  'PaymentMethodCapabilities',
+  objectNode({ items: arrayNode(paymentMethodCapabilityNode) }),
+);
+
+/** Runtime and generated schema for outgoing Payment Request evaluation input. */
+export const evaluatePaymentRequestRequestSchema = namedSchema<EvaluatePaymentRequestRequest>(
+  'EvaluatePaymentRequestRequest',
+  objectNode({ request: stringNode({ pattern: '\\S', sensitive: true }) }),
+);
+
+const paymentRequestSpendingConditionNode = unionNode([
+  objectNode({ kind: literalNode('P2PK') }),
+  objectNode({ kind: literalNode('unsupported'), nut10Kind: stringNode() }),
+  objectNode({ kind: literalNode('malformed'), nut10Kind: stringNode() }),
+]);
+
+/** Runtime and generated schema for safe outgoing Payment Request evaluation. */
+export const paymentRequestEvaluationSchema = namedSchema<PaymentRequestEvaluationDocument>(
+  'PaymentRequestEvaluation',
+  objectNode(
+    {
+      amount: decimalAmountNode,
+      unit: stringNode({ pattern: '\\S' }),
+      transport: objectNode({ type: enumNode(['inband', 'http', 'nostr']) }),
+      allowedMints: arrayNode(stringNode()),
+      payableMints: arrayNode(stringNode()),
+      spendingCondition: paymentRequestSpendingConditionNode,
+    },
+    { optional: ['amount', 'spendingCondition'] },
+  ),
+);
+
+/** Runtime and generated schema for method-specific Mint Quote creation. */
+export const createMintQuoteRequestSchema = namedSchema<CreateMintQuoteRequest>(
+  'CreateMintQuoteRequest',
+  quoteMethodUnionNode('mint', [
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt11'),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+        locked: booleanNode(),
+      },
+      { optional: ['locked'] },
+    ),
+    objectNode({
+      mintUrl: stringNode(),
+      method: literalNode('onchain'),
+      unit: stringNode(),
+    }),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt12'),
+        unit: stringNode(),
+        amount: decimalAmountNode,
+        description: stringNode(),
+      },
+      { optional: ['amount', 'description'] },
+    ),
+  ]),
+);
+
+const mintQuoteBaseFields = {
+  type: literalNode('mint'),
+  mintUrl: stringNode(),
+  quoteId: stringNode(),
+  request: stringNode(),
+  unit: stringNode(),
+  amountPaid: decimalAmountNode,
+  amountIssued: decimalAmountNode,
+  expiry: nullableNode(rfc3339UtcSchema),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const mintQuoteNode = unionNode([
+  objectNode({
+    ...mintQuoteBaseFields,
+    method: literalNode('bolt11'),
+    amount: decimalAmountNode,
+    reusable: literalNode(false),
+    state: enumNode(['UNPAID', 'PAID', 'ISSUED']),
+  }),
+  objectNode(
+    {
+      ...mintQuoteBaseFields,
+      method: literalNode('bolt12'),
+      amount: decimalAmountNode,
+      reusable: literalNode(true),
+    },
+    { optional: ['amount'] },
+  ),
+  objectNode({
+    ...mintQuoteBaseFields,
+    method: literalNode('onchain'),
+    reusable: literalNode(true),
+  }),
+]);
+
+/** Runtime and generated schema for one safe canonical Mint Quote. */
+export const mintQuoteSchema = namedSchema<MintQuoteDocument>('MintQuote', mintQuoteNode);
+
+/** Runtime and generated schema for pending canonical Mint Quotes. */
+export const pendingMintQuotesSchema = namedSchema<PendingMintQuotesDocument>(
+  'PendingMintQuotes',
+  objectNode({
+    items: arrayNode(mintQuoteNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+/** Runtime and generated schema for method-specific Melt Quote creation. */
+export const createMeltQuoteRequestSchema = namedSchema<CreateMeltQuoteRequest>(
+  'CreateMeltQuoteRequest',
+  quoteMethodUnionNode('melt', [
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt11'),
+        invoice: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['amount', 'unit'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('bolt12'),
+        offer: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['amount', 'unit'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        method: literalNode('onchain'),
+        address: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode(),
+      },
+      { optional: ['unit'] },
+    ),
+  ]),
+);
+
+const meltQuoteBaseFields = {
+  type: literalNode('melt'),
+  mintUrl: stringNode(),
+  quoteId: stringNode(),
+  request: stringNode(),
+  unit: stringNode(),
+  amount: decimalAmountNode,
+  state: enumNode(['UNPAID', 'PENDING', 'PAID']),
+  expiry: rfc3339UtcSchema,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const boltMeltQuoteFields = {
+  ...meltQuoteBaseFields,
+  feeReserve: decimalAmountNode,
+};
+
+const meltQuoteNode = unionNode([
+  objectNode({ ...boltMeltQuoteFields, method: literalNode('bolt11') }),
+  objectNode({ ...boltMeltQuoteFields, method: literalNode('bolt12') }),
+  objectNode({
+    ...meltQuoteBaseFields,
+    method: literalNode('onchain'),
+    feeOptions: arrayNode(
+      objectNode({
+        feeIndex: integerNode({ minimum: 0 }),
+        feeReserve: decimalAmountNode,
+        estimatedBlocks: integerNode({ minimum: 0 }),
+      }),
+    ),
+  }),
+]);
+
+/** Runtime and generated schema for one safe canonical Melt Quote. */
+export const meltQuoteSchema = namedSchema<MeltQuoteDocument>('MeltQuote', meltQuoteNode);
+
+/** Runtime and generated schema for pending canonical Melt Quotes. */
+export const pendingMeltQuotesSchema = namedSchema<PendingMeltQuotesDocument>(
+  'PendingMeltQuotes',
+  objectNode({
+    items: arrayNode(meltQuoteNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+/** Runtime and generated schema for quote-backed Mint Operation preparation. */
+export const createMintOperationRequestSchema = namedSchema<CreateMintOperationRequest>(
+  'CreateMintOperationRequest',
+  objectNode({
+    mintUrl: stringNode(),
+    quoteId: stringNode({ pattern: '\\S' }),
+    amount: decimalAmountNode,
+  }),
+);
+
+const mintOperationFailureNode = objectNode(
+  {
+    reason: stringNode(),
+    code: stringNode(),
+    retryable: booleanNode(),
+    observedAt: rfc3339UtcSchema,
+  },
+  { optional: ['code', 'retryable'] },
+);
+
+const mintOperationNode = objectNode(
+  {
+    id: stringNode(),
+    type: literalNode('mint'),
+    state: enumNode(['init', 'pending', 'executing', 'finalized', 'failed']),
+    mintUrl: stringNode(),
+    unit: stringNode(),
+    method: enumNode(['bolt11', 'bolt12', 'onchain']),
+    amount: decimalAmountNode,
+    quote: objectNode({ mintUrl: stringNode(), quoteId: stringNode() }),
+    expiry: nullableNode(rfc3339UtcSchema),
+    failure: mintOperationFailureNode,
+    createdAt: rfc3339UtcSchema,
+    updatedAt: rfc3339UtcSchema,
+  },
+  { optional: ['expiry', 'failure'] },
+);
+
+/** Runtime and generated schema for one safe Mint Operation. */
+export const mintOperationSchema = namedSchema<MintOperationDocument>(
+  'MintOperation',
+  mintOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Mint Operations. */
+export const mintOperationsSchema = namedSchema<MintOperationsDocument>(
+  'MintOperations',
+  objectNode({
+    items: arrayNode(mintOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+/** Runtime and generated schema for quote-backed Melt Operation preparation. */
+export const createMeltOperationRequestSchema = namedSchema<CreateMeltOperationRequest>(
+  'CreateMeltOperationRequest',
+  objectNode(
+    {
+      mintUrl: stringNode(),
+      quoteId: stringNode({ pattern: '\\S' }),
+      feeIndex: integerNode({ minimum: 0 }),
+    },
+    { optional: ['feeIndex'] },
+  ),
+);
+
+const meltOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('melt'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  method: enumNode(['bolt11', 'bolt12', 'onchain']),
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const meltOperationQuoteNode = objectNode({ mintUrl: stringNode(), quoteId: stringNode() });
+const meltOperationNode = unionNode([
+  objectNode(
+    {
+      ...meltOperationBaseFields,
+      state: literalNode('init'),
+      quote: meltOperationQuoteNode,
+    },
+    { optional: ['quote'] },
+  ),
+  objectNode(
+    {
+      ...meltOperationBaseFields,
+      state: enumNode([
+        'prepared',
+        'executing',
+        'pending',
+        'failed',
+        'finalized',
+        'rolling_back',
+        'rolled_back',
+      ]),
+      amount: decimalAmountNode,
+      quote: meltOperationQuoteNode,
+      feeReserve: decimalAmountNode,
+      swapFee: decimalAmountNode,
+      inputAmount: decimalAmountNode,
+      needsSwap: booleanNode(),
+      feeIndex: integerNode({ minimum: 0 }),
+      changeAmount: decimalAmountNode,
+      effectiveFee: decimalAmountNode,
+    },
+    { optional: ['feeIndex', 'changeAmount', 'effectiveFee'] },
+  ),
+]);
+
+/** Runtime and generated schema for one safe Melt Operation. */
+export const meltOperationSchema = namedSchema<MeltOperationDocument>(
+  'MeltOperation',
+  meltOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Melt Operations. */
+export const meltOperationsSchema = namedSchema<MeltOperationsDocument>(
+  'MeltOperations',
+  objectNode({
+    items: arrayNode(meltOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+const meltResultNode = unionNode([
+  objectNode({ preimage: stringNode({ sensitive: true }) }),
+  objectNode({ outpoint: stringNode({ sensitive: true }) }),
+]);
+
+/** Runtime and generated schema for a sensitive Melt Operation settlement result. */
+export const meltResultSchema = namedSchema<MeltResultDocument>('MeltResult', meltResultNode);
+
+/** Runtime and generated schema for Melt Operation execution. */
+export const executeMeltOperationResponseSchema = namedSchema<ExecuteMeltOperationResponseDocument>(
+  'ExecuteMeltOperationResponse',
+  objectNode({ operation: meltOperationNode, result: meltResultNode }, { optional: ['result'] }),
+);
+
+/** Runtime and generated schema for Cashu Send Operation preparation. */
+const paymentRequestSendSourceNode = objectNode({
+  type: literalNode('payment-request'),
+  request: stringNode({ pattern: '\\S', sensitive: true }),
+});
+
+export const createSendOperationRequestSchema = namedSchema<CreateSendOperationRequest>(
+  'CreateSendOperationRequest',
+  unionNode([
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        amount: decimalAmountNode,
+        unit: stringNode({ pattern: '\\S' }),
+        forceSwap: booleanNode(),
+      },
+      { optional: ['mintUrl', 'forceSwap'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        source: paymentRequestSendSourceNode,
+      },
+      { optional: ['mintUrl'] },
+    ),
+    objectNode(
+      {
+        mintUrl: stringNode(),
+        source: paymentRequestSendSourceNode,
+        amount: decimalAmountNode,
+        unit: stringNode({ pattern: '\\S' }),
+      },
+      { optional: ['mintUrl', 'unit'] },
+    ),
+  ]),
+);
+
+const sendOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('send'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  method: enumNode(['default', 'p2pk']),
+  requestedAmount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const sendOperationNode = unionNode([
+  objectNode({ ...sendOperationBaseFields, state: literalNode('init') }),
+  objectNode({
+    ...sendOperationBaseFields,
+    state: enumNode([
+      'prepared',
+      'executing',
+      'pending',
+      'finalized',
+      'rolling_back',
+      'rolled_back',
+    ]),
+    inputAmount: decimalAmountNode,
+    fee: decimalAmountNode,
+    needsSwap: booleanNode(),
+  }),
+]);
+
+/** Runtime and generated schema for one safe Send Operation. */
+export const sendOperationSchema = namedSchema<SendOperationDocument>(
+  'SendOperation',
+  sendOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Send Operations. */
+export const sendOperationsSchema = namedSchema<SendOperationsDocument>(
+  'SendOperations',
+  objectNode({
+    items: arrayNode(sendOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
+const sendResultNode = objectNode({ token: stringNode({ sensitive: true }) });
+
+/** Runtime and generated schema for a sensitive Send Operation result. */
+export const sendResultSchema = namedSchema<SendResultDocument>('SendResult', sendResultNode);
+
+/** Runtime and generated schema for Send Operation execution with its result. */
+export const executeSendOperationResponseSchema = namedSchema<ExecuteSendOperationResponseDocument>(
+  'ExecuteSendOperationResponse',
+  objectNode({ operation: sendOperationNode, result: sendResultNode }),
+);
+
+/** Runtime and generated schema for Cashu Receive Operation preparation. */
+export const createReceiveOperationRequestSchema = namedSchema<CreateReceiveOperationRequest>(
+  'CreateReceiveOperationRequest',
+  objectNode({ token: stringNode({ pattern: '\\S', sensitive: true }) }),
+);
+
+const receiveOperationBaseFields = {
+  id: stringNode(),
+  type: literalNode('receive'),
+  mintUrl: stringNode(),
+  unit: stringNode(),
+  amount: decimalAmountNode,
+  createdAt: rfc3339UtcSchema,
+  updatedAt: rfc3339UtcSchema,
+};
+
+const receiveOperationNode = unionNode([
+  objectNode({ ...receiveOperationBaseFields, state: literalNode('init') }),
+  objectNode({
+    ...receiveOperationBaseFields,
+    state: enumNode(['prepared', 'executing', 'finalized', 'rolled_back']),
+    fee: decimalAmountNode,
+  }),
+]);
+
+/** Runtime and generated schema for one safe Receive Operation. */
+export const receiveOperationSchema = namedSchema<ReceiveOperationDocument>(
+  'ReceiveOperation',
+  receiveOperationNode,
+);
+
+/** Runtime and generated schema for paginated safe Receive Operations. */
+export const receiveOperationsSchema = namedSchema<ReceiveOperationsDocument>(
+  'ReceiveOperations',
+  objectNode({
+    items: arrayNode(receiveOperationNode),
+    offset: integerNode({ minimum: 0 }),
+    limit: integerNode({ minimum: 1 }),
+  }),
+);
+
 /** Maps runtime-owned lifecycle state to its safe v1 representation. */
 export function toLifecycleStatusDocument(
   status: CocodStatus,
@@ -256,7 +1271,7 @@ function namedSchema<T>(name: string, node: SchemaNode): RuntimeSchema<T> {
   };
 }
 
-function literalNode<T extends string | null>(expected: T): SchemaNode {
+function literalNode<T extends string | number | boolean | null>(expected: T): SchemaNode {
   return {
     jsonSchema: expected === null ? { type: 'null' } : { const: expected },
     parse(value, path) {
@@ -264,6 +1279,15 @@ function literalNode<T extends string | null>(expected: T): SchemaNode {
         throw new Error(`${path} must equal ${JSON.stringify(expected)}`);
       }
       return expected;
+    },
+  };
+}
+
+function anyNode(): SchemaNode {
+  return {
+    jsonSchema: {},
+    parse(value) {
+      return value;
     },
   };
 }
@@ -308,6 +1332,39 @@ function booleanNode(): SchemaNode {
   };
 }
 
+function integerNode(options: { minimum?: number; maximum?: number } = {}): SchemaNode {
+  return {
+    jsonSchema: {
+      type: 'integer',
+      ...(options.minimum !== undefined ? { minimum: options.minimum } : {}),
+      ...(options.maximum !== undefined ? { maximum: options.maximum } : {}),
+    },
+    parse(value, path) {
+      if (
+        typeof value !== 'number' ||
+        !Number.isSafeInteger(value) ||
+        (options.minimum !== undefined && value < options.minimum) ||
+        (options.maximum !== undefined && value > options.maximum)
+      ) {
+        throw new Error(`${path} must be an integer in the allowed range`);
+      }
+      return value;
+    },
+  };
+}
+
+function arrayNode(item: SchemaNode): SchemaNode {
+  return {
+    jsonSchema: { type: 'array', items: item.jsonSchema },
+    parse(value, path) {
+      if (!Array.isArray(value)) {
+        throw new Error(`${path} must be an array`);
+      }
+      return value.map((entry, index) => item.parse(entry, `${path}[${index}]`));
+    },
+  };
+}
+
 function enumNode<const T extends readonly string[]>(values: T): SchemaNode {
   return {
     jsonSchema: { enum: values },
@@ -316,6 +1373,28 @@ function enumNode<const T extends readonly string[]>(values: T): SchemaNode {
         throw new Error(`${path} must be one of ${values.join(', ')}`);
       }
       return value;
+    },
+  };
+}
+
+function quoteMethodUnionNode(type: 'mint' | 'melt', nodes: readonly SchemaNode[]): SchemaNode {
+  const supportedMethods = ['bolt11', 'bolt12', 'onchain'];
+  const supportedUnion = unionNode(nodes);
+  return {
+    jsonSchema: supportedUnion.jsonSchema,
+    parse(value, path) {
+      const record = requireRecord(value, path);
+      const method = record.method;
+      if (typeof method === 'string' && !supportedMethods.includes(method)) {
+        throw new V1HttpError({
+          status: 409,
+          code: 'unsupported_behavior',
+          message: `The ${type === 'mint' ? 'Mint' : 'Melt'} Quote method is unsupported`,
+          retryable: false,
+          details: { type, method },
+        });
+      }
+      return supportedUnion.parse(value, path);
     },
   };
 }
@@ -370,6 +1449,7 @@ function unionNode(nodes: readonly SchemaNode[], keyword: 'oneOf' | 'anyOf' = 'o
         try {
           matches.push(node.parse(value, path));
         } catch (error) {
+          if (error instanceof V1HttpError) throw error;
           errors.push(error);
         }
       }

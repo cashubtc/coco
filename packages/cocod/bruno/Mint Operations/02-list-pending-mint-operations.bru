@@ -1,0 +1,26 @@
+meta {
+  name: List Pending Mint Operations
+  type: http
+  seq: 2
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/mint/pending
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List pending Mint Operations.
+
+  Implemented v1 contract. Expected success status: 200.
+}

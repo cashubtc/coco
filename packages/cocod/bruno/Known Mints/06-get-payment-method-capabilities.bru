@@ -1,0 +1,25 @@
+meta {
+  name: Get Payment Method Capabilities
+  type: http
+  seq: 6
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/mints/payment-method-capabilities
+  body: none
+  auth: inherit
+}
+
+params:query {
+  mintUrl: {{mintUrl}}
+}
+
+docs {
+  List the Mint and Melt methods and units advertised by a Mint.
+
+  Implemented v1 contract. Expected success status: 200.
+}

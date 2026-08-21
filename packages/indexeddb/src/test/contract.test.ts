@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Dexie from 'dexie';
 import {
   runRepositoryTransactionContract,
+  runMintRepositoryContract,
   runKeyRingDerivationRepositoryContract,
   runAuthSessionRepositoryContract,
   runProofRepositoryContract,
@@ -72,6 +73,8 @@ runRepositoryTransactionContract(
   },
   { describe, it, expect },
 );
+
+runMintRepositoryContract({ createRepositories }, { describe, it, expect });
 
 runKeyRingDerivationRepositoryContract(
   { createRepositories, createSharedRepositories },

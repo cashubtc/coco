@@ -1,0 +1,26 @@
+meta {
+  name: Execute Melt Operation
+  type: http
+  seq: 5
+  tags: [
+    mutation
+    financial
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/melt/{{meltOperationId}}/execute
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Execute or resume a prepared Melt Operation; may return a sensitive result.
+
+  Implemented v1 contract. Expected success status: 200. Response cache policy: no-store.
+}

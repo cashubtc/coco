@@ -1,0 +1,25 @@
+meta {
+  name: Reclaim Melt Operation
+  type: http
+  seq: 9
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/melt/{{meltOperationId}}/reclaim
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Reclaim a pending Melt when Coco determines doing so is safe.
+
+  Implemented v1 contract. Expected success status: 200.
+}

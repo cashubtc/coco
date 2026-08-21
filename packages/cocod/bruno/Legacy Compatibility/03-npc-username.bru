@@ -1,0 +1,33 @@
+meta {
+  name: NPC Username
+  type: http
+  seq: 3
+  tags: [
+    legacy
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/npc/username
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "username": "{{npcUsername}}",
+    "confirm": false
+  }
+}
+
+docs {
+  Legacy NPC username purchase route outside the v1 migration scope.
+
+  Authenticated legacy compatibility surface. Expected success status: not part of the implemented v1 contract.
+}

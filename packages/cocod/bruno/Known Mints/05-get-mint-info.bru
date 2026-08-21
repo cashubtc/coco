@@ -1,0 +1,25 @@
+meta {
+  name: Get Mint Info
+  type: http
+  seq: 5
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/mints/info
+  body: none
+  auth: inherit
+}
+
+params:query {
+  mintUrl: {{mintUrl}}
+}
+
+docs {
+  Resolve current Mint metadata through Coco.
+
+  Implemented v1 contract. Expected success status: 200.
+}

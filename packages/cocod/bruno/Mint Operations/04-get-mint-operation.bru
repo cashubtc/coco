@@ -1,0 +1,21 @@
+meta {
+  name: Get Mint Operation
+  type: http
+  seq: 4
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/mint/{{mintOperationId}}
+  body: none
+  auth: inherit
+}
+
+docs {
+  Inspect safe state and preparation data for a Mint Operation.
+
+  Implemented v1 contract. Expected success status: 200.
+}

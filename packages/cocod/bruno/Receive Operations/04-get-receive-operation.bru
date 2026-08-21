@@ -1,0 +1,21 @@
+meta {
+  name: Get Receive Operation
+  type: http
+  seq: 4
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/receive/{{receiveOperationId}}
+  body: none
+  auth: inherit
+}
+
+docs {
+  Inspect safe state and preparation data for a Receive Operation.
+
+  Implemented v1 contract. Expected success status: 200.
+}

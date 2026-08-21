@@ -1,0 +1,21 @@
+meta {
+  name: Lifecycle Status
+  type: http
+  seq: 2
+  tags: [
+    safe
+    lifecycle
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/status
+  body: none
+  auth: inherit
+}
+
+docs {
+  Read Wallet configuration, Wallet Seed Access, and Coco Session state.
+
+  Implemented v1 contract. Expected success status: 200.
+}

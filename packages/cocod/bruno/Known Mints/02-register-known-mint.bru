@@ -1,0 +1,32 @@
+meta {
+  name: Register Known Mint
+  type: http
+  seq: 2
+  tags: [
+    mutation
+    wallet
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/mints
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}"
+  }
+}
+
+docs {
+  Discover and persist a Known Mint without implicitly trusting it.
+
+  Implemented v1 contract. Expected success status: 200, 201.
+}

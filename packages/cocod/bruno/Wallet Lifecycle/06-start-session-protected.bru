@@ -1,0 +1,33 @@
+meta {
+  name: Start Session (Protected)
+  type: http
+  seq: 6
+  tags: [
+    mutation
+    lifecycle
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/session/start
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "passphrase": "{{walletPassphrase}}"
+  }
+}
+
+docs {
+  Unlock Wallet Seed Access and start the Coco Session.
+
+  Implemented v1 contract. Expected success status: 200, 202.
+}

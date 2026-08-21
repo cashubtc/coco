@@ -20,6 +20,8 @@ import {
   MintOperationError,
   ProofValidationError,
   OperationInProgressError,
+  ReceiveOperationNotFoundError,
+  ReceiveOperationStateError,
 } from '../../models/Error';
 import type {
   ReceiveOperation,
@@ -280,12 +282,10 @@ export class ReceiveOperationService {
     try {
       const current = await this.receiveOperationRepository.getById(operation.id);
       if (!current) {
-        throw new Error(`Operation ${operation.id} not found`);
+        throw new ReceiveOperationNotFoundError(operation.id);
       }
       if (current.state !== 'prepared') {
-        throw new Error(
-          `Cannot execute operation in state '${current.state}'. Expected 'prepared'.`,
-        );
+        throw new ReceiveOperationStateError(current.id, current.state, ['prepared']);
       }
 
       const prepared = current as PreparedReceiveOperation;
@@ -814,18 +814,17 @@ export class ReceiveOperationService {
     try {
       const operation = await this.receiveOperationRepository.getById(operationId);
       if (!operation) {
-        throw new Error(`Operation ${operationId} not found`);
+        throw new ReceiveOperationNotFoundError(operationId);
       }
 
       switch (operation.state) {
         case 'executing':
-          throw new Error(`Cannot rollback operation in state ${operation.state}`);
-
         case 'finalized':
-          throw new Error(`Cannot rollback operation in state ${operation.state}`);
-
         case 'rolled_back':
-          throw new Error(`Cannot rollback operation in state ${operation.state}`);
+          throw new ReceiveOperationStateError(operation.id, operation.state, [
+            'init',
+            'prepared',
+          ]);
 
         case 'init':
           await this.receiveOperationRepository.delete(operation.id);

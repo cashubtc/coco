@@ -1,0 +1,41 @@
+meta {
+  name: Prepare Payment Request Send
+  type: http
+  seq: 2
+  tags: [
+    mutation
+    financial
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/send
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}",
+    "source": {
+      "type": "payment-request",
+      "request": "{{paymentRequest}}"
+    }
+  }
+}
+
+script:post-response {
+  if (res.status === 201) bru.setVar('sendOperationId', res.body.id);
+}
+
+docs {
+  Prepare an in-band Payment Request Send without executing it.
+
+  Implemented v1 contract. Expected success status: 201.
+}

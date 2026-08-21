@@ -1,0 +1,25 @@
+meta {
+  name: Refresh Send Operation
+  type: http
+  seq: 10
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/send/{{sendOperationId}}/refresh
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Reconcile persisted, Wallet, and remote Send Operation state.
+
+  Implemented v1 contract. Expected success status: 200.
+}

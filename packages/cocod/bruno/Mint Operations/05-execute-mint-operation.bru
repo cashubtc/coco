@@ -1,0 +1,25 @@
+meta {
+  name: Execute Mint Operation
+  type: http
+  seq: 5
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/mint/{{mintOperationId}}/execute
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Execute or resume a prepared Mint Operation.
+
+  Implemented v1 contract. Expected success status: 200.
+}

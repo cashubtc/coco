@@ -1,0 +1,26 @@
+meta {
+  name: List In-flight Mint Operations
+  type: http
+  seq: 3
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/operations/mint/in-flight
+  body: none
+  auth: inherit
+}
+
+params:query {
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List in-flight Mint Operations.
+
+  Implemented v1 contract. Expected success status: 200.
+}

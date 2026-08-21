@@ -2,18 +2,63 @@ import { program } from 'commander';
 
 import { loadClientCredential } from './credentials.js';
 import {
+  balancesSchema,
+  createMintOperationRequestSchema,
+  createMintQuoteRequestSchema,
+  createMeltOperationRequestSchema,
+  createMeltQuoteRequestSchema,
+  createReceiveOperationRequestSchema,
+  createSendOperationRequestSchema,
+  evaluatePaymentRequestRequestSchema,
+  executeSendOperationResponseSchema,
+  executeMeltOperationResponseSchema,
   healthSchema,
+  historyPageSchema,
+  historySchema,
   initializeWalletResponseSchema,
+  knownMintSchema,
+  knownMintsSchema,
   lifecycleStatusSchema,
+  mintInformationSchema,
+  mintOperationSchema,
+  mintQuoteSchema,
+  meltOperationSchema,
+  meltQuoteSchema,
+  paymentMethodCapabilitiesSchema,
+  paymentRequestEvaluationSchema,
   processShutdownResponseSchema,
+  receiveOperationSchema,
+  sendOperationSchema,
   v1ErrorSchema,
   walletRecoveryMaterialResponseSchema,
+  type BalancesDocument,
+  type CreateMintOperationRequest,
+  type CreateMintQuoteRequest,
+  type CreateMeltOperationRequest,
+  type CreateMeltQuoteRequest,
+  type CreateReceiveOperationRequest,
+  type CreateSendOperationRequest,
+  type ExecuteSendOperationResponseDocument,
+  type ExecuteMeltOperationResponseDocument,
   type HealthDocument,
+  type HistoryDocument,
+  type HistoryPageDocument,
   type InitializeWalletRequest,
   type InitializeWalletResponseDocument,
+  type KnownMintDocument,
+  type KnownMintsDocument,
   type LifecycleStatusDocument,
+  type MintInformationDocument,
+  type MintOperationDocument,
+  type MintQuoteDocument,
+  type MeltOperationDocument,
+  type MeltQuoteDocument,
+  type PaymentMethodCapabilitiesDocument,
+  type PaymentRequestEvaluationDocument,
   type ProcessShutdownResponseDocument,
+  type ReceiveOperationDocument,
   type RuntimeSchema,
+  type SendOperationDocument,
   type StartSessionRequest,
   type V1ErrorCode,
   type WalletRecoveryMaterialRequest,
@@ -50,9 +95,46 @@ export interface SessionTransitionWaitOptions {
   pollIntervalMs?: number;
 }
 
+export interface BalanceFilters {
+  mintUrls?: string[];
+  units?: string[];
+  trustedOnly?: boolean;
+}
+
+export interface KnownMintFilters {
+  trustedOnly?: boolean;
+}
+
+/** Offset and limit requested from the safe Wallet history collection. */
+export interface HistoryPagination {
+  offset?: number;
+  limit?: number;
+}
+
 export interface V1Client {
   health(): Promise<HealthDocument>;
   status(): Promise<LifecycleStatusDocument>;
+  balances(filters?: BalanceFilters): Promise<BalancesDocument>;
+  /** Lists a safe page of Wallet history through Coco. */
+  listHistory(pagination?: HistoryPagination): Promise<HistoryPageDocument>;
+  /** Returns one safe Wallet history entry by its direct Coco identity. */
+  getHistory(historyEntryId: string): Promise<HistoryDocument>;
+  listMints(filters?: KnownMintFilters): Promise<KnownMintsDocument>;
+  registerMint(mintUrl: string): Promise<KnownMintDocument>;
+  getMintInfo(mintUrl: string): Promise<MintInformationDocument>;
+  trustMint(mintUrl: string): Promise<KnownMintDocument>;
+  untrustMint(mintUrl: string): Promise<KnownMintDocument>;
+  listPaymentMethodCapabilities(mintUrl: string): Promise<PaymentMethodCapabilitiesDocument>;
+  evaluatePaymentRequest(request: string): Promise<PaymentRequestEvaluationDocument>;
+  createMintQuote(input: CreateMintQuoteRequest): Promise<MintQuoteDocument>;
+  createMeltQuote(input: CreateMeltQuoteRequest): Promise<MeltQuoteDocument>;
+  prepareMint(input: CreateMintOperationRequest): Promise<MintOperationDocument>;
+  prepareMelt(input: CreateMeltOperationRequest): Promise<MeltOperationDocument>;
+  executeMelt(operationId: string): Promise<ExecuteMeltOperationResponseDocument>;
+  prepareSend(input: CreateSendOperationRequest): Promise<SendOperationDocument>;
+  executeSend(operationId: string): Promise<ExecuteSendOperationResponseDocument>;
+  prepareReceive(input: CreateReceiveOperationRequest): Promise<ReceiveOperationDocument>;
+  executeReceive(operationId: string): Promise<ReceiveOperationDocument>;
   initializeWallet(input: InitializeWalletRequest): Promise<InitializeWalletResponseDocument>;
   getWalletRecoveryMaterial(
     input: WalletRecoveryMaterialRequest,
@@ -89,7 +171,7 @@ export function assertHostLocalOperation(
   }
 }
 
-/** Creates one typed client for the implemented v1 lifecycle interface. */
+/** Creates one typed client for the implemented v1 interface. */
 export function createV1Client(options: ClientCredentialOptions = {}): V1Client {
   const endpoint = configuredClientEndpoint(options.url);
   const credentialFile = options.credentialFile;
@@ -98,6 +180,156 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
     health: () => requestV1(endpoint, '/health', 'GET', undefined, healthSchema, credentialFile),
     status: () =>
       requestV1(endpoint, '/v1/status', 'GET', undefined, lifecycleStatusSchema, credentialFile),
+    balances: (filters = {}) =>
+      requestV1(endpoint, balancePath(filters), 'GET', undefined, balancesSchema, credentialFile),
+    listHistory: (pagination = {}) =>
+      requestV1(
+        endpoint,
+        historyPath(pagination),
+        'GET',
+        undefined,
+        historyPageSchema,
+        credentialFile,
+      ),
+    getHistory: (historyEntryId) =>
+      requestV1(
+        endpoint,
+        `/v1/history/${encodeURIComponent(historyEntryId)}`,
+        'GET',
+        undefined,
+        historySchema,
+        credentialFile,
+      ),
+    listMints: (filters = {}) =>
+      requestV1(
+        endpoint,
+        mintListPath(filters),
+        'GET',
+        undefined,
+        knownMintsSchema,
+        credentialFile,
+      ),
+    registerMint: (mintUrl) =>
+      requestV1(endpoint, '/v1/mints', 'POST', { mintUrl }, knownMintSchema, credentialFile),
+    getMintInfo: (mintUrl) =>
+      requestV1(
+        endpoint,
+        mintResourcePath('/v1/mints/info', mintUrl),
+        'GET',
+        undefined,
+        mintInformationSchema,
+        credentialFile,
+      ),
+    trustMint: (mintUrl) =>
+      requestV1(endpoint, '/v1/mints/trust', 'POST', { mintUrl }, knownMintSchema, credentialFile),
+    untrustMint: (mintUrl) =>
+      requestV1(
+        endpoint,
+        '/v1/mints/untrust',
+        'POST',
+        { mintUrl },
+        knownMintSchema,
+        credentialFile,
+      ),
+    listPaymentMethodCapabilities: (mintUrl) =>
+      requestV1(
+        endpoint,
+        mintResourcePath('/v1/mints/payment-method-capabilities', mintUrl),
+        'GET',
+        undefined,
+        paymentMethodCapabilitiesSchema,
+        credentialFile,
+      ),
+    evaluatePaymentRequest: (request) =>
+      requestV1(
+        endpoint,
+        '/v1/payment-requests/evaluate',
+        'POST',
+        evaluatePaymentRequestRequestSchema.parse({ request }),
+        paymentRequestEvaluationSchema,
+        credentialFile,
+      ),
+    createMintQuote: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/quotes/mint',
+        'POST',
+        createMintQuoteRequestSchema.parse(input),
+        mintQuoteSchema,
+        credentialFile,
+      ),
+    createMeltQuote: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/quotes/melt',
+        'POST',
+        createMeltQuoteRequestSchema.parse(input),
+        meltQuoteSchema,
+        credentialFile,
+      ),
+    prepareMint: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/mint',
+        'POST',
+        createMintOperationRequestSchema.parse(input),
+        mintOperationSchema,
+        credentialFile,
+      ),
+    prepareMelt: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/melt',
+        'POST',
+        createMeltOperationRequestSchema.parse(input),
+        meltOperationSchema,
+        credentialFile,
+      ),
+    executeMelt: (operationId) =>
+      requestV1(
+        endpoint,
+        `/v1/operations/melt/${encodeURIComponent(operationId)}/execute`,
+        'POST',
+        undefined,
+        executeMeltOperationResponseSchema,
+        credentialFile,
+      ),
+    prepareSend: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/send',
+        'POST',
+        createSendOperationRequestSchema.parse(input),
+        sendOperationSchema,
+        credentialFile,
+      ),
+    executeSend: (operationId) =>
+      requestV1(
+        endpoint,
+        `/v1/operations/send/${encodeURIComponent(operationId)}/execute`,
+        'POST',
+        undefined,
+        executeSendOperationResponseSchema,
+        credentialFile,
+      ),
+    prepareReceive: (input) =>
+      requestV1(
+        endpoint,
+        '/v1/operations/receive',
+        'POST',
+        createReceiveOperationRequestSchema.parse(input),
+        receiveOperationSchema,
+        credentialFile,
+      ),
+    executeReceive: (operationId) =>
+      requestV1(
+        endpoint,
+        `/v1/operations/receive/${encodeURIComponent(operationId)}/execute`,
+        'POST',
+        undefined,
+        receiveOperationSchema,
+        credentialFile,
+      ),
     initializeWallet: (input) =>
       requestV1(
         endpoint,
@@ -144,6 +376,183 @@ export function createV1Client(options: ClientCredentialOptions = {}): V1Client 
         credentialFile,
       ),
   };
+}
+
+/** Preserves the human `mints add` behavior while keeping registration and trust explicit. */
+export async function registerAndTrustMint(
+  client: V1Client,
+  mintUrl: string,
+): Promise<KnownMintDocument> {
+  const registered = await client.registerMint(mintUrl);
+  return registered.trusted ? registered : client.trustMint(registered.mintUrl);
+}
+
+/** Creates a BOLT11 Mint Quote and prepares its pending Mint Operation through v1. */
+export async function prepareBolt11Receive(
+  client: V1Client,
+  input: { amount: string; mintUrl?: string },
+): Promise<string> {
+  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
+  const quote = await client.createMintQuote({
+    mintUrl,
+    method: 'bolt11',
+    amount: input.amount,
+    unit: 'sat',
+  });
+  await client.prepareMint({
+    mintUrl: quote.mintUrl,
+    quoteId: quote.quoteId,
+    amount: input.amount,
+  });
+  return quote.request;
+}
+
+/** Preserves the human one-shot Cashu-send flow over the explicit v1 lifecycle. */
+export async function prepareAndExecuteCashuSend(
+  client: V1Client,
+  input: { amount: string; mintUrl?: string },
+): Promise<string> {
+  const operation = await client.prepareSend({
+    ...(input.mintUrl !== undefined ? { mintUrl: input.mintUrl } : {}),
+    amount: input.amount,
+    unit: 'sat',
+  });
+  return (await client.executeSend(operation.id)).result.token;
+}
+
+/** Preserves the human Payment Request parse output over non-mutating v1 evaluation. */
+export async function evaluatePaymentRequestForDisplay(
+  client: V1Client,
+  request: string,
+): Promise<string> {
+  const evaluation = await client.evaluatePaymentRequest(request);
+  const mintRequirement =
+    evaluation.allowedMints.length > 0
+      ? `from one of ${evaluation.allowedMints.length} Mints`
+      : 'from any Mint';
+  const matchingMints =
+    evaluation.payableMints.length > 0 ? evaluation.payableMints.join('\n') : 'No matching Mint!';
+  const spendingCondition = evaluation.spendingCondition
+    ? `\nSpending condition: ${evaluation.spendingCondition.kind}`
+    : '';
+  return (
+    `Request requires payment of ${evaluation.amount ?? 'an unspecified amount'} ` +
+    `${evaluation.unit} ${mintRequirement}.\nMatching Mints:\n${matchingMints}\n` +
+    `Transport: ${evaluation.transport.type}${spendingCondition}`
+  );
+}
+
+/** Preserves the human one-shot Payment Request flow over evaluation and Send Operations. */
+export async function prepareAndExecutePaymentRequest(
+  client: V1Client,
+  request: string,
+): Promise<string> {
+  const evaluation = await client.evaluatePaymentRequest(request);
+  const mintUrl = evaluation.payableMints[0];
+  if (!mintUrl) {
+    throw new Error('No payable Mint is available for the Payment Request');
+  }
+  const operation = await client.prepareSend({
+    mintUrl,
+    source: { type: 'payment-request', request },
+  });
+  const result = await client.executeSend(operation.id);
+  return `X-Cashu: ${result.result.token}`;
+}
+
+/** Preserves the human one-shot Lightning-send flow over the explicit v1 lifecycle. */
+export async function prepareAndExecuteBolt11Send(
+  client: V1Client,
+  input: { invoice: string; mintUrl?: string },
+): Promise<string> {
+  const mintUrl = input.mintUrl ?? (await defaultTrustedMintUrl(client));
+  const quote = await client.createMeltQuote({
+    mintUrl,
+    method: 'bolt11',
+    invoice: input.invoice,
+  });
+  const operation = await client.prepareMelt({
+    mintUrl: quote.mintUrl,
+    quoteId: quote.quoteId,
+  });
+  await client.executeMelt(operation.id);
+  return `Paid invoice: ${input.invoice}`;
+}
+
+/** Preserves the human one-shot Cashu-receive flow over the explicit v1 lifecycle. */
+export async function prepareAndExecuteCashuReceive(
+  client: V1Client,
+  token: string,
+): Promise<string> {
+  const prepared = await client.prepareReceive({ token });
+  const finalized = await client.executeReceive(prepared.id);
+  return `Received ${finalized.amount}`;
+}
+
+function mintListPath(filters: KnownMintFilters): string {
+  return filters.trustedOnly === undefined
+    ? '/v1/mints'
+    : `/v1/mints?trustedOnly=${String(filters.trustedOnly)}`;
+}
+
+async function defaultTrustedMintUrl(client: V1Client): Promise<string> {
+  const mint = (await client.listMints({ trustedOnly: true })).items[0];
+  if (!mint) {
+    throw new Error('No trusted Mint is available; pass --mint-url or add a Mint first');
+  }
+  return mint.mintUrl;
+}
+
+function mintResourcePath(path: string, mintUrl: string): string {
+  return `${path}?${new URLSearchParams({ mintUrl }).toString()}`;
+}
+
+function balancePath(filters: BalanceFilters): string {
+  const query = new URLSearchParams();
+  for (const mintUrl of filters.mintUrls ?? []) {
+    query.append('mintUrl', mintUrl);
+  }
+  for (const unit of filters.units ?? []) {
+    query.append('unit', unit);
+  }
+  if (filters.trustedOnly !== undefined) {
+    query.set('trustedOnly', String(filters.trustedOnly));
+  }
+  const serialized = query.toString();
+  return serialized.length > 0 ? `/v1/balances?${serialized}` : '/v1/balances';
+}
+
+/** Formats safe balance resources for the human-oriented CLI. */
+export function formatBalances(document: BalancesDocument): string {
+  if (document.items.length === 0) {
+    return 'No balances.';
+  }
+
+  const lines: string[] = [];
+  let previousMintUrl: string | undefined;
+  for (const balance of document.items) {
+    if (balance.mintUrl !== previousMintUrl) {
+      lines.push(balance.mintUrl);
+      previousMintUrl = balance.mintUrl;
+    }
+    lines.push(
+      `  ${balance.unit}: ${balance.total} total (${balance.spendable} spendable, ${balance.reserved} reserved)`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Formats safe Wallet history entries for the human-oriented CLI. */
+export function formatHistory(document: HistoryPageDocument): string {
+  return document.items.length === 0 ? 'No history.' : JSON.stringify(document.items, null, 2);
+}
+
+function historyPath({ offset, limit }: HistoryPagination): string {
+  const query = new URLSearchParams();
+  if (offset !== undefined) query.set('offset', offset.toString());
+  if (limit !== undefined) query.set('limit', limit.toString());
+  const serialized = query.toString();
+  return serialized.length > 0 ? `/v1/history?${serialized}` : '/v1/history';
 }
 
 async function callDaemon(path: string, options: DaemonCallOptions = {}): Promise<CommandResponse> {
@@ -276,6 +685,17 @@ export async function handleV1Command<T>(
   } catch (error) {
     exitForClientError(error);
   }
+}
+
+/** Runs a human CLI command only after any active Coco Session transition settles. */
+export async function handleWalletV1Command<T>(
+  action: (client: V1Client) => Promise<T>,
+  options: ClientCredentialOptions = {},
+): Promise<T> {
+  return handleV1Command(async (client) => {
+    await waitForOperationalSession(client);
+    return action(client);
+  }, options);
 }
 
 export async function handleDaemonCommand(

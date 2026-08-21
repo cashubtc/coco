@@ -1,0 +1,21 @@
+meta {
+  name: OpenAPI Description (Proposed)
+  type: http
+  seq: 2
+  tags: [
+    proposed
+    safe
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/openapi.json
+  body: none
+  auth: inherit
+}
+
+docs {
+  Target generated OpenAPI document. This resource is not implemented yet.
+
+  Accepted target surface; currently proposed. Expected success status: not part of the implemented v1 contract.
+}

@@ -1,0 +1,31 @@
+meta {
+  name: Initialize Wallet (Unattended)
+  type: http
+  seq: 1
+  tags: [
+    mutation
+    lifecycle
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/admin/wallet/initialize
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {}
+}
+
+docs {
+  Generate a Wallet with unattended Coco Session startup and return its mnemonic.
+
+  Implemented v1 contract. Expected success status: 201, 202. Response cache policy: no-store.
+}

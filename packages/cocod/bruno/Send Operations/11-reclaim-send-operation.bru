@@ -1,0 +1,25 @@
+meta {
+  name: Reclaim Send Operation
+  type: http
+  seq: 11
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/send/{{sendOperationId}}/reclaim
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Reclaim a pending Send when Coco determines doing so is safe.
+
+  Implemented v1 contract. Expected success status: 200.
+}

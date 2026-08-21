@@ -1,0 +1,25 @@
+meta {
+  name: Cancel Melt Operation
+  type: http
+  seq: 7
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/melt/{{meltOperationId}}/cancel
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Cancel a Melt Operation before irreversible execution when supported.
+
+  Implemented v1 contract. Expected success status: 200.
+}

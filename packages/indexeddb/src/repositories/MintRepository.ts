@@ -1,4 +1,4 @@
-import type { MintRepository, Mint } from '@cashu/coco-core/adapter';
+import { UnknownMintError, type MintRepository, type Mint } from '@cashu/coco-core/adapter';
 import type { IdbDb, MintRow } from '../lib/db.ts';
 
 export class IdbMintRepository implements MintRepository {
@@ -17,7 +17,7 @@ export class IdbMintRepository implements MintRepository {
     const row = (await (this.db as any).table('coco_cashu_mints').get(mintUrl)) as
       | MintRow
       | undefined;
-    if (!row) throw new Error(`Mint not found: ${mintUrl}`);
+    if (!row) throw new UnknownMintError(`Mint not found: ${mintUrl}`);
     return {
       mintUrl: row.mintUrl,
       name: row.name,
@@ -72,23 +72,36 @@ export class IdbMintRepository implements MintRepository {
     await (this.db as any).table('coco_cashu_mints').put(row);
   }
 
-  async addOrUpdateMint(mint: Mint): Promise<void> {
-    const existing = (await (this.db as any).table('coco_cashu_mints').get(mint.mintUrl)) as
-      | MintRow
-      | undefined;
+  async addOrUpdateMint(
+    mint: Mint,
+    options?: { preserveExistingTrust?: boolean },
+  ): Promise<boolean> {
     const row: MintRow = {
       mintUrl: mint.mintUrl,
       name: mint.name,
       mintInfo: JSON.stringify(mint.mintInfo),
       trusted: mint.trusted,
-      createdAt: existing?.createdAt ?? mint.createdAt,
+      createdAt: mint.createdAt,
       updatedAt: mint.updatedAt,
     };
-    await (this.db as any).table('coco_cashu_mints').put(row);
+    return this.db.runTransaction('rw', ['coco_cashu_mints'], async (transaction) => {
+      const table = transaction.table('coco_cashu_mints');
+      const existing = (await table.get(mint.mintUrl)) as MintRow | undefined;
+      if (!existing) {
+        await table.add(row);
+        return true;
+      }
+      await table.put({
+        ...row,
+        trusted: options?.preserveExistingTrust ? (existing.trusted ?? true) : row.trusted,
+        createdAt: existing.createdAt,
+      });
+      return false;
+    });
   }
 
   async updateMint(mint: Mint): Promise<void> {
-    await this.addNewMint(mint);
+    await this.addOrUpdateMint(mint);
   }
 
   async setMintTrusted(mintUrl: string, trusted: boolean): Promise<void> {

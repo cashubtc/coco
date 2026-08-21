@@ -1,0 +1,27 @@
+meta {
+  name: List Pending Melt Quotes
+  type: http
+  seq: 4
+  tags: [
+    safe
+    financial
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/quotes/melt/pending
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~method: {{method}}
+  offset: {{offset}}
+  limit: {{limit}}
+}
+
+docs {
+  List pending Melt Quotes with optional method filtering.
+
+  Implemented v1 contract. Expected success status: 200.
+}

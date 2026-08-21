@@ -1,0 +1,27 @@
+meta {
+  name: List Balances
+  type: http
+  seq: 1
+  tags: [
+    safe
+    wallet
+  ]
+}
+
+get {
+  url: {{baseUrl}}/v1/balances
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~mintUrl: {{mintUrl}}
+  ~unit: {{unit}}
+  ~trustedOnly: {{trustedOnly}}
+}
+
+docs {
+  Return spendable, reserved, and total balances by Mint and unit.
+
+  Implemented v1 contract. Expected success status: 200.
+}

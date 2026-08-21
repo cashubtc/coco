@@ -1,0 +1,41 @@
+meta {
+  name: Create On-chain Melt Quote
+  type: http
+  seq: 3
+  tags: [
+    mutation
+    financial
+    sensitive
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/quotes/melt
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+  ~Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "mintUrl": "{{mintUrl}}",
+    "method": "onchain",
+    "address": "{{onchainAddress}}",
+    "amount": "{{amount}}",
+    "unit": "{{unit}}"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) bru.setVar('meltQuoteId', res.body.quoteId);
+}
+
+docs {
+  Create an on-chain Melt Quote without preparing or executing a Melt Operation.
+
+  Implemented v1 contract. Expected success status: 201.
+}

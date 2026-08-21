@@ -9,6 +9,8 @@ import {
   createV1Client,
   DEFAULT_SESSION_TRANSITION_TIMEOUT_MS,
   ensureDaemonRunning,
+  formatBalances,
+  handleWalletV1Command,
   startDaemonProcess,
   V1ClientError,
   waitForSessionTransition,
@@ -45,6 +47,90 @@ test('typed v1 status requests attach the file-backed bearer credential', async 
   expect(status.cocoSession.state).toBe('stopped');
   expect(authorizations).toEqual([`Bearer ${'a'.repeat(43)}`]);
   expect(requestedUrls).toEqual(['https://wallet.example.com/v1/status']);
+});
+
+test('typed v1 balance requests preserve repeatable filters and decimal strings', async () => {
+  const credentialFile = await temporaryCredentialFile('b'.repeat(43));
+  const requestedUrls: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request) => {
+    requestedUrls.push(input instanceof Request ? input.url : input.toString());
+    return Response.json({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          spendable: '9007199254740993',
+          reserved: '7',
+          total: '9007199254741000',
+        },
+      ],
+    });
+  }) as unknown as typeof fetch;
+
+  const balances = await createV1Client({
+    credentialFile,
+    url: 'https://wallet.example.com',
+  }).balances({
+    mintUrls: ['https://mint.example.com', 'https://mint.other'],
+    units: ['sat', 'usd'],
+    trustedOnly: false,
+  });
+
+  expect(balances.items[0]?.total).toBe('9007199254741000');
+  expect(requestedUrls).toEqual([
+    'https://wallet.example.com/v1/balances?mintUrl=https%3A%2F%2Fmint.example.com&mintUrl=https%3A%2F%2Fmint.other&unit=sat&unit=usd&trustedOnly=false',
+  ]);
+});
+
+test('formats structured balances without discarding reserved amounts or units', () => {
+  expect(
+    formatBalances({
+      items: [
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'sat',
+          spendable: '1200',
+          reserved: '300',
+          total: '1500',
+        },
+        {
+          mintUrl: 'https://mint.example.com',
+          unit: 'usd',
+          spendable: '4',
+          reserved: '1',
+          total: '5',
+        },
+      ],
+    }),
+  ).toBe(
+    'https://mint.example.com\n  sat: 1500 total (1200 spendable, 300 reserved)\n  usd: 5 total (4 spendable, 1 reserved)',
+  );
+  expect(formatBalances({ items: [] })).toBe('No balances.');
+});
+
+test('wallet v1 commands wait for an auto-started Coco Session before requesting balances', async () => {
+  const credentialFile = await temporaryCredentialFile('w'.repeat(43));
+  const requestedPaths: string[] = [];
+  let statusRequests = 0;
+  globalThis.fetch = mock(async (input: string | URL | Request) => {
+    const path = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+    requestedPaths.push(path);
+    if (path === '/health') {
+      return Response.json({ status: 'ok', interfaceVersion: '1' });
+    }
+    if (path === '/v1/status') {
+      statusRequests += 1;
+      return Response.json(lifecycleStatus(statusRequests === 1 ? 'starting' : 'running'));
+    }
+    return Response.json({ items: [] });
+  }) as unknown as typeof fetch;
+
+  await handleWalletV1Command((client) => client.balances(), {
+    credentialFile,
+    url: 'https://wallet.example.com',
+  });
+
+  expect(requestedPaths).toEqual(['/health', '/v1/status', '/v1/status', '/v1/balances']);
 });
 
 test('the liveness request remains credential-free', async () => {

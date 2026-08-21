@@ -1,0 +1,25 @@
+meta {
+  name: Cancel Send Operation
+  type: http
+  seq: 9
+  tags: [
+    mutation
+    financial
+  ]
+}
+
+post {
+  url: {{baseUrl}}/v1/operations/send/{{sendOperationId}}/cancel
+  body: none
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: {{$guid}}
+}
+
+docs {
+  Cancel a Send Operation before irreversible execution when supported.
+
+  Implemented v1 contract. Expected success status: 200.
+}
